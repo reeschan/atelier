@@ -1,0 +1,105 @@
+# pbi-orchestration-jev のアーキテクチャ図
+# __MONO__ は単色ロゴの色。render.py がライト用 (000000) とダーク用 (ffffff) に置き換えて 2 枚描く
+# 生成: python ~/.claude/skills/arch-diagram/versions/v1.1/scripts/render.py assets/architecture.d2
+direction: right
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 40
+  }
+}
+
+classes: {
+  svc: {
+    shape: rectangle
+    style: {
+      border-radius: 12
+      font-size: 15
+    }
+  }
+  ext: {
+    shape: image
+    width: 64
+    height: 64
+    label.near: outside-bottom-center
+  }
+  zone: {
+    style.border-radius: 16
+  }
+  saas: {
+    style: {
+      border-radius: 16
+      stroke-dash: 3
+    }
+  }
+}
+
+dev: Developer {
+  class: ext
+  icon: https://icons.terrastruct.com/essentials%2F005-programmer.svg
+}
+
+cc: Claude Code {
+  class: zone
+  icon: https://cdn.simpleicons.org/anthropic/__MONO__
+
+  orch: "Orchestrator\nmain session: PBIs, review, rework" {
+    class: svc
+    icon: https://cdn.simpleicons.org/claude
+  }
+  select: "select_model.py\ntier + route" {
+    class: svc
+    icon: https://cdn.simpleicons.org/python
+  }
+  stats: "agent_stats.py\ntokens & cache rebuilds" {
+    class: svc
+    icon: https://cdn.simpleicons.org/python
+  }
+  agent: "3. Agent tool\nhaiku / sonnet / opus" {
+    class: svc
+    icon: https://cdn.simpleicons.org/claude
+  }
+}
+
+runners: Other runners {
+  class: saas
+  direction: down
+
+  codex: "1. Codex CLI\ngpt-6-astra (medium / high)" {
+    shape: hexagon
+  }
+  agy: "2. Antigravity CLI\nClaude Sonnet / Opus 5.5" {
+    class: svc
+    icon: https://cdn.simpleicons.org/google
+  }
+}
+
+jev: "Jev (TypeSafe)\njudgment API" {
+  shape: hexagon
+}
+
+repo: Target repository {
+  class: zone
+  icon: https://cdn.simpleicons.org/git
+
+  code: "Source code\nchanged by runners" {
+    class: svc
+  }
+  pbi: "docs/pbi/\nPBIs, STATUS, jev-log, stats" {
+    class: svc
+    shape: page
+  }
+}
+
+dev <-> cc.orch: task / approval
+cc.orch -> cc.select: facts + Jev scores
+cc.orch <-> jev: text only: brief, report, rework size
+cc.orch -> runners.codex: PBI
+cc.orch -> runners.agy: "" {style.stroke-dash: 4}
+cc.orch -> cc.agent: "" {style.stroke-dash: 4}
+runners.codex -> repo.code
+runners.agy -> repo.code
+cc.agent -> repo.code
+cc.orch -> repo.pbi: status & logs
+cc.stats -> repo.pbi: stats {style.stroke-dash: 4}
