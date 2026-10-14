@@ -63,6 +63,13 @@ class AnalyzeTest(unittest.TestCase):
         self.assertEqual(a["by_model"]["claude-opus-5-5"]["output"], 5)
         self.assertEqual(a["by_model"]["claude-sonnet-5-5"]["output"], 7)
 
+    def test_context_sizes(self):
+        a = self.analyze([row("r1", "2026-10-11T00:00:00Z", inp=1, w1=10000),
+                          row("r2", "2026-10-11T00:01:00Z", inp=1, read=10000, w1=30000),
+                          row("r3", "2026-10-11T00:02:00Z", inp=1, read=20000, w1=100)])
+        self.assertEqual(a["peak_context"], 40001)
+        self.assertEqual(a["last_context"], 20101)
+
 
 class SessionTest(unittest.TestCase):
     def test_session_groups_agents_by_pbi(self):
@@ -79,6 +86,13 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(s["by_pbi"]["(PBI 以外)"]["agents"], 1)
         self.assertEqual(s["totals"]["by_model"]["claude-haiku-5-5"]["cache_write_5m"], 300)
         self.assertEqual(s["totals"]["by_model"]["claude-opus-5-5"]["cache_write_1h"], 5000)
+        text = agent_stats.summary(s)
+        self.assertIn("エージェント別の読みとターン数", text)
+        self.assertIn("| オーケストレーター | claude-opus-5-5 | 1 |", text)
+
+    def test_project_dir_for(self):
+        p = agent_stats.project_dir_for("C:/Users/alice/dev/my-app")
+        self.assertEqual(p.name, "C--Users-alice-dev-my-app")
 
 
 if __name__ == "__main__":

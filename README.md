@@ -2,7 +2,7 @@
 
 English | [日本語](README.ja.md)
 
-A [Claude Code](https://claude.com/claude-code) skill that splits multi-file implementation work into **PBIs (Product Backlog Items) and hands them to sub-agents**. The main session acts as the orchestrator: it writes the PBIs, picks a model for each, reviews the results and sends work back. The sub-agents (Codex CLI, Claude via the Antigravity CLI, or Claude Code's Agent tool) do the implementation.
+A [Claude Code](https://claude.com/claude-code) skill that splits multi-file implementation work into **PBIs (Product Backlog Items) and hands them to sub-agents**. The main session acts as the orchestrator: it writes the PBIs, picks a model for each, reviews the results and sends work back. The sub-agents (the opencode CLI with DeepSeek, Codex CLI, Claude via the Antigravity CLI, or Claude Code's Agent tool) do the implementation.
 
 Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe.ai)), a judgment API, as short text. Pass/fail is still decided by actually running verification commands, and counts are kept in a status file.
 
@@ -10,7 +10,7 @@ Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The orchestrator in Claude Code asks Jev short questions, picks a route with select_model.py, hands PBIs to Codex, Antigravity or the Agent tool, and records status in docs/pbi/ of the target repository.">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The orchestrator in Claude Code asks Jev short questions, picks a route with select_model.py, hands PBIs to opencode, Codex, Antigravity or the Agent tool, optionally compresses command output with rtk, and records status in docs/pbi/ of the target repository.">
 </picture>
 
 The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lang.com)).
@@ -22,7 +22,11 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - **Pass/fail comes from verification commands.** Neither the sub-agent's report nor Jev's triage is taken at face value. The orchestrator runs the commands itself and checks each acceptance criterion.
 - **At most two rounds of rework.** Jev estimates how big the fix is. The haiku tier may be promoted to sonnet once. If the design needs rethinking, or a PBI still fails after two rounds, the orchestrator stops and asks the user.
 - **Only prose goes to Jev.** PBI text, briefs, excerpts from reports and rework notes. Never source code, diffs, environment variables or credentials.
-- **Usage stats.** `agent_stats.py` reads Claude Code transcripts and reports tokens per model and how often the prompt cache had to be rebuilt.
+- **The orchestrator's context stays small.** Every token in the orchestrator's context is re-read on every later turn. Workers end with a 4-line report and put the details in a file, long command output goes to log files, and PBI text is written once and passed by path (`worker.md`, section 0.7 of `SKILL.md`).
+- **Hand-off when the context grows.** Between waves of PBIs the orchestrator measures its context with `agent_stats.py --ctx`. Above 250,000 tokens it writes `docs/pbi/HANDOFF.md` and asks you to `/clear` and resume with `/pbi-orchestration-jev resume`.
+- **Opus designs and reviews; cheaper models implement.** Only PBIs that need design decisions are implemented by Opus. Sensitive or tightly coupled PBIs are implemented by Sonnet and get a deep review from the Opus orchestrator.
+- **Optional output compression with [rtk](https://github.com/rtk-ai/rtk).** A bundled hook rewrites Bash / PowerShell commands to `rtk <cmd>` only in sessions where the skill switched it on.
+- **Usage stats.** `agent_stats.py` reads Claude Code transcripts and reports tokens per model and per agent, how often the prompt cache had to be rebuilt, and the current context size.
 
 ## Flow
 
@@ -33,33 +37,41 @@ flowchart TD
   C --> D[select_model.py<br/>tier and route]
   D --> E[Jev: PBI quality warnings]
   E --> F{User approval}
-  F --> G[Run along the route<br/>Codex → Antigravity → Agent]
+  F --> G[Run a wave along the route<br/>opencode → Codex → Antigravity → Agent]
   G --> H[Jev: triage the report]
   H --> I[Review<br/>run verification commands]
-  I -->|pass| J[Final report and stats]
   I -->|fail| K[Jev: size of the fix]
   K -->|up to 2 reworks| G
   K -->|redesign / limit reached| L[Stop and ask the user]
+  I -->|pass| M{Context ≥ 250k?}
+  M -->|no, PBIs left| G
+  M -->|yes| N[HANDOFF.md, /clear, resume]
+  N --> G
+  M -->|all done| J[Final report and stats]
 ```
 
 ## Routing
 
-| Condition (evaluated top to bottom) | Tier |
-|---|---|
-| `sensitive` is true, or `coupling` = 2 | opus |
-| `novelty` = 2 and `ambiguity` = 2 | opus |
-| any score ≥ 1, or files changed ≥ 4, or modules ≥ 2 | sonnet |
-| none of the above | haiku |
+| Condition (evaluated top to bottom) | Tier | Review |
+|---|---|---|
+| `novelty` = 2 and `ambiguity` = 2 (design decisions needed) | opus | normal |
+| `sensitive` is true | sonnet (Agent tool only) | deep |
+| `coupling` = 2 | sonnet | deep |
+| any score ≥ 1, or files changed ≥ 4, or modules ≥ 2 | sonnet | normal |
+| none of the above | haiku | normal |
 
-| Tier | 1. Codex (until `CODEX_UNTIL`) | 2. Antigravity (`agy`) | 3. Claude Code Agent tool |
-|---|---|---|---|
-| haiku | `gpt-6-astra`, effort `medium` | `claude-sonnet-5-5-low` | haiku, effort `max` |
-| sonnet | `gpt-6-astra`, effort `high` | `claude-sonnet-5-5-high` | sonnet, effort `high` |
-| opus | (not used) | `claude-opus-5-5-high` | opus, default effort |
+| Tier | 1. opencode | 2. Codex (until `CODEX_UNTIL`) | 3. Antigravity (`agy`) | 4. Claude Code Agent tool |
+|---|---|---|---|---|
+| haiku | `opencode-go/deepseek-v4.1-flash` | `gpt-6-astra`, effort `medium` | `claude-sonnet-5-5-low` | haiku, effort `max` |
+| sonnet | `opencode-go/deepseek-v4.1-flash` | `gpt-6-astra`, effort `high` | `claude-sonnet-5-5-high` | sonnet, effort `high` |
+| sonnet (sensitive) | (not used: stays off outside services) | (not used) | (not used) | sonnet, effort `high` |
+| opus | (not used) | (not used) | (not used) | opus, default effort |
 
 - A Jev score with confidence below 0.7 is lowered by one step. If Jev is unavailable, every score counts as 1.
 - Codex is used until the `CODEX_UNTIL` date in `select_model.py`, then dropped from the route. Set it to a past date to skip Codex entirely.
 - Antigravity offers no Haiku, so the haiku tier uses Sonnet at low effort there.
+- `--skip opencode,agy` drops runners that hit a quota or got denied in this session. `--all docs/pbi` routes every PBI at once and prints one line per PBI.
+- "deep" review means the Opus orchestrator reads the whole diff itself. A normal review over 300 lines is delegated to an Opus reviewer agent.
 
 ## Requirements
 
@@ -68,9 +80,11 @@ flowchart TD
 | [Claude Code](https://claude.com/claude-code) | yes | the orchestrator and the Agent tool |
 | Python 3.10+ | yes | `select_model.py`, `agent_stats.py`, the Jev client |
 | Jev API key | recommended | without it, Jev gates are skipped and defaults apply |
-| [Codex CLI](https://github.com/openai/codex) | no | first runner, until `CODEX_UNTIL` |
-| Antigravity CLI (`agy`) | no | first choice for Claude tiers |
-| Node.js | no | only for the JS Jev client (`jev.mjs`) |
+| [opencode](https://opencode.ai) + OpenCode Go | no | first runner for the haiku and sonnet tiers |
+| [Codex CLI](https://github.com/openai/codex) | no | next runner, until `CODEX_UNTIL` |
+| Antigravity CLI (`agy`) | no | Claude via a Google AI subscription |
+| Node.js | no | the rtk hook, and the JS Jev client (`jev.mjs`) |
+| [rtk](https://github.com/rtk-ai/rtk) | no | compressing command output |
 
 A missing runner just means the route moves on. Claude Code alone is enough to run the skill.
 
@@ -88,8 +102,39 @@ Put your Jev API key in one of these places (checked in this order):
 
 Never commit the key. Consider adding the credentials file to `permissions.deny` in Claude Code's `settings.json` so agents cannot read it.
 
+### Optional: rtk
+
+[rtk](https://github.com/rtk-ai/rtk) is a CLI proxy that compresses the output of common commands (git, tests, builds). The skill does not use `rtk init -g`, which would turn it on for every session. Instead, a bundled hook rewrites commands only in sessions where the skill ran `rtk/rtk-mode.mjs on`.
+
+1. Install rtk (for example `winget install rtk-ai.rtk`, or `cargo install --git https://github.com/rtk-ai/rtk`; plain `cargo install rtk` is a different package) and check `rtk gain` works.
+2. Add the hook to `~/.claude/settings.json`:
+
+   ```json
+   {
+     "hooks": {
+       "PreToolUse": [
+         {
+           "matcher": "Bash|PowerShell",
+           "hooks": [{ "type": "command", "command": "node \"<HOME>/.claude/skills/pbi-orchestration-jev/rtk/rtk-gate.mjs\"", "timeout": 10 }]
+         }
+       ]
+     }
+   }
+   ```
+
+3. Restart Claude Code so the hook and `rtk` on your `PATH` are picked up.
+
+Without the flag file (`~/.claude/state/rtk/<session_id>.on`), or without `rtk` on the `PATH`, the hook passes commands through unchanged. For opencode and Codex, rtk's own `rtk init -g --opencode` / `rtk init -g --codex` apply globally.
+
+### Notes on opencode
+
+- The DeepSeek models on OpenCode Go return HTTP 400 unless the workspace's privacy setting is Global.
+- Starting several `opencode run` at the same moment can fail with `database is locked`. The skill staggers starts by 30 seconds.
+- If opencode lives in a Node installed by fnm or nvm, it may not be on Claude Code's `PATH`. `runners.md` shows how to find it.
+
 ### Notes on Antigravity
 
+- As of 2026-10-13, headless runs (`agy -p`) had command execution auto-denied (`RunCommand`), so work did not progress. The skill drops `agy` for the rest of the session after the first such denial.
 - `agy` **silently denies commands it has no permission for and still exits 0**. Denials only show up in `denied_actions` in the JSON result and on stderr. The skill checks `denied_actions` every time.
 - Permissions live in `permissions.allow` in `~/.gemini/antigravity-cli/settings.json`. The sandbox is off by default, so `command(node)` alone was not enough; `unsandboxed(node)` was also needed (checked with agy 1.3.3).
 
@@ -106,23 +151,34 @@ Everything is recorded under `docs/pbi/` in the target repository.
 | Path | Contents |
 |---|---|
 | `docs/pbi/STATUS.md` | status, runner and rework count per PBI |
+| `docs/pbi/HANDOFF.md` | what the next session needs after a hand-off |
 | `docs/pbi/PBI-<n>.md` | the PBI itself |
-| `docs/pbi/PBI-<n>.facts.json` / `.brief.md` | routing inputs |
+| `docs/pbi/PBI-<n>.facts.json` / `.brief.md` / `.route.json` | routing inputs and result |
+| `docs/pbi/worker.md` | how workers proceed and report (copied from the skill) |
+| `docs/pbi/reports/` | workers' detailed reports |
+| `docs/pbi/verify/`, `docs/pbi/reviews/` | verification logs and delegated reviews |
 | `docs/pbi/jev-log.jsonl` | every Jev answer and the action taken |
 | `docs/pbi/jev.config.json` | Jev gates and thresholds (created from the template) |
-| `docs/pbi/codex/`, `docs/pbi/agy/` | prompts and reports for Codex / Antigravity |
+| `docs/pbi/opencode/`, `docs/pbi/codex/`, `docs/pbi/agy/` | prompts and outputs for each runner |
 | `docs/pbi/stats/` | token and cache stats |
 
-The orchestrator only stops to wait for the user in three cases: approving the PBI list, hitting the rework limit (or needing a redesign), and before destructive operations.
+The orchestrator only stops to wait for the user in four cases: approving the PBI list, hitting the rework limit (or needing a redesign), before destructive operations, and when it hands off a large context. After a hand-off, run `/clear` and then `/pbi-orchestration-jev resume`.
 
 ## Files
 
 ```
 skills/pbi-orchestration-jev/
 ├── SKILL.md                    # the skill (instructions for the orchestrator)
-├── select_model.py             # decision table: tier and route
-├── agent_stats.py              # tokens and cache rebuilds from transcripts
+├── runners.md                  # how to hand PBIs to opencode / Codex / Antigravity
+├── verify-commands.md          # pitfalls when writing verification commands
+├── worker.md                   # how workers proceed and report
+├── select_model.py             # decision table: tier, route and review depth
+├── agent_stats.py              # tokens, cache rebuilds and context size from transcripts
 ├── jev.config.template.json    # template for Jev gates and thresholds
+├── opencode.config.json        # opencode permissions (no push, no reset, no outside dirs)
+├── rtk/
+│   ├── rtk-gate.mjs            # optional PreToolUse hook for rtk
+│   └── rtk-mode.mjs            # turn rtk on / off for the current session
 ├── jev/
 │   ├── jev.py / jev.mjs        # Jev client (Python / JS)
 │   └── test_jev.py / jev.test.mjs
@@ -142,7 +198,8 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 ## Tuning
 
 - The decision table and thresholds are starting points. After 10–20 PBIs, look at the results per model (first-try pass, reworks, promotions) and adjust `select_model.py` and `jev.config.json`.
-- Runner models and effort levels are in the `CODEX` / `AGY` / `AGENT` tables in `select_model.py`.
+- Runner models and effort levels are in the `OPENCODE` / `CODEX` / `AGY` / `AGENT` tables in `select_model.py`.
+- Review the hand-off threshold (250,000 tokens) and the opencode results on the sonnet tier at the same time.
 
 ## Tests
 

@@ -9,6 +9,7 @@
   python agent_stats.py --all                 # PBI のサブエージェントを含む全セッション
   python agent_stats.py --out docs/pbi/stats  # <out>/<session>.json に書く (同じセッションは上書き)
   python agent_stats.py --json                # 要約の代わりに JSON を標準出力へ
+  python agent_stats.py --ctx                 # 今のディレクトリのセッションの、最後のリクエストの文脈の大きさを 1 行で出す
 """
 
 import argparse
@@ -70,6 +71,11 @@ def load_requests(path):
     return reqs
 
 
+def context(r):
+    """そのリクエストで送った文脈の大きさ (入力 + キャッシュ読み + キャッシュ書き)。"""
+    return r["input"] + r["cache_read"] + r["cache_write_5m"] + r["cache_write_1h"]
+
+
 def analyze(reqs):
     """リクエスト列からトークン合計・キャッシュの作り直し・リクエスト間隔の分布を出す。"""
     tokens = {k: 0 for k in TOKEN_KEYS}
@@ -84,6 +90,7 @@ def analyze(reqs):
     }
     events = []
     prev = None
+    peak = 0
     # 一度でも 1 時間 TTL で書いていたら、その会話は 1 時間 TTL で動いているとみなす
     uses_1h = False
     for r in reqs:
@@ -113,6 +120,7 @@ def analyze(reqs):
                 events.append({"gap_sec": round(gap), "tokens": written, "cause": cause,
                                "model": r["model"], "prev_model": prev["model"]})
         uses_1h = uses_1h or r["cache_write_1h"] > 0
+        peak = max(peak, context(r))
         prev = r
     first = reqs[0] if reqs else None
     return {
@@ -122,6 +130,8 @@ def analyze(reqs):
         "duration_sec": round(reqs[-1]["ts"] - reqs[0]["ts"]) if reqs else 0,
         "tokens": tokens,
         "by_model": by_model,
+        "peak_context": peak,
+        "last_context": context(reqs[-1]) if reqs else 0,
         "cold_start_write": (first["cache_write_5m"] + first["cache_write_1h"]) if first else 0,
         "cache_hit_ratio": round(tokens["cache_read"] / max(1, tokens["cache_read"] + tokens["input"]
                                  + tokens["cache_write_5m"] + tokens["cache_write_1h"]), 4),
@@ -136,6 +146,17 @@ def find_session(session_id):
     if not hits:
         sys.exit(f"セッション {session_id} の会話記録が見つからない")
     return hits[0]
+
+
+def project_dir_for(cwd):
+    """Claude Code が会話記録を置くディレクトリ名 (英数字以外を - にしたもの)。"""
+    return PROJECTS / "".join(c if c.isalnum() else "-" for c in str(cwd))
+
+
+def cwd_session():
+    """今のディレクトリのプロジェクトで最後に更新された会話記録。無ければ全体で最後のもの。"""
+    files = list(project_dir_for(Path.cwd()).glob("*.jsonl"))
+    return max(files, key=lambda p: p.stat().st_mtime) if files else latest_session()
 
 
 def latest_session():
@@ -214,6 +235,17 @@ def fmt(n):
 
 def summary(s):
     lines = [f"## セッション {s['session']} ({s['project_dir']})", ""]
+    parts = [("オーケストレーター", ", ".join(sorted(s["orchestrator"]["by_model"])), s["orchestrator"])] + [
+        (a["description"][:40] or a["agent"], ", ".join(a["models"]), a) for a in s["agents"]]
+    all_read = max(1, sum(a["tokens"]["cache_read"] for _, _, a in parts))
+    lines.append("### エージェント別の読みとターン数 (読みの多い順)")
+    lines.append("| 対象 | モデル | リクエスト | キャッシュ読み | 割合 | 1 リクエスト平均 | 最大の文脈 |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|")
+    for name, models, a in sorted(parts, key=lambda x: -x[2]["tokens"]["cache_read"]):
+        read, n = a["tokens"]["cache_read"], max(1, a["requests"])
+        lines.append(f"| {name} | {models} | {a['requests']} | {fmt(read)} | {read * 100 // all_read}% | "
+                     f"{fmt(read // n)} | {fmt(a['peak_context'])} |")
+    lines.append("")
     lines.append("### モデル別 (オーケストレーター + サブエージェント)")
     lines.append("| モデル | リクエスト | 入力 | 出力 | キャッシュ読み | 書き 5m | 書き 1h |")
     lines.append("|---|---:|---:|---:|---:|---:|---:|")
@@ -243,12 +275,17 @@ def main():
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--session")
     g.add_argument("--all", action="store_true")
+    g.add_argument("--ctx", action="store_true")
     ap.add_argument("--out")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
+    if args.ctx:
+        a = analyze(load_requests(cwd_session()))
+        print(f"context={a['last_context']} peak={a['peak_context']} requests={a['requests']}")
+        return
     if args.all:
         paths = pbi_sessions()
     elif args.session:
