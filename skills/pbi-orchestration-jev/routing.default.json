@@ -1,0 +1,21 @@
+{
+  "$schema_note": "select_model.py の --routing / docs/pbi/routing.json の形。どの段も最後の 1 つだけが agent。until を過ぎた実行先は route から外れる。",
+  "name": "default",
+  "tiers": {
+    "haiku": [
+      {"runner": "opencode", "model": "opencode-go/deepseek-v4.1-flash", "effort": null},
+      {"runner": "codex", "model": "gpt-6-astra", "effort": "medium", "until": "2026-10-23"},
+      {"runner": "agy", "model": "claude-sonnet-5-5-low", "effort": null},
+      {"runner": "agent", "model": "haiku", "effort": "max"}
+    ],
+    "sonnet": [
+      {"runner": "opencode", "model": "opencode-go/deepseek-v4.1-flash", "effort": null},
+      {"runner": "codex", "model": "gpt-6-astra", "effort": "high", "until": "2026-10-23"},
+      {"runner": "agy", "model": "claude-sonnet-5-5-high", "effort": null},
+      {"runner": "agent", "model": "sonnet", "effort": "high"}
+    ],
+    "opus": [
+      {"runner": "agent", "model": "opus", "effort": null}
+    ]
+  }
+}

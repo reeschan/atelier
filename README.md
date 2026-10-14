@@ -10,7 +10,7 @@ Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The orchestrator in Claude Code asks Jev short questions, picks a route with select_model.py, hands PBIs to opencode, Codex, Antigravity or the Agent tool, optionally compresses command output with rtk, and records status in docs/pbi/ of the target repository.">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The orchestrator in Claude Code asks Jev short questions, picks a route with select_model.py, hands PBIs to opencode, Codex, Antigravity or the Agent tool, optionally compresses command output with rtk, and records status in docs/pbi/ of the target repository. Template Studio shows a model list built from OpenRouter and Artificial Analysis and writes the chosen try order to docs/pbi/routing.json.">
 </picture>
 
 The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lang.com)).
@@ -29,6 +29,7 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - **Mechanical steps run as scripts.** `prepare.py` runs Jev gate 1 (brief and PBI quality) plus the decision table in one call, and `verify.py` runs a PBI's verification commands; both return only a table to the orchestrator. The skill body is split into a core and `appendix/` files that are read only when needed. In the author's measurements (2026-10, 6 tasks) these two changes cut cost by 15%.
 - **Workers get just what they need (optional).** With a shared-memory MCP (`mcp__shared-memory__*`), only the orchestrator writes per-task "refs" (one fact each) and lists their ids in the PBI. The `pbi-worker` sub-agent can only `get` memories, never search or write.
 - **CLAUDE.md first.** Stable repository knowledge (conventions, commands, pitfalls) is expected to live in layered CLAUDE.md files; the orchestrator searches memory only as a supplement.
+- **Pick the try order in a browser.** Template Studio turns the models you have into performance, cost and balanced proposals; reorder and press Apply to write `docs/pbi/routing.json` (see Template Studio below).
 - **Usage stats.** `agent_stats.py` reads Claude Code transcripts and reports tokens per model and per agent, how often the prompt cache had to be rebuilt, and the current context size.
 
 ## Flow
@@ -75,6 +76,41 @@ flowchart TD
 - Antigravity offers no Haiku, so the haiku tier uses Sonnet at low effort there.
 - `--skip opencode,agy` drops runners that hit a quota or got denied in this session. `--all docs/pbi` routes every PBI at once and prints one line per PBI.
 - "deep" review means the Opus orchestrator reads the whole diff itself. A normal review over 300 lines is delegated to an Opus reviewer agent.
+
+## Template Studio
+
+The "which runner and model, in what order" part of the tables above can be picked in a browser. The decision table that sets the tier does not change.
+
+```
+/pbi-orchestration-jev templates
+```
+
+Run this in Claude Code and the skill starts a small server on 127.0.0.1 and opens the page. To open it without the skill:
+
+```sh
+python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py --target <target repo root>
+```
+
+1. **Pick models**: keep only the runner chips you have on each provider card.
+2. **Pick a proposal**: the page builds performance, cost and balanced proposals from those models. You can set a quality floor per work class (light / standard / needs design).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/studio-proposals-dark.png">
+  <img src="assets/studio-proposals-light.png" alt="Template Studio: pick models on provider cards, then choose one of three proposals." width="800">
+</picture>
+
+3. **Adjust the order**: for each work class, drag or use the arrow buttons to reorder, and untick what you do not want. Pick the Claude Code model that catches the rest.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/studio-order-dark.png">
+  <img src="assets/studio-order-light.png" alt="Adjusting the try order per work class by reordering and unticking models." width="800">
+</picture>
+
+4. **Apply**: the Apply button writes `docs/pbi/routing.json` and the server stops. The previous file is kept as `routing.prev.json`. From then on `prepare.py` tries runners in that order.
+
+- Refresh the model list (`studio/catalog.json`) with `python studio/update_catalog.py`. Prices and new models come from OpenRouter; quality is the Artificial Analysis coding index (when `AA_API_KEY` is set). Until then the values are placeholders, and the page says so.
+- The server only writes `docs/pbi/routing.json`, and only when the per-run token, the Host header and the template shape all check out.
+- Design notes (Japanese): [docs/template-studio.md](docs/template-studio.md).
 
 ## Requirements
 
@@ -152,6 +188,8 @@ In Claude Code, invoke it for work that spans several files:
 /pbi-orchestration-jev <what you want built>
 ```
 
+To pick the routing template in a browser, run `/pbi-orchestration-jev templates` (see Template Studio above).
+
 Everything is recorded under `docs/pbi/` in the target repository.
 
 | Path | Contents |
@@ -183,6 +221,8 @@ skills/pbi-orchestration-jev/
 ├── prepare.py                  # Jev gate 1 + decision table in one call; prints a table
 ├── verify.py                   # runs a PBI's verification commands; prints exit codes and tails
 ├── select_model.py             # decision table: tier, route and review depth
+├── routing.default.json        # default routing template (override with docs/pbi/routing.json)
+├── studio/                     # build templates in a browser (index.html, serve.py, update_catalog.py, catalog.json)
 ├── agent_stats.py              # tokens, cache rebuilds and context size from transcripts
 ├── jev.config.template.json    # template for Jev gates and thresholds
 ├── opencode.config.json        # opencode permissions (no push, no reset, no outside dirs)
@@ -208,7 +248,8 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 ## Tuning
 
 - The decision table and thresholds are starting points. After 10–20 PBIs, look at the results per model (first-try pass, reworks, promotions) and adjust `select_model.py` and `jev.config.json`.
-- Runner models and effort levels are in the `OPENCODE` / `CODEX` / `AGY` / `AGENT` tables in `select_model.py`.
+- Runner models and effort levels come from a routing template (`routing.json`, same shape as `routing.default.json`). Put it at `docs/pbi/routing.json` in the target repo, or `routing.json` in the skill directory, and `select_model.py` uses it; without one, the built-in table applies.
+- You can also build the template in a browser (see Template Studio above).
 - Review the hand-off threshold (250,000 tokens) and the opencode results on the sonnet tier at the same time.
 
 ## Tests
@@ -216,6 +257,7 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 ```sh
 cd skills/pbi-orchestration-jev
 python -m unittest test_select_model test_agent_stats
+python -m unittest discover -s studio -p 'test_*.py'
 cd jev
 python -m unittest test_jev
 node --test --test-reporter=tap jev.test.mjs
