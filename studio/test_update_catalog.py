@@ -30,7 +30,10 @@ OPENROUTER = {'data': [
     {'id': 'anthropic/old', 'name': 'Old', 'created': NOW - 300 * DAY, 'pricing': {}},
     {'id': 'someone/else', 'name': 'Else', 'created': NOW - 1 * DAY, 'pricing': {}},
 ]}
-AA = {'data': [{'slug': 'a', 'evaluations': {'artificial_analysis_intelligence_index': 71.24}}]}
+AA = {'data': [
+    {'slug': 'a', 'evaluations': {'artificial_analysis_intelligence_index': 71.24}},
+    {'slug': 'd', 'evaluations': {'artificial_analysis_coding_index': 55.0, 'artificial_analysis_intelligence_index': 60.0}},
+]}
 
 
 class MergeTest(unittest.TestCase):
@@ -40,7 +43,9 @@ class MergeTest(unittest.TestCase):
         self.assertEqual((a['price_in'], a['price_out']), (3.0, 15.0))
         self.assertEqual(a['quality'], 71.2)
         self.assertFalse(a['sample'])
-        self.assertTrue(d['sample'])  # どちらの出どころにも無いので仮の値のまま
+        self.assertEqual(a['quality_metric'], 'artificial_analysis_intelligence_index')  # コーディング指標が無いので総合で代える
+        self.assertEqual((d['quality'], d['quality_metric']), (55.0, 'artificial_analysis_coding_index'))
+        self.assertTrue(d['sample'])  # 価格が OpenRouter に無いので仮の値のまま
         self.assertEqual([c['openrouter_id'] for c in out['candidates']], ['anthropic/new'])
         self.assertEqual(out['sources'], {'openrouter': '2026-10-14', 'artificial_analysis': '2026-10-14'})
 
