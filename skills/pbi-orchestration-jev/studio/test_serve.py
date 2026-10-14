@@ -60,6 +60,16 @@ class ServeTest(unittest.TestCase):
         self.assertIn('agent', json.loads(body)['error'])
         self.assertEqual(self.applied, [])
 
+    def test_symlinked_destination_is_refused(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        (self.target / 'docs').mkdir()
+        (self.target / 'docs' / 'pbi').symlink_to(outside.name, target_is_directory=True)
+        code, body = self.request('POST', '/apply', GOOD)
+        self.assertEqual(code, 400)
+        self.assertEqual(os.listdir(outside.name), [])
+        self.assertEqual(self.applied, [])
+
     def test_apply_writes_and_keeps_previous(self):
         out = self.target / 'docs' / 'pbi' / 'routing.json'
         out.parent.mkdir(parents=True)
@@ -68,7 +78,8 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(json.loads(out.read_text(encoding='utf-8'))['name'], 'mine')
         self.assertEqual(json.loads((out.parent / 'routing.prev.json').read_text(encoding='utf-8')), {'old': True})
-        self.assertEqual(self.applied, [out])
+        self.assertEqual(self.applied, [out.resolve()])
+        self.assertEqual(sorted(p.name for p in out.parent.iterdir()), ['routing.json', 'routing.prev.json'])
 
 
 if __name__ == '__main__':

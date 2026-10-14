@@ -7,15 +7,17 @@
 - GET /catalog.json モデル一覧
 - POST /apply       画面から送られた routing.json を確かめて <target>/docs/pbi/routing.json に書く。
                     前の routing.json があれば routing.prev.json に残す
-合言葉が違う・Host が 127.0.0.1 でない・形が違う (select_model.routing_error) ときは書かない。
-書いたら標準出力に「APPLIED <パス>」を出して終わる (--keep なら待ち続ける)。--timeout 秒たっても適用されなければ
-「TIMEOUT」を出して終わる。
+合言葉が違う・Host が 127.0.0.1 でない・形が違う (select_model.routing_error)・書き先がリンクでリポジトリの外を指す、のどれかなら書かない。
+書いたら標準出力に「APPLIED <パス>」を出して終わる。--timeout 秒たっても適用されなければ「TIMEOUT」を出して終わる。
+--keep のときは適用しても時間がたっても止まらない (Ctrl+C で止める)。
 """
 import argparse
 import hmac
 import json
+import os
 import secrets
 import sys
+import tempfile
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,13 +38,37 @@ def page(target: Path, token: str) -> bytes:
     return html.replace(MARKER, f'<script type="application/json" id="studio-apply">{info}</script>', 1).encode('utf-8')
 
 
-def apply(target: Path, table: dict) -> Path:
-    out = target / 'docs' / 'pbi' / 'routing.json'
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if out.exists():
-        out.with_name('routing.prev.json').write_bytes(out.read_bytes())
-    out.write_text(json.dumps(table, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+APPLY_LOCK = threading.Lock()
+
+
+def destination(target: Path) -> Path:
+    """書き先を決める。docs・docs/pbi・routing.json・routing.prev.json のどれかがリンクなら、外に書かないよう止める。"""
+    root = target.resolve()
+    out = root / 'docs' / 'pbi' / 'routing.json'
+    for p in (root / 'docs', root / 'docs' / 'pbi', out, out.with_name('routing.prev.json')):
+        if p.is_symlink():
+            raise ValueError(f'{p} がリンクなので書かない')
+    if not out.resolve().is_relative_to(root):
+        raise ValueError(f'{out} が対象リポジトリの外を指すので書かない')
     return out
+
+
+def apply(target: Path, table: dict) -> Path:
+    """前の routing.json を routing.prev.json に残し、新しい中身を一時ファイルから置き換える (同時の適用は 1 つずつ)。"""
+    with APPLY_LOCK:
+        out = destination(target)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.exists():
+            out.with_name('routing.prev.json').write_bytes(out.read_bytes())
+        fd, tmp = tempfile.mkstemp(prefix='.routing.', suffix='.json', dir=out.parent)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(json.dumps(table, ensure_ascii=False, indent=2) + '\n')
+            os.replace(tmp, out)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+        return out
 
 
 def make_server(target: Path, port: int, token: str, on_apply) -> ThreadingHTTPServer:
@@ -94,9 +120,12 @@ def make_server(target: Path, port: int, token: str, on_apply) -> ThreadingHTTPS
             err = routing_error(table)
             if err:
                 return self.fail(400, err)
-            out = apply(target, table)
-            self.send(200, json.dumps({'ok': True, 'path': str(out)}, ensure_ascii=False).encode('utf-8'))
+            try:
+                out = apply(target, table)
+            except ValueError as e:
+                return self.fail(400, str(e))
             on_apply(out)
+            self.send(200, json.dumps({'ok': True, 'path': str(out)}, ensure_ascii=False).encode('utf-8'))
 
     return ThreadingHTTPServer(('127.0.0.1', port), Handler)
 
@@ -129,7 +158,8 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     if not args.no_open:
         webbrowser.open(url)
-    if not done.wait(args.timeout if args.timeout > 0 else None):
+    # --keep のときは適用しても止まらないので、時間切れでも止めない (Ctrl+C で止める)
+    if not done.wait(None if args.keep or args.timeout <= 0 else args.timeout):
         print('TIMEOUT', flush=True)
     server.shutdown()
 

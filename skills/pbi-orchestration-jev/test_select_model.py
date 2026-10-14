@@ -174,7 +174,8 @@ class RoutingTemplateTest(unittest.TestCase):
         no_model = {'tiers': dict(PERF['tiers'], opus=[{'runner': 'agent'}])}
         bad_until = {'tiers': dict(PERF['tiers'], sonnet=[{'runner': 'codex', 'model': 'x', 'until': 'soon'},
                                                           {'runner': 'agent', 'model': 'sonnet'}])}
-        for table in (no_model, bad_until):
+        list_model = {'tiers': dict(PERF['tiers'], opus=[{'runner': 'agent', 'model': ['opus']}])}
+        for table in (no_model, bad_until, list_model):
             with tempfile.TemporaryDirectory() as d:
                 code, _ = run(SMALL, ALL_ZERO, '--routing', self.write(d, 'r.json', table))
             self.assertNotEqual(code, 0)
