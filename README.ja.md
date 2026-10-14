@@ -206,7 +206,8 @@ python jev/jev.py --request <request.json>                 # リクエストを�
 ## 調整
 
 - 決定表としきい値は仮の値です。PBI が 10〜20 件たまったら、モデル別の結果 (一発合格・差し戻し・昇格) を見て、`select_model.py` と `jev.config.json` を見直してください。
-- 実行先のモデルと effort は、`select_model.py` の `OPENCODE` / `CODEX` / `AGY` / `AGENT` で変えられます。
+- 実行先のモデルと effort は、テンプレート `routing.json` で変えられます (形は `routing.default.json`)。対象リポジトリの `docs/pbi/routing.json`、またはスキルのディレクトリの `routing.json` に置くと、`select_model.py` がそちらを使います。無ければ今までの表のままです。
+- テンプレートは画面でも組めます。`studio/index.html` をブラウザで開き、使うモデルを選ぶと、性能・コスパ・バランスの 3 案が出ます。選んだ案の JSON を `docs/pbi/routing.json` に置いてください。モデル一覧は `python studio/update_catalog.py` で更新します (設計は `docs/template-studio.md`)。
 - 引き継ぎのしきい値 (250,000 トークン) と、sonnet の段の opencode の結果も同じ時期に見直してください。
 
 ## テスト
@@ -214,6 +215,7 @@ python jev/jev.py --request <request.json>                 # リクエストを�
 ```sh
 cd skills/pbi-orchestration-jev
 python -m unittest test_select_model test_agent_stats
+python -m unittest discover -s ../../studio -p 'test_*.py'
 cd jev
 python -m unittest test_jev
 node --test --test-reporter=tap jev.test.mjs

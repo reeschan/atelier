@@ -1,7 +1,7 @@
 """担当を決める。
 
-  python select_model.py <facts.json> [<brief の Jev 応答.json>] [--today YYYY-MM-DD] [--tier haiku|sonnet|opus] [--skip opencode,agy]
-  python select_model.py --all docs/pbi [--today ...] [--skip ...]
+  python select_model.py <facts.json> [<brief の Jev 応答.json>] [--today YYYY-MM-DD] [--tier haiku|sonnet|opus] [--skip opencode,agy] [--routing <routing.json>]
+  python select_model.py --all docs/pbi [--today ...] [--skip ...] [--routing ...]
 
 facts.json: {"files_changed", "files_new", "files_deleted", "modules", "criteria", "sensitive"}
 Jev 応答: ゲート brief（novelty / coupling / ambiguity）の API 応答。無い・エラーのときは各 score を 1 とする。
@@ -9,6 +9,9 @@ Jev 応答: ゲート brief（novelty / coupling / ambiguity）の API 応答。
 --skip: route から外す実行先（このセッションで上限・拒否が出た実行先、昇格で外す opencode）。agent は外せない。
 --all: <dir>/PBI-*.facts.json と <dir>/jev/PBI-*.brief.json を全部判定し、<dir>/PBI-*.route.json に書いて、
        標準出力には 1 PBI 1 行の表だけを出す（オーケストレーターの文脈を細く保つため）。
+--routing: 段ごとの route を書いたテンプレート（routing.default.json と同じ形。studio/ の画面で作れる）。
+       指定が無ければ、--all のときは <dir>/routing.json、次にこのディレクトリの routing.json を探し、
+       どちらも無ければ下の既定の表を使う。
 標準出力（1 件のとき）: {"tier", "route": [{"runner", "model", "effort"}, ...], "review", "scores", "reasons"}
 
 route は上から順に試す実行先。runner は opencode（opencode CLI の OpenCode Go）/ codex（Codex CLI）/ agy（Antigravity
@@ -81,18 +84,68 @@ def claude_tier(facts: dict, scores: dict) -> tuple[str, str]:
     return 'haiku', 'どの条件にも当たらない'
 
 
-def route(tier: str, today: datetime.date, sensitive: bool = False, skip: frozenset = frozenset()) -> list[dict]:
-    steps = []
-    if not sensitive:
-        if tier in OPENCODE:
-            steps.append(OPENCODE[tier])
-        if tier in CODEX and today <= CODEX_UNTIL:
-            steps.append(CODEX[tier])
-        if tier in AGY:
-            steps.append(AGY[tier])
-    steps = [s for s in steps if s['runner'] not in skip]
-    steps.append(AGENT[tier])
-    return steps
+def default_routing() -> dict:
+    """テンプレートが無いときの表。routing.default.json と同じ中身。"""
+    def until(step, day):
+        return {**step, 'until': day.isoformat()}
+    return {'name': 'default', 'tiers': {
+        'haiku': [OPENCODE['haiku'], until(CODEX['haiku'], CODEX_UNTIL), AGY['haiku'], AGENT['haiku']],
+        'sonnet': [OPENCODE['sonnet'], until(CODEX['sonnet'], CODEX_UNTIL), AGY['sonnet'], AGENT['sonnet']],
+        'opus': [AGENT['opus']],
+    }}
+
+
+def load_routing(path) -> dict:
+    """テンプレートを読み、形を確かめる。どの段も最後の 1 つだけが agent で、間は RUNNERS のどれか。"""
+    table = json.load(open(path, encoding='utf-8'))
+    tiers = table.get('tiers', {})
+    for tier in TIERS:
+        steps = tiers.get(tier)
+        if not steps or steps[-1].get('runner') != 'agent':
+            sys.exit(f'{path}: tiers.{tier} の最後は agent の実行先にする')
+        for s in steps[:-1]:
+            if s.get('runner') not in RUNNERS:
+                sys.exit(f'{path}: tiers.{tier} の途中は {"/".join(RUNNERS)} のどれか（{s.get("runner")}）')
+            if not s.get('model'):
+                sys.exit(f'{path}: tiers.{tier} の {s["runner"]} に model が無い')
+            if s.get('until'):
+                datetime.date.fromisoformat(s['until'])
+    return table
+
+
+def find_routing(explicit: str | None, all_dir: str | None) -> tuple[dict, str]:
+    candidates = [Path(explicit)] if explicit else []
+    if not explicit:
+        if all_dir:
+            candidates.append(Path(all_dir) / 'routing.json')
+        candidates.append(Path(__file__).resolve().parent / 'routing.json')
+    for c in candidates:
+        if c.exists():
+            return load_routing(c), str(c)
+    if explicit:
+        sys.exit(f'--routing のファイルが無い: {explicit}')
+    return default_routing(), ''
+
+
+def route(tier: str, today: datetime.date, sensitive: bool = False, skip: frozenset = frozenset(),
+          routing: dict | None = None) -> list[dict]:
+    """sensitive はリポジトリの外のサービスに出さないため、その段の agent だけにする。"""
+    steps = (routing or default_routing())['tiers'][tier]
+    if sensitive:
+        return [strip(steps[-1])]
+    out = []
+    for s in steps[:-1]:
+        if s['runner'] in skip:
+            continue
+        if s.get('until') and today > datetime.date.fromisoformat(s['until']):
+            continue
+        out.append(strip(s))
+    out.append(strip(steps[-1]))
+    return out
+
+
+def strip(step: dict) -> dict:
+    return {'runner': step['runner'], 'model': step['model'], 'effort': step.get('effort')}
 
 
 def load_answers(path) -> dict:
@@ -105,7 +158,7 @@ def load_answers(path) -> dict:
 
 
 def decide(facts: dict, answers: dict, today: datetime.date, forced: str | None = None,
-           skip: frozenset = frozenset()) -> dict:
+           skip: frozenset = frozenset(), routing: dict | None = None) -> dict:
     scores, reasons = {}, []
     for k in KEYS:
         scores[k], note = level(answers.get(k))
@@ -115,12 +168,15 @@ def decide(facts: dict, answers: dict, today: datetime.date, forced: str | None 
     else:
         tier, why = claude_tier(facts, scores)
     sensitive = bool(facts.get('sensitive'))
-    steps = route(tier, today, sensitive, skip)
+    routing = routing or default_routing()
+    steps = route(tier, today, sensitive, skip, routing)
     review = 'deep' if sensitive or scores['coupling'] == 2 else 'normal'
     if steps[0]['runner'] == 'opencode':
         why += '（opencode の DeepSeek を先に試す）'
     if any(s['runner'] == 'codex' for s in steps):
-        why += f'（{CODEX_UNTIL} までは codex を agy より先に試す）'
+        why += f'（{CODEX_UNTIL} までは codex を agy より先に試す）' if routing.get('name') == 'default' else ''
+    if routing.get('name') != 'default':
+        why += f"（テンプレート {routing.get('name', '?')}）"
     if skip:
         why += f"（{','.join(sorted(skip))} を外した）"
     reasons.insert(0, f'決定: {tier}。{why}')
@@ -132,14 +188,14 @@ def label(step: dict) -> str:
     return f"{step['runner']} {model}" + (f" {step['effort']}" if step['effort'] else '')
 
 
-def run_all(base: Path, today: datetime.date, skip: frozenset) -> None:
+def run_all(base: Path, today: datetime.date, skip: frozenset, routing: dict | None = None) -> None:
     print('| PBI | 段 | route の先頭 | review | 理由 |')
     print('|---|---|---|---|---|')
     for fp in sorted(base.glob('PBI-*.facts.json')):
         pbi = fp.name.removesuffix('.facts.json')
         brief = base / 'jev' / f'{pbi}.brief.json'
         out = decide(json.load(open(fp, encoding='utf-8')), load_answers(brief if brief.exists() else None),
-                     today, skip=skip)
+                     today, skip=skip, routing=routing)
         (base / f'{pbi}.route.json').write_text(json.dumps(out, ensure_ascii=False), encoding='utf-8')
         print(f"| {pbi} | {out['tier']} | {label(out['route'][0])} | {out['review']} | "
               f"{out['reasons'][0].removeprefix('決定: ')} |")
@@ -167,13 +223,14 @@ def main():
     if skip - set(RUNNERS):
         sys.exit(f'--skip は {"/".join(RUNNERS)} のどれか（カンマ区切り）')
     all_dir = pop_opt(args, '--all')
+    routing, _ = find_routing(pop_opt(args, '--routing'), all_dir)
     if all_dir:
-        run_all(Path(all_dir), today, skip)
+        run_all(Path(all_dir), today, skip, routing)
         return
 
     facts = json.load(open(args[0], encoding='utf-8'))
     answers = load_answers(args[1] if len(args) > 1 else None)
-    print(json.dumps(decide(facts, answers, today, forced, skip), ensure_ascii=False))
+    print(json.dumps(decide(facts, answers, today, forced, skip, routing), ensure_ascii=False))
 
 
 if __name__ == '__main__':
