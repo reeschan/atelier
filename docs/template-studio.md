@@ -25,11 +25,13 @@ flowchart LR
 
 画面では、スキルの中の言葉をそのまま出さない。
 
-| スキルの中 | 画面 |
-|---|---|
-| 段 (tier) haiku / sonnet / opus | 作業の重さ: 軽い作業 / ふつうの作業 / 設計が要る作業 |
-| route | 試す順番 |
-| route の最後の agent | 最後に受ける Claude Code |
+| スキルの中 | 画面 (日本語) | 画面 (英語) |
+|---|---|---|
+| 段 (tier) haiku / sonnet / opus | 作業の重さ: 軽い作業 / ふつうの作業 / 設計が要る作業 | workload: Light work / Standard work / Design-heavy work |
+| route | 試す順番 | try order |
+| route の最後の agent | 最後に受ける Claude Code | Final fallback (Claude Code) |
+
+画面の文言は `index.html` の `TEXT` に日本語 (`ja`) と英語 (`en`) を同じキーで持つ。言語は URL の `?lang=`、前回選んだ言語 (localStorage)、ブラウザの言語の順に決め、ヘッダーのボタンで切り替える。切り替えても選んだモデル・案・並び替えはそのまま残る。
 
 ## 1. モデル一覧 (catalog.json) とその更新
 
