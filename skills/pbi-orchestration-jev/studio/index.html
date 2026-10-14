@@ -422,7 +422,11 @@ footer a { color: inherit; }
   };
   const $ = (id) => document.getElementById(id);
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);  // catalog の数値は数として出す
+  // 価格が無い (null など) ものは 0 とみなさず「不明」として扱い、案には入れない
+  const measure = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  const priced = (m) => measure(m.price_in) !== null && measure(m.price_out) !== null;
 
   function options(cat) {
     return cat.models.flatMap((m) => m.options.map((o) => ({
@@ -430,8 +434,8 @@ footer a { color: inherit; }
       modelName: m.name, provider: m.provider, sample: m.sample,
       runner: o.runner, model: o.model, effort: o.effort, billing: o.billing, until: o.until ?? m.until ?? null,
       quality: num(m.quality) + num(o.quality_delta),
-      price: (3 * num(m.price_in) + num(m.price_out)) / 4,
-      perPbi: (TOKENS.in * num(m.price_in) + TOKENS.out * num(m.price_out)) / 1e6,
+      price: priced(m) ? (3 * measure(m.price_in) + measure(m.price_out)) / 4 : null,
+      perPbi: priced(m) ? (TOKENS.in * measure(m.price_in) + TOKENS.out * measure(m.price_out)) / 1e6 : null,
     })));
   }
   const label = (o) => `${RUNNER[o.runner]} ${o.model.split('/').pop()}${o.effort ? ' ' + o.effort : ''}`;
@@ -450,7 +454,7 @@ footer a { color: inherit; }
   }
 
   function build(profile, opts) {
-    const on = opts.filter((o) => state.enabled.has(o.key));
+    const on = opts.filter((o) => state.enabled.has(o.key) && o.price !== null);
     const tiers = {}, warnings = [];
     for (const t of TIERS) {
       const floor = state.floors[t];
@@ -509,8 +513,8 @@ footer a { color: inherit; }
       return `<article class="prov glass">
         <div class="prov-head"><span class="mark" style="background:${esc(p.color)}">${esc(p.mark)}</span>
           <div><b>${esc(p.name)}</b><span>${esc(runners)}</span></div></div>
-        ${models.map((m) => { const q = num(m.quality), pin = num(m.price_in), pout = num(m.price_out); return `<div class="model">
-          <div class="model-top"><b>${esc(m.name)}</b><span class="price">$${pin} / $${pout}</span></div>
+        ${models.map((m) => { const q = num(m.quality); return `<div class="model">
+          <div class="model-top"><b>${esc(m.name)}</b><span class="price">${priced(m) ? `$${measure(m.price_in)} / $${measure(m.price_out)}` : '価格不明 (案に入れない)'}</span></div>
           <div class="qline"><span>性能 ${q}${m.sample ? ' (仮)' : ''}</span><span>${m.until ? esc(m.until) + ' まで' : ''}</span></div>
           <div class="qbar"><i style="width:${Math.max(4, Math.min(100, q))}%; background-position:${-q * 2}px 0"></i></div>
           <div class="opts">${m.options.map((o) => {
@@ -604,7 +608,7 @@ footer a { color: inherit; }
           <span class="grip" aria-hidden="true">⠿</span>
           <span class="prio">${x.on ? ++n : '–'}</span>
           <input type="checkbox" id="${id}" data-tier="${t}" data-i="${i}" ${x.on ? 'checked' : ''}>
-          <label for="${id}">${esc(o.modelName)}<small>${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''} · 性能 ${num(o.quality)}${below ? ' <span class="below">下限未満</span>' : ''}</small></label>
+          <label for="${id}">${esc(o.modelName)}<small>${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''} · 性能 ${num(o.quality)}${o.price === null ? ' · 価格不明' : ''}${below ? ' <span class="below">下限未満</span>' : ''}</small></label>
           <span class="moves"><button type="button" data-move="-1" data-tier="${t}" data-i="${i}" aria-label="上へ" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" data-move="1" data-tier="${t}" data-i="${i}" aria-label="下へ" ${i === c.list.length - 1 ? 'disabled' : ''}>↓</button></span>
         </li>`;
       }).join('');

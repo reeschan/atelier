@@ -95,6 +95,10 @@ def default_routing() -> dict:
     }}
 
 
+def nonempty_str(v) -> bool:
+    return isinstance(v, str) and bool(v.strip())
+
+
 def routing_error(table) -> str | None:
     """テンプレートの形を確かめ、問題があればその説明を返す。どの段も最後の 1 つだけが agent で、間は RUNNERS のどれか。"""
     tiers = table.get('tiers') if isinstance(table, dict) else None
@@ -106,12 +110,12 @@ def routing_error(table) -> str | None:
             return f'tiers.{tier} が無いか、形が違う'
         if steps[-1].get('runner') != 'agent':
             return f'tiers.{tier} の最後は agent の実行先にする'
-        if not steps[-1].get('model'):
+        if not nonempty_str(steps[-1].get('model')):
             return f'tiers.{tier} の agent に model が無い'
         for s in steps[:-1]:
             if s.get('runner') not in RUNNERS:
                 return f'tiers.{tier} の途中は {"/".join(RUNNERS)} のどれか（{s.get("runner")}）'
-            if not s.get('model'):
+            if not nonempty_str(s.get('model')):
                 return f'tiers.{tier} の {s["runner"]} に model が無い'
             if s.get('until'):
                 try:
