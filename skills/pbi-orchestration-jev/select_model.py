@@ -9,7 +9,7 @@ Jev 応答: ゲート brief（novelty / coupling / ambiguity）の API 応答。
 --skip: route から外す実行先（このセッションで上限・拒否が出た実行先、昇格で外す opencode）。agent は外せない。
 --all: <dir>/PBI-*.facts.json と <dir>/jev/PBI-*.brief.json を全部判定し、<dir>/PBI-*.route.json に書いて、
        標準出力には 1 PBI 1 行の表だけを出す（オーケストレーターの文脈を細く保つため）。
---routing: 段ごとの route を書いたテンプレート（routing.default.json と同じ形。studio/ の画面で作れる）。
+--routing: 段ごとの route を書いたテンプレート（routing.default.json と同じ形。studio/ の画面で作れる。studio/serve.py なら画面から直接置ける）。
        指定が無ければ、--all のときは <dir>/routing.json、次にこのディレクトリの routing.json を探し、
        どちらも無ければ下の既定の表を使う。
 標準出力（1 件のとき）: {"tier", "route": [{"runner", "model", "effort"}, ...], "review", "scores", "reasons"}
@@ -95,26 +95,37 @@ def default_routing() -> dict:
     }}
 
 
-def load_routing(path) -> dict:
-    """テンプレートを読み、形を確かめる。どの段も最後の 1 つだけが agent で、間は RUNNERS のどれか。"""
-    table = json.load(open(path, encoding='utf-8'))
-    tiers = table.get('tiers', {})
+def routing_error(table) -> str | None:
+    """テンプレートの形を確かめ、問題があればその説明を返す。どの段も最後の 1 つだけが agent で、間は RUNNERS のどれか。"""
+    tiers = table.get('tiers') if isinstance(table, dict) else None
+    if not isinstance(tiers, dict):
+        return 'tiers が無い'
     for tier in TIERS:
         steps = tiers.get(tier)
-        if not steps or steps[-1].get('runner') != 'agent':
-            sys.exit(f'{path}: tiers.{tier} の最後は agent の実行先にする')
+        if not isinstance(steps, list) or not steps or not all(isinstance(s, dict) for s in steps):
+            return f'tiers.{tier} が無いか、形が違う'
+        if steps[-1].get('runner') != 'agent':
+            return f'tiers.{tier} の最後は agent の実行先にする'
         if not steps[-1].get('model'):
-            sys.exit(f'{path}: tiers.{tier} の agent に model が無い')
+            return f'tiers.{tier} の agent に model が無い'
         for s in steps[:-1]:
             if s.get('runner') not in RUNNERS:
-                sys.exit(f'{path}: tiers.{tier} の途中は {"/".join(RUNNERS)} のどれか（{s.get("runner")}）')
+                return f'tiers.{tier} の途中は {"/".join(RUNNERS)} のどれか（{s.get("runner")}）'
             if not s.get('model'):
-                sys.exit(f'{path}: tiers.{tier} の {s["runner"]} に model が無い')
+                return f'tiers.{tier} の {s["runner"]} に model が無い'
             if s.get('until'):
                 try:
                     datetime.date.fromisoformat(s['until'])
-                except ValueError:
-                    sys.exit(f'{path}: tiers.{tier} の until が日付でない（{s["until"]}）')
+                except (TypeError, ValueError):
+                    return f'tiers.{tier} の until が日付でない（{s["until"]}）'
+    return None
+
+
+def load_routing(path) -> dict:
+    table = json.load(open(path, encoding='utf-8'))
+    err = routing_error(table)
+    if err:
+        sys.exit(f'{path}: {err}')
     return table
 
 

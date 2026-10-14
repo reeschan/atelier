@@ -10,6 +10,7 @@ description: 複数ファイルにまたがる実装を、PBI起票・モデル�
 | 場面 | 読むもの |
 |---|---|
 | 引数が `resume` / 6.3 で文脈が 150,000 以上 | `appendix/handoff.md` |
+| 引数が `templates`（振り分けテンプレートを画面で決める） | `appendix/templates.md` |
 | 作業キーを決める・ref を書く・引き継ぐ・終わる | `appendix/memory.md` |
 | 差し戻す・止まる条件に当たった | `appendix/rework.md` |
 | Jev を直接呼ぶ（報告の仕分け・差し戻しのゲート） | `appendix/jev.md` |

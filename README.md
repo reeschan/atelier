@@ -183,6 +183,8 @@ skills/pbi-orchestration-jev/
 ├── prepare.py                  # Jev gate 1 + decision table in one call; prints a table
 ├── verify.py                   # runs a PBI's verification commands; prints exit codes and tails
 ├── select_model.py             # decision table: tier, route and review depth
+├── routing.default.json        # default routing template (override with docs/pbi/routing.json)
+├── studio/                     # build templates in a browser (index.html, serve.py, update_catalog.py, catalog.json)
 ├── agent_stats.py              # tokens, cache rebuilds and context size from transcripts
 ├── jev.config.template.json    # template for Jev gates and thresholds
 ├── opencode.config.json        # opencode permissions (no push, no reset, no outside dirs)
@@ -209,7 +211,7 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 
 - The decision table and thresholds are starting points. After 10–20 PBIs, look at the results per model (first-try pass, reworks, promotions) and adjust `select_model.py` and `jev.config.json`.
 - Runner models and effort levels come from a routing template (`routing.json`, same shape as `routing.default.json`). Put it at `docs/pbi/routing.json` in the target repo, or `routing.json` in the skill directory, and `select_model.py` uses it; without one, the built-in table applies.
-- You can build the template in a browser: open `studio/index.html`, pick the models you have, and choose one of three proposals (performance, cost, balanced). Save the JSON as `docs/pbi/routing.json`. Refresh the model list with `python studio/update_catalog.py` (design notes in `docs/template-studio.md`, Japanese).
+- You can build the template in a browser: run `/pbi-orchestration-jev templates`, pick the models you have, choose one of three proposals (performance, cost, balanced), adjust the order, and press Apply. The page writes `docs/pbi/routing.json` through a local server bound to 127.0.0.1 (`python skills/pbi-orchestration-jev/studio/serve.py --target <repo>` does the same by hand). Refresh the model list with `studio/update_catalog.py` (design notes in `docs/template-studio.md`, Japanese).
 - Review the hand-off threshold (250,000 tokens) and the opencode results on the sonnet tier at the same time.
 
 ## Tests
@@ -217,7 +219,7 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 ```sh
 cd skills/pbi-orchestration-jev
 python -m unittest test_select_model test_agent_stats
-python -m unittest discover -s ../../studio -p 'test_*.py'
+python -m unittest discover -s studio -p 'test_*.py'
 cd jev
 python -m unittest test_jev
 node --test --test-reporter=tap jev.test.mjs
