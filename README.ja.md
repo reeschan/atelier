@@ -24,6 +24,9 @@
 - **文脈が大きくなったら引き継ぐ**: PBI の波の区切りで `agent_stats.py --ctx` で文脈の大きさを測り、250,000 トークン以上なら `docs/pbi/HANDOFF.md` を書いて止まります。`/clear` のあと `/pbi-orchestration-jev resume` で続きから再開します。
 - **Opus は設計とレビュー、実装は安いモデル**: Opus で実装するのは設計判断が要る PBI だけです。機密に触れる PBI や結合度の高い PBI は Sonnet で実装し、Opus のオーケストレーターが重点的にレビューします。
 - **[rtk](https://github.com/rtk-ai/rtk) でコマンド出力を圧縮 (任意)**: 同梱のフックが、スキルが有効にしたセッションだけ Bash / PowerShell のコマンドを `rtk <cmd>` に書き換えます。
+- **機械的な手順はスクリプトで**: Jev のゲート 1 (要約の判定・PBI の品質) と決定表の判定は `prepare.py`、検証コマンドの実行は `verify.py` が 1 回で行い、オーケストレーターには表だけを返します。スキル本文も、毎回要る中核と、場面ごとに読む `appendix/` に分けてあります。作者の実測 (2026-10、6 タスク) では、この 2 つで費用が 15% 下がりました。
+- **実装担当には必要十分な情報だけ (任意)**: 共有メモリの MCP (`mcp__shared-memory__*`) があるとき、オーケストレーターだけが作業ごとの空間に「ref」(1 件 1 事実) を書き、PBI の参照欄に id を並べます。実装担当用の `pbi-worker` はメモリの `get` だけを持ち、search と write はできません。
+- **CLAUDE.md を前提にする**: リポジトリの安定した知識 (規約・コマンド・落とし穴) は、階層化した CLAUDE.md にあるものとして扱い、オーケストレーターの検索は補助にとどめます。
 - **統計を取る**: `agent_stats.py` が、Claude Code の会話記録からモデル別・エージェント別のトークン数、プロンプトキャッシュの作り直しの回数、今の文脈の大きさを集計します。
 
 ## 流れ
@@ -91,7 +94,10 @@ flowchart TD
 ```sh
 git clone https://github.com/reeschan/pbi-orchestration-jev.git
 cp -r pbi-orchestration-jev/skills/pbi-orchestration-jev ~/.claude/skills/
+mkdir -p ~/.claude/agents && cp pbi-orchestration-jev/skills/pbi-orchestration-jev/agents/pbi-worker.md ~/.claude/agents/
 ```
+
+`pbi-worker` は実装担当とレビュー用のサブエージェントの定義です。Claude Code を再起動すると使えるようになります。置かないときは general-purpose で動きます (メモリの search を止める仕組みが無くなるだけです)。
 
 Jev の API キーは、次のどちらかに置きます (クライアントはこの順で探します)。
 
@@ -170,6 +176,10 @@ skills/pbi-orchestration-jev/
 ├── runners.md                  # opencode / Codex / Antigravity への渡し方
 ├── verify-commands.md          # 検証コマンドを書くときの注意
 ├── worker.md                   # 実装担当の進め方と報告の形
+├── appendix/                   # 場面ごとに読む付録 (memory・rework・handoff・finish・jev)
+├── agents/pbi-worker.md        # 実装担当・レビュー用のサブエージェントの定義 (~/.claude/agents に置く)
+├── prepare.py                  # Jev のゲート 1 と決定表を 1 回で実行し、表だけを出す
+├── verify.py                   # PBI の検証コマンドを実行し、終了コードと末尾だけを表で出す
 ├── select_model.py             # 決定表: 段・route・レビューの深さ
 ├── agent_stats.py              # 会話記録からトークン・キャッシュ・文脈の大きさを集計
 ├── jev.config.template.json    # Jev のゲートとしきい値の雛形

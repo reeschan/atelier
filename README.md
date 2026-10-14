@@ -26,6 +26,9 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - **Hand-off when the context grows.** Between waves of PBIs the orchestrator measures its context with `agent_stats.py --ctx`. Above 250,000 tokens it writes `docs/pbi/HANDOFF.md` and asks you to `/clear` and resume with `/pbi-orchestration-jev resume`.
 - **Opus designs and reviews; cheaper models implement.** Only PBIs that need design decisions are implemented by Opus. Sensitive or tightly coupled PBIs are implemented by Sonnet and get a deep review from the Opus orchestrator.
 - **Optional output compression with [rtk](https://github.com/rtk-ai/rtk).** A bundled hook rewrites Bash / PowerShell commands to `rtk <cmd>` only in sessions where the skill switched it on.
+- **Mechanical steps run as scripts.** `prepare.py` runs Jev gate 1 (brief and PBI quality) plus the decision table in one call, and `verify.py` runs a PBI's verification commands; both return only a table to the orchestrator. The skill body is split into a core and `appendix/` files that are read only when needed. In the author's measurements (2026-10, 6 tasks) these two changes cut cost by 15%.
+- **Workers get just what they need (optional).** With a shared-memory MCP (`mcp__shared-memory__*`), only the orchestrator writes per-task "refs" (one fact each) and lists their ids in the PBI. The `pbi-worker` sub-agent can only `get` memories, never search or write.
+- **CLAUDE.md first.** Stable repository knowledge (conventions, commands, pitfalls) is expected to live in layered CLAUDE.md files; the orchestrator searches memory only as a supplement.
 - **Usage stats.** `agent_stats.py` reads Claude Code transcripts and reports tokens per model and per agent, how often the prompt cache had to be rebuilt, and the current context size.
 
 ## Flow
@@ -93,7 +96,10 @@ A missing runner just means the route moves on. Claude Code alone is enough to r
 ```sh
 git clone https://github.com/reeschan/pbi-orchestration-jev.git
 cp -r pbi-orchestration-jev/skills/pbi-orchestration-jev ~/.claude/skills/
+mkdir -p ~/.claude/agents && cp pbi-orchestration-jev/skills/pbi-orchestration-jev/agents/pbi-worker.md ~/.claude/agents/
 ```
+
+`pbi-worker` defines the worker and reviewer sub-agent. Restart Claude Code to load it. Without it the skill falls back to general-purpose (you only lose the guard that stops workers from searching memory).
 
 Put your Jev API key in one of these places (checked in this order):
 
@@ -172,6 +178,10 @@ skills/pbi-orchestration-jev/
 ├── runners.md                  # how to hand PBIs to opencode / Codex / Antigravity
 ├── verify-commands.md          # pitfalls when writing verification commands
 ├── worker.md                   # how workers proceed and report
+├── appendix/                   # read only when needed (memory, rework, handoff, finish, jev)
+├── agents/pbi-worker.md        # worker / reviewer sub-agent (copy to ~/.claude/agents)
+├── prepare.py                  # Jev gate 1 + decision table in one call; prints a table
+├── verify.py                   # runs a PBI's verification commands; prints exit codes and tails
 ├── select_model.py             # decision table: tier, route and review depth
 ├── agent_stats.py              # tokens, cache rebuilds and context size from transcripts
 ├── jev.config.template.json    # template for Jev gates and thresholds

@@ -2,6 +2,8 @@
 
 route に出た実行先を初めて使う前に、その節だけを読む。依頼文（SKILL.md 6 章）は `docs/pbi/<実行先>/<報告名>.prompt.md` に書き、末尾に「要約の書き先: `docs/pbi/<実行先>/<報告名>.last.md`」を足す。リポジトリのルートで Bash から `run_in_background` で 1 件ずつ起動する。cd はリテラルの絶対パスで行う（変数で cd すると Claude Code の権限確認で止まる）。
 
+外部の実行先は shared-memory の `get` を使えないものとして扱う。PBI の「参照」欄に ref があれば、設計者がその本文を `get` して、依頼文のファイルの末尾に「## 参照（作業空間の ref）」として id ごとに書き写す。依頼文には「参照欄の ref は下に写してある。memory は使わない」と書き足す（SKILL.md 0.8）。
+
 報告は `.last.md`（4 行）だけを読む。`.jsonl`・`.log`・`.json` は丸ごと読まず、下に書いた項目を `grep -m` や `tail -n` で取り出す。
 
 差し戻しは新しく起動し直す（`<報告名>` を `PBI-<連番>.rework-<n>` にする）。前回の会話を続ける `opencode run -c`・`codex exec resume` は使わない。前回の文脈は報告ファイルと差し戻し文で渡す。

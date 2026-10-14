@@ -17,6 +17,11 @@ try {
   const sid = String(input.session_id || "");
   if (!/^[\w-]+$/.test(sid) || !fs.existsSync(path.join(FLAG_DIR, `${sid}.on`))) process.exit(0);
 
+  // rtk grep では -h がヘルプの意味になり、grep の結果の代わりに rtk のヘルプが出る。
+  // grep / rg に -h (短いオプションの束に h を含むもの) があるコマンドは書き換えない
+  const command = String(input.tool_input?.command || "");
+  if (/(^|[\s;&|(])(grep|egrep|fgrep|rg)\b[^;&|\n]*\s-[A-Za-z]*h/.test(command)) process.exit(0);
+
   // rtk hook claude は Bash の形の入力を受ける。PowerShell も同じ形で渡し、書き換え後の command だけ使う
   const payload = JSON.stringify({ ...input, tool_name: "Bash" });
   // rtk を名前で起動する: フックと Bash / PowerShell ツールは同じ PATH なので、ここで見つからなければ書き換えない
