@@ -8,7 +8,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev のアーキテクチャ図。Claude Code のオーケストレーターが Jev に短い文章で判断を聞き、select_model.py で実行先の順番を決めて、opencode・Codex・Antigravity・Agent ツールに PBI を渡し、任意で rtk によりコマンド出力を圧縮し、対象リポジトリの docs/pbi/ に状態を記録する。">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev のアーキテクチャ図。Claude Code のオーケストレーターが Jev に短い文章で判断を聞き、select_model.py で実行先の順番を決めて、opencode・Codex・Antigravity・Agent ツールに PBI を渡し、任意で rtk によりコマンド出力を圧縮し、対象リポジトリの docs/pbi/ に状態を記録する。Template Studio は OpenRouter と Artificial Analysis から作ったモデル一覧を画面に出し、選んだ試す順番を docs/pbi/routing.json に書く。">
 </picture>
 
 図のソースは `assets/architecture.d2` です ([D2](https://d2lang.com) で描いています)。
@@ -27,6 +27,7 @@
 - **機械的な手順はスクリプトで**: Jev のゲート 1 (要約の判定・PBI の品質) と決定表の判定は `prepare.py`、検証コマンドの実行は `verify.py` が 1 回で行い、オーケストレーターには表だけを返します。スキル本文も、毎回要る中核と、場面ごとに読む `appendix/` に分けてあります。作者の実測 (2026-10、6 タスク) では、この 2 つで費用が 15% 下がりました。
 - **実装担当には必要十分な情報だけ (任意)**: 共有メモリの MCP (`mcp__shared-memory__*`) があるとき、オーケストレーターだけが作業ごとの空間に「ref」(1 件 1 事実) を書き、PBI の参照欄に id を並べます。実装担当用の `pbi-worker` はメモリの `get` だけを持ち、search と write はできません。
 - **CLAUDE.md を前提にする**: リポジトリの安定した知識 (規約・コマンド・落とし穴) は、階層化した CLAUDE.md にあるものとして扱い、オーケストレーターの検索は補助にとどめます。
+- **試す順番を画面で決める**: Template Studio で、使うモデルを選ぶと性能・コスパ・バランスの 3 案が出ます。並べ替えて「適用」を押すと、`docs/pbi/routing.json` に書かれます (下の「Template Studio」)。
 - **統計を取る**: `agent_stats.py` が、Claude Code の会話記録からモデル別・エージェント別のトークン数、プロンプトキャッシュの作り直しの回数、今の文脈の大きさを集計します。
 
 ## 流れ
@@ -73,6 +74,41 @@ flowchart TD
 - Antigravity には haiku が無いので、haiku の段は Sonnet の low にしています。
 - `--skip opencode,agy` で、このセッションで上限や拒否が出た実行先を外せます。`--all docs/pbi` は全 PBI を 1 回で判定し、1 PBI 1 行の表だけを出します。
 - レビューが deep の PBI は、Opus のオーケストレーターが diff を全部自分で読みます。normal で 300 行を超える diff は、Opus のレビュー担当のエージェントに読ませます。
+
+## Template Studio (振り分けテンプレートを画面で組む)
+
+上の表の「どの実行先・モデルを、どの順に試すか」は、画面で選んで差し替えられます。段の決め方 (決定表) は変わりません。
+
+```
+/pbi-orchestration-jev templates
+```
+
+Claude Code でこう呼ぶと、スキルが手元 (127.0.0.1) に小さなサーバーを立て、ブラウザで画面を開きます。スキルを通さずに開くときは次を実行します。
+
+```sh
+python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py --target <対象リポジトリのルート>
+```
+
+1. **使うモデルを選ぶ**: 会社ごとのカードで、契約している実行先のチップだけを残します。
+2. **案を選ぶ**: 選んだモデルから、性能・コスパ・バランスの 3 案が出ます。作業の重さ (軽い作業 / ふつうの作業 / 設計が要る作業) ごとの性能の下限も変えられます。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/studio-proposals-dark.png">
+  <img src="assets/studio-proposals-light.png" alt="Template Studio の画面。会社ごとのカードでモデルを選び、性能・コスパ・バランスの 3 案から選ぶ。" width="800">
+</picture>
+
+3. **試す順番を整える**: 作業の重さごとに、ドラッグか ↑ ↓ で並べ替え、チェックで使う・使わないを切り替えます。最後に受ける Claude Code のモデルも選べます。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/studio-order-dark.png">
+  <img src="assets/studio-order-light.png" alt="試す順番を調整する画面。作業の重さごとの列で、モデルを並べ替えたりチェックを外したりする。" width="800">
+</picture>
+
+4. **適用する**: 「このリポジトリに適用」を押すと `docs/pbi/routing.json` に書かれ、サーバーは閉じます。前のものは `routing.prev.json` に残ります。以後 `prepare.py` はこの順番で実行先を試します。
+
+- モデル一覧 (`studio/catalog.json`) は `python studio/update_catalog.py` で更新します。価格と新しいモデルは OpenRouter、性能は Artificial Analysis のコーディング指標 (環境変数 `AA_API_KEY` があるとき) から取ります。取るまでの値は仮の値で、画面にそう出ます。
+- サーバーが書くのは `docs/pbi/routing.json` だけです。起動ごとの合言葉、Host の確認、形の確認のどれかが合わなければ書きません。
+- 設計の詳細は [docs/template-studio.md](docs/template-studio.md) にあります。
 
 ## 必要なもの
 
@@ -150,6 +186,8 @@ Claude Code で、複数ファイルにまたがる実装を頼むときに呼�
 /pbi-orchestration-jev <やりたいこと>
 ```
 
+振り分けテンプレートを画面で決めるときは `/pbi-orchestration-jev templates` と呼びます (上の「Template Studio」)。
+
 作業の記録は、対象リポジトリの `docs/pbi/` に残ります。
 
 | パス | 中身 |
@@ -181,6 +219,8 @@ skills/pbi-orchestration-jev/
 ├── prepare.py                  # Jev のゲート 1 と決定表を 1 回で実行し、表だけを出す
 ├── verify.py                   # PBI の検証コマンドを実行し、終了コードと末尾だけを表で出す
 ├── select_model.py             # 決定表: 段・route・レビューの深さ
+├── routing.default.json        # 振り分けテンプレートの既定 (docs/pbi/routing.json で差し替え)
+├── studio/                     # テンプレートを画面で組む (index.html・serve.py・update_catalog.py・catalog.json)
 ├── agent_stats.py              # 会話記録からトークン・キャッシュ・文脈の大きさを集計
 ├── jev.config.template.json    # Jev のゲートとしきい値の雛形
 ├── opencode.config.json        # opencode の権限 (push・reset・リポジトリ外を拒否)
@@ -206,7 +246,8 @@ python jev/jev.py --request <request.json>                 # リクエストを�
 ## 調整
 
 - 決定表としきい値は仮の値です。PBI が 10〜20 件たまったら、モデル別の結果 (一発合格・差し戻し・昇格) を見て、`select_model.py` と `jev.config.json` を見直してください。
-- 実行先のモデルと effort は、`select_model.py` の `OPENCODE` / `CODEX` / `AGY` / `AGENT` で変えられます。
+- 実行先のモデルと effort は、テンプレート `routing.json` で変えられます (形は `routing.default.json`)。対象リポジトリの `docs/pbi/routing.json`、またはスキルのディレクトリの `routing.json` に置くと、`select_model.py` がそちらを使います。無ければ今までの表のままです。
+- テンプレートは画面でも組めます (上の「Template Studio」)。
 - 引き継ぎのしきい値 (250,000 トークン) と、sonnet の段の opencode の結果も同じ時期に見直してください。
 
 ## テスト
@@ -214,6 +255,7 @@ python jev/jev.py --request <request.json>                 # リクエストを�
 ```sh
 cd skills/pbi-orchestration-jev
 python -m unittest test_select_model test_agent_stats
+python -m unittest discover -s studio -p 'test_*.py'
 cd jev
 python -m unittest test_jev
 node --test --test-reporter=tap jev.test.mjs

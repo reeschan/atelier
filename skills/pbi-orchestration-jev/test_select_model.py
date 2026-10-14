@@ -125,5 +125,73 @@ class SelectModelTest(unittest.TestCase):
             self.assertEqual([s['runner'] for s in r2['route']], ['agent'])
 
 
+PERF = {'name': 'performance', 'tiers': {
+    'haiku': [{'runner': 'agy', 'model': 'claude-sonnet-5-5-high', 'effort': None},
+              {'runner': 'agent', 'model': 'sonnet', 'effort': 'high'}],
+    'sonnet': [{'runner': 'codex', 'model': 'gpt-6-astra', 'effort': 'high', 'until': BEFORE},
+               {'runner': 'agent', 'model': 'opus', 'effort': None}],
+    'opus': [{'runner': 'agent', 'model': 'opus', 'effort': None}],
+}}
+
+
+class RoutingTemplateTest(unittest.TestCase):
+    def write(self, d, name, table):
+        path = os.path.join(d, name)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(table, f)
+        return path
+
+    def test_default_file_matches_builtin_table(self):
+        with open(os.path.join(HERE, 'routing.default.json'), encoding='utf-8') as f:
+            table = json.load(f)
+        self.assertEqual(table['tiers'], select_model.default_routing()['tiers'])
+
+    def test_routing_option_replaces_route(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, r = run(SMALL, ALL_ZERO, '--today', BEFORE, '--routing', self.write(d, 'r.json', PERF))
+        self.assertEqual(r['tier'], 'haiku')
+        self.assertEqual([s['runner'] for s in r['route']], ['agy', 'agent'])
+        self.assertIn('performance', r['reasons'][0])
+
+    def test_template_until_drops_step(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, r = run(SMALL, None, '--today', AFTER, '--routing', self.write(d, 'r.json', PERF))
+        self.assertEqual(r['route'], [{'runner': 'agent', 'model': 'opus', 'effort': None}])
+
+    def test_sensitive_uses_template_agent_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, r = run({**SMALL, 'sensitive': True}, ALL_ZERO, '--today', BEFORE,
+                       '--routing', self.write(d, 'r.json', PERF))
+        self.assertEqual([s['runner'] for s in r['route']], ['agent'])
+
+    def test_template_not_ending_with_agent_fails(self):
+        bad = {'tiers': dict(PERF['tiers'], opus=[{'runner': 'codex', 'model': 'x'}])}
+        with tempfile.TemporaryDirectory() as d:
+            code, _ = run(SMALL, ALL_ZERO, '--routing', self.write(d, 'r.json', bad))
+        self.assertNotEqual(code, 0)
+
+    def test_agent_without_model_or_bad_until_fails(self):
+        no_model = {'tiers': dict(PERF['tiers'], opus=[{'runner': 'agent'}])}
+        bad_until = {'tiers': dict(PERF['tiers'], sonnet=[{'runner': 'codex', 'model': 'x', 'until': 'soon'},
+                                                          {'runner': 'agent', 'model': 'sonnet'}])}
+        list_model = {'tiers': dict(PERF['tiers'], opus=[{'runner': 'agent', 'model': ['opus']}])}
+        for table in (no_model, bad_until, list_model):
+            with tempfile.TemporaryDirectory() as d:
+                code, _ = run(SMALL, ALL_ZERO, '--routing', self.write(d, 'r.json', table))
+            self.assertNotEqual(code, 0)
+
+    def test_all_picks_routing_json_in_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.write(d, 'routing.json', PERF)
+            self.write(d, 'PBI-001.facts.json', SMALL)
+            out = subprocess.run([sys.executable, SCRIPT, '--all', d, '--today', BEFORE],
+                                 capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(out.returncode, 0, out.stderr)
+            with open(os.path.join(d, 'PBI-001.route.json'), encoding='utf-8') as f:
+                r = json.load(f)
+        self.assertEqual(r['tier'], 'sonnet')
+        self.assertEqual([s['runner'] for s in r['route']], ['codex', 'agent'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PBI Template Studio</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: frosted panels floating over slow color fields; three steps top to bottom (models, proposals, output). */
+:root {
+  --ground: #e9edf5;
+  --blob-a: #ffb38a;
+  --blob-b: #8fb4ff;
+  --blob-c: #b7f0d8;
+  --glass: rgba(255, 255, 255, 0.55);
+  --glass-strong: rgba(255, 255, 255, 0.78);
+  --glass-edge: rgba(255, 255, 255, 0.9);
+  --line: rgba(40, 52, 80, 0.12);
+  --ink: #1c2233;
+  --ink-soft: #55607a;
+  --accent: #3a5bd9;
+  --accent-ink: #ffffff;
+  --perf: #c2410c;
+  --cost: #0f7a55;
+  --bal: #3a5bd9;
+  --warn: #a15c00;
+  --shadow: 0 10px 40px rgba(30, 40, 80, 0.12);
+  --f-display: "Unbounded", "Zen Kaku Gothic New", system-ui, sans-serif;
+  --f-body: "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0c1020; --blob-a: #7a2e18; --blob-b: #1f3a8a; --blob-c: #0d5a44;
+    --glass: rgba(22, 28, 48, 0.52); --glass-strong: rgba(28, 35, 60, 0.82); --glass-edge: rgba(255, 255, 255, 0.14);
+    --line: rgba(220, 230, 255, 0.12); --ink: #eef1fb; --ink-soft: #a3acc6; --accent: #8aa4ff; --accent-ink: #0c1020;
+    --perf: #ff9a6b; --cost: #5fe0ac; --bal: #8aa4ff; --warn: #ffc163; --shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0c1020; --blob-a: #7a2e18; --blob-b: #1f3a8a; --blob-c: #0d5a44;
+  --glass: rgba(22, 28, 48, 0.52); --glass-strong: rgba(28, 35, 60, 0.82); --glass-edge: rgba(255, 255, 255, 0.14);
+  --line: rgba(220, 230, 255, 0.12); --ink: #eef1fb; --ink-soft: #a3acc6; --accent: #8aa4ff; --accent-ink: #0c1020;
+  --perf: #ff9a6b; --cost: #5fe0ac; --bal: #8aa4ff; --warn: #ffc163; --shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font: 15px/1.65 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 64px;
+  min-height: 100%;
+}
+.field { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.field i { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .75; animation: drift 26s ease-in-out infinite alternate; }
+.field i:nth-child(1) { width: 46vw; height: 46vw; left: -10vw; top: -8vw; background: var(--blob-a); }
+.field i:nth-child(2) { width: 52vw; height: 52vw; right: -14vw; top: 18vh; background: var(--blob-b); animation-delay: -8s; }
+.field i:nth-child(3) { width: 40vw; height: 40vw; left: 22vw; bottom: -16vw; background: var(--blob-c); animation-delay: -15s; }
+@keyframes drift { to { transform: translate(4vw, 3vh) scale(1.08); } }
+@media (prefers-reduced-motion: reduce) { .field i { animation: none; } }
+
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 28px; }
+.glass {
+  background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 22px;
+  backdrop-filter: blur(22px) saturate(1.5); -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  box-shadow: var(--shadow);
+}
+header.top { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; justify-content: space-between; }
+h1 { font: 700 clamp(26px, 4.4vw, 40px)/1.1 var(--f-display); letter-spacing: -.01em; margin: 0; text-wrap: balance; }
+h1 small { display: block; font: 500 13px/1.4 var(--f-body); color: var(--ink-soft); letter-spacing: .02em; margin-top: 8px; }
+h2 { font: 500 18px/1.3 var(--f-display); margin: 0; text-wrap: balance; }
+.step-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; margin-bottom: 14px; }
+.step-head p { margin: 0; color: var(--ink-soft); font-size: 13.5px; max-width: 62ch; }
+.step-no { font: 600 11px/1 var(--f-mono); letter-spacing: .14em; color: var(--accent); text-transform: uppercase; display: block; margin-bottom: 6px; }
+
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn { border: 1px solid var(--glass-edge); background: var(--glass-strong); border-radius: 999px; padding: 8px 16px; font-weight: 500; font-size: 13.5px; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink-soft); }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--glass-strong); font-size: 12px; white-space: nowrap; }
+.pill.warn { color: var(--warn); border-color: currentColor; }
+
+/* step 1: providers */
+.providers { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.prov { padding: 18px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.prov-head { display: flex; align-items: center; gap: 12px; }
+.mark { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font: 700 17px/1 var(--f-display); color: #fff; flex: none; box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 4px 14px rgba(0,0,0,.18); }
+.prov-head b { font-size: 16px; }
+.prov-head div span { display: block; font-size: 12px; color: var(--ink-soft); }
+.model { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 8px; }
+.model-top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.model-top b { font-weight: 700; }
+.model-top .price { font: 400 12px var(--f-mono); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.qbar { height: 6px; border-radius: 6px; background: var(--line); overflow: hidden; }
+.qbar i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--cost), var(--bal), var(--perf)); background-size: 300px 100%; }
+.qline { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.opt { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 10px; border: 1px solid var(--line); background: transparent; font: 400 12px var(--f-mono); color: var(--ink-soft); }
+.opt::before { content: ""; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid currentColor; }
+.opt[aria-pressed="true"] { color: var(--ink); border-color: var(--accent); background: var(--glass-strong); }
+.opt[aria-pressed="true"]::before { background: var(--accent); border-color: var(--accent); }
+.cand { padding: 16px 18px; display: grid; gap: 10px; }
+.cand ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.cand li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
+.cand code { font: 12px var(--f-mono); }
+
+/* tuning */
+.tune { padding: 16px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 22px; }
+.tune label { display: grid; gap: 4px; font-size: 13px; }
+.tune .row { display: flex; justify-content: space-between; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.tune input[type=range] { width: 100%; accent-color: var(--accent); }
+.check { display: flex !important; grid-template-columns: none; align-items: center; gap: 8px; }
+.check input { accent-color: var(--accent); width: 16px; height: 16px; }
+
+/* step 2: proposals */
+.proposals { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 16px; }
+.prop { padding: 18px; display: grid; gap: 14px; align-content: start; text-align: left; border: 1px solid var(--glass-edge); position: relative; min-width: 0; }
+.prop[aria-checked="true"] { outline: 2px solid var(--tone); outline-offset: -2px; }
+.prop-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.prop-head h3 { margin: 0; font: 700 17px/1.2 var(--f-display); color: var(--tone); }
+.prop-head .sel { font-size: 12px; color: var(--ink-soft); }
+.prop[aria-checked="true"] .sel { color: var(--tone); font-weight: 700; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat { padding: 10px 12px; border-radius: 14px; background: var(--glass-strong); border: 1px solid var(--line); }
+.stat small { display: block; font-size: 11px; color: var(--ink-soft); letter-spacing: .04em; }
+.stat b { font: 600 20px/1.2 var(--f-mono); font-variant-numeric: tabular-nums; }
+.tier { display: grid; gap: 6px; }
+.tier-name { font: 600 11px/1 var(--f-mono); text-transform: uppercase; letter-spacing: .12em; color: var(--ink-soft); display: flex; gap: 8px; align-items: center; }
+.chain { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.chain .hop { font: 12px var(--f-mono); padding: 3px 8px; border-radius: 8px; background: var(--glass-strong); border: 1px solid var(--line); white-space: nowrap; }
+.chain .hop.first { border-color: var(--tone); }
+.chain .arrow { color: var(--ink-soft); font-size: 11px; }
+.why { margin: 0; font-size: 13px; color: var(--ink-soft); }
+.why.bad { color: var(--warn); }
+
+/* step 3: editor */
+.edit-bar { margin-bottom: 12px; }
+.lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.lane { padding: 16px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.lane-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.lane-head b { font: 500 15px/1.3 var(--f-display); }
+.lane-head code, .lane-head span { font: 11.5px var(--f-mono); color: var(--ink-soft); }
+.lane ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.row { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 8px 8px 6px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass-strong); }
+.row.off { opacity: .55; }
+.row.dragging { opacity: .35; }
+.row.over { border-color: var(--accent); box-shadow: 0 -2px 0 var(--accent); }
+.grip { cursor: grab; color: var(--ink-soft); font-size: 14px; padding: 0 2px; user-select: none; }
+.prio { font: 600 12px var(--f-mono); width: 1.6em; text-align: center; color: var(--accent); font-variant-numeric: tabular-nums; }
+.row.off .prio { color: var(--ink-soft); }
+.row input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.row label { min-width: 0; font-size: 13px; line-height: 1.35; cursor: pointer; }
+.row label small { display: block; font: 11px var(--f-mono); color: var(--ink-soft); overflow-wrap: anywhere; }
+.row label .below { color: var(--warn); white-space: nowrap; }
+.moves { display: flex; gap: 2px; }
+.moves button { border: 1px solid var(--line); background: transparent; border-radius: 8px; width: 26px; height: 26px; font-size: 12px; line-height: 1; color: var(--ink-soft); }
+.moves button:hover:not(:disabled) { border-color: var(--accent); color: var(--ink); }
+.moves button:disabled { opacity: .3; cursor: default; }
+.lane-last { display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-soft); border-top: 1px dashed var(--line); padding-top: 10px; }
+.lane-last select { font: 13px var(--f-body); color: var(--ink); background: var(--glass-strong); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; }
+.lane-empty { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
+
+/* step 4: output */
+.out { padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.out pre { margin: 0; padding: 14px; border-radius: 14px; background: var(--glass-strong); border: 1px solid var(--line); font: 12.5px/1.55 var(--f-mono); overflow-x: auto; max-height: 420px; }
+.out .cmd { font: 12.5px var(--f-mono); padding: 10px 12px; border-radius: 12px; background: var(--glass-strong); border: 1px solid var(--line); overflow-x: auto; white-space: nowrap; }
+.apply-note { margin: 0; font-size: 12.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.apply-note code { font: 12px var(--f-mono); color: var(--ink); }
+.apply-note.done { color: var(--cost); }
+.toast { font-size: 12.5px; color: var(--cost); min-height: 1em; }
+footer { font-size: 12px; color: var(--ink-soft); text-align: left; }
+footer a { color: inherit; }
+@media (max-width: 480px) { .stats { grid-template-columns: 1fr; } .glass { border-radius: 18px; } }
+</style>
+</head>
+<body>
+<div class="field" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="wrap">
+  <header class="top">
+    <h1>Template Studio<small>pbi-orchestration-jev の振り分けテンプレート (routing.json) を組み立てる</small></h1>
+    <div class="meta">
+      <span class="pill" id="updated">一覧の日付 —</span>
+      <span class="pill warn" id="sampleNote" hidden>性能と価格は仮の値</span>
+      <button class="btn" id="reload" type="button">モデル一覧を読み直す</button>
+    </div>
+  </header>
+
+  <section aria-labelledby="s1">
+    <div class="step-head">
+      <div><span class="step-no">Step 1</span><h2 id="s1">使うモデルを選ぶ</h2></div>
+      <p>契約している実行先だけを残してください。チップ 1 つが「試す順番」の 1 つ (実行先・モデル・effort) になります。</p>
+    </div>
+    <div class="providers" id="providers"></div>
+    <div class="cand glass" id="candidates" hidden style="margin-top:16px"></div>
+  </section>
+
+  <section aria-labelledby="s1b">
+    <div class="step-head">
+      <div><span class="step-no">Tuning</span><h2 id="s1b">作業の重さごとの性能の下限</h2></div>
+      <p>PBI は 1 件ずつ、Jev の判定と変更の大きさから「軽い作業」「ふつうの作業」「設計が要る作業」のどれかに分けられます。それぞれ、これより性能の低いモデルは案に入れません。</p>
+    </div>
+    <div class="tune glass" id="tune">
+      <label for="floor-haiku"><span class="row"><span>軽い作業</span><b id="floor-haiku-v"></b></span><input id="floor-haiku" type="range" min="30" max="95" step="1"></label>
+      <label for="floor-sonnet"><span class="row"><span>ふつうの作業</span><b id="floor-sonnet-v"></b></span><input id="floor-sonnet" type="range" min="30" max="95" step="1"></label>
+      <label for="floor-opus"><span class="row"><span>設計が要る作業</span><b id="floor-opus-v"></b></span><input id="floor-opus" type="range" min="30" max="95" step="1"></label>
+      <label for="maxSteps"><span class="row"><span>試す実行先の数 (作業 1 つあたり)</span><b id="maxSteps-v"></b></span><input id="maxSteps" type="range" min="1" max="4" step="1"></label>
+      <label class="check" for="subsCheap"><input id="subsCheap" type="checkbox"> サブスクの枠内は安いとみなす</label>
+      <label class="check" for="extOpus"><input id="extOpus" type="checkbox"> 設計が要る作業にも Claude Code 以外を使う</label>
+    </div>
+  </section>
+
+  <section aria-labelledby="s2">
+    <div class="step-head">
+      <div><span class="step-no">Step 2</span><h2 id="s2">テンプレート案から選ぶ</h2></div>
+      <p>同じモデルの組み合わせから、性能・コスパ・バランスの 3 案を作りました。目安の費用は 1 PBI = 入力 30 万・出力 3 万トークンの API 換算です。</p>
+    </div>
+    <div class="proposals" id="proposals" role="radiogroup" aria-label="テンプレート案"></div>
+  </section>
+
+  <section aria-labelledby="s3e">
+    <div class="step-head">
+      <div><span class="step-no">Step 3</span><h2 id="s3e">試す順番を調整する</h2></div>
+      <p>選んだ案をもとに、作業の重さごとに上から順に試します。ドラッグか ↑ ↓ で並べ替え、チェックを外したものは使いません。使えなかったときの最後の受け皿は、Claude Code のモデルから選びます。</p>
+    </div>
+    <div class="edit-bar meta"><span class="pill" id="editBase"></span><span class="pill warn" id="editedPill" hidden>調整済み</span><button class="btn" id="resetEdit" type="button" hidden>案に戻す</button></div>
+    <div class="lanes" id="lanes"></div>
+  </section>
+
+  <section aria-labelledby="s3">
+    <div class="step-head">
+      <div><span class="step-no">Step 4</span><h2 id="s3">routing.json を書き出す</h2></div>
+      <p>対象リポジトリの docs/pbi/routing.json に置くと、prepare.py がこの順番で実行先を試します。</p>
+    </div>
+    <div class="out glass">
+      <div class="meta">
+        <button class="btn primary" id="apply" type="button" hidden>このリポジトリに適用</button>
+        <button class="btn" id="copy" type="button">JSON をコピー</button>
+        <span class="toast" id="toast" role="status"></span>
+      </div>
+      <p class="apply-note" id="applyNote" hidden></p>
+      <pre id="json" tabindex="0"></pre>
+      <div class="cmd" id="cmd">python skills/pbi-orchestration-jev/select_model.py --all docs/pbi</div>
+    </div>
+  </section>
+
+  <footer>モデル一覧は studio/update_catalog.py が OpenRouter (価格・新モデル) と Artificial Analysis (コーディング指標) から作ります。</footer>
+</div>
+
+<script type="application/json" id="studio-apply"></script>
+<script type="application/json" id="catalog-fallback">
+{
+  "updated": "2026-10-14",
+  "sources": {
+    "openrouter": null,
+    "artificial_analysis": null
+  },
+  "note": "quality と価格は update_catalog.py を実行するまで仮の値 (sample: true)。quality は 0〜100 のコーディング指標 (Artificial Analysis の Coding Index を想定)、価格は API の $/100 万トークン。",
+  "providers": [
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "color": "#d97757",
+      "mark": "A"
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "color": "#10a37f",
+      "mark": "O"
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "color": "#4d6bfe",
+      "mark": "D"
+    }
+  ],
+  "models": [
+    {
+      "id": "claude-opus",
+      "provider": "anthropic",
+      "name": "Claude Opus 5.5",
+      "openrouter_id": "anthropic/claude-opus-5.5",
+      "aa_slug": "claude-opus-5-5",
+      "quality": 90,
+      "price_in": 15.0,
+      "price_out": 75.0,
+      "sample": true,
+      "options": [
+        {
+          "runner": "agent",
+          "model": "opus",
+          "effort": null,
+          "billing": "subscription"
+        }
+      ]
+    },
+    {
+      "id": "claude-sonnet",
+      "provider": "anthropic",
+      "name": "Claude Sonnet 5.5",
+      "openrouter_id": "anthropic/claude-sonnet-5.5",
+      "aa_slug": "claude-sonnet-5-5",
+      "quality": 80,
+      "price_in": 3.0,
+      "price_out": 15.0,
+      "sample": true,
+      "options": [
+        {
+          "runner": "agent",
+          "model": "sonnet",
+          "effort": "high",
+          "billing": "subscription"
+        },
+        {
+          "runner": "agy",
+          "model": "claude-sonnet-5-5-high",
+          "effort": null,
+          "billing": "subscription"
+        },
+        {
+          "runner": "agy",
+          "model": "claude-sonnet-5-5-low",
+          "effort": null,
+          "billing": "subscription",
+          "quality_delta": -8
+        }
+      ]
+    },
+    {
+      "id": "claude-haiku",
+      "provider": "anthropic",
+      "name": "Claude Haiku 5.5",
+      "openrouter_id": "anthropic/claude-haiku-5.5",
+      "aa_slug": "claude-haiku-5-5",
+      "quality": 62,
+      "price_in": 1.0,
+      "price_out": 5.0,
+      "sample": true,
+      "options": [
+        {
+          "runner": "agent",
+          "model": "haiku",
+          "effort": "max",
+          "billing": "subscription"
+        }
+      ]
+    },
+    {
+      "id": "gpt-6-astra",
+      "provider": "openai",
+      "name": "GPT-6 Astra",
+      "openrouter_id": "openai/gpt-6-astra",
+      "aa_slug": "gpt-6-astra",
+      "quality": 84,
+      "price_in": 2.5,
+      "price_out": 10.0,
+      "sample": true,
+      "until": "2026-10-23",
+      "options": [
+        {
+          "runner": "codex",
+          "model": "gpt-6-astra",
+          "effort": "high",
+          "billing": "subscription"
+        },
+        {
+          "runner": "codex",
+          "model": "gpt-6-astra",
+          "effort": "medium",
+          "billing": "subscription",
+          "quality_delta": -6
+        }
+      ]
+    },
+    {
+      "id": "deepseek-v4.1-flash",
+      "provider": "deepseek",
+      "name": "DeepSeek V4.1 Flash",
+      "openrouter_id": "deepseek/deepseek-v4.1-flash",
+      "aa_slug": "deepseek-v4-1-flash",
+      "quality": 66,
+      "price_in": 0.2,
+      "price_out": 0.8,
+      "sample": true,
+      "options": [
+        {
+          "runner": "opencode",
+          "model": "opencode-go/deepseek-v4.1-flash",
+          "effort": null,
+          "billing": "subscription"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<script>
+(() => {
+  const RUNNER = { opencode: 'opencode', codex: 'Codex', agy: 'Antigravity', agent: 'Claude Code' };
+  const TIERS = ['haiku', 'sonnet', 'opus'];
+  const CLASS = { haiku: '軽い作業', sonnet: 'ふつうの作業', opus: '設計が要る作業' };
+  const MIX = { haiku: 0.4, sonnet: 0.45, opus: 0.15 };  // 作業の重さの出方の目安 (重み)
+  const TOKENS = { in: 300000, out: 30000 };
+  const PROFILES = [
+    { id: 'performance', label: '性能', tone: 'var(--perf)' },
+    { id: 'cost', label: 'コスパ', tone: 'var(--cost)' },
+    { id: 'balanced', label: 'バランス', tone: 'var(--bal)' },
+  ];
+  const state = {
+    catalog: null, enabled: new Set(), chosen: 'balanced', built: [], custom: null, edited: false, drag: null,
+    floors: { haiku: 55, sonnet: 70, opus: 85 }, maxSteps: 4, subsCheap: true, extOpus: false,
+  };
+  const $ = (id) => document.getElementById(id);
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);  // catalog の数値は数として出す
+  // 価格が無い (null など) ものは 0 とみなさず「不明」として扱い、案には入れない
+  const measure = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  const priced = (m) => measure(m.price_in) !== null && measure(m.price_out) !== null;
+
+  function options(cat) {
+    return cat.models.flatMap((m) => m.options.map((o) => ({
+      key: `${o.runner}|${o.model}|${o.effort ?? ''}`,
+      modelName: m.name, provider: m.provider, sample: m.sample,
+      runner: o.runner, model: o.model, effort: o.effort, billing: o.billing, until: o.until ?? m.until ?? null,
+      quality: num(m.quality) + num(o.quality_delta),
+      price: priced(m) ? (3 * measure(m.price_in) + measure(m.price_out)) / 4 : null,
+      perPbi: priced(m) ? (TOKENS.in * measure(m.price_in) + TOKENS.out * measure(m.price_out)) / 1e6 : null,
+    })));
+  }
+  const label = (o) => `${RUNNER[o.runner]} ${o.model.split('/').pop()}${o.effort ? ' ' + o.effort : ''}`;
+  const effCost = (o) => (o.billing === 'subscription' && state.subsCheap ? o.price * 0.15 : o.price);
+
+  function sorter(profile, pool) {
+    const qs = pool.map((o) => o.quality), cs = pool.map((o) => Math.log10(effCost(o) + 0.05));
+    const [qMin, qMax, cMin, cMax] = [Math.min(...qs), Math.max(...qs), Math.min(...cs), Math.max(...cs)];
+    const norm = (v, a, b) => (b > a ? (v - a) / (b - a) : 0.5);
+    const score = (o) => {
+      if (profile === 'performance') return o.quality * 1000 - effCost(o);
+      if (profile === 'cost') return -effCost(o) * 1000 + o.quality;
+      return 0.4 * norm(o.quality, qMin, qMax) + 0.6 * (1 - norm(Math.log10(effCost(o) + 0.05), cMin, cMax));
+    };
+    return (a, b) => score(b) - score(a);
+  }
+
+  function build(profile, opts) {
+    const on = opts.filter((o) => state.enabled.has(o.key) && o.price !== null);
+    const tiers = {}, warnings = [];
+    for (const t of TIERS) {
+      const floor = state.floors[t];
+      const ext = on.filter((o) => o.runner !== 'agent' && o.quality >= floor && (t !== 'opus' || state.extOpus));
+      const agents = on.filter((o) => o.runner === 'agent');
+      const extSorted = ext.sort(sorter(profile, on));
+      const seen = new Set(), chain = [];
+      for (const o of extSorted) {
+        if (seen.has(o.runner) || chain.length >= state.maxSteps - 1) continue;
+        seen.add(o.runner); chain.push(o);
+      }
+      let agent = agents.filter((o) => o.quality >= floor).sort(sorter(profile, on))[0];
+      if (!agent && agents.length) {
+        agent = agents.slice().sort((a, b) => b.quality - a.quality)[0];
+        warnings.push(`${CLASS[t]}: 下限 ${floor} に届く Claude Code のモデルが無いので ${agent.modelName} にした`);
+      }
+      if (!agent) { warnings.push('Claude Code (Agent) のモデルを 1 つ以上残してください'); return { tiers: null, warnings }; }
+      tiers[t] = [...chain, agent];
+    }
+    return { tiers, warnings };
+  }
+
+  function metrics(tiers) {
+    let q = 0, cost = 0;
+    for (const t of TIERS) { q += MIX[t] * tiers[t][0].quality; cost += MIX[t] * tiers[t][0].perPbi; }
+    return { q, cost };
+  }
+
+  function reason(profile, tiers) {
+    const head = (t) => tiers[t][0];
+    const s = head('sonnet'), h = head('haiku');
+    const base = profile === 'performance' ? 'どの作業も性能の高い順に試します。'
+      : profile === 'cost' ? 'どの作業も安い順に試し、最後に Claude Code で受けます。'
+      : '性能と費用の釣り合いが良い順に試します。';
+    return `${base} ふつうの作業は ${s.modelName} (${RUNNER[s.runner]}) から、軽い作業は ${h.modelName} (${RUNNER[h.runner]}) から始めます。`;
+  }
+
+  function toRouting(profile, tiers) {
+    const out = { name: profile, generated_by: 'studio', catalog: state.catalog.updated, tiers: {} };
+    for (const t of TIERS) out.tiers[t] = tiers[t].map((o) => {
+      const s = { runner: o.runner, model: o.model, effort: o.effort ?? null };
+      if (o.until && o.runner !== 'agent') s.until = o.until;
+      return s;
+    });
+    return out;
+  }
+
+  function renderProviders() {
+    const cat = state.catalog;
+    $('updated').textContent = `一覧の日付 ${cat.updated}`;
+    $('sampleNote').hidden = !cat.models.some((m) => m.sample);
+    $('providers').innerHTML = cat.providers.map((p) => {
+      const models = cat.models.filter((m) => m.provider === p.id);
+      if (!models.length) return '';
+      const runners = [...new Set(models.flatMap((m) => m.options.map((o) => RUNNER[o.runner])))].join(' · ');
+      return `<article class="prov glass">
+        <div class="prov-head"><span class="mark" style="background:${esc(p.color)}">${esc(p.mark)}</span>
+          <div><b>${esc(p.name)}</b><span>${esc(runners)}</span></div></div>
+        ${models.map((m) => { const q = num(m.quality); return `<div class="model">
+          <div class="model-top"><b>${esc(m.name)}</b><span class="price">${priced(m) ? `$${measure(m.price_in)} / $${measure(m.price_out)}` : '価格不明 (案に入れない)'}</span></div>
+          <div class="qline"><span>性能 ${q}${m.sample ? ' (仮)' : ''}</span><span>${m.until ? esc(m.until) + ' まで' : ''}</span></div>
+          <div class="qbar"><i style="width:${Math.max(4, Math.min(100, q))}%; background-position:${-q * 2}px 0"></i></div>
+          <div class="opts">${m.options.map((o) => {
+            const k = `${o.runner}|${o.model}|${o.effort ?? ''}`;
+            return `<button type="button" class="opt" data-key="${esc(k)}" aria-pressed="${state.enabled.has(k)}">${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''}${o.runner === 'agy' ? ' ' + esc(o.model.split('-').pop()) : ''}</button>`;
+          }).join('')}</div>
+        </div>`; }).join('')}
+      </article>`;
+    }).join('');
+    const c = cat.candidates || [];
+    $('candidates').hidden = !c.length;
+    $('candidates').innerHTML = c.length ? `<h2>新しく出たモデル</h2>
+      <p class="why">まだ実行先との対応が無いので、案には入りません。catalog.json の models に options を書くと選べます。</p>
+      <ul>${c.slice(0, 8).map((m) => `<li><span class="pill">${esc(m.created)}</span><b>${esc(m.name)}</b><code>${esc(m.openrouter_id)}</code></li>`).join('')}</ul>` : '';
+  }
+
+  function renderProposals() {
+    const opts = options(state.catalog);
+    const built = PROFILES.map((p) => ({ p, ...build(p.id, opts) }));
+    $('proposals').innerHTML = built.map(({ p, tiers, warnings }) => {
+      if (!tiers) return `<div class="prop glass" style="--tone:${p.tone}"><div class="prop-head"><h3>${p.label}</h3></div><p class="why bad">${esc(warnings[0])}</p></div>`;
+      const m = metrics(tiers);
+      return `<button type="button" class="prop glass" role="radio" data-profile="${p.id}" aria-checked="${state.chosen === p.id}" style="--tone:${p.tone}">
+        <div class="prop-head"><h3>${p.label}</h3><span class="sel">${state.chosen === p.id ? '選択中' : '選ぶ'}</span></div>
+        <div class="stats">
+          <div class="stat"><small>先頭の性能 (加重平均)</small><b>${m.q.toFixed(0)}</b></div>
+          <div class="stat"><small>API 換算 / PBI</small><b>$${m.cost.toFixed(2)}</b></div>
+        </div>
+        ${TIERS.map((t) => `<div class="tier"><span class="tier-name">${CLASS[t]}<span>下限 ${state.floors[t]}</span></span>
+          <div class="chain">${tiers[t].map((o, i) => `${i ? '<span class="arrow">→</span>' : ''}<span class="hop${i ? '' : ' first'}">${esc(label(o))}</span>`).join('')}</div></div>`).join('')}
+        <p class="why">${esc(reason(p.id, tiers))}</p>
+        ${warnings.map((w) => `<p class="why bad">${esc(w)}</p>`).join('')}
+      </button>`;
+    }).join('');
+    state.built = built;
+    const pick = built.find((b) => b.p.id === state.chosen && b.tiers) || built.find((b) => b.tiers);
+    if (!pick) { state.custom = null; renderEditor(); renderJson(); return; }
+    state.chosen = pick.p.id;
+    if (!state.custom || !state.edited) seedCustom(pick);
+    else syncCustom();
+    renderEditor(); renderJson();
+  }
+
+  // Step 3: 案をもとに、作業の重さごとの試す順番を手で調整する
+  const byKey = () => new Map(options(state.catalog).map((o) => [o.key, o]));
+
+  function seedCustom(pick) {
+    const all = options(state.catalog).filter((o) => state.enabled.has(o.key) && o.runner !== 'agent')
+      .sort((a, b) => b.quality - a.quality);
+    const tiers = {};
+    for (const t of TIERS) {
+      const chain = pick.tiers[t];
+      const used = chain.slice(0, -1).map((o) => o.key);
+      tiers[t] = {
+        list: [...used.map((key) => ({ key, on: true })), ...all.filter((o) => !used.includes(o.key)).map((o) => ({ key: o.key, on: false }))],
+        agent: chain[chain.length - 1].key,
+      };
+    }
+    state.custom = { from: pick.p.id, tiers };
+    state.edited = false;
+  }
+
+  function syncCustom() {
+    const opts = options(state.catalog).filter((o) => state.enabled.has(o.key));
+    const agents = opts.filter((o) => o.runner === 'agent');
+    for (const t of TIERS) {
+      const c = state.custom.tiers[t];
+      c.list = c.list.filter((x) => state.enabled.has(x.key));
+      for (const o of opts) if (o.runner !== 'agent' && !c.list.some((x) => x.key === o.key)) c.list.push({ key: o.key, on: false });
+      if (!state.enabled.has(c.agent) && agents.length) c.agent = agents.slice().sort((a, b) => b.quality - a.quality)[0].key;
+    }
+  }
+
+  function renderEditor() {
+    const lanes = $('lanes');
+    if (!state.custom) { lanes.innerHTML = '<p class="lane-empty">Claude Code のモデルを 1 つ以上選ぶと、ここで調整できます。</p>'; return; }
+    const map = byKey();
+    const prof = PROFILES.find((p) => p.id === state.custom.from);
+    $('editBase').textContent = `もとにした案: ${prof ? prof.label : state.custom.from}`;
+    $('editedPill').hidden = !state.edited;
+    $('resetEdit').hidden = !state.edited;
+    const agents = options(state.catalog).filter((o) => o.runner === 'agent' && state.enabled.has(o.key));
+    lanes.innerHTML = TIERS.map((t) => {
+      const c = state.custom.tiers[t];
+      let n = 0;
+      const rows = c.list.map((x, i) => {
+        const o = map.get(x.key);
+        const below = o.quality < state.floors[t];
+        const id = `use-${t}-${i}`;
+        return `<li class="row${x.on ? '' : ' off'}" draggable="true" data-tier="${t}" data-i="${i}">
+          <span class="grip" aria-hidden="true">⠿</span>
+          <span class="prio">${x.on ? ++n : '–'}</span>
+          <input type="checkbox" id="${id}" data-tier="${t}" data-i="${i}" ${x.on ? 'checked' : ''}>
+          <label for="${id}">${esc(o.modelName)}<small>${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''} · 性能 ${num(o.quality)}${o.price === null ? ' · 価格不明' : ''}${below ? ' <span class="below">下限未満</span>' : ''}</small></label>
+          <span class="moves"><button type="button" data-move="-1" data-tier="${t}" data-i="${i}" aria-label="上へ" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" data-move="1" data-tier="${t}" data-i="${i}" aria-label="下へ" ${i === c.list.length - 1 ? 'disabled' : ''}>↓</button></span>
+        </li>`;
+      }).join('');
+      return `<div class="lane glass">
+        <div class="lane-head"><b>${CLASS[t]}</b><code>${t}</code><span>下限 ${state.floors[t]}</span></div>
+        ${rows ? `<ol>${rows}</ol>` : '<p class="lane-empty">Claude Code 以外の実行先が選ばれていません。</p>'}
+        <label class="lane-last" for="agent-${t}">最後に受ける Claude Code
+          <select id="agent-${t}" data-tier="${t}">${agents.map((o) => `<option value="${esc(o.key)}" ${o.key === c.agent ? 'selected' : ''}>${esc(o.modelName)}${o.effort ? ' (' + esc(o.effort) + ')' : ''}</option>`).join('')}</select>
+        </label>
+      </div>`;
+    }).join('');
+  }
+
+  function renderJson() {
+    if (!state.custom) { $('json').textContent = '// Claude Code (Agent) のモデルを 1 つ以上選んでください'; return; }
+    const map = byKey();
+    const tiers = {};
+    for (const t of TIERS) {
+      const c = state.custom.tiers[t];
+      tiers[t] = [...c.list.filter((x) => x.on).map((x) => map.get(x.key)), map.get(c.agent)];
+    }
+    $('json').textContent = JSON.stringify(toRouting(state.custom.from + (state.edited ? '-custom' : ''), tiers), null, 2);
+  }
+
+  function edited() { state.edited = true; renderEditor(); renderJson(); }
+
+  function move(t, from, to) {
+    const list = state.custom.tiers[t].list;
+    if (to < 0 || to >= list.length || from === to) return;
+    const [x] = list.splice(from, 1);
+    list.splice(to, 0, x);
+    edited();
+  }
+
+  function render() { renderProviders(); renderProposals(); }
+
+  function setCatalog(cat) {
+    state.catalog = cat;
+    state.enabled = new Set(options(cat).map((o) => o.key));
+    render();
+  }
+
+  async function loadCatalog(user) {
+    try {
+      const r = await fetch('catalog.json', { cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status);
+      setCatalog(await r.json());
+      if (user) flash('モデル一覧を読み直しました');
+    } catch (e) {
+      if (!state.catalog) setCatalog(JSON.parse($('catalog-fallback').textContent));
+      if (user) flash('catalog.json を読めなかったので、ページ内の控えを使っています');
+    }
+  }
+
+  function flash(msg) { $('toast').textContent = msg; clearTimeout(flash.t); flash.t = setTimeout(() => ($('toast').textContent = ''), 3200); }
+
+  document.addEventListener('click', (e) => {
+    const opt = e.target.closest('.opt');
+    if (opt) {
+      const k = opt.dataset.key;
+      state.enabled.has(k) ? state.enabled.delete(k) : state.enabled.add(k);
+      opt.setAttribute('aria-pressed', state.enabled.has(k));
+      renderProposals();
+      return;
+    }
+    const prop = e.target.closest('.prop[data-profile]');
+    if (prop) { state.chosen = prop.dataset.profile; state.edited = false; renderProposals(); return; }
+    const mv = e.target.closest('button[data-move]');
+    if (mv) {
+      const i = +mv.dataset.i, t = mv.dataset.tier, to = i + +mv.dataset.move;
+      move(t, i, to);
+      const again = document.querySelector(`button[data-move="${mv.dataset.move}"][data-tier="${t}"][data-i="${to}"]`);
+      if (again && !again.disabled) again.focus();
+    }
+  });
+  $('lanes').addEventListener('change', (e) => {
+    const el = e.target;
+    if (el.matches('input[type=checkbox]')) { state.custom.tiers[el.dataset.tier].list[+el.dataset.i].on = el.checked; edited(); }
+    if (el.matches('select')) { state.custom.tiers[el.dataset.tier].agent = el.value; edited(); }
+  });
+  $('lanes').addEventListener('dragstart', (e) => {
+    const li = e.target.closest('li.row'); if (!li) return;
+    state.drag = { t: li.dataset.tier, i: +li.dataset.i };
+    li.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', li.dataset.i); } catch (_) {}
+  });
+  $('lanes').addEventListener('dragover', (e) => {
+    const li = e.target.closest('li.row');
+    if (!li || !state.drag || li.dataset.tier !== state.drag.t) return;
+    e.preventDefault();
+    document.querySelectorAll('.row.over').forEach((r) => r !== li && r.classList.remove('over'));
+    li.classList.add('over');
+  });
+  $('lanes').addEventListener('drop', (e) => {
+    const li = e.target.closest('li.row');
+    if (!li || !state.drag || li.dataset.tier !== state.drag.t) return;
+    e.preventDefault();
+    move(state.drag.t, state.drag.i, +li.dataset.i);
+    state.drag = null;
+  });
+  $('lanes').addEventListener('dragend', () => { state.drag = null; document.querySelectorAll('.row.over, .row.dragging').forEach((r) => r.classList.remove('over', 'dragging')); });
+  $('resetEdit').addEventListener('click', () => { state.edited = false; renderProposals(); });
+  $('reload').addEventListener('click', () => loadCatalog(true));
+
+  // serve.py から開いたときだけ、適用先と合言葉が埋め込まれる
+  const applyInfo = (() => { try { const t = $('studio-apply').textContent.trim(); return t ? JSON.parse(t) : null; } catch (_) { return null; } })();
+  if (applyInfo) {
+    $('apply').hidden = false;
+    $('copy').classList.remove('primary');
+    $('applyNote').hidden = false;
+    $('applyNote').innerHTML = `適用先: <code>${esc(applyInfo.target)}</code>`;
+    $('apply').addEventListener('click', async () => {
+      $('apply').disabled = true;
+      try {
+        const r = await fetch('/apply', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Studio-Token': applyInfo.token }, body: $('json').textContent });
+        const res = await r.json();
+        if (!res.ok) throw new Error(res.error);
+        $('applyNote').classList.add('done');
+        $('applyNote').innerHTML = `適用しました: <code>${esc(res.path)}</code>。この画面は閉じてかまいません。`;
+      } catch (e) {
+        $('apply').disabled = false;
+        flash(`適用できませんでした: ${e.message || e}`);
+      }
+    });
+  }
+  $('copy').addEventListener('click', () => {
+    const text = $('json').textContent;
+    navigator.clipboard.writeText(text).then(() => flash('コピーしました'), () => {
+      const range = document.createRange(); range.selectNodeContents($('json'));
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      flash('選択しました。Ctrl+C でコピーしてください');
+    });
+  });
+  for (const t of TIERS) {
+    const el = $(`floor-${t}`);
+    el.value = state.floors[t]; $(`floor-${t}-v`).textContent = el.value;
+    el.addEventListener('input', () => { state.floors[t] = +el.value; $(`floor-${t}-v`).textContent = el.value; renderProposals(); });
+  }
+  $('maxSteps').value = state.maxSteps; $('maxSteps-v').textContent = state.maxSteps;
+  $('maxSteps').addEventListener('input', (e) => { state.maxSteps = +e.target.value; $('maxSteps-v').textContent = state.maxSteps; renderProposals(); });
+  $('subsCheap').checked = state.subsCheap;
+  $('subsCheap').addEventListener('change', (e) => { state.subsCheap = e.target.checked; renderProposals(); });
+  $('extOpus').checked = state.extOpus;
+  $('extOpus').addEventListener('change', (e) => { state.extOpus = e.target.checked; renderProposals(); });
+
+  setCatalog(JSON.parse($('catalog-fallback').textContent));
+  loadCatalog(false);
+})();
+</script>
+</body>
+</html>
