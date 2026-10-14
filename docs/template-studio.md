@@ -13,8 +13,11 @@ flowchart LR
   OR[OpenRouter /api/v1/models<br/>価格・新しいモデル] --> U[update_catalog.py]
   AA[Artificial Analysis API<br/>性能指標] --> U
   U --> C[studio/catalog.json<br/>+ index.html の控え]
-  C --> S[studio/index.html<br/>モデルを選ぶ → 3 案 → 選ぶ]
-  S --> R[docs/pbi/routing.json]
+  C --> S[studio/index.html<br/>モデルを選ぶ → 3 案 → 並べ替え]
+  K[/pbi-orchestration-jev templates/] --> V[studio/serve.py<br/>127.0.0.1 で画面を出す]
+  V --> S
+  S -->|適用 POST /apply| V
+  V --> R[docs/pbi/routing.json]
   R --> P[prepare.py → select_model.py --all]
 ```
 
@@ -37,7 +40,7 @@ flowchart LR
 | `models[].options[]` | そのモデルを呼べる実行先。`runner` (opencode / codex / agy / agent)・`model`・`effort`・`billing` (subscription / api)・`quality_delta` (effort を下げたときの差) |
 | `candidates[]` | 更新で見つかった新しいモデル (実行先との対応がまだ無いもの) |
 
-更新は `python studio/update_catalog.py` 1 回で行う。
+更新は `python skills/pbi-orchestration-jev/studio/update_catalog.py` 1 回で行う (以下、`studio/` はスキルのディレクトリの中)。
 
 - **価格**: OpenRouter の `GET /api/v1/models` (キー不要)。1 トークンあたりの USD を 100 万トークンあたりに直す。
 - **性能**: Artificial Analysis の `GET /api/v2/data/llms/models` の `artificial_analysis_coding_index` (PBI の実装に近いため。無いモデルは `artificial_analysis_intelligence_index` で代える)。無料のキーを `AA_API_KEY` に置いたときだけ取り、無ければ前の値のまま。
@@ -93,8 +96,19 @@ flowchart LR
 - `sensitive` の PBI は、テンプレートに関係なくその段の `agent` だけになる。`--skip` も今までどおり効く。
 - 読む順: `--routing <file>` → (`--all` のとき) `<dir>/routing.json` → スキルのディレクトリの `routing.json` → 組み込みの表 (`routing.default.json` と同じ中身)。prepare.py は `select_model.py --all docs/pbi` を呼ぶので、`docs/pbi/routing.json` を置くだけで効く。
 
+## 5. 画面から直接適用する (serve.py)
+
+ログインの画面が手元のアドレスに結果を返すのと同じ形で、スキルが手元に小さなサーバーを立て、画面の「このリポジトリに適用」がそこへ JSON を送る。
+
+1. `/pbi-orchestration-jev templates` で、スキルが `studio/serve.py --target <リポジトリ>` をバックグラウンドで起動する (`appendix/templates.md`)。ブラウザが開く。
+2. サーバーは 127.0.0.1 の空いているポートだけで待ち受け、起動ごとに作る合言葉 (token) を画面に埋め込んで返す。
+3. 「適用」を押すと、画面が `POST /apply` に合言葉付きで JSON を送る。サーバーは `select_model.routing_error` で形を確かめ、`docs/pbi/routing.json` に書く。前のものは `routing.prev.json` に残す。
+4. サーバーは `APPLIED <パス>` を出して終わる。スキルはそれを受けて、PBI があれば新しい表で担当を出し直して伝える。
+
+守り: 書くのは `<target>/docs/pbi/routing.json` だけ。合言葉が違う、Host が 127.0.0.1 / localhost でない (DNS rebinding よけ)、64 KB を超える、形が違う、のどれかなら書かない。30 分で適用されなければ `TIMEOUT` で終わる。ファイルで開いたときや claude.ai の Artifact では適用ボタンは出ず、JSON のコピーだけになる。
+
 ## 次の段階 (この PR には入れない)
 
 - `update_catalog.py` を実データで一度回して、仮の値を置き換える (このコンテナからは外部 API に出られなかったので、取り込みは手元のテスト用 JSON でしか確かめていない)。
-- スキルに `/pbi-orchestration-jev templates` を足し、オーケストレーターが一覧を更新して `candidates` の `options` を下書きし、3 案に一言ずつ説明を付ける。
+- `templates` で、オーケストレーターが `candidates` の `options` を下書きし、3 案に一言ずつ説明を付ける。
 - `agent_stats.py` と jev-log の実績 (段ごとの差し戻し率・実際の費用) を一覧に戻して、性能の数字を「公開ベンチマーク」から「このリポジトリでの実績」に寄せる。

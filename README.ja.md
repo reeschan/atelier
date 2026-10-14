@@ -181,6 +181,8 @@ skills/pbi-orchestration-jev/
 ├── prepare.py                  # Jev のゲート 1 と決定表を 1 回で実行し、表だけを出す
 ├── verify.py                   # PBI の検証コマンドを実行し、終了コードと末尾だけを表で出す
 ├── select_model.py             # 決定表: 段・route・レビューの深さ
+├── routing.default.json        # 振り分けテンプレートの既定 (docs/pbi/routing.json で差し替え)
+├── studio/                     # テンプレートを画面で組む (index.html・serve.py・update_catalog.py・catalog.json)
 ├── agent_stats.py              # 会話記録からトークン・キャッシュ・文脈の大きさを集計
 ├── jev.config.template.json    # Jev のゲートとしきい値の雛形
 ├── opencode.config.json        # opencode の権限 (push・reset・リポジトリ外を拒否)
@@ -207,7 +209,7 @@ python jev/jev.py --request <request.json>                 # リクエストを�
 
 - 決定表としきい値は仮の値です。PBI が 10〜20 件たまったら、モデル別の結果 (一発合格・差し戻し・昇格) を見て、`select_model.py` と `jev.config.json` を見直してください。
 - 実行先のモデルと effort は、テンプレート `routing.json` で変えられます (形は `routing.default.json`)。対象リポジトリの `docs/pbi/routing.json`、またはスキルのディレクトリの `routing.json` に置くと、`select_model.py` がそちらを使います。無ければ今までの表のままです。
-- テンプレートは画面でも組めます。`studio/index.html` をブラウザで開き、使うモデルを選ぶと、性能・コスパ・バランスの 3 案が出ます。選んだ案の JSON を `docs/pbi/routing.json` に置いてください。モデル一覧は `python studio/update_catalog.py` で更新します (設計は `docs/template-studio.md`)。
+- テンプレートは画面でも組めます。`/pbi-orchestration-jev templates` を実行すると画面が開き、使うモデルを選ぶと、性能・コスパ・バランスの 3 案が出ます。並びを整えて「このリポジトリに適用」を押すと、`docs/pbi/routing.json` に書かれます (手元で `python skills/pbi-orchestration-jev/studio/serve.py --target <リポジトリ>` を実行しても同じです)。モデル一覧は `studio/update_catalog.py` で更新します (設計は `docs/template-studio.md`)。
 - 引き継ぎのしきい値 (250,000 トークン) と、sonnet の段の opencode の結果も同じ時期に見直してください。
 
 ## テスト
@@ -215,7 +217,7 @@ python jev/jev.py --request <request.json>                 # リクエストを�
 ```sh
 cd skills/pbi-orchestration-jev
 python -m unittest test_select_model test_agent_stats
-python -m unittest discover -s ../../studio -p 'test_*.py'
+python -m unittest discover -s studio -p 'test_*.py'
 cd jev
 python -m unittest test_jev
 node --test --test-reporter=tap jev.test.mjs

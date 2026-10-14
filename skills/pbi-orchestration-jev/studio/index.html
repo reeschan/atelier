@@ -173,6 +173,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .out { padding: 18px; display: grid; gap: 12px; min-width: 0; }
 .out pre { margin: 0; padding: 14px; border-radius: 14px; background: var(--glass-strong); border: 1px solid var(--line); font: 12.5px/1.55 var(--f-mono); overflow-x: auto; max-height: 420px; }
 .out .cmd { font: 12.5px var(--f-mono); padding: 10px 12px; border-radius: 12px; background: var(--glass-strong); border: 1px solid var(--line); overflow-x: auto; white-space: nowrap; }
+.apply-note { margin: 0; font-size: 12.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.apply-note code { font: 12px var(--f-mono); color: var(--ink); }
+.apply-note.done { color: var(--cost); }
 .toast { font-size: 12.5px; color: var(--cost); min-height: 1em; }
 footer { font-size: 12px; color: var(--ink-soft); text-align: left; }
 footer a { color: inherit; }
@@ -238,7 +241,12 @@ footer a { color: inherit; }
       <p>対象リポジトリの docs/pbi/routing.json に置くと、prepare.py がこの順番で実行先を試します。</p>
     </div>
     <div class="out glass">
-      <div class="meta"><button class="btn primary" id="copy" type="button">JSON をコピー</button><span class="toast" id="toast" role="status"></span></div>
+      <div class="meta">
+        <button class="btn primary" id="apply" type="button" hidden>このリポジトリに適用</button>
+        <button class="btn" id="copy" type="button">JSON をコピー</button>
+        <span class="toast" id="toast" role="status"></span>
+      </div>
+      <p class="apply-note" id="applyNote" hidden></p>
       <pre id="json" tabindex="0"></pre>
       <div class="cmd" id="cmd">python skills/pbi-orchestration-jev/select_model.py --all docs/pbi</div>
     </div>
@@ -247,6 +255,7 @@ footer a { color: inherit; }
   <footer>モデル一覧は studio/update_catalog.py が OpenRouter (価格・新モデル) と Artificial Analysis (コーディング指標) から作ります。</footer>
 </div>
 
+<script type="application/json" id="studio-apply"></script>
 <script type="application/json" id="catalog-fallback">
 {
   "updated": "2026-10-14",
@@ -700,6 +709,28 @@ footer a { color: inherit; }
   $('lanes').addEventListener('dragend', () => { state.drag = null; document.querySelectorAll('.row.over, .row.dragging').forEach((r) => r.classList.remove('over', 'dragging')); });
   $('resetEdit').addEventListener('click', () => { state.edited = false; renderProposals(); });
   $('reload').addEventListener('click', () => loadCatalog(true));
+
+  // serve.py から開いたときだけ、適用先と合言葉が埋め込まれる
+  const applyInfo = (() => { try { const t = $('studio-apply').textContent.trim(); return t ? JSON.parse(t) : null; } catch (_) { return null; } })();
+  if (applyInfo) {
+    $('apply').hidden = false;
+    $('copy').classList.remove('primary');
+    $('applyNote').hidden = false;
+    $('applyNote').innerHTML = `適用先: <code>${esc(applyInfo.target)}</code>`;
+    $('apply').addEventListener('click', async () => {
+      $('apply').disabled = true;
+      try {
+        const r = await fetch('/apply', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Studio-Token': applyInfo.token }, body: $('json').textContent });
+        const res = await r.json();
+        if (!res.ok) throw new Error(res.error);
+        $('applyNote').classList.add('done');
+        $('applyNote').innerHTML = `適用しました: <code>${esc(res.path)}</code>。この画面は閉じてかまいません。`;
+      } catch (e) {
+        $('apply').disabled = false;
+        flash(`適用できませんでした: ${e.message || e}`);
+      }
+    });
+  }
   $('copy').addEventListener('click', () => {
     const text = $('json').textContent;
     navigator.clipboard.writeText(text).then(() => flash('コピーしました'), () => {
