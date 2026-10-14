@@ -142,7 +142,34 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .why { margin: 0; font-size: 13px; color: var(--ink-soft); }
 .why.bad { color: var(--warn); }
 
-/* step 3: output */
+/* step 3: editor */
+.edit-bar { margin-bottom: 12px; }
+.lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.lane { padding: 16px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.lane-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.lane-head b { font: 500 15px/1.3 var(--f-display); }
+.lane-head code, .lane-head span { font: 11.5px var(--f-mono); color: var(--ink-soft); }
+.lane ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.row { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 8px 8px 6px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass-strong); }
+.row.off { opacity: .55; }
+.row.dragging { opacity: .35; }
+.row.over { border-color: var(--accent); box-shadow: 0 -2px 0 var(--accent); }
+.grip { cursor: grab; color: var(--ink-soft); font-size: 14px; padding: 0 2px; user-select: none; }
+.prio { font: 600 12px var(--f-mono); width: 1.6em; text-align: center; color: var(--accent); font-variant-numeric: tabular-nums; }
+.row.off .prio { color: var(--ink-soft); }
+.row input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.row label { min-width: 0; font-size: 13px; line-height: 1.35; cursor: pointer; }
+.row label small { display: block; font: 11px var(--f-mono); color: var(--ink-soft); overflow-wrap: anywhere; }
+.row label .below { color: var(--warn); white-space: nowrap; }
+.moves { display: flex; gap: 2px; }
+.moves button { border: 1px solid var(--line); background: transparent; border-radius: 8px; width: 26px; height: 26px; font-size: 12px; line-height: 1; color: var(--ink-soft); }
+.moves button:hover:not(:disabled) { border-color: var(--accent); color: var(--ink); }
+.moves button:disabled { opacity: .3; cursor: default; }
+.lane-last { display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-soft); border-top: 1px dashed var(--line); padding-top: 10px; }
+.lane-last select { font: 13px var(--f-body); color: var(--ink); background: var(--glass-strong); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; }
+.lane-empty { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
+
+/* step 4: output */
 .out { padding: 18px; display: grid; gap: 12px; min-width: 0; }
 .out pre { margin: 0; padding: 14px; border-radius: 14px; background: var(--glass-strong); border: 1px solid var(--line); font: 12.5px/1.55 var(--f-mono); overflow-x: auto; max-height: 420px; }
 .out .cmd { font: 12.5px var(--f-mono); padding: 10px 12px; border-radius: 12px; background: var(--glass-strong); border: 1px solid var(--line); overflow-x: auto; white-space: nowrap; }
@@ -167,7 +194,7 @@ footer a { color: inherit; }
   <section aria-labelledby="s1">
     <div class="step-head">
       <div><span class="step-no">Step 1</span><h2 id="s1">使うモデルを選ぶ</h2></div>
-      <p>契約している実行先だけを残してください。チップ 1 つが route の 1 段 (実行先・モデル・effort) になります。</p>
+      <p>契約している実行先だけを残してください。チップ 1 つが「試す順番」の 1 つ (実行先・モデル・effort) になります。</p>
     </div>
     <div class="providers" id="providers"></div>
     <div class="cand glass" id="candidates" hidden style="margin-top:16px"></div>
@@ -175,16 +202,16 @@ footer a { color: inherit; }
 
   <section aria-labelledby="s1b">
     <div class="step-head">
-      <div><span class="step-no">Tuning</span><h2 id="s1b">段ごとの性能の下限</h2></div>
-      <p>select_model.py が決める段 (haiku / sonnet / opus) ごとに、これより低いモデルは route に入れません。</p>
+      <div><span class="step-no">Tuning</span><h2 id="s1b">作業の重さごとの性能の下限</h2></div>
+      <p>PBI は 1 件ずつ、Jev の判定と変更の大きさから「軽い作業」「ふつうの作業」「設計が要る作業」のどれかに分けられます。それぞれ、これより性能の低いモデルは案に入れません。</p>
     </div>
     <div class="tune glass" id="tune">
-      <label for="floor-haiku"><span class="row"><span>haiku の段</span><b id="floor-haiku-v"></b></span><input id="floor-haiku" type="range" min="30" max="95" step="1"></label>
-      <label for="floor-sonnet"><span class="row"><span>sonnet の段</span><b id="floor-sonnet-v"></b></span><input id="floor-sonnet" type="range" min="30" max="95" step="1"></label>
-      <label for="floor-opus"><span class="row"><span>opus の段</span><b id="floor-opus-v"></b></span><input id="floor-opus" type="range" min="30" max="95" step="1"></label>
-      <label for="maxSteps"><span class="row"><span>1 段あたりの実行先の数</span><b id="maxSteps-v"></b></span><input id="maxSteps" type="range" min="1" max="4" step="1"></label>
+      <label for="floor-haiku"><span class="row"><span>軽い作業</span><b id="floor-haiku-v"></b></span><input id="floor-haiku" type="range" min="30" max="95" step="1"></label>
+      <label for="floor-sonnet"><span class="row"><span>ふつうの作業</span><b id="floor-sonnet-v"></b></span><input id="floor-sonnet" type="range" min="30" max="95" step="1"></label>
+      <label for="floor-opus"><span class="row"><span>設計が要る作業</span><b id="floor-opus-v"></b></span><input id="floor-opus" type="range" min="30" max="95" step="1"></label>
+      <label for="maxSteps"><span class="row"><span>試す実行先の数 (作業 1 つあたり)</span><b id="maxSteps-v"></b></span><input id="maxSteps" type="range" min="1" max="4" step="1"></label>
       <label class="check" for="subsCheap"><input id="subsCheap" type="checkbox"> サブスクの枠内は安いとみなす</label>
-      <label class="check" for="extOpus"><input id="extOpus" type="checkbox"> opus の段にも外部の実行先を使う</label>
+      <label class="check" for="extOpus"><input id="extOpus" type="checkbox"> 設計が要る作業にも Claude Code 以外を使う</label>
     </div>
   </section>
 
@@ -196,10 +223,19 @@ footer a { color: inherit; }
     <div class="proposals" id="proposals" role="radiogroup" aria-label="テンプレート案"></div>
   </section>
 
+  <section aria-labelledby="s3e">
+    <div class="step-head">
+      <div><span class="step-no">Step 3</span><h2 id="s3e">試す順番を調整する</h2></div>
+      <p>選んだ案をもとに、作業の重さごとに上から順に試します。ドラッグか ↑ ↓ で並べ替え、チェックを外したものは使いません。使えなかったときの最後の受け皿は、Claude Code のモデルから選びます。</p>
+    </div>
+    <div class="edit-bar meta"><span class="pill" id="editBase"></span><span class="pill warn" id="editedPill" hidden>調整済み</span><button class="btn" id="resetEdit" type="button" hidden>案に戻す</button></div>
+    <div class="lanes" id="lanes"></div>
+  </section>
+
   <section aria-labelledby="s3">
     <div class="step-head">
-      <div><span class="step-no">Step 3</span><h2 id="s3">routing.json を書き出す</h2></div>
-      <p>対象リポジトリの docs/pbi/routing.json に置くと、prepare.py (select_model.py --all) がこの表で route を出します。</p>
+      <div><span class="step-no">Step 4</span><h2 id="s3">routing.json を書き出す</h2></div>
+      <p>対象リポジトリの docs/pbi/routing.json に置くと、prepare.py がこの順番で実行先を試します。</p>
     </div>
     <div class="out glass">
       <div class="meta"><button class="btn primary" id="copy" type="button">JSON をコピー</button><span class="toast" id="toast" role="status"></span></div>
@@ -363,7 +399,8 @@ footer a { color: inherit; }
 (() => {
   const RUNNER = { opencode: 'opencode', codex: 'Codex', agy: 'Antigravity', agent: 'Claude Code' };
   const TIERS = ['haiku', 'sonnet', 'opus'];
-  const MIX = { haiku: 0.4, sonnet: 0.45, opus: 0.15 };  // PBI の段の出方の目安 (重み)
+  const CLASS = { haiku: '軽い作業', sonnet: 'ふつうの作業', opus: '設計が要る作業' };
+  const MIX = { haiku: 0.4, sonnet: 0.45, opus: 0.15 };  // 作業の重さの出方の目安 (重み)
   const TOKENS = { in: 300000, out: 30000 };
   const PROFILES = [
     { id: 'performance', label: '性能', tone: 'var(--perf)' },
@@ -371,7 +408,7 @@ footer a { color: inherit; }
     { id: 'balanced', label: 'バランス', tone: 'var(--bal)' },
   ];
   const state = {
-    catalog: null, enabled: new Set(), chosen: 'balanced',
+    catalog: null, enabled: new Set(), chosen: 'balanced', built: [], custom: null, edited: false, drag: null,
     floors: { haiku: 55, sonnet: 70, opus: 85 }, maxSteps: 4, subsCheap: true, extOpus: false,
   };
   const $ = (id) => document.getElementById(id);
@@ -418,7 +455,7 @@ footer a { color: inherit; }
       let agent = agents.filter((o) => o.quality >= floor).sort(sorter(profile, on))[0];
       if (!agent && agents.length) {
         agent = agents.slice().sort((a, b) => b.quality - a.quality)[0];
-        warnings.push(`${t} の段: 下限 ${floor} に届く Claude Code のモデルが無いので ${agent.modelName} にした`);
+        warnings.push(`${CLASS[t]}: 下限 ${floor} に届く Claude Code のモデルが無いので ${agent.modelName} にした`);
       }
       if (!agent) { warnings.push('Claude Code (Agent) のモデルを 1 つ以上残してください'); return { tiers: null, warnings }; }
       tiers[t] = [...chain, agent];
@@ -435,10 +472,10 @@ footer a { color: inherit; }
   function reason(profile, tiers) {
     const head = (t) => tiers[t][0];
     const s = head('sonnet'), h = head('haiku');
-    const base = profile === 'performance' ? '各段で性能の高い順に試します。'
-      : profile === 'cost' ? '各段で安い順に試し、最後に Claude Code で受けます。'
+    const base = profile === 'performance' ? 'どの作業も性能の高い順に試します。'
+      : profile === 'cost' ? 'どの作業も安い順に試し、最後に Claude Code で受けます。'
       : '性能と費用の釣り合いが良い順に試します。';
-    return `${base} sonnet の段は ${s.modelName} (${RUNNER[s.runner]}) から、haiku の段は ${h.modelName} (${RUNNER[h.runner]}) から始めます。`;
+    return `${base} ふつうの作業は ${s.modelName} (${RUNNER[s.runner]}) から、軽い作業は ${h.modelName} (${RUNNER[h.runner]}) から始めます。`;
   }
 
   function toRouting(profile, tiers) {
@@ -492,14 +529,104 @@ footer a { color: inherit; }
           <div class="stat"><small>先頭の性能 (加重平均)</small><b>${m.q.toFixed(0)}</b></div>
           <div class="stat"><small>API 換算 / PBI</small><b>$${m.cost.toFixed(2)}</b></div>
         </div>
-        ${TIERS.map((t) => `<div class="tier"><span class="tier-name">${t}<span>下限 ${state.floors[t]}</span></span>
+        ${TIERS.map((t) => `<div class="tier"><span class="tier-name">${CLASS[t]}<span>下限 ${state.floors[t]}</span></span>
           <div class="chain">${tiers[t].map((o, i) => `${i ? '<span class="arrow">→</span>' : ''}<span class="hop${i ? '' : ' first'}">${esc(label(o))}</span>`).join('')}</div></div>`).join('')}
         <p class="why">${esc(reason(p.id, tiers))}</p>
         ${warnings.map((w) => `<p class="why bad">${esc(w)}</p>`).join('')}
       </button>`;
     }).join('');
+    state.built = built;
     const pick = built.find((b) => b.p.id === state.chosen && b.tiers) || built.find((b) => b.tiers);
-    $('json').textContent = pick ? JSON.stringify(toRouting(pick.p.id, pick.tiers), null, 2) : '// Claude Code (Agent) のモデルを 1 つ以上選んでください';
+    if (!pick) { state.custom = null; renderEditor(); renderJson(); return; }
+    state.chosen = pick.p.id;
+    if (!state.custom || !state.edited) seedCustom(pick);
+    else syncCustom();
+    renderEditor(); renderJson();
+  }
+
+  // Step 3: 案をもとに、作業の重さごとの試す順番を手で調整する
+  const byKey = () => new Map(options(state.catalog).map((o) => [o.key, o]));
+
+  function seedCustom(pick) {
+    const all = options(state.catalog).filter((o) => state.enabled.has(o.key) && o.runner !== 'agent')
+      .sort((a, b) => b.quality - a.quality);
+    const tiers = {};
+    for (const t of TIERS) {
+      const chain = pick.tiers[t];
+      const used = chain.slice(0, -1).map((o) => o.key);
+      tiers[t] = {
+        list: [...used.map((key) => ({ key, on: true })), ...all.filter((o) => !used.includes(o.key)).map((o) => ({ key: o.key, on: false }))],
+        agent: chain[chain.length - 1].key,
+      };
+    }
+    state.custom = { from: pick.p.id, tiers };
+    state.edited = false;
+  }
+
+  function syncCustom() {
+    const opts = options(state.catalog).filter((o) => state.enabled.has(o.key));
+    const agents = opts.filter((o) => o.runner === 'agent');
+    for (const t of TIERS) {
+      const c = state.custom.tiers[t];
+      c.list = c.list.filter((x) => state.enabled.has(x.key));
+      for (const o of opts) if (o.runner !== 'agent' && !c.list.some((x) => x.key === o.key)) c.list.push({ key: o.key, on: false });
+      if (!state.enabled.has(c.agent) && agents.length) c.agent = agents.slice().sort((a, b) => b.quality - a.quality)[0].key;
+    }
+  }
+
+  function renderEditor() {
+    const lanes = $('lanes');
+    if (!state.custom) { lanes.innerHTML = '<p class="lane-empty">Claude Code のモデルを 1 つ以上選ぶと、ここで調整できます。</p>'; return; }
+    const map = byKey();
+    const prof = PROFILES.find((p) => p.id === state.custom.from);
+    $('editBase').textContent = `もとにした案: ${prof ? prof.label : state.custom.from}`;
+    $('editedPill').hidden = !state.edited;
+    $('resetEdit').hidden = !state.edited;
+    const agents = options(state.catalog).filter((o) => o.runner === 'agent' && state.enabled.has(o.key));
+    lanes.innerHTML = TIERS.map((t) => {
+      const c = state.custom.tiers[t];
+      let n = 0;
+      const rows = c.list.map((x, i) => {
+        const o = map.get(x.key);
+        const below = o.quality < state.floors[t];
+        const id = `use-${t}-${i}`;
+        return `<li class="row${x.on ? '' : ' off'}" draggable="true" data-tier="${t}" data-i="${i}">
+          <span class="grip" aria-hidden="true">⠿</span>
+          <span class="prio">${x.on ? ++n : '–'}</span>
+          <input type="checkbox" id="${id}" data-tier="${t}" data-i="${i}" ${x.on ? 'checked' : ''}>
+          <label for="${id}">${esc(o.modelName)}<small>${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''} · 性能 ${o.quality}${below ? ' <span class="below">下限未満</span>' : ''}</small></label>
+          <span class="moves"><button type="button" data-move="-1" data-tier="${t}" data-i="${i}" aria-label="上へ" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" data-move="1" data-tier="${t}" data-i="${i}" aria-label="下へ" ${i === c.list.length - 1 ? 'disabled' : ''}>↓</button></span>
+        </li>`;
+      }).join('');
+      return `<div class="lane glass">
+        <div class="lane-head"><b>${CLASS[t]}</b><code>${t}</code><span>下限 ${state.floors[t]}</span></div>
+        ${rows ? `<ol>${rows}</ol>` : '<p class="lane-empty">Claude Code 以外の実行先が選ばれていません。</p>'}
+        <label class="lane-last" for="agent-${t}">最後に受ける Claude Code
+          <select id="agent-${t}" data-tier="${t}">${agents.map((o) => `<option value="${esc(o.key)}" ${o.key === c.agent ? 'selected' : ''}>${esc(o.modelName)}${o.effort ? ' (' + esc(o.effort) + ')' : ''}</option>`).join('')}</select>
+        </label>
+      </div>`;
+    }).join('');
+  }
+
+  function renderJson() {
+    if (!state.custom) { $('json').textContent = '// Claude Code (Agent) のモデルを 1 つ以上選んでください'; return; }
+    const map = byKey();
+    const tiers = {};
+    for (const t of TIERS) {
+      const c = state.custom.tiers[t];
+      tiers[t] = [...c.list.filter((x) => x.on).map((x) => map.get(x.key)), map.get(c.agent)];
+    }
+    $('json').textContent = JSON.stringify(toRouting(state.custom.from + (state.edited ? '-custom' : ''), tiers), null, 2);
+  }
+
+  function edited() { state.edited = true; renderEditor(); renderJson(); }
+
+  function move(t, from, to) {
+    const list = state.custom.tiers[t].list;
+    if (to < 0 || to >= list.length || from === to) return;
+    const [x] = list.splice(from, 1);
+    list.splice(to, 0, x);
+    edited();
   }
 
   function render() { renderProviders(); renderProposals(); }
@@ -534,8 +661,43 @@ footer a { color: inherit; }
       return;
     }
     const prop = e.target.closest('.prop[data-profile]');
-    if (prop) { state.chosen = prop.dataset.profile; renderProposals(); }
+    if (prop) { state.chosen = prop.dataset.profile; state.edited = false; renderProposals(); return; }
+    const mv = e.target.closest('button[data-move]');
+    if (mv) {
+      const i = +mv.dataset.i, t = mv.dataset.tier, to = i + +mv.dataset.move;
+      move(t, i, to);
+      const again = document.querySelector(`button[data-move="${mv.dataset.move}"][data-tier="${t}"][data-i="${to}"]`);
+      if (again && !again.disabled) again.focus();
+    }
   });
+  $('lanes').addEventListener('change', (e) => {
+    const el = e.target;
+    if (el.matches('input[type=checkbox]')) { state.custom.tiers[el.dataset.tier].list[+el.dataset.i].on = el.checked; edited(); }
+    if (el.matches('select')) { state.custom.tiers[el.dataset.tier].agent = el.value; edited(); }
+  });
+  $('lanes').addEventListener('dragstart', (e) => {
+    const li = e.target.closest('li.row'); if (!li) return;
+    state.drag = { t: li.dataset.tier, i: +li.dataset.i };
+    li.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', li.dataset.i); } catch (_) {}
+  });
+  $('lanes').addEventListener('dragover', (e) => {
+    const li = e.target.closest('li.row');
+    if (!li || !state.drag || li.dataset.tier !== state.drag.t) return;
+    e.preventDefault();
+    document.querySelectorAll('.row.over').forEach((r) => r !== li && r.classList.remove('over'));
+    li.classList.add('over');
+  });
+  $('lanes').addEventListener('drop', (e) => {
+    const li = e.target.closest('li.row');
+    if (!li || !state.drag || li.dataset.tier !== state.drag.t) return;
+    e.preventDefault();
+    move(state.drag.t, state.drag.i, +li.dataset.i);
+    state.drag = null;
+  });
+  $('lanes').addEventListener('dragend', () => { state.drag = null; document.querySelectorAll('.row.over, .row.dragging').forEach((r) => r.classList.remove('over', 'dragging')); });
+  $('resetEdit').addEventListener('click', () => { state.edited = false; renderProposals(); });
   $('reload').addEventListener('click', () => loadCatalog(true));
   $('copy').addEventListener('click', () => {
     const text = $('json').textContent;
