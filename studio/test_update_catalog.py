@@ -61,6 +61,13 @@ class MergeTest(unittest.TestCase):
         self.assertIn('"updated": "z"', out)
         self.assertIn('<script>x</script>', out)
 
+    def test_embed_escapes_script_close(self):
+        html = '<script type="application/json" id="catalog-fallback">{}</script>'
+        out = update_catalog.embed(html, {'name': '</script><b>x'})
+        self.assertEqual(out.count('</script>'), 1)
+        body = out[out.index('>') + 1:out.rindex('</script>')]
+        self.assertEqual(json.loads(body), {'name': '</script><b>x'})
+
     def test_page_fallback_matches_catalog(self):
         with open(os.path.join(HERE, 'index.html'), encoding='utf-8') as f:
             html = f.read()

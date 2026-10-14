@@ -412,6 +412,7 @@ footer a { color: inherit; }
     floors: { haiku: 55, sonnet: 70, opus: 85 }, maxSteps: 4, subsCheap: true, extOpus: false,
   };
   const $ = (id) => document.getElementById(id);
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);  // catalog の数値は数として出す
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   function options(cat) {
@@ -419,9 +420,9 @@ footer a { color: inherit; }
       key: `${o.runner}|${o.model}|${o.effort ?? ''}`,
       modelName: m.name, provider: m.provider, sample: m.sample,
       runner: o.runner, model: o.model, effort: o.effort, billing: o.billing, until: o.until ?? m.until ?? null,
-      quality: m.quality + (o.quality_delta || 0),
-      price: (3 * m.price_in + m.price_out) / 4,
-      perPbi: (TOKENS.in * m.price_in + TOKENS.out * m.price_out) / 1e6,
+      quality: num(m.quality) + num(o.quality_delta),
+      price: (3 * num(m.price_in) + num(m.price_out)) / 4,
+      perPbi: (TOKENS.in * num(m.price_in) + TOKENS.out * num(m.price_out)) / 1e6,
     })));
   }
   const label = (o) => `${RUNNER[o.runner]} ${o.model.split('/').pop()}${o.effort ? ' ' + o.effort : ''}`;
@@ -499,15 +500,15 @@ footer a { color: inherit; }
       return `<article class="prov glass">
         <div class="prov-head"><span class="mark" style="background:${esc(p.color)}">${esc(p.mark)}</span>
           <div><b>${esc(p.name)}</b><span>${esc(runners)}</span></div></div>
-        ${models.map((m) => `<div class="model">
-          <div class="model-top"><b>${esc(m.name)}</b><span class="price">$${m.price_in} / $${m.price_out}</span></div>
-          <div class="qline"><span>性能 ${m.quality}${m.sample ? ' (仮)' : ''}</span><span>${m.until ? esc(m.until) + ' まで' : ''}</span></div>
-          <div class="qbar"><i style="width:${Math.max(4, Math.min(100, m.quality))}%; background-position:${-m.quality * 2}px 0"></i></div>
+        ${models.map((m) => { const q = num(m.quality), pin = num(m.price_in), pout = num(m.price_out); return `<div class="model">
+          <div class="model-top"><b>${esc(m.name)}</b><span class="price">$${pin} / $${pout}</span></div>
+          <div class="qline"><span>性能 ${q}${m.sample ? ' (仮)' : ''}</span><span>${m.until ? esc(m.until) + ' まで' : ''}</span></div>
+          <div class="qbar"><i style="width:${Math.max(4, Math.min(100, q))}%; background-position:${-q * 2}px 0"></i></div>
           <div class="opts">${m.options.map((o) => {
             const k = `${o.runner}|${o.model}|${o.effort ?? ''}`;
             return `<button type="button" class="opt" data-key="${esc(k)}" aria-pressed="${state.enabled.has(k)}">${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''}${o.runner === 'agy' ? ' ' + esc(o.model.split('-').pop()) : ''}</button>`;
           }).join('')}</div>
-        </div>`).join('')}
+        </div>`; }).join('')}
       </article>`;
     }).join('');
     const c = cat.candidates || [];
@@ -594,7 +595,7 @@ footer a { color: inherit; }
           <span class="grip" aria-hidden="true">⠿</span>
           <span class="prio">${x.on ? ++n : '–'}</span>
           <input type="checkbox" id="${id}" data-tier="${t}" data-i="${i}" ${x.on ? 'checked' : ''}>
-          <label for="${id}">${esc(o.modelName)}<small>${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''} · 性能 ${o.quality}${below ? ' <span class="below">下限未満</span>' : ''}</small></label>
+          <label for="${id}">${esc(o.modelName)}<small>${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''} · 性能 ${num(o.quality)}${below ? ' <span class="below">下限未満</span>' : ''}</small></label>
           <span class="moves"><button type="button" data-move="-1" data-tier="${t}" data-i="${i}" aria-label="上へ" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" data-move="1" data-tier="${t}" data-i="${i}" aria-label="下へ" ${i === c.list.length - 1 ? 'disabled' : ''}>↓</button></span>
         </li>`;
       }).join('');

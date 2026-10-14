@@ -170,6 +170,15 @@ class RoutingTemplateTest(unittest.TestCase):
             code, _ = run(SMALL, ALL_ZERO, '--routing', self.write(d, 'r.json', bad))
         self.assertNotEqual(code, 0)
 
+    def test_agent_without_model_or_bad_until_fails(self):
+        no_model = {'tiers': dict(PERF['tiers'], opus=[{'runner': 'agent'}])}
+        bad_until = {'tiers': dict(PERF['tiers'], sonnet=[{'runner': 'codex', 'model': 'x', 'until': 'soon'},
+                                                          {'runner': 'agent', 'model': 'sonnet'}])}
+        for table in (no_model, bad_until):
+            with tempfile.TemporaryDirectory() as d:
+                code, _ = run(SMALL, ALL_ZERO, '--routing', self.write(d, 'r.json', table))
+            self.assertNotEqual(code, 0)
+
     def test_all_picks_routing_json_in_dir(self):
         with tempfile.TemporaryDirectory() as d:
             self.write(d, 'routing.json', PERF)
