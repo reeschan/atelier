@@ -4,7 +4,7 @@
     "openrouter": null,
     "artificial_analysis": null
   },
-  "note": "quality と価格は update_catalog.py を実行するまで仮の値 (sample: true)。quality は 0〜100 の総合指標 (Artificial Analysis の Intelligence Index を想定)、価格は API の $/100 万トークン。",
+  "note": "quality と価格は update_catalog.py を実行するまで仮の値 (sample: true)。quality は 0〜100 のコーディング指標 (Artificial Analysis の Coding Index を想定)、価格は API の $/100 万トークン。",
   "providers": [
     {"id": "anthropic", "name": "Anthropic", "color": "#d97757", "mark": "A"},
     {"id": "openai", "name": "OpenAI", "color": "#10a37f", "mark": "O"},

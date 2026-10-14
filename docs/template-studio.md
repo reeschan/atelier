@@ -40,7 +40,7 @@ flowchart LR
 更新は `python studio/update_catalog.py` 1 回で行う。
 
 - **価格**: OpenRouter の `GET /api/v1/models` (キー不要)。1 トークンあたりの USD を 100 万トークンあたりに直す。
-- **性能**: Artificial Analysis の `GET /api/v2/data/llms/models` の `artificial_analysis_intelligence_index`。無料のキーを `AA_API_KEY` に置いたときだけ取り、無ければ前の値のまま。
+- **性能**: Artificial Analysis の `GET /api/v2/data/llms/models` の `artificial_analysis_coding_index` (PBI の実装に近いため。無いモデルは `artificial_analysis_intelligence_index` で代える)。無料のキーを `AA_API_KEY` に置いたときだけ取り、無ければ前の値のまま。
 - **新しいモデル**: catalog に載っている会社の、60 日以内 (`--new-days`) に出たモデルを `candidates` に出す。どの CLI のどのモデル名で呼ぶかは人が決めることなので、`models` には自動で足さない。画面では「新しく出たモデル」として出し、`options` を書けば選べるようになる。
 - 取れなかった値は `sample: true` のまま残り、画面に「仮の値」と出る。今のコミットの値はすべて仮の値。
 - 定期的に回すなら、Claude Code のルーティン (週 1 回 `update_catalog.py` を実行して PR を出す) か GitHub Actions の cron を使う。どちらにするかは後で決める。

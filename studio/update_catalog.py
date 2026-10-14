@@ -6,7 +6,8 @@
   python update_catalog.py --embed-only          # catalog.json を手で直したあと、index.html の控えだけ合わせる
 
 - 価格: OpenRouter の GET /api/v1/models の pricing (1 トークンあたりの USD) を 100 万トークンあたりに直す。キーは要らない
-- 性能: Artificial Analysis の GET /api/v2/data/llms/models の artificial_analysis_intelligence_index。
+- 性能: Artificial Analysis の GET /api/v2/data/llms/models の artificial_analysis_coding_index
+  (PBI の実装に近いため)。無いモデルは artificial_analysis_intelligence_index で代える。
   環境変数 AA_API_KEY があるときだけ取る。無ければ quality は前の値のまま
 - 新しいモデル: catalog の providers に載っている会社の、new-days 日以内に出たモデルで catalog に無いものを
   candidates に入れる。実行先 (runner) への対応は人が決めるので、models には足さない
@@ -24,6 +25,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 OPENROUTER = 'https://openrouter.ai/api/v1/models'
 AA = 'https://artificialanalysis.ai/api/v2/data/llms/models'
+QUALITY_METRICS = ('artificial_analysis_coding_index', 'artificial_analysis_intelligence_index')
 
 
 def fetch(url: str, headers: dict | None = None) -> dict:
@@ -52,10 +54,13 @@ def merge(catalog: dict, openrouter: dict | None, aa: dict | None, today: dateti
                 m['price_in'], m['price_out'] = pin, pout
                 m['price_sample'] = False
         a = aa_by_slug.get(m.get('aa_slug'))
-        index = (a or {}).get('evaluations', {}).get('artificial_analysis_intelligence_index')
-        if index is not None:
-            m['quality'] = round(float(index), 1)
-            m['quality_sample'] = False
+        evals = (a or {}).get('evaluations') or {}
+        for metric in QUALITY_METRICS:
+            if evals.get(metric) is not None:
+                m['quality'] = round(float(evals[metric]), 1)
+                m['quality_metric'] = metric
+                m['quality_sample'] = False
+                break
         m['sample'] = not (m.get('price_sample') is False and m.get('quality_sample') is False)
     if openrouter:
         out['sources']['openrouter'] = today.isoformat()
