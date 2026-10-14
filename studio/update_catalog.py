@@ -82,7 +82,8 @@ def merge(catalog: dict, openrouter: dict | None, aa: dict | None, today: dateti
 
 
 def embed(html: str, catalog: dict) -> str:
-    body = json.dumps(catalog, ensure_ascii=False, indent=2)
+    # 外から来たモデル名に </script> があっても script を閉じないよう、< をエスケープする
+    body = json.dumps(catalog, ensure_ascii=False, indent=2).replace('<', '\\u003c')
     pattern = re.compile(r'(<script type="application/json" id="catalog-fallback">)(.*?)(</script>)', re.S)
     if not pattern.search(html):
         sys.exit('index.html に catalog-fallback の script が無い')

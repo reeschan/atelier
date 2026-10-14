@@ -103,13 +103,18 @@ def load_routing(path) -> dict:
         steps = tiers.get(tier)
         if not steps or steps[-1].get('runner') != 'agent':
             sys.exit(f'{path}: tiers.{tier} の最後は agent の実行先にする')
+        if not steps[-1].get('model'):
+            sys.exit(f'{path}: tiers.{tier} の agent に model が無い')
         for s in steps[:-1]:
             if s.get('runner') not in RUNNERS:
                 sys.exit(f'{path}: tiers.{tier} の途中は {"/".join(RUNNERS)} のどれか（{s.get("runner")}）')
             if not s.get('model'):
                 sys.exit(f'{path}: tiers.{tier} の {s["runner"]} に model が無い')
             if s.get('until'):
-                datetime.date.fromisoformat(s['until'])
+                try:
+                    datetime.date.fromisoformat(s['until'])
+                except ValueError:
+                    sys.exit(f'{path}: tiers.{tier} の until が日付でない（{s["until"]}）')
     return table
 
 
