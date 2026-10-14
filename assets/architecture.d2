@@ -56,9 +56,13 @@ cc: Claude Code {
     class: svc
     icon: https://cdn.simpleicons.org/python
   }
-  agent: "3. Agent tool\nhaiku / sonnet / opus" {
+  agent: "4. Agent tool\nhaiku / sonnet / opus" {
     class: svc
     icon: https://cdn.simpleicons.org/claude
+  }
+  rtk: "rtk-gate.mjs (optional)\ncompresses command output" {
+    class: svc
+    style.stroke-dash: 3
   }
 }
 
@@ -66,10 +70,13 @@ runners: Other runners {
   class: saas
   direction: down
 
-  codex: "1. Codex CLI\ngpt-6-astra (medium / high)" {
+  opencode: "1. opencode CLI\nDeepSeek V4.1 Flash (OpenCode Go)" {
     shape: hexagon
   }
-  agy: "2. Antigravity CLI\nClaude Sonnet / Opus 5.5" {
+  codex: "2. Codex CLI\ngpt-6-astra (until CODEX_UNTIL)" {
+    shape: hexagon
+  }
+  agy: "3. Antigravity CLI\nClaude Sonnet 5.5" {
     class: svc
     icon: https://cdn.simpleicons.org/google
   }
@@ -86,7 +93,7 @@ repo: Target repository {
   code: "Source code\nchanged by runners" {
     class: svc
   }
-  pbi: "docs/pbi/\nPBIs, STATUS, jev-log, stats" {
+  pbi: "docs/pbi/\nPBIs, STATUS, reports, HANDOFF, stats" {
     class: svc
     shape: page
   }
@@ -95,9 +102,12 @@ repo: Target repository {
 dev <-> cc.orch: task / approval
 cc.orch -> cc.select: facts + Jev scores
 cc.orch <-> jev: text only: brief, report, rework size
-cc.orch -> runners.codex: PBI
+cc.orch -> runners.opencode: PBI path
+cc.orch -> runners.codex: "" {style.stroke-dash: 4}
 cc.orch -> runners.agy: "" {style.stroke-dash: 4}
 cc.orch -> cc.agent: "" {style.stroke-dash: 4}
+cc.orch -> cc.rtk: Bash / PowerShell {style.stroke-dash: 4}
+runners.opencode -> repo.code
 runners.codex -> repo.code
 runners.agy -> repo.code
 cc.agent -> repo.code

@@ -9,6 +9,7 @@
   python agent_stats.py --all                 # PBI のサブエージェントを含む全セッション
   python agent_stats.py --out docs/pbi/stats  # <out>/<session>.json に書く (同じセッションは上書き)
   python agent_stats.py --json                # 要約の代わりに JSON を標準出力へ
+  python agent_stats.py --ctx                 # 今のディレクトリのセッションの、最後のリクエストの文脈の大きさを 1 行で出す
 """
 
 import argparse
@@ -70,6 +71,66 @@ def load_requests(path):
     return reqs
 
 
+def load_advisor(path):
+    """jsonl から advisor (サーバー側の advisor ツール) の呼び出しを取り出す。
+
+    advisor の使用量は、呼び出したリクエストの usage.iterations に type "advisor_message" で入り、
+    usage の最上位 (メインのモデルの分) には含まれない。同じ requestId の行は同じ usage を繰り返すので 1 回だけ数える。
+    サブエージェントの会話記録には iterations が残らない (2026-10、Claude Code 2.1.296)。その場合は呼び出しの回数だけを
+    content の advisor_tool_result から数え、トークンは 0 として扱う (費用は /usage かヘッドレスの modelUsage で見る)。
+    """
+    by_id = {}
+    results = set()
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            msg = row.get("message")
+            if not isinstance(msg, dict):
+                continue
+            for b in msg.get("content") if isinstance(msg.get("content"), list) else []:
+                if isinstance(b, dict) and b.get("type") == "advisor_tool_result":
+                    results.add(b.get("tool_use_id"))
+            if row.get("type") != "assistant":
+                continue
+            its = (msg.get("usage") or {}).get("iterations") or []
+            calls = [it for it in its if isinstance(it, dict) and it.get("type") == "advisor_message"]
+            if not calls:
+                continue
+            rid = row.get("requestId") or row.get("uuid")
+            by_id[rid] = [{
+                "ts": parse_ts(row["timestamp"]),
+                "model": it.get("model") or "advisor",
+                "input": it.get("input_tokens", 0) or 0,
+                "output": it.get("output_tokens", 0) or 0,
+                "cache_read": it.get("cache_read_input_tokens", 0) or 0,
+                "cache_write_5m": (it.get("cache_creation") or {}).get("ephemeral_5m_input_tokens", 0) or 0,
+                "cache_write_1h": (it.get("cache_creation") or {}).get("ephemeral_1h_input_tokens", 0) or 0,
+            } for it in calls]
+    calls = sorted((c for cs in by_id.values() for c in cs), key=lambda c: c["ts"])
+    # 使用量の残っていない呼び出し (サブエージェント) は、回数だけを足す
+    for _ in range(max(0, len(results) - len(calls))):
+        calls.append({"ts": 0, "model": "advisor (使用量の記録なし)", **{k: 0 for k in TOKEN_KEYS}})
+    return calls
+
+
+def advisor_summary(calls):
+    out = {"calls": len(calls), "by_model": {}}
+    for c in calls:
+        m = out["by_model"].setdefault(c["model"], {"requests": 0, **{k: 0 for k in TOKEN_KEYS}})
+        m["requests"] += 1
+        for k in TOKEN_KEYS:
+            m[k] += c[k]
+    return out
+
+
+def context(r):
+    """そのリクエストで送った文脈の大きさ (入力 + キャッシュ読み + キャッシュ書き)。"""
+    return r["input"] + r["cache_read"] + r["cache_write_5m"] + r["cache_write_1h"]
+
+
 def analyze(reqs):
     """リクエスト列からトークン合計・キャッシュの作り直し・リクエスト間隔の分布を出す。"""
     tokens = {k: 0 for k in TOKEN_KEYS}
@@ -84,6 +145,7 @@ def analyze(reqs):
     }
     events = []
     prev = None
+    peak = 0
     # 一度でも 1 時間 TTL で書いていたら、その会話は 1 時間 TTL で動いているとみなす
     uses_1h = False
     for r in reqs:
@@ -113,6 +175,7 @@ def analyze(reqs):
                 events.append({"gap_sec": round(gap), "tokens": written, "cause": cause,
                                "model": r["model"], "prev_model": prev["model"]})
         uses_1h = uses_1h or r["cache_write_1h"] > 0
+        peak = max(peak, context(r))
         prev = r
     first = reqs[0] if reqs else None
     return {
@@ -122,6 +185,8 @@ def analyze(reqs):
         "duration_sec": round(reqs[-1]["ts"] - reqs[0]["ts"]) if reqs else 0,
         "tokens": tokens,
         "by_model": by_model,
+        "peak_context": peak,
+        "last_context": context(reqs[-1]) if reqs else 0,
         "cold_start_write": (first["cache_write_5m"] + first["cache_write_1h"]) if first else 0,
         "cache_hit_ratio": round(tokens["cache_read"] / max(1, tokens["cache_read"] + tokens["input"]
                                  + tokens["cache_write_5m"] + tokens["cache_write_1h"]), 4),
@@ -136,6 +201,17 @@ def find_session(session_id):
     if not hits:
         sys.exit(f"セッション {session_id} の会話記録が見つからない")
     return hits[0]
+
+
+def project_dir_for(cwd):
+    """Claude Code が会話記録を置くディレクトリ名 (英数字以外を - にしたもの)。"""
+    return PROJECTS / "".join(c if c.isalnum() else "-" for c in str(cwd))
+
+
+def cwd_session():
+    """今のディレクトリのプロジェクトで最後に更新された会話記録。無ければ全体で最後のもの。"""
+    files = list(project_dir_for(Path.cwd()).glob("*.jsonl"))
+    return max(files, key=lambda p: p.stat().st_mtime) if files else latest_session()
 
 
 def latest_session():
@@ -174,9 +250,21 @@ def session_stats(main_path):
             "agent_type": meta.get("agentType"),
             "models": sorted({r["model"] for r in reqs}),
             **analyze(reqs),
+            "advisor": advisor_summary(load_advisor(jl)),
         })
     orch = analyze(load_requests(main_path))
-    totals = {"by_model": {}, "rebuild": {}}
+    orch["advisor"] = advisor_summary(load_advisor(main_path))
+    totals = {"by_model": {}, "rebuild": {}, "advisor": {"calls": 0, "orchestrator_calls": orch["advisor"]["calls"],
+                                                         "subagent_calls": 0, "by_model": {}}}
+    for part in [orch] + agents:
+        adv = part["advisor"]
+        totals["advisor"]["calls"] += adv["calls"]
+        if part is not orch:
+            totals["advisor"]["subagent_calls"] += adv["calls"]
+        for model, m in adv["by_model"].items():
+            t = totals["advisor"]["by_model"].setdefault(model, {"requests": 0, **{k: 0 for k in TOKEN_KEYS}})
+            for k, v in m.items():
+                t[k] += v
     for part in [orch] + agents:
         for model, m in part["by_model"].items():
             t = totals["by_model"].setdefault(model, {"requests": 0, **{k: 0 for k in TOKEN_KEYS}})
@@ -214,12 +302,33 @@ def fmt(n):
 
 def summary(s):
     lines = [f"## セッション {s['session']} ({s['project_dir']})", ""]
+    parts = [("オーケストレーター", ", ".join(sorted(s["orchestrator"]["by_model"])), s["orchestrator"])] + [
+        (a["description"][:40] or a["agent"], ", ".join(a["models"]), a) for a in s["agents"]]
+    all_read = max(1, sum(a["tokens"]["cache_read"] for _, _, a in parts))
+    lines.append("### エージェント別の読みとターン数 (読みの多い順)")
+    lines.append("| 対象 | モデル | リクエスト | キャッシュ読み | 割合 | 1 リクエスト平均 | 最大の文脈 |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|")
+    for name, models, a in sorted(parts, key=lambda x: -x[2]["tokens"]["cache_read"]):
+        read, n = a["tokens"]["cache_read"], max(1, a["requests"])
+        lines.append(f"| {name} | {models} | {a['requests']} | {fmt(read)} | {read * 100 // all_read}% | "
+                     f"{fmt(read // n)} | {fmt(a['peak_context'])} |")
+    lines.append("")
     lines.append("### モデル別 (オーケストレーター + サブエージェント)")
     lines.append("| モデル | リクエスト | 入力 | 出力 | キャッシュ読み | 書き 5m | 書き 1h |")
     lines.append("|---|---:|---:|---:|---:|---:|---:|")
     for model, m in sorted(s["totals"]["by_model"].items()):
         lines.append(f"| {model} | {m['requests']} | {fmt(m['input'])} | {fmt(m['output'])} | "
                      f"{fmt(m['cache_read'])} | {fmt(m['cache_write_5m'])} | {fmt(m['cache_write_1h'])} |")
+    adv = s["totals"].get("advisor") or {"calls": 0}
+    lines += ["", "### advisor (メインのモデルとは別の行)"]
+    if adv["calls"]:
+        lines.append(f"呼び出し {adv['calls']} 回 (オーケストレーター {adv['orchestrator_calls']} / サブエージェント {adv['subagent_calls']})")
+        lines.append("| モデル | 呼び出し | 入力 | 出力 | キャッシュ読み |")
+        lines.append("|---|---:|---:|---:|---:|")
+        for model, m in sorted(adv["by_model"].items()):
+            lines.append(f"| {model} | {m['requests']} | {fmt(m['input'])} | {fmt(m['output'])} | {fmt(m['cache_read'])} |")
+    else:
+        lines.append("呼び出し 0 回")
     lines += ["", "### キャッシュの作り直し", "| 対象 | 回数 | トークン | TTL 切れ | うち 1h TTL なら防げた | その他 | 間隔 ≤5m / 5m–1h / >1h | 読み率 |",
               "|---|---:|---:|---:|---:|---:|---|---:|"]
     rows = [("オーケストレーター", s["orchestrator"])] + [
@@ -243,12 +352,17 @@ def main():
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--session")
     g.add_argument("--all", action="store_true")
+    g.add_argument("--ctx", action="store_true")
     ap.add_argument("--out")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
+    if args.ctx:
+        a = analyze(load_requests(cwd_session()))
+        print(f"context={a['last_context']} peak={a['peak_context']} requests={a['requests']}")
+        return
     if args.all:
         paths = pbi_sessions()
     elif args.session:
