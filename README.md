@@ -208,7 +208,8 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 ## Tuning
 
 - The decision table and thresholds are starting points. After 10–20 PBIs, look at the results per model (first-try pass, reworks, promotions) and adjust `select_model.py` and `jev.config.json`.
-- Runner models and effort levels are in the `OPENCODE` / `CODEX` / `AGY` / `AGENT` tables in `select_model.py`.
+- Runner models and effort levels come from a routing template (`routing.json`, same shape as `routing.default.json`). Put it at `docs/pbi/routing.json` in the target repo, or `routing.json` in the skill directory, and `select_model.py` uses it; without one, the built-in table applies.
+- You can build the template in a browser: open `studio/index.html`, pick the models you have, and choose one of three proposals (performance, cost, balanced). Save the JSON as `docs/pbi/routing.json`. Refresh the model list with `python studio/update_catalog.py` (design notes in `docs/template-studio.md`, Japanese).
 - Review the hand-off threshold (250,000 tokens) and the opencode results on the sonnet tier at the same time.
 
 ## Tests
@@ -216,6 +217,7 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 ```sh
 cd skills/pbi-orchestration-jev
 python -m unittest test_select_model test_agent_stats
+python -m unittest discover -s ../../studio -p 'test_*.py'
 cd jev
 python -m unittest test_jev
 node --test --test-reporter=tap jev.test.mjs
