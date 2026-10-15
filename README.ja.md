@@ -93,19 +93,20 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py --target <対象�
 2. **案を選ぶ**: 選んだモデルから、性能・コスパ・バランスの 3 案が出ます。作業の重さ (軽い作業 / ふつうの作業 / 設計が要る作業) ごとの性能の下限も変えられます。
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/studio-proposals-dark.png">
-  <img src="assets/studio-proposals-light.png" alt="Template Studio の画面。会社ごとのカードでモデルを選び、性能・コスパ・バランスの 3 案から選ぶ。" width="800">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/studio-proposals-ja-dark.png">
+  <img src="assets/studio-proposals-ja-light.png" alt="Template Studio の画面。会社ごとのカードでモデルを選び、性能・コスパ・バランスの 3 案から選ぶ。" width="800">
 </picture>
 
 3. **試す順番を整える**: 作業の重さごとに、ドラッグか ↑ ↓ で並べ替え、チェックで使う・使わないを切り替えます。最後に受ける Claude Code のモデルも選べます。
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/studio-order-dark.png">
-  <img src="assets/studio-order-light.png" alt="試す順番を調整する画面。作業の重さごとの列で、モデルを並べ替えたりチェックを外したりする。" width="800">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/studio-order-ja-dark.png">
+  <img src="assets/studio-order-ja-light.png" alt="試す順番を調整する画面。作業の重さごとの列で、モデルを並べ替えたりチェックを外したりする。" width="800">
 </picture>
 
 4. **適用する**: 「このリポジトリに適用」を押すと `docs/pbi/routing.json` に書かれ、サーバーは閉じます。前のものは `routing.prev.json` に残ります。以後 `prepare.py` はこの順番で実行先を試します。
 
+- 画面は日本語と英語に対応しています。ブラウザの言語に合わせて開き、右上の「EN / 日本語」ボタンで切り替えられます (選んだ言語は次回も使います)。URL に `?lang=ja` か `?lang=en` を付けても切り替えられます。
 - モデル一覧 (`studio/catalog.json`) は `python studio/update_catalog.py` で更新します。価格と新しいモデルは OpenRouter、性能は Artificial Analysis のコーディング指標 (環境変数 `AA_API_KEY` があるとき) から取ります。取るまでの値は仮の値で、画面にそう出ます。
 - サーバーが書くのは `docs/pbi/routing.json` だけです。起動ごとの合言葉、Host の確認、形の確認のどれかが合わなければ書きません。
 - 設計の詳細は [docs/template-studio.md](docs/template-studio.md) にあります。
