@@ -186,18 +186,19 @@ footer a { color: inherit; }
 <div class="field" aria-hidden="true"><i></i><i></i><i></i></div>
 <div class="wrap">
   <header class="top">
-    <h1>Template Studio<small>pbi-orchestration-jev の振り分けテンプレート (routing.json) を組み立てる</small></h1>
+    <h1>Template Studio<small data-i18n="tagline"></small></h1>
     <div class="meta">
-      <span class="pill" id="updated">一覧の日付 —</span>
-      <span class="pill warn" id="sampleNote" hidden>性能と価格は仮の値</span>
-      <button class="btn" id="reload" type="button">モデル一覧を読み直す</button>
+      <span class="pill" id="updated"></span>
+      <span class="pill warn" id="sampleNote" data-i18n="sample" hidden></span>
+      <button class="btn" id="reload" type="button" data-i18n="reload"></button>
+      <button class="btn" id="lang" type="button"></button>
     </div>
   </header>
 
   <section aria-labelledby="s1">
     <div class="step-head">
-      <div><span class="step-no">Step 1</span><h2 id="s1">使うモデルを選ぶ</h2></div>
-      <p>契約している実行先だけを残してください。チップ 1 つが「試す順番」の 1 つ (実行先・モデル・effort) になります。</p>
+      <div><span class="step-no">Step 1</span><h2 id="s1" data-i18n="s1"></h2></div>
+      <p data-i18n="s1p"></p>
     </div>
     <div class="providers" id="providers"></div>
     <div class="cand glass" id="candidates" hidden style="margin-top:16px"></div>
@@ -205,45 +206,45 @@ footer a { color: inherit; }
 
   <section aria-labelledby="s1b">
     <div class="step-head">
-      <div><span class="step-no">Tuning</span><h2 id="s1b">作業の重さごとの性能の下限</h2></div>
-      <p>PBI は 1 件ずつ、Jev の判定と変更の大きさから「軽い作業」「ふつうの作業」「設計が要る作業」のどれかに分けられます。それぞれ、これより性能の低いモデルは案に入れません。</p>
+      <div><span class="step-no">Tuning</span><h2 id="s1b" data-i18n="s1b"></h2></div>
+      <p data-i18n="s1bp"></p>
     </div>
     <div class="tune glass" id="tune">
-      <label for="floor-haiku"><span class="row"><span>軽い作業</span><b id="floor-haiku-v"></b></span><input id="floor-haiku" type="range" min="30" max="95" step="1"></label>
-      <label for="floor-sonnet"><span class="row"><span>ふつうの作業</span><b id="floor-sonnet-v"></b></span><input id="floor-sonnet" type="range" min="30" max="95" step="1"></label>
-      <label for="floor-opus"><span class="row"><span>設計が要る作業</span><b id="floor-opus-v"></b></span><input id="floor-opus" type="range" min="30" max="95" step="1"></label>
-      <label for="maxSteps"><span class="row"><span>試す実行先の数 (作業 1 つあたり)</span><b id="maxSteps-v"></b></span><input id="maxSteps" type="range" min="1" max="4" step="1"></label>
-      <label class="check" for="subsCheap"><input id="subsCheap" type="checkbox"> サブスクの枠内は安いとみなす</label>
-      <label class="check" for="extOpus"><input id="extOpus" type="checkbox"> 設計が要る作業にも Claude Code 以外を使う</label>
+      <label for="floor-haiku"><span class="row"><span data-i18n="haiku"></span><b id="floor-haiku-v"></b></span><input id="floor-haiku" type="range" min="30" max="95" step="1"></label>
+      <label for="floor-sonnet"><span class="row"><span data-i18n="sonnet"></span><b id="floor-sonnet-v"></b></span><input id="floor-sonnet" type="range" min="30" max="95" step="1"></label>
+      <label for="floor-opus"><span class="row"><span data-i18n="opus"></span><b id="floor-opus-v"></b></span><input id="floor-opus" type="range" min="30" max="95" step="1"></label>
+      <label for="maxSteps"><span class="row"><span data-i18n="maxSteps"></span><b id="maxSteps-v"></b></span><input id="maxSteps" type="range" min="1" max="4" step="1"></label>
+      <label class="check" for="subsCheap"><input id="subsCheap" type="checkbox"> <span data-i18n="subsCheap"></span></label>
+      <label class="check" for="extOpus"><input id="extOpus" type="checkbox"> <span data-i18n="extOpus"></span></label>
     </div>
   </section>
 
   <section aria-labelledby="s2">
     <div class="step-head">
-      <div><span class="step-no">Step 2</span><h2 id="s2">テンプレート案から選ぶ</h2></div>
-      <p>同じモデルの組み合わせから、性能・コスパ・バランスの 3 案を作りました。目安の費用は 1 PBI = 入力 30 万・出力 3 万トークンの API 換算です。</p>
+      <div><span class="step-no">Step 2</span><h2 id="s2" data-i18n="s2"></h2></div>
+      <p data-i18n="s2p"></p>
     </div>
-    <div class="proposals" id="proposals" role="radiogroup" aria-label="テンプレート案"></div>
+    <div class="proposals" id="proposals" role="radiogroup"></div>
   </section>
 
   <section aria-labelledby="s3e">
     <div class="step-head">
-      <div><span class="step-no">Step 3</span><h2 id="s3e">試す順番を調整する</h2></div>
-      <p>選んだ案をもとに、作業の重さごとに上から順に試します。ドラッグか ↑ ↓ で並べ替え、チェックを外したものは使いません。使えなかったときの最後の受け皿は、Claude Code のモデルから選びます。</p>
+      <div><span class="step-no">Step 3</span><h2 id="s3e" data-i18n="s3e"></h2></div>
+      <p data-i18n="s3ep"></p>
     </div>
-    <div class="edit-bar meta"><span class="pill" id="editBase"></span><span class="pill warn" id="editedPill" hidden>調整済み</span><button class="btn" id="resetEdit" type="button" hidden>案に戻す</button></div>
+    <div class="edit-bar meta"><span class="pill" id="editBase"></span><span class="pill warn" id="editedPill" data-i18n="edited" hidden></span><button class="btn" id="resetEdit" type="button" data-i18n="reset" hidden></button></div>
     <div class="lanes" id="lanes"></div>
   </section>
 
   <section aria-labelledby="s3">
     <div class="step-head">
-      <div><span class="step-no">Step 4</span><h2 id="s3">routing.json を書き出す</h2></div>
-      <p>対象リポジトリの docs/pbi/routing.json に置くと、prepare.py がこの順番で実行先を試します。</p>
+      <div><span class="step-no">Step 4</span><h2 id="s3" data-i18n="s3"></h2></div>
+      <p data-i18n="s3p"></p>
     </div>
     <div class="out glass">
       <div class="meta">
-        <button class="btn primary" id="apply" type="button" hidden>このリポジトリに適用</button>
-        <button class="btn" id="copy" type="button">JSON をコピー</button>
+        <button class="btn primary" id="apply" type="button" data-i18n="apply" hidden></button>
+        <button class="btn" id="copy" type="button" data-i18n="copy"></button>
         <span class="toast" id="toast" role="status"></span>
       </div>
       <p class="apply-note" id="applyNote" hidden></p>
@@ -252,7 +253,7 @@ footer a { color: inherit; }
     </div>
   </section>
 
-  <footer>モデル一覧は studio/update_catalog.py が OpenRouter (価格・新モデル) と Artificial Analysis (コーディング指標) から作ります。</footer>
+  <footer data-i18n="footer"></footer>
 </div>
 
 <script type="application/json" id="studio-apply"></script>
@@ -406,18 +407,98 @@ footer a { color: inherit; }
 </script>
 <script>
 (() => {
+  // 画面の言葉。日本語と英語を同じキーで持ち、ヘッダーのボタンで切り替える
+  const TEXT = {
+    ja: {
+      tagline: 'pbi-orchestration-jev の振り分けテンプレート (routing.json) を組み立てる',
+      updated: '一覧の日付 {0}', sample: '性能と価格は仮の値', reload: 'モデル一覧を読み直す',
+      langBtn: 'EN', langAria: 'Switch to English',
+      s1: '使うモデルを選ぶ',
+      s1p: '契約している実行先だけを残してください。チップ 1 つが「試す順番」の 1 つ (実行先・モデル・effort) になります。',
+      s1b: '作業の重さごとの性能の下限',
+      s1bp: 'PBI は 1 件ずつ、Jev の判定と変更の大きさから「軽い作業」「ふつうの作業」「設計が要る作業」のどれかに分けられます。それぞれ、これより性能の低いモデルは案に入れません。',
+      haiku: '軽い作業', sonnet: 'ふつうの作業', opus: '設計が要る作業',
+      maxSteps: '試す実行先の数 (作業 1 つあたり)', subsCheap: 'サブスクの枠内は安いとみなす', extOpus: '設計が要る作業にも Claude Code 以外を使う',
+      s2: 'テンプレート案から選ぶ',
+      s2p: '同じモデルの組み合わせから、性能・コスパ・バランスの 3 案を作りました。目安の費用は 1 PBI = 入力 30 万・出力 3 万トークンの API 換算です。',
+      proposals: 'テンプレート案', performance: '性能', cost: 'コスパ', balanced: 'バランス',
+      s3e: '試す順番を調整する',
+      s3ep: '選んだ案をもとに、作業の重さごとに上から順に試します。ドラッグか ↑ ↓ で並べ替え、チェックを外したものは使いません。使えなかったときの最後の受け皿は、Claude Code のモデルから選びます。',
+      edited: '調整済み', reset: '案に戻す',
+      s3: 'routing.json を書き出す',
+      s3p: '対象リポジトリの docs/pbi/routing.json に置くと、prepare.py がこの順番で実行先を試します。',
+      apply: 'このリポジトリに適用', copy: 'JSON をコピー',
+      footer: 'モデル一覧は studio/update_catalog.py が OpenRouter (価格・新モデル) と Artificial Analysis (コーディング指標) から作ります。',
+      noPrice: '価格不明 (案に入れない)', score: '性能 {0}', sampleMark: ' (仮)', until: '{0} まで',
+      candTitle: '新しく出たモデル', candNote: 'まだ実行先との対応が無いので、案には入りません。catalog.json の models に options を書くと選べます。',
+      selected: '選択中', choose: '選ぶ', statQ: '先頭の性能 (加重平均)', statCost: 'API 換算 / PBI', floor: '下限 {0}',
+      warnFloor: '{0}: 下限 {1} に届く Claude Code のモデルが無いので {2} にした',
+      warnAgent: 'Claude Code (Agent) のモデルを 1 つ以上残してください',
+      whyPerformance: 'どの作業も性能の高い順に試します。', whyCost: 'どの作業も安い順に試し、最後に Claude Code で受けます。', whyBalanced: '性能と費用の釣り合いが良い順に試します。',
+      whyTail: '{0} ふつうの作業は {1} ({2}) から、軽い作業は {3} ({4}) から始めます。',
+      editorEmpty: 'Claude Code のモデルを 1 つ以上選ぶと、ここで調整できます。', editBase: 'もとにした案: {0}',
+      rowNoPrice: ' · 価格不明', below: '下限未満', up: '上へ', down: '下へ',
+      laneEmpty: 'Claude Code 以外の実行先が選ばれていません。', laneLast: '最後に受ける Claude Code',
+      jsonEmpty: '// Claude Code (Agent) のモデルを 1 つ以上選んでください',
+      reloaded: 'モデル一覧を読み直しました', reloadFail: 'catalog.json を読めなかったので、ページ内の控えを使っています',
+      target: '適用先: {0}', applied: '適用しました: {0}。この画面は閉じてかまいません。', applyFail: '適用できませんでした: {0}',
+      copied: 'コピーしました', selectedText: '選択しました。Ctrl+C でコピーしてください',
+    },
+    en: {
+      tagline: 'Build the routing template (routing.json) for pbi-orchestration-jev',
+      updated: 'Catalog date {0}', sample: 'Scores and prices are sample values', reload: 'Reload model list',
+      langBtn: '日本語', langAria: '日本語に切り替える',
+      s1: 'Choose the models to use',
+      s1p: 'Keep only the runners you subscribe to. Each chip becomes one entry in the try order (runner, model, effort).',
+      s1b: 'Minimum score per workload',
+      s1bp: 'Each PBI is classed as light, standard or design-heavy work from Jev’s verdict and the size of the change. Models scoring below the floor are left out of the proposals for that class.',
+      haiku: 'Light work', sonnet: 'Standard work', opus: 'Design-heavy work',
+      maxSteps: 'Runners to try per task', subsCheap: 'Treat usage within a subscription as cheap', extOpus: 'Use runners other than Claude Code for design-heavy work too',
+      s2: 'Pick a proposal',
+      s2p: 'Three proposals built from the same models: performance, cost and balanced. The estimated cost assumes 300k input and 30k output tokens per PBI at API prices.',
+      proposals: 'Template proposals', performance: 'Performance', cost: 'Cost', balanced: 'Balanced',
+      s3e: 'Adjust the try order',
+      s3ep: 'Starting from the chosen proposal, each workload tries runners from top to bottom. Drag or use ↑ ↓ to reorder; unchecked entries are not used. The final fallback is the Claude Code model you pick.',
+      edited: 'Edited', reset: 'Back to proposal',
+      s3: 'Export routing.json',
+      s3p: 'Put it at docs/pbi/routing.json in the target repository, and prepare.py tries runners in this order.',
+      apply: 'Apply to this repository', copy: 'Copy JSON',
+      footer: 'studio/update_catalog.py builds the model list from OpenRouter (prices, new models) and Artificial Analysis (coding index).',
+      noPrice: 'Price unknown (not used in proposals)', score: 'Score {0}', sampleMark: ' (sample)', until: 'until {0}',
+      candTitle: 'New models', candNote: 'They have no runner mapping yet, so proposals do not use them. Add options under models in catalog.json to make them selectable.',
+      selected: 'Selected', choose: 'Choose', statQ: 'First-choice score (weighted)', statCost: 'API cost / PBI', floor: 'floor {0}',
+      warnFloor: '{0}: no Claude Code model reaches the floor of {1}, so {2} is used',
+      warnAgent: 'Keep at least one Claude Code (Agent) model',
+      whyPerformance: 'Every workload tries the highest-scoring runner first.', whyCost: 'Every workload tries the cheapest runner first and falls back to Claude Code.', whyBalanced: 'Runners are tried in order of the best balance between score and cost.',
+      whyTail: '{0} Standard work starts with {1} ({2}); light work starts with {3} ({4}).',
+      editorEmpty: 'Select at least one Claude Code model to adjust the order here.', editBase: 'Based on: {0}',
+      rowNoPrice: ' · price unknown', below: 'below floor', up: 'Move up', down: 'Move down',
+      laneEmpty: 'No runners other than Claude Code are selected.', laneLast: 'Final fallback (Claude Code)',
+      jsonEmpty: '// Select at least one Claude Code (Agent) model',
+      reloaded: 'Reloaded the model list', reloadFail: 'Could not read catalog.json, so the copy in this page is used',
+      target: 'Target: {0}', applied: 'Applied: {0}. You can close this page.', applyFail: 'Could not apply: {0}',
+      copied: 'Copied', selectedText: 'Selected. Press Ctrl+C to copy.',
+    },
+  };
+  const store = { get: (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} } };
+  const pickLang = () => {
+    const q = new URLSearchParams(location.search).get('lang');
+    const v = q || store.get('studio-lang') || (navigator.language || '').slice(0, 2);
+    return v === 'ja' ? 'ja' : 'en';
+  };
+  let lang = pickLang();
+  const t = (key, ...args) => (TEXT[lang][key] ?? TEXT.ja[key]).replace(/\{(\d)\}/g, (_, i) => args[+i]);
   const RUNNER = { opencode: 'opencode', codex: 'Codex', agy: 'Antigravity', agent: 'Claude Code' };
   const TIERS = ['haiku', 'sonnet', 'opus'];
-  const CLASS = { haiku: '軽い作業', sonnet: 'ふつうの作業', opus: '設計が要る作業' };
   const MIX = { haiku: 0.4, sonnet: 0.45, opus: 0.15 };  // 作業の重さの出方の目安 (重み)
   const TOKENS = { in: 300000, out: 30000 };
   const PROFILES = [
-    { id: 'performance', label: '性能', tone: 'var(--perf)' },
-    { id: 'cost', label: 'コスパ', tone: 'var(--cost)' },
-    { id: 'balanced', label: 'バランス', tone: 'var(--bal)' },
+    { id: 'performance', tone: 'var(--perf)' },
+    { id: 'cost', tone: 'var(--cost)' },
+    { id: 'balanced', tone: 'var(--bal)' },
   ];
   const state = {
-    catalog: null, enabled: new Set(), chosen: 'balanced', built: [], custom: null, edited: false, drag: null,
+    catalog: null, applied: null, enabled: new Set(), chosen: 'balanced', built: [], custom: null, edited: false, drag: null,
     floors: { haiku: 55, sonnet: 70, opus: 85 }, maxSteps: 4, subsCheap: true, extOpus: false,
   };
   const $ = (id) => document.getElementById(id);
@@ -456,9 +537,9 @@ footer a { color: inherit; }
   function build(profile, opts) {
     const on = opts.filter((o) => state.enabled.has(o.key) && o.price !== null);
     const tiers = {}, warnings = [];
-    for (const t of TIERS) {
-      const floor = state.floors[t];
-      const ext = on.filter((o) => o.runner !== 'agent' && o.quality >= floor && (t !== 'opus' || state.extOpus));
+    for (const tier of TIERS) {
+      const floor = state.floors[tier];
+      const ext = on.filter((o) => o.runner !== 'agent' && o.quality >= floor && (tier !== 'opus' || state.extOpus));
       const agents = on.filter((o) => o.runner === 'agent');
       const extSorted = ext.sort(sorter(profile, on));
       const seen = new Set(), chain = [];
@@ -469,32 +550,29 @@ footer a { color: inherit; }
       let agent = agents.filter((o) => o.quality >= floor).sort(sorter(profile, on))[0];
       if (!agent && agents.length) {
         agent = agents.slice().sort((a, b) => b.quality - a.quality)[0];
-        warnings.push(`${CLASS[t]}: 下限 ${floor} に届く Claude Code のモデルが無いので ${agent.modelName} にした`);
+        warnings.push(t('warnFloor', t(tier), floor, agent.modelName));
       }
-      if (!agent) { warnings.push('Claude Code (Agent) のモデルを 1 つ以上残してください'); return { tiers: null, warnings }; }
-      tiers[t] = [...chain, agent];
+      if (!agent) { warnings.push(t('warnAgent')); return { tiers: null, warnings }; }
+      tiers[tier] = [...chain, agent];
     }
     return { tiers, warnings };
   }
 
   function metrics(tiers) {
     let q = 0, cost = 0;
-    for (const t of TIERS) { q += MIX[t] * tiers[t][0].quality; cost += MIX[t] * tiers[t][0].perPbi; }
+    for (const k of TIERS) { q += MIX[k] * tiers[k][0].quality; cost += MIX[k] * tiers[k][0].perPbi; }
     return { q, cost };
   }
 
   function reason(profile, tiers) {
-    const head = (t) => tiers[t][0];
-    const s = head('sonnet'), h = head('haiku');
-    const base = profile === 'performance' ? 'どの作業も性能の高い順に試します。'
-      : profile === 'cost' ? 'どの作業も安い順に試し、最後に Claude Code で受けます。'
-      : '性能と費用の釣り合いが良い順に試します。';
-    return `${base} ふつうの作業は ${s.modelName} (${RUNNER[s.runner]}) から、軽い作業は ${h.modelName} (${RUNNER[h.runner]}) から始めます。`;
+    const s = tiers.sonnet[0], h = tiers.haiku[0];
+    const base = t(profile === 'performance' ? 'whyPerformance' : profile === 'cost' ? 'whyCost' : 'whyBalanced');
+    return t('whyTail', base, s.modelName, RUNNER[s.runner], h.modelName, RUNNER[h.runner]);
   }
 
   function toRouting(profile, tiers) {
     const out = { name: profile, generated_by: 'studio', catalog: state.catalog.updated, tiers: {} };
-    for (const t of TIERS) out.tiers[t] = tiers[t].map((o) => {
+    for (const k of TIERS) out.tiers[k] = tiers[k].map((o) => {
       const s = { runner: o.runner, model: o.model, effort: o.effort ?? null };
       if (o.until && o.runner !== 'agent') s.until = o.until;
       return s;
@@ -504,7 +582,7 @@ footer a { color: inherit; }
 
   function renderProviders() {
     const cat = state.catalog;
-    $('updated').textContent = `一覧の日付 ${cat.updated}`;
+    $('updated').textContent = t('updated', cat.updated);
     $('sampleNote').hidden = !cat.models.some((m) => m.sample);
     $('providers').innerHTML = cat.providers.map((p) => {
       const models = cat.models.filter((m) => m.provider === p.id);
@@ -514,8 +592,8 @@ footer a { color: inherit; }
         <div class="prov-head"><span class="mark" style="background:${esc(p.color)}">${esc(p.mark)}</span>
           <div><b>${esc(p.name)}</b><span>${esc(runners)}</span></div></div>
         ${models.map((m) => { const q = num(m.quality); return `<div class="model">
-          <div class="model-top"><b>${esc(m.name)}</b><span class="price">${priced(m) ? `$${measure(m.price_in)} / $${measure(m.price_out)}` : '価格不明 (案に入れない)'}</span></div>
-          <div class="qline"><span>性能 ${q}${m.sample ? ' (仮)' : ''}</span><span>${m.until ? esc(m.until) + ' まで' : ''}</span></div>
+          <div class="model-top"><b>${esc(m.name)}</b><span class="price">${priced(m) ? `$${measure(m.price_in)} / $${measure(m.price_out)}` : esc(t('noPrice'))}</span></div>
+          <div class="qline"><span>${esc(t('score', q))}${m.sample ? esc(t('sampleMark')) : ''}</span><span>${m.until ? esc(t('until', m.until)) : ''}</span></div>
           <div class="qbar"><i style="width:${Math.max(4, Math.min(100, q))}%; background-position:${-q * 2}px 0"></i></div>
           <div class="opts">${m.options.map((o) => {
             const k = `${o.runner}|${o.model}|${o.effort ?? ''}`;
@@ -526,8 +604,8 @@ footer a { color: inherit; }
     }).join('');
     const c = cat.candidates || [];
     $('candidates').hidden = !c.length;
-    $('candidates').innerHTML = c.length ? `<h2>新しく出たモデル</h2>
-      <p class="why">まだ実行先との対応が無いので、案には入りません。catalog.json の models に options を書くと選べます。</p>
+    $('candidates').innerHTML = c.length ? `<h2>${esc(t('candTitle'))}</h2>
+      <p class="why">${esc(t('candNote'))}</p>
       <ul>${c.slice(0, 8).map((m) => `<li><span class="pill">${esc(m.created)}</span><b>${esc(m.name)}</b><code>${esc(m.openrouter_id)}</code></li>`).join('')}</ul>` : '';
   }
 
@@ -535,16 +613,16 @@ footer a { color: inherit; }
     const opts = options(state.catalog);
     const built = PROFILES.map((p) => ({ p, ...build(p.id, opts) }));
     $('proposals').innerHTML = built.map(({ p, tiers, warnings }) => {
-      if (!tiers) return `<div class="prop glass" style="--tone:${p.tone}"><div class="prop-head"><h3>${p.label}</h3></div><p class="why bad">${esc(warnings[0])}</p></div>`;
+      if (!tiers) return `<div class="prop glass" style="--tone:${p.tone}"><div class="prop-head"><h3>${esc(t(p.id))}</h3></div><p class="why bad">${esc(warnings[0])}</p></div>`;
       const m = metrics(tiers);
       return `<button type="button" class="prop glass" role="radio" data-profile="${p.id}" aria-checked="${state.chosen === p.id}" style="--tone:${p.tone}">
-        <div class="prop-head"><h3>${p.label}</h3><span class="sel">${state.chosen === p.id ? '選択中' : '選ぶ'}</span></div>
+        <div class="prop-head"><h3>${esc(t(p.id))}</h3><span class="sel">${esc(t(state.chosen === p.id ? 'selected' : 'choose'))}</span></div>
         <div class="stats">
-          <div class="stat"><small>先頭の性能 (加重平均)</small><b>${m.q.toFixed(0)}</b></div>
-          <div class="stat"><small>API 換算 / PBI</small><b>$${m.cost.toFixed(2)}</b></div>
+          <div class="stat"><small>${esc(t('statQ'))}</small><b>${m.q.toFixed(0)}</b></div>
+          <div class="stat"><small>${esc(t('statCost'))}</small><b>$${m.cost.toFixed(2)}</b></div>
         </div>
-        ${TIERS.map((t) => `<div class="tier"><span class="tier-name">${CLASS[t]}<span>下限 ${state.floors[t]}</span></span>
-          <div class="chain">${tiers[t].map((o, i) => `${i ? '<span class="arrow">→</span>' : ''}<span class="hop${i ? '' : ' first'}">${esc(label(o))}</span>`).join('')}</div></div>`).join('')}
+        ${TIERS.map((k) => `<div class="tier"><span class="tier-name">${esc(t(k))}<span>${esc(t('floor', state.floors[k]))}</span></span>
+          <div class="chain">${tiers[k].map((o, i) => `${i ? '<span class="arrow">→</span>' : ''}<span class="hop${i ? '' : ' first'}">${esc(label(o))}</span>`).join('')}</div></div>`).join('')}
         <p class="why">${esc(reason(p.id, tiers))}</p>
         ${warnings.map((w) => `<p class="why bad">${esc(w)}</p>`).join('')}
       </button>`;
@@ -565,10 +643,10 @@ footer a { color: inherit; }
     const all = options(state.catalog).filter((o) => state.enabled.has(o.key) && o.runner !== 'agent')
       .sort((a, b) => b.quality - a.quality);
     const tiers = {};
-    for (const t of TIERS) {
-      const chain = pick.tiers[t];
+    for (const k of TIERS) {
+      const chain = pick.tiers[k];
       const used = chain.slice(0, -1).map((o) => o.key);
-      tiers[t] = {
+      tiers[k] = {
         list: [...used.map((key) => ({ key, on: true })), ...all.filter((o) => !used.includes(o.key)).map((o) => ({ key: o.key, on: false }))],
         agent: chain[chain.length - 1].key,
       };
@@ -580,8 +658,8 @@ footer a { color: inherit; }
   function syncCustom() {
     const opts = options(state.catalog).filter((o) => state.enabled.has(o.key));
     const agents = opts.filter((o) => o.runner === 'agent');
-    for (const t of TIERS) {
-      const c = state.custom.tiers[t];
+    for (const k of TIERS) {
+      const c = state.custom.tiers[k];
       c.list = c.list.filter((x) => state.enabled.has(x.key));
       for (const o of opts) if (o.runner !== 'agent' && !c.list.some((x) => x.key === o.key)) c.list.push({ key: o.key, on: false });
       if (!state.enabled.has(c.agent) && agents.length) c.agent = agents.slice().sort((a, b) => b.quality - a.quality)[0].key;
@@ -590,57 +668,67 @@ footer a { color: inherit; }
 
   function renderEditor() {
     const lanes = $('lanes');
-    if (!state.custom) { lanes.innerHTML = '<p class="lane-empty">Claude Code のモデルを 1 つ以上選ぶと、ここで調整できます。</p>'; return; }
+    if (!state.custom) { lanes.innerHTML = `<p class="lane-empty">${esc(t('editorEmpty'))}</p>`; return; }
     const map = byKey();
     const prof = PROFILES.find((p) => p.id === state.custom.from);
-    $('editBase').textContent = `もとにした案: ${prof ? prof.label : state.custom.from}`;
+    $('editBase').textContent = t('editBase', prof ? t(prof.id) : state.custom.from);
     $('editedPill').hidden = !state.edited;
     $('resetEdit').hidden = !state.edited;
     const agents = options(state.catalog).filter((o) => o.runner === 'agent' && state.enabled.has(o.key));
-    lanes.innerHTML = TIERS.map((t) => {
-      const c = state.custom.tiers[t];
+    lanes.innerHTML = TIERS.map((k) => {
+      const c = state.custom.tiers[k];
       let n = 0;
       const rows = c.list.map((x, i) => {
         const o = map.get(x.key);
-        const below = o.quality < state.floors[t];
-        const id = `use-${t}-${i}`;
-        return `<li class="row${x.on ? '' : ' off'}" draggable="true" data-tier="${t}" data-i="${i}">
+        const below = o.quality < state.floors[k];
+        const id = `use-${k}-${i}`;
+        return `<li class="row${x.on ? '' : ' off'}" draggable="true" data-tier="${k}" data-i="${i}">
           <span class="grip" aria-hidden="true">⠿</span>
           <span class="prio">${x.on ? ++n : '–'}</span>
-          <input type="checkbox" id="${id}" data-tier="${t}" data-i="${i}" ${x.on ? 'checked' : ''}>
-          <label for="${id}">${esc(o.modelName)}<small>${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''} · 性能 ${num(o.quality)}${o.price === null ? ' · 価格不明' : ''}${below ? ' <span class="below">下限未満</span>' : ''}</small></label>
-          <span class="moves"><button type="button" data-move="-1" data-tier="${t}" data-i="${i}" aria-label="上へ" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" data-move="1" data-tier="${t}" data-i="${i}" aria-label="下へ" ${i === c.list.length - 1 ? 'disabled' : ''}>↓</button></span>
+          <input type="checkbox" id="${id}" data-tier="${k}" data-i="${i}" ${x.on ? 'checked' : ''}>
+          <label for="${id}">${esc(o.modelName)}<small>${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''} · ${esc(t('score', num(o.quality)))}${o.price === null ? esc(t('rowNoPrice')) : ''}${below ? ` <span class="below">${esc(t('below'))}</span>` : ''}</small></label>
+          <span class="moves"><button type="button" data-move="-1" data-tier="${k}" data-i="${i}" aria-label="${esc(t('up'))}" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" data-move="1" data-tier="${k}" data-i="${i}" aria-label="${esc(t('down'))}" ${i === c.list.length - 1 ? 'disabled' : ''}>↓</button></span>
         </li>`;
       }).join('');
       return `<div class="lane glass">
-        <div class="lane-head"><b>${CLASS[t]}</b><code>${t}</code><span>下限 ${state.floors[t]}</span></div>
-        ${rows ? `<ol>${rows}</ol>` : '<p class="lane-empty">Claude Code 以外の実行先が選ばれていません。</p>'}
-        <label class="lane-last" for="agent-${t}">最後に受ける Claude Code
-          <select id="agent-${t}" data-tier="${t}">${agents.map((o) => `<option value="${esc(o.key)}" ${o.key === c.agent ? 'selected' : ''}>${esc(o.modelName)}${o.effort ? ' (' + esc(o.effort) + ')' : ''}</option>`).join('')}</select>
+        <div class="lane-head"><b>${esc(t(k))}</b><code>${k}</code><span>${esc(t('floor', state.floors[k]))}</span></div>
+        ${rows ? `<ol>${rows}</ol>` : `<p class="lane-empty">${esc(t('laneEmpty'))}</p>`}
+        <label class="lane-last" for="agent-${k}">${esc(t('laneLast'))}
+          <select id="agent-${k}" data-tier="${k}">${agents.map((o) => `<option value="${esc(o.key)}" ${o.key === c.agent ? 'selected' : ''}>${esc(o.modelName)}${o.effort ? ' (' + esc(o.effort) + ')' : ''}</option>`).join('')}</select>
         </label>
       </div>`;
     }).join('');
   }
 
   function renderJson() {
-    if (!state.custom) { $('json').textContent = '// Claude Code (Agent) のモデルを 1 つ以上選んでください'; return; }
+    if (!state.custom) { $('json').textContent = t('jsonEmpty'); return; }
     const map = byKey();
     const tiers = {};
-    for (const t of TIERS) {
-      const c = state.custom.tiers[t];
-      tiers[t] = [...c.list.filter((x) => x.on).map((x) => map.get(x.key)), map.get(c.agent)];
+    for (const k of TIERS) {
+      const c = state.custom.tiers[k];
+      tiers[k] = [...c.list.filter((x) => x.on).map((x) => map.get(x.key)), map.get(c.agent)];
     }
     $('json').textContent = JSON.stringify(toRouting(state.custom.from + (state.edited ? '-custom' : ''), tiers), null, 2);
   }
 
   function edited() { state.edited = true; renderEditor(); renderJson(); }
 
-  function move(t, from, to) {
-    const list = state.custom.tiers[t].list;
+  function move(tier, from, to) {
+    const list = state.custom.tiers[tier].list;
     if (to < 0 || to >= list.length || from === to) return;
     const [x] = list.splice(from, 1);
     list.splice(to, 0, x);
     edited();
+  }
+
+  function renderStatic() {
+    document.documentElement.lang = lang;
+    document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+    $('proposals').setAttribute('aria-label', t('proposals'));
+    $('lang').textContent = t('langBtn');
+    $('lang').setAttribute('aria-label', t('langAria'));
+    if (!state.catalog) $('updated').textContent = t('updated', '—');
+    renderApplyNote();
   }
 
   function render() { renderProviders(); renderProposals(); }
@@ -656,10 +744,10 @@ footer a { color: inherit; }
       const r = await fetch('catalog.json', { cache: 'no-store' });
       if (!r.ok) throw new Error(r.status);
       setCatalog(await r.json());
-      if (user) flash('モデル一覧を読み直しました');
+      if (user) flash(t('reloaded'));
     } catch (e) {
       if (!state.catalog) setCatalog(JSON.parse($('catalog-fallback').textContent));
-      if (user) flash('catalog.json を読めなかったので、ページ内の控えを使っています');
+      if (user) flash(t('reloadFail'));
     }
   }
 
@@ -678,9 +766,9 @@ footer a { color: inherit; }
     if (prop) { state.chosen = prop.dataset.profile; state.edited = false; renderProposals(); return; }
     const mv = e.target.closest('button[data-move]');
     if (mv) {
-      const i = +mv.dataset.i, t = mv.dataset.tier, to = i + +mv.dataset.move;
-      move(t, i, to);
-      const again = document.querySelector(`button[data-move="${mv.dataset.move}"][data-tier="${t}"][data-i="${to}"]`);
+      const i = +mv.dataset.i, tier = mv.dataset.tier, to = i + +mv.dataset.move;
+      move(tier, i, to);
+      const again = document.querySelector(`button[data-move="${mv.dataset.move}"][data-tier="${tier}"][data-i="${to}"]`);
       if (again && !again.disabled) again.focus();
     }
   });
@@ -713,40 +801,51 @@ footer a { color: inherit; }
   $('lanes').addEventListener('dragend', () => { state.drag = null; document.querySelectorAll('.row.over, .row.dragging').forEach((r) => r.classList.remove('over', 'dragging')); });
   $('resetEdit').addEventListener('click', () => { state.edited = false; renderProposals(); });
   $('reload').addEventListener('click', () => loadCatalog(true));
+  $('lang').addEventListener('click', () => {
+    lang = lang === 'ja' ? 'en' : 'ja';
+    store.set('studio-lang', lang);
+    renderStatic(); render();
+  });
 
   // serve.py から開いたときだけ、適用先と合言葉が埋め込まれる
-  const applyInfo = (() => { try { const t = $('studio-apply').textContent.trim(); return t ? JSON.parse(t) : null; } catch (_) { return null; } })();
+  const applyInfo = (() => { try { const raw = $('studio-apply').textContent.trim(); return raw ? JSON.parse(raw) : null; } catch (_) { return null; } })();
+  function renderApplyNote() {
+    if (!applyInfo) return;
+    const [key, path] = state.applied ? ['applied', state.applied] : ['target', applyInfo.target];
+    const [before, after] = t(key, '\u0000').split('\u0000');
+    $('applyNote').innerHTML = `${esc(before)}<code>${esc(path)}</code>${esc(after)}`;
+    $('applyNote').classList.toggle('done', !!state.applied);
+  }
   if (applyInfo) {
     $('apply').hidden = false;
     $('copy').classList.remove('primary');
     $('applyNote').hidden = false;
-    $('applyNote').innerHTML = `適用先: <code>${esc(applyInfo.target)}</code>`;
     $('apply').addEventListener('click', async () => {
       $('apply').disabled = true;
       try {
         const r = await fetch('/apply', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Studio-Token': applyInfo.token }, body: $('json').textContent });
         const res = await r.json();
         if (!res.ok) throw new Error(res.error);
-        $('applyNote').classList.add('done');
-        $('applyNote').innerHTML = `適用しました: <code>${esc(res.path)}</code>。この画面は閉じてかまいません。`;
+        state.applied = res.path;
+        renderApplyNote();
       } catch (e) {
         $('apply').disabled = false;
-        flash(`適用できませんでした: ${e.message || e}`);
+        flash(t('applyFail', e.message || e));
       }
     });
   }
   $('copy').addEventListener('click', () => {
     const text = $('json').textContent;
-    navigator.clipboard.writeText(text).then(() => flash('コピーしました'), () => {
+    navigator.clipboard.writeText(text).then(() => flash(t('copied')), () => {
       const range = document.createRange(); range.selectNodeContents($('json'));
       const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
-      flash('選択しました。Ctrl+C でコピーしてください');
+      flash(t('selectedText'));
     });
   });
-  for (const t of TIERS) {
-    const el = $(`floor-${t}`);
-    el.value = state.floors[t]; $(`floor-${t}-v`).textContent = el.value;
-    el.addEventListener('input', () => { state.floors[t] = +el.value; $(`floor-${t}-v`).textContent = el.value; renderProposals(); });
+  for (const k of TIERS) {
+    const el = $(`floor-${k}`);
+    el.value = state.floors[k]; $(`floor-${k}-v`).textContent = el.value;
+    el.addEventListener('input', () => { state.floors[k] = +el.value; $(`floor-${k}-v`).textContent = el.value; renderProposals(); });
   }
   $('maxSteps').value = state.maxSteps; $('maxSteps-v').textContent = state.maxSteps;
   $('maxSteps').addEventListener('input', (e) => { state.maxSteps = +e.target.value; $('maxSteps-v').textContent = state.maxSteps; renderProposals(); });
@@ -755,6 +854,7 @@ footer a { color: inherit; }
   $('extOpus').checked = state.extOpus;
   $('extOpus').addEventListener('change', (e) => { state.extOpus = e.target.checked; renderProposals(); });
 
+  renderStatic();
   setCatalog(JSON.parse($('catalog-fallback').textContent));
   loadCatalog(false);
 })();
