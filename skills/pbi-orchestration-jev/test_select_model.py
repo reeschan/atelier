@@ -345,6 +345,89 @@ class RoutingTemplateTest(unittest.TestCase):
         self.assertEqual([s['runner'] for s in r['route']], ['codex', 'agent'])
 
 
+class RoutingHomeTest(unittest.TestCase):
+    """共通の routing.json は優先テンプレートと同じ home (templates.resolve_home) から探す。"""
+
+    def write(self, d, table):
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, 'routing.json'), 'w', encoding='utf-8') as f:
+            json.dump(table, f)
+
+    def runners(self, r):
+        return [s['runner'] for s in r['route']]
+
+    def test_home_option_routing_json_is_used(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.write(d, PERF)
+            code, r = run(SMALL, ALL_ZERO, '--today', BEFORE, '--home', d)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.runners(r), ['agy', 'agent'])
+        self.assertIn('performance', r['reasons'][0])
+
+    def test_env_home_routing_json_is_used(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.write(d, PERF)
+            fp = os.path.join(d, 'facts.json')
+            with open(fp, 'w', encoding='utf-8') as f:
+                json.dump(SMALL, f)
+            out = subprocess.run([sys.executable, SCRIPT, fp, '--today', BEFORE], capture_output=True, text=True,
+                                 encoding='utf-8', env={**os.environ, 'PBI_TEMPLATES_HOME': d})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        # Jev の答えが無いので sonnet の段。PERF の sonnet は codex → agent
+        self.assertEqual(self.runners(json.loads(out.stdout)), ['codex', 'agent'])
+
+    def test_all_dir_routing_json_wins_over_home(self):
+        dir_table = {'name': 'dir', 'tiers': dict(PERF['tiers'], sonnet=[{'runner': 'agent', 'model': 'sonnet'}])}
+        with tempfile.TemporaryDirectory() as d:
+            home, pbi = os.path.join(d, 'home'), os.path.join(d, 'pbi')
+            self.write(home, PERF)
+            self.write(pbi, dir_table)
+            with open(os.path.join(pbi, 'PBI-001.facts.json'), 'w', encoding='utf-8') as f:
+                json.dump({**SMALL, 'files_changed': 4}, f)
+            out = subprocess.run([sys.executable, SCRIPT, '--all', pbi, '--today', BEFORE, '--home', home],
+                                 capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(out.returncode, 0, out.stderr)
+            with open(os.path.join(pbi, 'PBI-001.route.json'), encoding='utf-8') as f:
+                r = json.load(f)
+        self.assertEqual(self.runners(r), ['agent'])
+
+    def run_copied(self, script_dir, facts_dir):
+        """select_model.py と templates.py を script_dir に写し、--home も PBI_TEMPLATES_HOME も無しで動かす。
+        Jev の答えを渡さないので sonnet の段になる。"""
+        os.makedirs(script_dir, exist_ok=True)
+        for name in ('select_model.py', 'templates.py'):
+            with open(os.path.join(HERE, name), encoding='utf-8') as src,                     open(os.path.join(script_dir, name), 'w', encoding='utf-8') as dst:
+                dst.write(src.read())
+        fp = os.path.join(facts_dir, 'facts.json')
+        with open(fp, 'w', encoding='utf-8') as f:
+            json.dump(SMALL, f)
+        env = {k: v for k, v in os.environ.items() if k != 'PBI_TEMPLATES_HOME'}
+        out = subprocess.run([sys.executable, os.path.join(script_dir, 'select_model.py'), fp, '--today', BEFORE],
+                             capture_output=True, text=True, encoding='utf-8', env=env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_versioned_layout_reads_skill_root(self):
+        """版管理の配置 (versions/<版>/) では、版のディレクトリでなくスキルのルートの routing.json を読む。"""
+        with tempfile.TemporaryDirectory() as d:
+            root = os.path.join(d, 'skill')
+            self.write(root, PERF)
+            self.write(os.path.join(root, 'versions', 'v1'), {'name': 'version-dir', 'tiers': {
+                t: [{'runner': 'agent', 'model': 'opus'}] for t in select_model.TIERS}})
+            r = self.run_copied(os.path.join(root, 'versions', 'v1'), d)
+        self.assertEqual(self.runners(r), ['codex', 'agent'])
+        self.assertIn('performance', r['reasons'][0])
+
+    def test_flat_layout_reads_script_dir(self):
+        """版の無い配置 (公開リポジトリ) では、スクリプトのディレクトリの routing.json を読む。"""
+        with tempfile.TemporaryDirectory() as d:
+            root = os.path.join(d, 'skill')
+            self.write(root, PERF)
+            r = self.run_copied(root, d)
+        self.assertEqual(self.runners(r), ['codex', 'agent'])
+        self.assertIn('performance', r['reasons'][0])
+
+
 class PriorityOverRoutingTest(unittest.TestCase):
     """優先テンプレートは振り分けテンプレート (routing) より先に当たり、最後は routing のその段の agent。"""
 

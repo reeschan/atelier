@@ -96,7 +96,8 @@ flowchart LR
 - どの段も、最後の 1 つだけが `agent`。途中は opencode / codex / agy のどれか。形が違えば select_model.py はエラーで止まる。
 - `until` を過ぎた実行先は route から外れる (今の `CODEX_UNTIL` を段ごとに書けるようにしたもの)。
 - `sensitive` の PBI は、テンプレートに関係なくその段の `agent` だけになる。`--skip` も今までどおり効く。
-- 読む順: `--routing <file>` → (`--all` のとき) `<dir>/routing.json` → スキルのディレクトリの `routing.json` → 組み込みの表 (`routing.default.json` と同じ中身)。prepare.py は `select_model.py --all docs/pbi` を呼ぶので、`docs/pbi/routing.json` を置くだけで効く。
+- 読む順: `--routing <file>` → (`--all` のとき) `<dir>/routing.json` → home の `routing.json` → 組み込みの表 (`routing.default.json` と同じ中身)。prepare.py は `select_model.py --all docs/pbi` を呼ぶので、`docs/pbi/routing.json` を置くだけで効く。
+- home は優先テンプレートの置き場と同じ (`templates.resolve_home`): `--home` → 環境変数 `PBI_TEMPLATES_HOME` → スクリプトのディレクトリの親が `versions` ならスキルのルート → スクリプトのディレクトリ。版のある配置 (`versions/<版>/`) でも全リポジトリ共通の表が版の切り替えで引き継がれる。版の無い配置ではスキルのディレクトリで、以前と同じ。
 
 ## 5. 画面から直接適用する (serve.py)
 
