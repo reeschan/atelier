@@ -1,6 +1,8 @@
 """PBI の検証コマンドを番号順に実行し、番号ごとの終了コードと末尾だけを表で出す (SKILL.md 8 章)。
 
 出力は docs/pbi/verify/<PBI>.<番号>.log に全部書き、設計者の文脈には表だけが入る。
+番号ごとのコマンドと終了コードは docs/pbi/verify/<名前>.json にも書く (record_run.py が読む)。
+差し戻しの検証では --name に報告名 (PBI-003.rework-1) を渡す。
 受け入れ条件の pass / fail の判定は設計者がする (このスクリプトは判定しない)。
 
 使い方 (リポジトリのルートで):
@@ -13,6 +15,7 @@ PBI の「## 検証コマンド」節から、次のどちらかの形の行を�
 """
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -71,6 +74,7 @@ def main():
     name = args.name or args.pbi
     print(f"| 番号 | 終了コード | 末尾 ({args.tail} 行) | ログ |")
     print("|---|---|---|---|")
+    results = []
     for n, cmd in cmds:
         log = logdir / f"{name}.{n}.log"
         try:
@@ -86,6 +90,9 @@ def main():
         tail = tap + [ln for ln in plain[-args.tail:] if ln and ln not in tap]
         tail = " / ".join(t[:120] for t in tail).replace("|", "\\|") or "(出力なし)"
         print(f"| {n} | {code} | {tail} | {log.as_posix()} |")
+        results.append({"n": n, "command": cmd, "code": code, "log": log.as_posix()})
+    (logdir / f"{name}.json").write_text(json.dumps({"name": name, "pbi": args.pbi, "results": results},
+                                                    ensure_ascii=False), encoding="utf-8")
 
 
 if __name__ == "__main__":
