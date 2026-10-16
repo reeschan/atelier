@@ -1,7 +1,7 @@
 # pbi-orchestration-jev のアーキテクチャ図
 # __MONO__ は単色ロゴの色。render.py がライト用 (000000) とダーク用 (ffffff) に置き換えて 2 枚描く
 # 生成: python ~/.claude/skills/arch-diagram/versions/v1.1/scripts/render.py assets/architecture.d2
-# 2026-10-14 の Template Studio 追加分は d2 v0.7.1 (elk、ライト theme 0 / ダーク theme 200) で描き直した
+# 2026-10-16 に prepare.py / verify.py・pbi-worker・shared-memory・優先テンプレートを足して描き直した (d2 v0.7.1、elk、ライト theme 0 / ダーク theme 200)
 direction: right
 
 vars: {
@@ -45,19 +45,23 @@ cc: Claude Code {
   class: zone
   icon: https://cdn.simpleicons.org/anthropic/__MONO__
 
-  orch: "Orchestrator\nmain session: PBIs, review, rework" {
+  orch: "Orchestrator\nmain session: design, PBIs, review, rework, handoff" {
     class: svc
     icon: https://cdn.simpleicons.org/claude
   }
-  select: "select_model.py\ntier + route" {
+  prepare: "prepare.py → select_model.py\nJev gate 1, tier + route (table only)" {
     class: svc
     icon: https://cdn.simpleicons.org/python
   }
-  stats: "agent_stats.py\ntokens & cache rebuilds" {
+  verify: "verify.py + unchanged.py\nrun checks, hash untouched files" {
     class: svc
     icon: https://cdn.simpleicons.org/python
   }
-  agent: "4. Agent tool\nhaiku / sonnet / opus" {
+  templates: "templates.py\npriority templates → overrides.json" {
+    class: svc
+    icon: https://cdn.simpleicons.org/python
+  }
+  worker: "4. pbi-worker (Agent tool)\nhaiku / sonnet / opus, memory get only" {
     class: svc
     icon: https://cdn.simpleicons.org/claude
   }
@@ -83,28 +87,29 @@ runners: Other runners {
   }
 }
 
-jev: "Jev (TypeSafe)\njudgment API" {
+jev: "Jev (TypeSafe)\njudgment API, text only" {
   shape: hexagon
 }
 
-studio: Template Studio {
-  class: zone
+memory: "shared-memory MCP (optional)\nrefs per work, handoff memory" {
+  class: svc
+  icon: https://cdn.simpleicons.org/modelcontextprotocol/__MONO__
+  style.stroke-dash: 3
+}
 
-  page: "Studio page (browser)\nopened by /pbi-orchestration-jev templates\npick models, 3 proposals, reorder" {
-    class: svc
-  }
-  serve: "studio/serve.py\n127.0.0.1 + token, POST /apply" {
-    class: svc
-    icon: https://cdn.simpleicons.org/python
-  }
-  catalog: "studio/update_catalog.py\ncatalog.json" {
-    class: svc
-    icon: https://cdn.simpleicons.org/python
-  }
+web: "Priority templates page\nclaude.ai Artifact with its own DB" {
+  class: svc
+  icon: https://cdn.simpleicons.org/claude
+}
+
+studio: "Template Studio\nstudio/serve.py on 127.0.0.1\npick models, 3 proposals, reorder" {
+  class: svc
+  icon: https://icons.terrastruct.com/tech%2Fbrowser-2.svg
 }
 
 bench: "OpenRouter / Artificial Analysis\nprices, new models, coding index" {
-  shape: hexagon
+  class: svc
+  icon: https://cdn.simpleicons.org/openrouter/__MONO__
 }
 
 repo: Target repository {
@@ -114,32 +119,36 @@ repo: Target repository {
   code: "Source code\nchanged by runners" {
     class: svc
   }
-  pbi: "docs/pbi/\nPBIs, STATUS, reports, HANDOFF, stats" {
+  pbi: "docs/pbi/\nPBIs, STATUS, HANDOFF, reports, logs" {
     class: svc
     shape: page
   }
-  routing: "docs/pbi/routing.json\ntry order, read by select_model.py" {
+  routing: "docs/pbi/routing.json\ntry order, read by select_model.py\n(default: routing.default.json)" {
     class: svc
     shape: page
   }
 }
 
-dev <-> cc.orch: task / approval
-cc.orch -> cc.select: facts + Jev scores
-cc.orch <-> jev: text only: brief, report, rework size
+dev <-> cc.orch: task / approval / resume
+cc.orch -> cc.prepare: facts
+cc.prepare -> jev: brief, PBI quality
+cc.orch <-> jev: report, rework size
+cc.orch -> cc.verify: checks
 cc.orch -> runners.opencode: PBI path
 cc.orch -> runners.codex: "" {style.stroke-dash: 4}
 cc.orch -> runners.agy: "" {style.stroke-dash: 4}
-cc.orch -> cc.agent: "" {style.stroke-dash: 4}
+cc.orch -> cc.worker: "" {style.stroke-dash: 4}
 cc.orch -> cc.rtk: Bash / PowerShell {style.stroke-dash: 4}
 runners.opencode -> repo.code
 runners.codex -> repo.code
 runners.agy -> repo.code
-cc.agent -> repo.code
-cc.orch -> repo.pbi: status & logs
-cc.stats -> repo.pbi: stats {style.stroke-dash: 4}
-dev -> studio.page: pick & apply
-bench -> studio.catalog: fetch
-studio.catalog -> studio.page: models
-studio.page -> studio.serve: routing.json
-studio.serve -> repo.routing: write
+cc.worker -> repo.code
+cc.orch -> repo.pbi: status, HANDOFF
+cc.orch <-> memory: write refs, handoff {style.stroke-dash: 4}
+cc.worker -> memory: get refs {style.stroke-dash: 4}
+cc.templates -> cc.prepare: overrides {style.stroke-dash: 4}
+web <-> cc.templates: sync / answer {style.stroke-dash: 4}
+dev -> web: apply, extend, stop {style.stroke-dash: 4}
+dev -> studio: pick & apply
+bench -> studio: models
+studio -> repo.routing: write

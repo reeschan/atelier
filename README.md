@@ -10,7 +10,7 @@ Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The orchestrator in Claude Code asks Jev short questions, picks a route with select_model.py, hands PBIs to opencode, Codex, Antigravity or the Agent tool, optionally compresses command output with rtk, and records status in docs/pbi/ of the target repository. Template Studio shows a model list built from OpenRouter and Artificial Analysis and writes the chosen try order to docs/pbi/routing.json.">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator uses prepare.py (Jev gate 1 plus select_model.py) to pick a tier and a route, hands PBIs to opencode, Codex, Antigravity or pbi-worker (the Agent tool), verifies them with verify.py and unchanged.py, asks Jev in plain text to triage reports and size fixes, and records status and HANDOFF in docs/pbi/ of the target repository. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. rtk optionally compresses command output. Template Studio shows a model list built from OpenRouter and Artificial Analysis and writes the chosen try order to docs/pbi/routing.json. The priority templates web page (a claude.ai artifact) syncs with templates.py, which overrides routing for a limited time through overrides.json.">
 </picture>
 
 The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lang.com)).
@@ -23,13 +23,14 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - **At most two rounds of rework.** Jev estimates how big the fix is. The haiku tier may be promoted to sonnet once. If the design needs rethinking, or a PBI still fails after two rounds, the orchestrator stops and asks the user.
 - **Only prose goes to Jev.** PBI text, briefs, excerpts from reports and rework notes. Never source code, diffs, environment variables or credentials.
 - **The orchestrator's context stays small.** Every token in the orchestrator's context is re-read on every later turn. Workers end with a 4-line report and put the details in a file, long command output goes to log files, and PBI text is written once and passed by path (`worker.md`, section 0.7 of `SKILL.md`).
-- **Hand-off when the context grows.** Between waves of PBIs the orchestrator measures its context with `agent_stats.py --ctx`. Above 250,000 tokens it writes `docs/pbi/HANDOFF.md` and asks you to `/clear` and resume with `/pbi-orchestration-jev resume`.
+- **Hand-off when the context grows.** Between waves of PBIs the orchestrator measures its context with `agent_stats.py --ctx`. Above 250,000 tokens it writes `docs/pbi/HANDOFF.md` (plus a hand-off memory when shared memory is available) and asks you to `/clear` and resume with `/pbi-orchestration-jev resume`. From a session started without a project folder, run `/pbi-orchestration-jev resume <repository path>`; without the path, the skill finds the repository from the hand-off memory.
 - **Opus designs and reviews; cheaper models implement.** Only PBIs that need design decisions are implemented by Opus. Sensitive or tightly coupled PBIs are implemented by Sonnet and get a deep review from the Opus orchestrator.
 - **Optional output compression with [rtk](https://github.com/rtk-ai/rtk).** A bundled hook rewrites Bash / PowerShell commands to `rtk <cmd>` only in sessions where the skill switched it on.
-- **Mechanical steps run as scripts.** `prepare.py` runs Jev gate 1 (brief and PBI quality) plus the decision table in one call, and `verify.py` runs a PBI's verification commands; both return only a table to the orchestrator. The skill body is split into a core and `appendix/` files that are read only when needed. In the author's measurements (2026-10, 6 tasks) these two changes cut cost by 15%.
+- **Mechanical steps run as scripts.** `prepare.py` runs Jev gate 1 (brief and PBI quality) plus the decision table in one call, and `verify.py` runs a PBI's verification commands; both return only a table to the orchestrator. Files a PBI must not touch are checked by `unchanged.py`, which hashes them before the worker starts. The skill body is split into a core and `appendix/` files that are read only when needed. In the author's measurements (2026-10, 6 tasks) these two changes cut cost by 15%.
 - **Workers get just what they need (optional).** With a shared-memory MCP (`mcp__shared-memory__*`), only the orchestrator writes per-task "refs" (one fact each) and lists their ids in the PBI. The `pbi-worker` sub-agent can only `get` memories, never search or write.
 - **CLAUDE.md first.** Stable repository knowledge (conventions, commands, pitfalls) is expected to live in layered CLAUDE.md files; the orchestrator searches memory only as a supplement.
 - **Pick the try order in a browser.** Template Studio turns the models you have into performance, cost and balanced proposals; reorder and press Apply to write `docs/pbi/routing.json` (see Template Studio below).
+- **Override routing for a while.** Turn on a priority template and it replaces per-tier routes until its deadline, then asks whether to continue. You can also set it from a web page (an artifact); see Priority templates below.
 - **Usage stats.** `agent_stats.py` reads Claude Code transcripts and reports tokens per model and per agent, how often the prompt cache had to be rebuilt, and the current context size.
 
 ## Flow
@@ -37,19 +38,17 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 ```mermaid
 flowchart TD
   A[Design and split into PBIs] --> B[Count facts<br/>facts.json]
-  B --> C[Jev: judge the brief]
-  C --> D[select_model.py<br/>tier and route]
-  D --> E[Jev: PBI quality warnings]
-  E --> F{User approval}
+  B --> C[prepare.py<br/>Jev: judge the brief and PBI quality<br/>select_model.py: tier and route]
+  C --> F{User approval}
   F --> G[Run a wave along the route<br/>opencode → Codex → Antigravity → Agent]
   G --> H[Jev: triage the report]
-  H --> I[Review<br/>run verification commands]
+  H --> I[Review<br/>verify.py runs the verification commands]
   I -->|fail| K[Jev: size of the fix]
   K -->|up to 2 reworks| G
   K -->|redesign / limit reached| L[Stop and ask the user]
   I -->|pass| M{Context ≥ 250k?}
   M -->|no, PBIs left| G
-  M -->|yes| N[HANDOFF.md, /clear, resume]
+  M -->|yes| N[HANDOFF.md, hand-off memory<br/>/clear, resume]
   N --> G
   M -->|all done| J[Final report and stats]
 ```
@@ -136,8 +135,9 @@ The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `ma
 | Tool | Required | Used for |
 |---|---|---|
 | [Claude Code](https://claude.com/claude-code) | yes | the orchestrator and the Agent tool |
-| Python 3.10+ | yes | `select_model.py`, `agent_stats.py`, the Jev client |
+| Python 3.10+ | yes | scripts such as `prepare.py`, `select_model.py` and `verify.py`, and the Jev client |
 | Jev API key | recommended | without it, Jev gates are skipped and defaults apply |
+| shared-memory MCP (`mcp__shared-memory__*`) | no | per-task refs and the hand-off memory; without it, facts go into the PBI notes |
 | [opencode](https://opencode.ai) + OpenCode Go | no | first runner for the haiku and sonnet tiers |
 | [Codex CLI](https://github.com/openai/codex) | no | next runner, until `CODEX_UNTIL` |
 | Antigravity CLI (`agy`) | no | Claude via a Google AI subscription |
@@ -218,7 +218,9 @@ Everything is recorded under `docs/pbi/` in the target repository.
 | `docs/pbi/PBI-<n>.md` | the PBI itself |
 | `docs/pbi/PBI-<n>.facts.json` / `.brief.md` / `.route.json` | routing inputs and result |
 | `docs/pbi/worker.md` | how workers proceed and report (copied from the skill) |
-| `docs/pbi/reports/` | workers' detailed reports |
+| `docs/pbi/tools/unchanged.py` | checks files a PBI must not touch (copied from the skill) |
+| `docs/pbi/routing.json` | try order (written by Template Studio; defaults apply without it) |
+| `docs/pbi/reports/`, `docs/pbi/notes/` | workers' detailed reports and research notes |
 | `docs/pbi/verify/`, `docs/pbi/reviews/` | verification logs and delegated reviews |
 | `docs/pbi/jev-log.jsonl` | every Jev answer and the action taken |
 | `docs/pbi/jev.config.json` | Jev gates and thresholds (created from the template) |
@@ -226,6 +228,14 @@ Everything is recorded under `docs/pbi/` in the target repository.
 | `docs/pbi/stats/` | token and cache stats |
 
 The orchestrator only stops to wait for the user in four cases: approving the PBI list, hitting the rework limit (or needing a redesign), before destructive operations, and when it hands off a large context. After a hand-off, run `/clear` and then `/pbi-orchestration-jev resume`.
+
+A session started without a project folder (the Claude desktop app runs it in an empty folder it creates) has no `docs/pbi/STATUS.md` in its working directory. The skill then picks the repository in this order:
+
+1. the path in `/pbi-orchestration-jev resume <repository path>`
+2. without a path, the path in the hand-off memory (tag `handoff`) in shared memory; if several tasks are mid hand-off, it asks which one to resume
+3. otherwise, it asks you
+
+It then checks that `STATUS.md` and the branch match, and either moves the session to that folder or keeps working with absolute paths. That is why `HANDOFF.md` and the hand-off memory always carry the repository's absolute path and branch.
 
 ## Files
 
@@ -235,7 +245,7 @@ skills/pbi-orchestration-jev/
 ├── runners.md                  # how to hand PBIs to opencode / Codex / Antigravity
 ├── verify-commands.md          # pitfalls when writing verification commands
 ├── worker.md                   # how workers proceed and report
-├── appendix/                   # read only when needed (memory, rework, handoff, finish, jev)
+├── appendix/                   # read only when needed (memory, rework, handoff, finish, jev, templates, priority-templates)
 ├── agents/pbi-worker.md        # worker / reviewer sub-agent (copy to ~/.claude/agents)
 ├── prepare.py                  # Jev gate 1 + decision table in one call; prints a table
 ├── verify.py                   # runs a PBI's verification commands; prints exit codes and tails
@@ -280,7 +290,7 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 
 ```sh
 cd skills/pbi-orchestration-jev
-python -m unittest test_select_model test_agent_stats
+python -m unittest discover -p 'test_*.py'
 python -m unittest discover -s studio -p 'test_*.py'
 cd jev
 python -m unittest test_jev
