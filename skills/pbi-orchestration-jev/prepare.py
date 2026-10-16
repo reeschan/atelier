@@ -11,8 +11,8 @@
 - 応答 (docs/pbi/jev/<PBI>.brief.json・.pbi_quality.json) が既にあれば呼び直さない (--only で指定した PBI は呼び直す)
 - Jev の呼び出しは並列 (同時 4 件)。失敗したゲートは飛ばし、表の「メモ」に出す (select_model.py は score を 1 として扱う)
 - 判定ごとに docs/pbi/jev-log.jsonl に 1 行ずつ追記する (brief の行に route.json の template を足す)
-- 表の前に 1 行「テンプレート: …」を出し (写しと適用の状態。templates.load_overrides・state_of)、
-  表の列「テンプレート」に route.json の template.note を出す (無ければ —)
+- 表の前に 1 行「優先テンプレート: …」を出し (写しと適用の状態。templates.load_overrides・state_of)、
+  表の列「優先テンプレート」に route.json の template.note を出す (無ければ —)
 - --home・--now はテンプレートの home (templates.resolve_home) と今の時刻 (templates.parse_time)。select_model.py にもそのまま渡す
 """
 
@@ -76,23 +76,23 @@ def template_line(home, now):
     overrides = templates.load_overrides(home)
     application = overrides.get("application")
     if not isinstance(application, dict):
-        text = "テンプレート: 適用なし"
+        text = "優先テンプレート: 適用なし"
     else:
         name = application.get("template")
         name = name if isinstance(name, str) else "（名前なし）"
         try:
             state = templates.state_of(application, now)
         except ValueError:
-            text = f"テンプレート: {name} の適用の時刻が不正"
+            text = f"優先テンプレート: {name} の適用の時刻が不正"
         else:
             until = application.get("until")
             if state == "active":
                 when = "期限なし" if until is None else f"{until} まで、期限切れは {application.get('on_expire')}"
-                text = f"テンプレート: {name} を適用中 ({when})"
+                text = f"優先テンプレート: {name} を適用中 ({when})"
             elif state == "expired_ask":
-                text = f"テンプレート: {name} は期限切れ。承認で「延長 / やめる / 期限なし」を確認する"
+                text = f"優先テンプレート: {name} は期限切れ。承認で「延長 / やめる / 期限なし」を確認する"
             else:
-                text = f"テンプレート: {name} は期限切れ (drop)。当てない"
+                text = f"優先テンプレート: {name} は期限切れ (drop)。当てない"
     synced = overrides.get("synced_at")
     return text + " / " + (f"写し: {synced} 時点" if synced else "写し: なし")
 
@@ -156,7 +156,7 @@ def main():
     ts = datetime.now().isoformat(timespec="seconds")
     lines = []
     print(template_line(home, now))
-    print("| PBI | 段 | route の先頭 | review | テンプレート | 新規性/結合度/あいまいさ (確信度) | 品質の警告 | メモ |")
+    print("| PBI | 段 | route の先頭 | review | 優先テンプレート | 新規性/結合度/あいまいさ (確信度) | 品質の警告 | メモ |")
     print("|---|---|---|---|---|---|---|---|")
     for p in pbis:
         brief, quality = load(base / "jev" / f"{p}.brief.json"), load(base / "jev" / f"{p}.pbi_quality.json")

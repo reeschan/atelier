@@ -173,7 +173,7 @@ class SelectModelTest(unittest.TestCase):
                     ('opencode', select_model.DEEPSEEK, 'max'),
                     (agent['runner'], agent['model'], agent['effort']),
                 ])
-                self.assertTrue(r['reasons'][0].endswith('（テンプレート deepseek-all を当てた）'))
+                self.assertTrue(r['reasons'][0].endswith('（優先テンプレート deepseek-all を当てた）'))
 
     def test_template_without_that_tier_keeps_normal_route(self):
         code, r = run_home({**SMALL, 'files_changed': 4}, ALL_ZERO, {'light-only': HAIKU_ONLY},
@@ -213,7 +213,7 @@ class SelectModelTest(unittest.TestCase):
                            '--now', PAST)
         self.assertEqual(code, 0)
         self.assertTrue(r['template']['applied'])
-        self.assertEqual(r['template']['note'], '期限なしで当てた')
+        self.assertEqual(r['template']['note'], 'deepseek-all を期限なしで当てた')
         self.assertEqual(self.runners(r), [
             ('opencode', select_model.DEEPSEEK, 'max'),
             ('agent', 'haiku', 'max'),
@@ -268,13 +268,118 @@ class SelectModelTest(unittest.TestCase):
                                  capture_output=True, text=True, encoding='utf-8')
             self.assertEqual(out.returncode, 0)
             lines = out.stdout.splitlines()
-            self.assertIn('| テンプレート |', lines[0])
+            self.assertIn('| 優先テンプレート |', lines[0])
             rows = [line for line in lines if line.startswith('| PBI-')]
             self.assertEqual(len(rows), 2)
             self.assertIn(f'deepseek-all を当てた ({UNTIL} まで)', rows[0])
             self.assertIn('sensitive のため当てない', rows[1])
             with open(os.path.join(d, 'PBI-001.route.json'), encoding='utf-8') as f:
                 self.assertTrue(json.load(f)['template']['applied'])
+
+
+PERF = {'name': 'performance', 'tiers': {
+    'haiku': [{'runner': 'agy', 'model': 'claude-sonnet-5-5-high', 'effort': None},
+              {'runner': 'agent', 'model': 'sonnet', 'effort': 'high'}],
+    'sonnet': [{'runner': 'codex', 'model': 'gpt-6-astra', 'effort': 'high', 'until': BEFORE},
+               {'runner': 'agent', 'model': 'opus', 'effort': None}],
+    'opus': [{'runner': 'agent', 'model': 'opus', 'effort': None}],
+}}
+
+
+class RoutingTemplateTest(unittest.TestCase):
+    def write(self, d, name, table):
+        path = os.path.join(d, name)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(table, f)
+        return path
+
+    def test_default_file_matches_builtin_table(self):
+        with open(os.path.join(HERE, 'routing.default.json'), encoding='utf-8') as f:
+            table = json.load(f)
+        self.assertEqual(table['tiers'], select_model.default_routing()['tiers'])
+
+    def test_routing_option_replaces_route(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, r = run(SMALL, ALL_ZERO, '--today', BEFORE, '--routing', self.write(d, 'r.json', PERF))
+        self.assertEqual(r['tier'], 'haiku')
+        self.assertEqual([s['runner'] for s in r['route']], ['agy', 'agent'])
+        self.assertIn('performance', r['reasons'][0])
+
+    def test_template_until_drops_step(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, r = run(SMALL, None, '--today', AFTER, '--routing', self.write(d, 'r.json', PERF))
+        self.assertEqual(r['route'], [{'runner': 'agent', 'model': 'opus', 'effort': None}])
+
+    def test_sensitive_uses_template_agent_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, r = run({**SMALL, 'sensitive': True}, ALL_ZERO, '--today', BEFORE,
+                       '--routing', self.write(d, 'r.json', PERF))
+        self.assertEqual([s['runner'] for s in r['route']], ['agent'])
+
+    def test_template_not_ending_with_agent_fails(self):
+        bad = {'tiers': dict(PERF['tiers'], opus=[{'runner': 'codex', 'model': 'x'}])}
+        with tempfile.TemporaryDirectory() as d:
+            code, _ = run(SMALL, ALL_ZERO, '--routing', self.write(d, 'r.json', bad))
+        self.assertNotEqual(code, 0)
+
+    def test_agent_without_model_or_bad_until_fails(self):
+        no_model = {'tiers': dict(PERF['tiers'], opus=[{'runner': 'agent'}])}
+        bad_until = {'tiers': dict(PERF['tiers'], sonnet=[{'runner': 'codex', 'model': 'x', 'until': 'soon'},
+                                                          {'runner': 'agent', 'model': 'sonnet'}])}
+        list_model = {'tiers': dict(PERF['tiers'], opus=[{'runner': 'agent', 'model': ['opus']}])}
+        for table in (no_model, bad_until, list_model):
+            with tempfile.TemporaryDirectory() as d:
+                code, _ = run(SMALL, ALL_ZERO, '--routing', self.write(d, 'r.json', table))
+            self.assertNotEqual(code, 0)
+
+    def test_all_picks_routing_json_in_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.write(d, 'routing.json', PERF)
+            self.write(d, 'PBI-001.facts.json', SMALL)
+            out = subprocess.run([sys.executable, SCRIPT, '--all', d, '--today', BEFORE],
+                                 capture_output=True, text=True, encoding='utf-8', env=empty_home_env(d))
+            self.assertEqual(out.returncode, 0, out.stderr)
+            with open(os.path.join(d, 'PBI-001.route.json'), encoding='utf-8') as f:
+                r = json.load(f)
+        self.assertEqual(r['tier'], 'sonnet')
+        self.assertEqual([s['runner'] for s in r['route']], ['codex', 'agent'])
+
+
+class PriorityOverRoutingTest(unittest.TestCase):
+    """優先テンプレートは振り分けテンプレート (routing) より先に当たり、最後は routing のその段の agent。"""
+
+    def test_priority_template_wins_and_falls_back_to_routing_agent(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'routing.json')
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(PERF, f)
+            code, r = run_home({**SMALL, 'files_changed': 4}, ALL_ZERO, {'deepseek-all': ALL_TIERS},
+                               application(), '--now', NOW, '--routing', path)
+        self.assertEqual(code, 0)
+        self.assertEqual(r['tier'], 'sonnet')
+        self.assertTrue(r['template']['applied'])
+        self.assertEqual([(s['runner'], s['model']) for s in r['route']],
+                         [('opencode', select_model.DEEPSEEK), ('agent', 'opus')])
+
+    def test_routing_is_used_when_no_application(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'routing.json')
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(PERF, f)
+            code, r = run_home({**SMALL, 'files_changed': 4}, ALL_ZERO, {'deepseek-all': ALL_TIERS},
+                               None, '--now', NOW, '--today', BEFORE, '--routing', path)
+        self.assertEqual(code, 0)
+        self.assertFalse(r['template']['applied'])
+        self.assertEqual([s['runner'] for s in r['route']], ['codex', 'agent'])
+
+    def test_priority_step_past_its_until_is_dropped(self):
+        dated = {'name': 'dated', 'description': '', 'tiers': {'haiku': [
+            {'runner': 'codex', 'model': 'gpt-6-astra', 'effort': 'medium', 'until': '2026-10-19'},
+            {'runner': 'opencode', 'model': select_model.DEEPSEEK, 'effort': 'max'}]}}
+        code, r = run_home(SMALL, ALL_ZERO, {'dated': dated}, application('dated'), '--now', NOW)
+        self.assertEqual(code, 0)
+        self.assertTrue(r['template']['applied'])
+        self.assertEqual([s['runner'] for s in r['route']], ['opencode', 'agent'])
 
 
 if __name__ == '__main__':

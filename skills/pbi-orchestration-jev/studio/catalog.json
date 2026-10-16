@@ -1,0 +1,58 @@
+{
+  "updated": "2026-10-14",
+  "sources": {
+    "openrouter": null,
+    "artificial_analysis": null
+  },
+  "note": "quality と価格は update_catalog.py を実行するまで仮の値 (sample: true)。quality は 0〜100 のコーディング指標 (Artificial Analysis の Coding Index を想定)、価格は API の $/100 万トークン。",
+  "providers": [
+    {"id": "anthropic", "name": "Anthropic", "color": "#d97757", "mark": "A"},
+    {"id": "openai", "name": "OpenAI", "color": "#10a37f", "mark": "O"},
+    {"id": "deepseek", "name": "DeepSeek", "color": "#4d6bfe", "mark": "D"}
+  ],
+  "models": [
+    {
+      "id": "claude-opus", "provider": "anthropic", "name": "Claude Opus 5.5",
+      "openrouter_id": "anthropic/claude-opus-5.5", "aa_slug": "claude-opus-5-5",
+      "quality": 90, "price_in": 15.0, "price_out": 75.0, "sample": true,
+      "options": [
+        {"runner": "agent", "model": "opus", "effort": null, "billing": "subscription"}
+      ]
+    },
+    {
+      "id": "claude-sonnet", "provider": "anthropic", "name": "Claude Sonnet 5.5",
+      "openrouter_id": "anthropic/claude-sonnet-5.5", "aa_slug": "claude-sonnet-5-5",
+      "quality": 80, "price_in": 3.0, "price_out": 15.0, "sample": true,
+      "options": [
+        {"runner": "agent", "model": "sonnet", "effort": "high", "billing": "subscription"},
+        {"runner": "agy", "model": "claude-sonnet-5-5-high", "effort": null, "billing": "subscription"},
+        {"runner": "agy", "model": "claude-sonnet-5-5-low", "effort": null, "billing": "subscription", "quality_delta": -8}
+      ]
+    },
+    {
+      "id": "claude-haiku", "provider": "anthropic", "name": "Claude Haiku 5.5",
+      "openrouter_id": "anthropic/claude-haiku-5.5", "aa_slug": "claude-haiku-5-5",
+      "quality": 62, "price_in": 1.0, "price_out": 5.0, "sample": true,
+      "options": [
+        {"runner": "agent", "model": "haiku", "effort": "max", "billing": "subscription"}
+      ]
+    },
+    {
+      "id": "gpt-6-astra", "provider": "openai", "name": "GPT-6 Astra",
+      "openrouter_id": "openai/gpt-6-astra", "aa_slug": "gpt-6-astra",
+      "quality": 84, "price_in": 2.5, "price_out": 10.0, "sample": true, "until": "2026-10-23",
+      "options": [
+        {"runner": "codex", "model": "gpt-6-astra", "effort": "high", "billing": "subscription"},
+        {"runner": "codex", "model": "gpt-6-astra", "effort": "medium", "billing": "subscription", "quality_delta": -6}
+      ]
+    },
+    {
+      "id": "deepseek-v4.1-flash", "provider": "deepseek", "name": "DeepSeek V4.1 Flash",
+      "openrouter_id": "deepseek/deepseek-v4.1-flash", "aa_slug": "deepseek-v4-1-flash",
+      "quality": 66, "price_in": 0.2, "price_out": 0.8, "sample": true,
+      "options": [
+        {"runner": "opencode", "model": "opencode-go/deepseek-v4.1-flash", "effort": null, "billing": "subscription"}
+      ]
+    }
+  ]
+}

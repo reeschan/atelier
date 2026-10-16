@@ -81,6 +81,18 @@ class ValidateTest(unittest.TestCase):
         problems = templates.validate(t, 'deepseek-all')
         self.assertTrue(any('余計なキー' in p for p in problems), problems)
 
+    def test_routing_json_shape_is_accepted(self):
+        t = template()
+        t['$schema_note'] = 'routing.json と同じ形'
+        t['tiers']['haiku'][0]['until'] = '2026-10-23'
+        self.assertEqual(templates.validate(t, 'deepseek-all'), [])
+
+    def test_step_until_must_be_a_date(self):
+        t = template()
+        t['tiers']['haiku'][0]['until'] = 'next week'
+        problems = templates.validate(t, 'deepseek-all')
+        self.assertTrue(any('until' in p for p in problems), problems)
+
     def test_extra_top_key(self):
         t = template()
         t['synced_at'] = '2026-10-16T09:00:00+09:00'

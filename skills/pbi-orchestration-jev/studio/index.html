@@ -1,0 +1,863 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PBI Template Studio</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: frosted panels floating over slow color fields; three steps top to bottom (models, proposals, output). */
+:root {
+  --ground: #e9edf5;
+  --blob-a: #ffb38a;
+  --blob-b: #8fb4ff;
+  --blob-c: #b7f0d8;
+  --glass: rgba(255, 255, 255, 0.55);
+  --glass-strong: rgba(255, 255, 255, 0.78);
+  --glass-edge: rgba(255, 255, 255, 0.9);
+  --line: rgba(40, 52, 80, 0.12);
+  --ink: #1c2233;
+  --ink-soft: #55607a;
+  --accent: #3a5bd9;
+  --accent-ink: #ffffff;
+  --perf: #c2410c;
+  --cost: #0f7a55;
+  --bal: #3a5bd9;
+  --warn: #a15c00;
+  --shadow: 0 10px 40px rgba(30, 40, 80, 0.12);
+  --f-display: "Unbounded", "Zen Kaku Gothic New", system-ui, sans-serif;
+  --f-body: "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0c1020; --blob-a: #7a2e18; --blob-b: #1f3a8a; --blob-c: #0d5a44;
+    --glass: rgba(22, 28, 48, 0.52); --glass-strong: rgba(28, 35, 60, 0.82); --glass-edge: rgba(255, 255, 255, 0.14);
+    --line: rgba(220, 230, 255, 0.12); --ink: #eef1fb; --ink-soft: #a3acc6; --accent: #8aa4ff; --accent-ink: #0c1020;
+    --perf: #ff9a6b; --cost: #5fe0ac; --bal: #8aa4ff; --warn: #ffc163; --shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0c1020; --blob-a: #7a2e18; --blob-b: #1f3a8a; --blob-c: #0d5a44;
+  --glass: rgba(22, 28, 48, 0.52); --glass-strong: rgba(28, 35, 60, 0.82); --glass-edge: rgba(255, 255, 255, 0.14);
+  --line: rgba(220, 230, 255, 0.12); --ink: #eef1fb; --ink-soft: #a3acc6; --accent: #8aa4ff; --accent-ink: #0c1020;
+  --perf: #ff9a6b; --cost: #5fe0ac; --bal: #8aa4ff; --warn: #ffc163; --shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font: 15px/1.65 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 64px;
+  min-height: 100%;
+}
+.field { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.field i { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .75; animation: drift 26s ease-in-out infinite alternate; }
+.field i:nth-child(1) { width: 46vw; height: 46vw; left: -10vw; top: -8vw; background: var(--blob-a); }
+.field i:nth-child(2) { width: 52vw; height: 52vw; right: -14vw; top: 18vh; background: var(--blob-b); animation-delay: -8s; }
+.field i:nth-child(3) { width: 40vw; height: 40vw; left: 22vw; bottom: -16vw; background: var(--blob-c); animation-delay: -15s; }
+@keyframes drift { to { transform: translate(4vw, 3vh) scale(1.08); } }
+@media (prefers-reduced-motion: reduce) { .field i { animation: none; } }
+
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 28px; }
+.glass {
+  background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 22px;
+  backdrop-filter: blur(22px) saturate(1.5); -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  box-shadow: var(--shadow);
+}
+header.top { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; justify-content: space-between; }
+h1 { font: 700 clamp(26px, 4.4vw, 40px)/1.1 var(--f-display); letter-spacing: -.01em; margin: 0; text-wrap: balance; }
+h1 small { display: block; font: 500 13px/1.4 var(--f-body); color: var(--ink-soft); letter-spacing: .02em; margin-top: 8px; }
+h2 { font: 500 18px/1.3 var(--f-display); margin: 0; text-wrap: balance; }
+.step-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; margin-bottom: 14px; }
+.step-head p { margin: 0; color: var(--ink-soft); font-size: 13.5px; max-width: 62ch; }
+.step-no { font: 600 11px/1 var(--f-mono); letter-spacing: .14em; color: var(--accent); text-transform: uppercase; display: block; margin-bottom: 6px; }
+
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn { border: 1px solid var(--glass-edge); background: var(--glass-strong); border-radius: 999px; padding: 8px 16px; font-weight: 500; font-size: 13.5px; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink-soft); }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--glass-strong); font-size: 12px; white-space: nowrap; }
+.pill.warn { color: var(--warn); border-color: currentColor; }
+
+/* step 1: providers */
+.providers { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.prov { padding: 18px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.prov-head { display: flex; align-items: center; gap: 12px; }
+.mark { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font: 700 17px/1 var(--f-display); color: #fff; flex: none; box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 4px 14px rgba(0,0,0,.18); }
+.prov-head b { font-size: 16px; }
+.prov-head div span { display: block; font-size: 12px; color: var(--ink-soft); }
+.model { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 8px; }
+.model-top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.model-top b { font-weight: 700; }
+.model-top .price { font: 400 12px var(--f-mono); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.qbar { height: 6px; border-radius: 6px; background: var(--line); overflow: hidden; }
+.qbar i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--cost), var(--bal), var(--perf)); background-size: 300px 100%; }
+.qline { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.opt { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 10px; border: 1px solid var(--line); background: transparent; font: 400 12px var(--f-mono); color: var(--ink-soft); }
+.opt::before { content: ""; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid currentColor; }
+.opt[aria-pressed="true"] { color: var(--ink); border-color: var(--accent); background: var(--glass-strong); }
+.opt[aria-pressed="true"]::before { background: var(--accent); border-color: var(--accent); }
+.cand { padding: 16px 18px; display: grid; gap: 10px; }
+.cand ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.cand li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
+.cand code { font: 12px var(--f-mono); }
+
+/* tuning */
+.tune { padding: 16px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 22px; }
+.tune label { display: grid; gap: 4px; font-size: 13px; }
+.tune .row { display: flex; justify-content: space-between; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.tune input[type=range] { width: 100%; accent-color: var(--accent); }
+.check { display: flex !important; grid-template-columns: none; align-items: center; gap: 8px; }
+.check input { accent-color: var(--accent); width: 16px; height: 16px; }
+
+/* step 2: proposals */
+.proposals { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 16px; }
+.prop { padding: 18px; display: grid; gap: 14px; align-content: start; text-align: left; border: 1px solid var(--glass-edge); position: relative; min-width: 0; }
+.prop[aria-checked="true"] { outline: 2px solid var(--tone); outline-offset: -2px; }
+.prop-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.prop-head h3 { margin: 0; font: 700 17px/1.2 var(--f-display); color: var(--tone); }
+.prop-head .sel { font-size: 12px; color: var(--ink-soft); }
+.prop[aria-checked="true"] .sel { color: var(--tone); font-weight: 700; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat { padding: 10px 12px; border-radius: 14px; background: var(--glass-strong); border: 1px solid var(--line); }
+.stat small { display: block; font-size: 11px; color: var(--ink-soft); letter-spacing: .04em; }
+.stat b { font: 600 20px/1.2 var(--f-mono); font-variant-numeric: tabular-nums; }
+.tier { display: grid; gap: 6px; }
+.tier-name { font: 600 11px/1 var(--f-mono); text-transform: uppercase; letter-spacing: .12em; color: var(--ink-soft); display: flex; gap: 8px; align-items: center; }
+.chain { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.chain .hop { font: 12px var(--f-mono); padding: 3px 8px; border-radius: 8px; background: var(--glass-strong); border: 1px solid var(--line); white-space: nowrap; }
+.chain .hop.first { border-color: var(--tone); }
+.chain .arrow { color: var(--ink-soft); font-size: 11px; }
+.why { margin: 0; font-size: 13px; color: var(--ink-soft); }
+.why.bad { color: var(--warn); }
+
+/* step 3: editor */
+.edit-bar { margin-bottom: 12px; }
+.lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.lane { padding: 16px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.lane-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.lane-head b { font: 500 15px/1.3 var(--f-display); }
+.lane-head code, .lane-head span { font: 11.5px var(--f-mono); color: var(--ink-soft); }
+.lane ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.row { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 8px 8px 6px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass-strong); }
+.row.off { opacity: .55; }
+.row.dragging { opacity: .35; }
+.row.over { border-color: var(--accent); box-shadow: 0 -2px 0 var(--accent); }
+.grip { cursor: grab; color: var(--ink-soft); font-size: 14px; padding: 0 2px; user-select: none; }
+.prio { font: 600 12px var(--f-mono); width: 1.6em; text-align: center; color: var(--accent); font-variant-numeric: tabular-nums; }
+.row.off .prio { color: var(--ink-soft); }
+.row input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.row label { min-width: 0; font-size: 13px; line-height: 1.35; cursor: pointer; }
+.row label small { display: block; font: 11px var(--f-mono); color: var(--ink-soft); overflow-wrap: anywhere; }
+.row label .below { color: var(--warn); white-space: nowrap; }
+.moves { display: flex; gap: 2px; }
+.moves button { border: 1px solid var(--line); background: transparent; border-radius: 8px; width: 26px; height: 26px; font-size: 12px; line-height: 1; color: var(--ink-soft); }
+.moves button:hover:not(:disabled) { border-color: var(--accent); color: var(--ink); }
+.moves button:disabled { opacity: .3; cursor: default; }
+.lane-last { display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-soft); border-top: 1px dashed var(--line); padding-top: 10px; }
+.lane-last select { font: 13px var(--f-body); color: var(--ink); background: var(--glass-strong); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; }
+.lane-empty { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
+
+/* step 4: output */
+.out { padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.out pre { margin: 0; padding: 14px; border-radius: 14px; background: var(--glass-strong); border: 1px solid var(--line); font: 12.5px/1.55 var(--f-mono); overflow-x: auto; max-height: 420px; }
+.out .cmd { font: 12.5px var(--f-mono); padding: 10px 12px; border-radius: 12px; background: var(--glass-strong); border: 1px solid var(--line); overflow-x: auto; white-space: nowrap; }
+.apply-note { margin: 0; font-size: 12.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.apply-note code { font: 12px var(--f-mono); color: var(--ink); }
+.apply-note.done { color: var(--cost); }
+.toast { font-size: 12.5px; color: var(--cost); min-height: 1em; }
+footer { font-size: 12px; color: var(--ink-soft); text-align: left; }
+footer a { color: inherit; }
+@media (max-width: 480px) { .stats { grid-template-columns: 1fr; } .glass { border-radius: 18px; } }
+</style>
+</head>
+<body>
+<div class="field" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="wrap">
+  <header class="top">
+    <h1>Template Studio<small data-i18n="tagline"></small></h1>
+    <div class="meta">
+      <span class="pill" id="updated"></span>
+      <span class="pill warn" id="sampleNote" data-i18n="sample" hidden></span>
+      <button class="btn" id="reload" type="button" data-i18n="reload"></button>
+      <button class="btn" id="lang" type="button"></button>
+    </div>
+  </header>
+
+  <section aria-labelledby="s1">
+    <div class="step-head">
+      <div><span class="step-no">Step 1</span><h2 id="s1" data-i18n="s1"></h2></div>
+      <p data-i18n="s1p"></p>
+    </div>
+    <div class="providers" id="providers"></div>
+    <div class="cand glass" id="candidates" hidden style="margin-top:16px"></div>
+  </section>
+
+  <section aria-labelledby="s1b">
+    <div class="step-head">
+      <div><span class="step-no">Tuning</span><h2 id="s1b" data-i18n="s1b"></h2></div>
+      <p data-i18n="s1bp"></p>
+    </div>
+    <div class="tune glass" id="tune">
+      <label for="floor-haiku"><span class="row"><span data-i18n="haiku"></span><b id="floor-haiku-v"></b></span><input id="floor-haiku" type="range" min="30" max="95" step="1"></label>
+      <label for="floor-sonnet"><span class="row"><span data-i18n="sonnet"></span><b id="floor-sonnet-v"></b></span><input id="floor-sonnet" type="range" min="30" max="95" step="1"></label>
+      <label for="floor-opus"><span class="row"><span data-i18n="opus"></span><b id="floor-opus-v"></b></span><input id="floor-opus" type="range" min="30" max="95" step="1"></label>
+      <label for="maxSteps"><span class="row"><span data-i18n="maxSteps"></span><b id="maxSteps-v"></b></span><input id="maxSteps" type="range" min="1" max="4" step="1"></label>
+      <label class="check" for="subsCheap"><input id="subsCheap" type="checkbox"> <span data-i18n="subsCheap"></span></label>
+      <label class="check" for="extOpus"><input id="extOpus" type="checkbox"> <span data-i18n="extOpus"></span></label>
+    </div>
+  </section>
+
+  <section aria-labelledby="s2">
+    <div class="step-head">
+      <div><span class="step-no">Step 2</span><h2 id="s2" data-i18n="s2"></h2></div>
+      <p data-i18n="s2p"></p>
+    </div>
+    <div class="proposals" id="proposals" role="radiogroup"></div>
+  </section>
+
+  <section aria-labelledby="s3e">
+    <div class="step-head">
+      <div><span class="step-no">Step 3</span><h2 id="s3e" data-i18n="s3e"></h2></div>
+      <p data-i18n="s3ep"></p>
+    </div>
+    <div class="edit-bar meta"><span class="pill" id="editBase"></span><span class="pill warn" id="editedPill" data-i18n="edited" hidden></span><button class="btn" id="resetEdit" type="button" data-i18n="reset" hidden></button></div>
+    <div class="lanes" id="lanes"></div>
+  </section>
+
+  <section aria-labelledby="s3">
+    <div class="step-head">
+      <div><span class="step-no">Step 4</span><h2 id="s3" data-i18n="s3"></h2></div>
+      <p data-i18n="s3p"></p>
+    </div>
+    <div class="out glass">
+      <div class="meta">
+        <button class="btn primary" id="apply" type="button" data-i18n="apply" hidden></button>
+        <button class="btn" id="copy" type="button" data-i18n="copy"></button>
+        <span class="toast" id="toast" role="status"></span>
+      </div>
+      <p class="apply-note" id="applyNote" hidden></p>
+      <pre id="json" tabindex="0"></pre>
+      <div class="cmd" id="cmd">python skills/pbi-orchestration-jev/select_model.py --all docs/pbi</div>
+    </div>
+  </section>
+
+  <footer data-i18n="footer"></footer>
+</div>
+
+<script type="application/json" id="studio-apply"></script>
+<script type="application/json" id="catalog-fallback">
+{
+  "updated": "2026-10-14",
+  "sources": {
+    "openrouter": null,
+    "artificial_analysis": null
+  },
+  "note": "quality と価格は update_catalog.py を実行するまで仮の値 (sample: true)。quality は 0〜100 のコーディング指標 (Artificial Analysis の Coding Index を想定)、価格は API の $/100 万トークン。",
+  "providers": [
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "color": "#d97757",
+      "mark": "A"
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "color": "#10a37f",
+      "mark": "O"
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "color": "#4d6bfe",
+      "mark": "D"
+    }
+  ],
+  "models": [
+    {
+      "id": "claude-opus",
+      "provider": "anthropic",
+      "name": "Claude Opus 5.5",
+      "openrouter_id": "anthropic/claude-opus-5.5",
+      "aa_slug": "claude-opus-5-5",
+      "quality": 90,
+      "price_in": 15.0,
+      "price_out": 75.0,
+      "sample": true,
+      "options": [
+        {
+          "runner": "agent",
+          "model": "opus",
+          "effort": null,
+          "billing": "subscription"
+        }
+      ]
+    },
+    {
+      "id": "claude-sonnet",
+      "provider": "anthropic",
+      "name": "Claude Sonnet 5.5",
+      "openrouter_id": "anthropic/claude-sonnet-5.5",
+      "aa_slug": "claude-sonnet-5-5",
+      "quality": 80,
+      "price_in": 3.0,
+      "price_out": 15.0,
+      "sample": true,
+      "options": [
+        {
+          "runner": "agent",
+          "model": "sonnet",
+          "effort": "high",
+          "billing": "subscription"
+        },
+        {
+          "runner": "agy",
+          "model": "claude-sonnet-5-5-high",
+          "effort": null,
+          "billing": "subscription"
+        },
+        {
+          "runner": "agy",
+          "model": "claude-sonnet-5-5-low",
+          "effort": null,
+          "billing": "subscription",
+          "quality_delta": -8
+        }
+      ]
+    },
+    {
+      "id": "claude-haiku",
+      "provider": "anthropic",
+      "name": "Claude Haiku 5.5",
+      "openrouter_id": "anthropic/claude-haiku-5.5",
+      "aa_slug": "claude-haiku-5-5",
+      "quality": 62,
+      "price_in": 1.0,
+      "price_out": 5.0,
+      "sample": true,
+      "options": [
+        {
+          "runner": "agent",
+          "model": "haiku",
+          "effort": "max",
+          "billing": "subscription"
+        }
+      ]
+    },
+    {
+      "id": "gpt-6-astra",
+      "provider": "openai",
+      "name": "GPT-6 Astra",
+      "openrouter_id": "openai/gpt-6-astra",
+      "aa_slug": "gpt-6-astra",
+      "quality": 84,
+      "price_in": 2.5,
+      "price_out": 10.0,
+      "sample": true,
+      "until": "2026-10-23",
+      "options": [
+        {
+          "runner": "codex",
+          "model": "gpt-6-astra",
+          "effort": "high",
+          "billing": "subscription"
+        },
+        {
+          "runner": "codex",
+          "model": "gpt-6-astra",
+          "effort": "medium",
+          "billing": "subscription",
+          "quality_delta": -6
+        }
+      ]
+    },
+    {
+      "id": "deepseek-v4.1-flash",
+      "provider": "deepseek",
+      "name": "DeepSeek V4.1 Flash",
+      "openrouter_id": "deepseek/deepseek-v4.1-flash",
+      "aa_slug": "deepseek-v4-1-flash",
+      "quality": 66,
+      "price_in": 0.2,
+      "price_out": 0.8,
+      "sample": true,
+      "options": [
+        {
+          "runner": "opencode",
+          "model": "opencode-go/deepseek-v4.1-flash",
+          "effort": null,
+          "billing": "subscription"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<script>
+(() => {
+  // 画面の言葉。日本語と英語を同じキーで持ち、ヘッダーのボタンで切り替える
+  const TEXT = {
+    ja: {
+      tagline: 'pbi-orchestration-jev の振り分けテンプレート (routing.json) を組み立てる',
+      updated: '一覧の日付 {0}', sample: '性能と価格は仮の値', reload: 'モデル一覧を読み直す',
+      langBtn: 'EN', langAria: 'Switch to English',
+      s1: '使うモデルを選ぶ',
+      s1p: '契約している実行先だけを残してください。チップ 1 つが「試す順番」の 1 つ (実行先・モデル・effort) になります。',
+      s1b: '作業の重さごとの性能の下限',
+      s1bp: 'PBI は 1 件ずつ、Jev の判定と変更の大きさから「軽い作業」「ふつうの作業」「設計が要る作業」のどれかに分けられます。それぞれ、これより性能の低いモデルは案に入れません。',
+      haiku: '軽い作業', sonnet: 'ふつうの作業', opus: '設計が要る作業',
+      maxSteps: '試す実行先の数 (作業 1 つあたり)', subsCheap: 'サブスクの枠内は安いとみなす', extOpus: '設計が要る作業にも Claude Code 以外を使う',
+      s2: 'テンプレート案から選ぶ',
+      s2p: '同じモデルの組み合わせから、性能・コスパ・バランスの 3 案を作りました。目安の費用は 1 PBI = 入力 30 万・出力 3 万トークンの API 換算です。',
+      proposals: 'テンプレート案', performance: '性能', cost: 'コスパ', balanced: 'バランス',
+      s3e: '試す順番を調整する',
+      s3ep: '選んだ案をもとに、作業の重さごとに上から順に試します。ドラッグか ↑ ↓ で並べ替え、チェックを外したものは使いません。使えなかったときの最後の受け皿は、Claude Code のモデルから選びます。',
+      edited: '調整済み', reset: '案に戻す',
+      s3: 'routing.json を書き出す',
+      s3p: '対象リポジトリの docs/pbi/routing.json に置くと、prepare.py がこの順番で実行先を試します。',
+      apply: 'このリポジトリに適用', copy: 'JSON をコピー',
+      footer: 'モデル一覧は studio/update_catalog.py が OpenRouter (価格・新モデル) と Artificial Analysis (コーディング指標) から作ります。',
+      noPrice: '価格不明 (案に入れない)', score: '性能 {0}', sampleMark: ' (仮)', until: '{0} まで',
+      candTitle: '新しく出たモデル', candNote: 'まだ実行先との対応が無いので、案には入りません。catalog.json の models に options を書くと選べます。',
+      selected: '選択中', choose: '選ぶ', statQ: '先頭の性能 (加重平均)', statCost: 'API 換算 / PBI', floor: '下限 {0}',
+      warnFloor: '{0}: 下限 {1} に届く Claude Code のモデルが無いので {2} にした',
+      warnAgent: 'Claude Code (Agent) のモデルを 1 つ以上残してください',
+      whyPerformance: 'どの作業も性能の高い順に試します。', whyCost: 'どの作業も安い順に試し、最後に Claude Code で受けます。', whyBalanced: '性能と費用の釣り合いが良い順に試します。',
+      whyTail: '{0} ふつうの作業は {1} ({2}) から、軽い作業は {3} ({4}) から始めます。',
+      editorEmpty: 'Claude Code のモデルを 1 つ以上選ぶと、ここで調整できます。', editBase: 'もとにした案: {0}',
+      rowNoPrice: ' · 価格不明', below: '下限未満', up: '上へ', down: '下へ',
+      laneEmpty: 'Claude Code 以外の実行先が選ばれていません。', laneLast: '最後に受ける Claude Code',
+      jsonEmpty: '// Claude Code (Agent) のモデルを 1 つ以上選んでください',
+      reloaded: 'モデル一覧を読み直しました', reloadFail: 'catalog.json を読めなかったので、ページ内の控えを使っています',
+      target: '適用先: {0}', applied: '適用しました: {0}。この画面は閉じてかまいません。', applyFail: '適用できませんでした: {0}',
+      copied: 'コピーしました', selectedText: '選択しました。Ctrl+C でコピーしてください',
+    },
+    en: {
+      tagline: 'Build the routing template (routing.json) for pbi-orchestration-jev',
+      updated: 'Catalog date {0}', sample: 'Scores and prices are sample values', reload: 'Reload model list',
+      langBtn: '日本語', langAria: '日本語に切り替える',
+      s1: 'Choose the models to use',
+      s1p: 'Keep only the runners you subscribe to. Each chip becomes one entry in the try order (runner, model, effort).',
+      s1b: 'Minimum score per workload',
+      s1bp: 'Each PBI is classed as light, standard or design-heavy work from Jev’s verdict and the size of the change. Models scoring below the floor are left out of the proposals for that class.',
+      haiku: 'Light work', sonnet: 'Standard work', opus: 'Design-heavy work',
+      maxSteps: 'Runners to try per task', subsCheap: 'Treat usage within a subscription as cheap', extOpus: 'Use runners other than Claude Code for design-heavy work too',
+      s2: 'Pick a proposal',
+      s2p: 'Three proposals built from the same models: performance, cost and balanced. The estimated cost assumes 300k input and 30k output tokens per PBI at API prices.',
+      proposals: 'Template proposals', performance: 'Performance', cost: 'Cost', balanced: 'Balanced',
+      s3e: 'Adjust the try order',
+      s3ep: 'Starting from the chosen proposal, each workload tries runners from top to bottom. Drag or use ↑ ↓ to reorder; unchecked entries are not used. The final fallback is the Claude Code model you pick.',
+      edited: 'Edited', reset: 'Back to proposal',
+      s3: 'Export routing.json',
+      s3p: 'Put it at docs/pbi/routing.json in the target repository, and prepare.py tries runners in this order.',
+      apply: 'Apply to this repository', copy: 'Copy JSON',
+      footer: 'studio/update_catalog.py builds the model list from OpenRouter (prices, new models) and Artificial Analysis (coding index).',
+      noPrice: 'Price unknown (not used in proposals)', score: 'Score {0}', sampleMark: ' (sample)', until: 'until {0}',
+      candTitle: 'New models', candNote: 'They have no runner mapping yet, so proposals do not use them. Add options under models in catalog.json to make them selectable.',
+      selected: 'Selected', choose: 'Choose', statQ: 'First-choice score (weighted)', statCost: 'API cost / PBI', floor: 'floor {0}',
+      warnFloor: '{0}: no Claude Code model reaches the floor of {1}, so {2} is used',
+      warnAgent: 'Keep at least one Claude Code (Agent) model',
+      whyPerformance: 'Every workload tries the highest-scoring runner first.', whyCost: 'Every workload tries the cheapest runner first and falls back to Claude Code.', whyBalanced: 'Runners are tried in order of the best balance between score and cost.',
+      whyTail: '{0} Standard work starts with {1} ({2}); light work starts with {3} ({4}).',
+      editorEmpty: 'Select at least one Claude Code model to adjust the order here.', editBase: 'Based on: {0}',
+      rowNoPrice: ' · price unknown', below: 'below floor', up: 'Move up', down: 'Move down',
+      laneEmpty: 'No runners other than Claude Code are selected.', laneLast: 'Final fallback (Claude Code)',
+      jsonEmpty: '// Select at least one Claude Code (Agent) model',
+      reloaded: 'Reloaded the model list', reloadFail: 'Could not read catalog.json, so the copy in this page is used',
+      target: 'Target: {0}', applied: 'Applied: {0}. You can close this page.', applyFail: 'Could not apply: {0}',
+      copied: 'Copied', selectedText: 'Selected. Press Ctrl+C to copy.',
+    },
+  };
+  const store = { get: (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} } };
+  const pickLang = () => {
+    const q = new URLSearchParams(location.search).get('lang');
+    const v = q || store.get('studio-lang') || (navigator.language || '').slice(0, 2);
+    return v === 'ja' ? 'ja' : 'en';
+  };
+  let lang = pickLang();
+  const t = (key, ...args) => (TEXT[lang][key] ?? TEXT.ja[key]).replace(/\{(\d)\}/g, (_, i) => args[+i]);
+  const RUNNER = { opencode: 'opencode', codex: 'Codex', agy: 'Antigravity', agent: 'Claude Code' };
+  const TIERS = ['haiku', 'sonnet', 'opus'];
+  const MIX = { haiku: 0.4, sonnet: 0.45, opus: 0.15 };  // 作業の重さの出方の目安 (重み)
+  const TOKENS = { in: 300000, out: 30000 };
+  const PROFILES = [
+    { id: 'performance', tone: 'var(--perf)' },
+    { id: 'cost', tone: 'var(--cost)' },
+    { id: 'balanced', tone: 'var(--bal)' },
+  ];
+  const state = {
+    catalog: null, applied: null, enabled: new Set(), chosen: 'balanced', built: [], custom: null, edited: false, drag: null,
+    floors: { haiku: 55, sonnet: 70, opus: 85 }, maxSteps: 4, subsCheap: true, extOpus: false,
+  };
+  const $ = (id) => document.getElementById(id);
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);  // catalog の数値は数として出す
+  // 価格が無い (null など) ものは 0 とみなさず「不明」として扱い、案には入れない
+  const measure = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  const priced = (m) => measure(m.price_in) !== null && measure(m.price_out) !== null;
+
+  function options(cat) {
+    return cat.models.flatMap((m) => m.options.map((o) => ({
+      key: `${o.runner}|${o.model}|${o.effort ?? ''}`,
+      modelName: m.name, provider: m.provider, sample: m.sample,
+      runner: o.runner, model: o.model, effort: o.effort, billing: o.billing, until: o.until ?? m.until ?? null,
+      quality: num(m.quality) + num(o.quality_delta),
+      price: priced(m) ? (3 * measure(m.price_in) + measure(m.price_out)) / 4 : null,
+      perPbi: priced(m) ? (TOKENS.in * measure(m.price_in) + TOKENS.out * measure(m.price_out)) / 1e6 : null,
+    })));
+  }
+  const label = (o) => `${RUNNER[o.runner]} ${o.model.split('/').pop()}${o.effort ? ' ' + o.effort : ''}`;
+  const effCost = (o) => (o.billing === 'subscription' && state.subsCheap ? o.price * 0.15 : o.price);
+
+  function sorter(profile, pool) {
+    const qs = pool.map((o) => o.quality), cs = pool.map((o) => Math.log10(effCost(o) + 0.05));
+    const [qMin, qMax, cMin, cMax] = [Math.min(...qs), Math.max(...qs), Math.min(...cs), Math.max(...cs)];
+    const norm = (v, a, b) => (b > a ? (v - a) / (b - a) : 0.5);
+    const score = (o) => {
+      if (profile === 'performance') return o.quality * 1000 - effCost(o);
+      if (profile === 'cost') return -effCost(o) * 1000 + o.quality;
+      return 0.4 * norm(o.quality, qMin, qMax) + 0.6 * (1 - norm(Math.log10(effCost(o) + 0.05), cMin, cMax));
+    };
+    return (a, b) => score(b) - score(a);
+  }
+
+  function build(profile, opts) {
+    const on = opts.filter((o) => state.enabled.has(o.key) && o.price !== null);
+    const tiers = {}, warnings = [];
+    for (const tier of TIERS) {
+      const floor = state.floors[tier];
+      const ext = on.filter((o) => o.runner !== 'agent' && o.quality >= floor && (tier !== 'opus' || state.extOpus));
+      const agents = on.filter((o) => o.runner === 'agent');
+      const extSorted = ext.sort(sorter(profile, on));
+      const seen = new Set(), chain = [];
+      for (const o of extSorted) {
+        if (seen.has(o.runner) || chain.length >= state.maxSteps - 1) continue;
+        seen.add(o.runner); chain.push(o);
+      }
+      let agent = agents.filter((o) => o.quality >= floor).sort(sorter(profile, on))[0];
+      if (!agent && agents.length) {
+        agent = agents.slice().sort((a, b) => b.quality - a.quality)[0];
+        warnings.push(t('warnFloor', t(tier), floor, agent.modelName));
+      }
+      if (!agent) { warnings.push(t('warnAgent')); return { tiers: null, warnings }; }
+      tiers[tier] = [...chain, agent];
+    }
+    return { tiers, warnings };
+  }
+
+  function metrics(tiers) {
+    let q = 0, cost = 0;
+    for (const k of TIERS) { q += MIX[k] * tiers[k][0].quality; cost += MIX[k] * tiers[k][0].perPbi; }
+    return { q, cost };
+  }
+
+  function reason(profile, tiers) {
+    const s = tiers.sonnet[0], h = tiers.haiku[0];
+    const base = t(profile === 'performance' ? 'whyPerformance' : profile === 'cost' ? 'whyCost' : 'whyBalanced');
+    return t('whyTail', base, s.modelName, RUNNER[s.runner], h.modelName, RUNNER[h.runner]);
+  }
+
+  function toRouting(profile, tiers) {
+    const out = { name: profile, generated_by: 'studio', catalog: state.catalog.updated, tiers: {} };
+    for (const k of TIERS) out.tiers[k] = tiers[k].map((o) => {
+      const s = { runner: o.runner, model: o.model, effort: o.effort ?? null };
+      if (o.until && o.runner !== 'agent') s.until = o.until;
+      return s;
+    });
+    return out;
+  }
+
+  function renderProviders() {
+    const cat = state.catalog;
+    $('updated').textContent = t('updated', cat.updated);
+    $('sampleNote').hidden = !cat.models.some((m) => m.sample);
+    $('providers').innerHTML = cat.providers.map((p) => {
+      const models = cat.models.filter((m) => m.provider === p.id);
+      if (!models.length) return '';
+      const runners = [...new Set(models.flatMap((m) => m.options.map((o) => RUNNER[o.runner])))].join(' · ');
+      return `<article class="prov glass">
+        <div class="prov-head"><span class="mark" style="background:${esc(p.color)}">${esc(p.mark)}</span>
+          <div><b>${esc(p.name)}</b><span>${esc(runners)}</span></div></div>
+        ${models.map((m) => { const q = num(m.quality); return `<div class="model">
+          <div class="model-top"><b>${esc(m.name)}</b><span class="price">${priced(m) ? `$${measure(m.price_in)} / $${measure(m.price_out)}` : esc(t('noPrice'))}</span></div>
+          <div class="qline"><span>${esc(t('score', q))}${m.sample ? esc(t('sampleMark')) : ''}</span><span>${m.until ? esc(t('until', m.until)) : ''}</span></div>
+          <div class="qbar"><i style="width:${Math.max(4, Math.min(100, q))}%; background-position:${-q * 2}px 0"></i></div>
+          <div class="opts">${m.options.map((o) => {
+            const k = `${o.runner}|${o.model}|${o.effort ?? ''}`;
+            return `<button type="button" class="opt" data-key="${esc(k)}" aria-pressed="${state.enabled.has(k)}">${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''}${o.runner === 'agy' ? ' ' + esc(o.model.split('-').pop()) : ''}</button>`;
+          }).join('')}</div>
+        </div>`; }).join('')}
+      </article>`;
+    }).join('');
+    const c = cat.candidates || [];
+    $('candidates').hidden = !c.length;
+    $('candidates').innerHTML = c.length ? `<h2>${esc(t('candTitle'))}</h2>
+      <p class="why">${esc(t('candNote'))}</p>
+      <ul>${c.slice(0, 8).map((m) => `<li><span class="pill">${esc(m.created)}</span><b>${esc(m.name)}</b><code>${esc(m.openrouter_id)}</code></li>`).join('')}</ul>` : '';
+  }
+
+  function renderProposals() {
+    const opts = options(state.catalog);
+    const built = PROFILES.map((p) => ({ p, ...build(p.id, opts) }));
+    $('proposals').innerHTML = built.map(({ p, tiers, warnings }) => {
+      if (!tiers) return `<div class="prop glass" style="--tone:${p.tone}"><div class="prop-head"><h3>${esc(t(p.id))}</h3></div><p class="why bad">${esc(warnings[0])}</p></div>`;
+      const m = metrics(tiers);
+      return `<button type="button" class="prop glass" role="radio" data-profile="${p.id}" aria-checked="${state.chosen === p.id}" style="--tone:${p.tone}">
+        <div class="prop-head"><h3>${esc(t(p.id))}</h3><span class="sel">${esc(t(state.chosen === p.id ? 'selected' : 'choose'))}</span></div>
+        <div class="stats">
+          <div class="stat"><small>${esc(t('statQ'))}</small><b>${m.q.toFixed(0)}</b></div>
+          <div class="stat"><small>${esc(t('statCost'))}</small><b>$${m.cost.toFixed(2)}</b></div>
+        </div>
+        ${TIERS.map((k) => `<div class="tier"><span class="tier-name">${esc(t(k))}<span>${esc(t('floor', state.floors[k]))}</span></span>
+          <div class="chain">${tiers[k].map((o, i) => `${i ? '<span class="arrow">→</span>' : ''}<span class="hop${i ? '' : ' first'}">${esc(label(o))}</span>`).join('')}</div></div>`).join('')}
+        <p class="why">${esc(reason(p.id, tiers))}</p>
+        ${warnings.map((w) => `<p class="why bad">${esc(w)}</p>`).join('')}
+      </button>`;
+    }).join('');
+    state.built = built;
+    const pick = built.find((b) => b.p.id === state.chosen && b.tiers) || built.find((b) => b.tiers);
+    if (!pick) { state.custom = null; renderEditor(); renderJson(); return; }
+    state.chosen = pick.p.id;
+    if (!state.custom || !state.edited) seedCustom(pick);
+    else syncCustom();
+    renderEditor(); renderJson();
+  }
+
+  // Step 3: 案をもとに、作業の重さごとの試す順番を手で調整する
+  const byKey = () => new Map(options(state.catalog).map((o) => [o.key, o]));
+
+  function seedCustom(pick) {
+    const all = options(state.catalog).filter((o) => state.enabled.has(o.key) && o.runner !== 'agent')
+      .sort((a, b) => b.quality - a.quality);
+    const tiers = {};
+    for (const k of TIERS) {
+      const chain = pick.tiers[k];
+      const used = chain.slice(0, -1).map((o) => o.key);
+      tiers[k] = {
+        list: [...used.map((key) => ({ key, on: true })), ...all.filter((o) => !used.includes(o.key)).map((o) => ({ key: o.key, on: false }))],
+        agent: chain[chain.length - 1].key,
+      };
+    }
+    state.custom = { from: pick.p.id, tiers };
+    state.edited = false;
+  }
+
+  function syncCustom() {
+    const opts = options(state.catalog).filter((o) => state.enabled.has(o.key));
+    const agents = opts.filter((o) => o.runner === 'agent');
+    for (const k of TIERS) {
+      const c = state.custom.tiers[k];
+      c.list = c.list.filter((x) => state.enabled.has(x.key));
+      for (const o of opts) if (o.runner !== 'agent' && !c.list.some((x) => x.key === o.key)) c.list.push({ key: o.key, on: false });
+      if (!state.enabled.has(c.agent) && agents.length) c.agent = agents.slice().sort((a, b) => b.quality - a.quality)[0].key;
+    }
+  }
+
+  function renderEditor() {
+    const lanes = $('lanes');
+    if (!state.custom) { lanes.innerHTML = `<p class="lane-empty">${esc(t('editorEmpty'))}</p>`; return; }
+    const map = byKey();
+    const prof = PROFILES.find((p) => p.id === state.custom.from);
+    $('editBase').textContent = t('editBase', prof ? t(prof.id) : state.custom.from);
+    $('editedPill').hidden = !state.edited;
+    $('resetEdit').hidden = !state.edited;
+    const agents = options(state.catalog).filter((o) => o.runner === 'agent' && state.enabled.has(o.key));
+    lanes.innerHTML = TIERS.map((k) => {
+      const c = state.custom.tiers[k];
+      let n = 0;
+      const rows = c.list.map((x, i) => {
+        const o = map.get(x.key);
+        const below = o.quality < state.floors[k];
+        const id = `use-${k}-${i}`;
+        return `<li class="row${x.on ? '' : ' off'}" draggable="true" data-tier="${k}" data-i="${i}">
+          <span class="grip" aria-hidden="true">⠿</span>
+          <span class="prio">${x.on ? ++n : '–'}</span>
+          <input type="checkbox" id="${id}" data-tier="${k}" data-i="${i}" ${x.on ? 'checked' : ''}>
+          <label for="${id}">${esc(o.modelName)}<small>${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''} · ${esc(t('score', num(o.quality)))}${o.price === null ? esc(t('rowNoPrice')) : ''}${below ? ` <span class="below">${esc(t('below'))}</span>` : ''}</small></label>
+          <span class="moves"><button type="button" data-move="-1" data-tier="${k}" data-i="${i}" aria-label="${esc(t('up'))}" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" data-move="1" data-tier="${k}" data-i="${i}" aria-label="${esc(t('down'))}" ${i === c.list.length - 1 ? 'disabled' : ''}>↓</button></span>
+        </li>`;
+      }).join('');
+      return `<div class="lane glass">
+        <div class="lane-head"><b>${esc(t(k))}</b><code>${k}</code><span>${esc(t('floor', state.floors[k]))}</span></div>
+        ${rows ? `<ol>${rows}</ol>` : `<p class="lane-empty">${esc(t('laneEmpty'))}</p>`}
+        <label class="lane-last" for="agent-${k}">${esc(t('laneLast'))}
+          <select id="agent-${k}" data-tier="${k}">${agents.map((o) => `<option value="${esc(o.key)}" ${o.key === c.agent ? 'selected' : ''}>${esc(o.modelName)}${o.effort ? ' (' + esc(o.effort) + ')' : ''}</option>`).join('')}</select>
+        </label>
+      </div>`;
+    }).join('');
+  }
+
+  function renderJson() {
+    if (!state.custom) { $('json').textContent = t('jsonEmpty'); return; }
+    const map = byKey();
+    const tiers = {};
+    for (const k of TIERS) {
+      const c = state.custom.tiers[k];
+      tiers[k] = [...c.list.filter((x) => x.on).map((x) => map.get(x.key)), map.get(c.agent)];
+    }
+    $('json').textContent = JSON.stringify(toRouting(state.custom.from + (state.edited ? '-custom' : ''), tiers), null, 2);
+  }
+
+  function edited() { state.edited = true; renderEditor(); renderJson(); }
+
+  function move(tier, from, to) {
+    const list = state.custom.tiers[tier].list;
+    if (to < 0 || to >= list.length || from === to) return;
+    const [x] = list.splice(from, 1);
+    list.splice(to, 0, x);
+    edited();
+  }
+
+  function renderStatic() {
+    document.documentElement.lang = lang;
+    document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+    $('proposals').setAttribute('aria-label', t('proposals'));
+    $('lang').textContent = t('langBtn');
+    $('lang').setAttribute('aria-label', t('langAria'));
+    if (!state.catalog) $('updated').textContent = t('updated', '—');
+    renderApplyNote();
+  }
+
+  function render() { renderProviders(); renderProposals(); }
+
+  function setCatalog(cat) {
+    state.catalog = cat;
+    state.enabled = new Set(options(cat).map((o) => o.key));
+    render();
+  }
+
+  async function loadCatalog(user) {
+    try {
+      const r = await fetch('catalog.json', { cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status);
+      setCatalog(await r.json());
+      if (user) flash(t('reloaded'));
+    } catch (e) {
+      if (!state.catalog) setCatalog(JSON.parse($('catalog-fallback').textContent));
+      if (user) flash(t('reloadFail'));
+    }
+  }
+
+  function flash(msg) { $('toast').textContent = msg; clearTimeout(flash.t); flash.t = setTimeout(() => ($('toast').textContent = ''), 3200); }
+
+  document.addEventListener('click', (e) => {
+    const opt = e.target.closest('.opt');
+    if (opt) {
+      const k = opt.dataset.key;
+      state.enabled.has(k) ? state.enabled.delete(k) : state.enabled.add(k);
+      opt.setAttribute('aria-pressed', state.enabled.has(k));
+      renderProposals();
+      return;
+    }
+    const prop = e.target.closest('.prop[data-profile]');
+    if (prop) { state.chosen = prop.dataset.profile; state.edited = false; renderProposals(); return; }
+    const mv = e.target.closest('button[data-move]');
+    if (mv) {
+      const i = +mv.dataset.i, tier = mv.dataset.tier, to = i + +mv.dataset.move;
+      move(tier, i, to);
+      const again = document.querySelector(`button[data-move="${mv.dataset.move}"][data-tier="${tier}"][data-i="${to}"]`);
+      if (again && !again.disabled) again.focus();
+    }
+  });
+  $('lanes').addEventListener('change', (e) => {
+    const el = e.target;
+    if (el.matches('input[type=checkbox]')) { state.custom.tiers[el.dataset.tier].list[+el.dataset.i].on = el.checked; edited(); }
+    if (el.matches('select')) { state.custom.tiers[el.dataset.tier].agent = el.value; edited(); }
+  });
+  $('lanes').addEventListener('dragstart', (e) => {
+    const li = e.target.closest('li.row'); if (!li) return;
+    state.drag = { t: li.dataset.tier, i: +li.dataset.i };
+    li.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', li.dataset.i); } catch (_) {}
+  });
+  $('lanes').addEventListener('dragover', (e) => {
+    const li = e.target.closest('li.row');
+    if (!li || !state.drag || li.dataset.tier !== state.drag.t) return;
+    e.preventDefault();
+    document.querySelectorAll('.row.over').forEach((r) => r !== li && r.classList.remove('over'));
+    li.classList.add('over');
+  });
+  $('lanes').addEventListener('drop', (e) => {
+    const li = e.target.closest('li.row');
+    if (!li || !state.drag || li.dataset.tier !== state.drag.t) return;
+    e.preventDefault();
+    move(state.drag.t, state.drag.i, +li.dataset.i);
+    state.drag = null;
+  });
+  $('lanes').addEventListener('dragend', () => { state.drag = null; document.querySelectorAll('.row.over, .row.dragging').forEach((r) => r.classList.remove('over', 'dragging')); });
+  $('resetEdit').addEventListener('click', () => { state.edited = false; renderProposals(); });
+  $('reload').addEventListener('click', () => loadCatalog(true));
+  $('lang').addEventListener('click', () => {
+    lang = lang === 'ja' ? 'en' : 'ja';
+    store.set('studio-lang', lang);
+    renderStatic(); render();
+  });
+
+  // serve.py から開いたときだけ、適用先と合言葉が埋め込まれる
+  const applyInfo = (() => { try { const raw = $('studio-apply').textContent.trim(); return raw ? JSON.parse(raw) : null; } catch (_) { return null; } })();
+  function renderApplyNote() {
+    if (!applyInfo) return;
+    const [key, path] = state.applied ? ['applied', state.applied] : ['target', applyInfo.target];
+    const [before, after] = t(key, '\u0000').split('\u0000');
+    $('applyNote').innerHTML = `${esc(before)}<code>${esc(path)}</code>${esc(after)}`;
+    $('applyNote').classList.toggle('done', !!state.applied);
+  }
+  if (applyInfo) {
+    $('apply').hidden = false;
+    $('copy').classList.remove('primary');
+    $('applyNote').hidden = false;
+    $('apply').addEventListener('click', async () => {
+      $('apply').disabled = true;
+      try {
+        const r = await fetch('/apply', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Studio-Token': applyInfo.token }, body: $('json').textContent });
+        const res = await r.json();
+        if (!res.ok) throw new Error(res.error);
+        state.applied = res.path;
+        renderApplyNote();
+      } catch (e) {
+        $('apply').disabled = false;
+        flash(t('applyFail', e.message || e));
+      }
+    });
+  }
+  $('copy').addEventListener('click', () => {
+    const text = $('json').textContent;
+    navigator.clipboard.writeText(text).then(() => flash(t('copied')), () => {
+      const range = document.createRange(); range.selectNodeContents($('json'));
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      flash(t('selectedText'));
+    });
+  });
+  for (const k of TIERS) {
+    const el = $(`floor-${k}`);
+    el.value = state.floors[k]; $(`floor-${k}-v`).textContent = el.value;
+    el.addEventListener('input', () => { state.floors[k] = +el.value; $(`floor-${k}-v`).textContent = el.value; renderProposals(); });
+  }
+  $('maxSteps').value = state.maxSteps; $('maxSteps-v').textContent = state.maxSteps;
+  $('maxSteps').addEventListener('input', (e) => { state.maxSteps = +e.target.value; $('maxSteps-v').textContent = state.maxSteps; renderProposals(); });
+  $('subsCheap').checked = state.subsCheap;
+  $('subsCheap').addEventListener('change', (e) => { state.subsCheap = e.target.checked; renderProposals(); });
+  $('extOpus').checked = state.extOpus;
+  $('extOpus').addEventListener('change', (e) => { state.extOpus = e.target.checked; renderProposals(); });
+
+  renderStatic();
+  setCatalog(JSON.parse($('catalog-fallback').textContent));
+  loadCatalog(false);
+})();
+</script>
+</body>
+</html>
