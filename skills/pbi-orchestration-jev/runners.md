@@ -24,9 +24,10 @@ command -v opencode || ls -d "$(cygpath "$APPDATA")"/fnm/node-versions/*/install
 
 ```bash
 mkdir -p docs/pbi/opencode
-PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<このディレクトリ>/opencode.config.json" opencode run -m <route の model> --format json   "docs/pbi/opencode/<報告名>.prompt.md を読み、その指示どおりに作業してください。"   < /dev/null > docs/pbi/opencode/<報告名>.jsonl 2> docs/pbi/opencode/<報告名>.err
+PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<このディレクトリ>/opencode.config.json" opencode run -m <route の model>[#<route の effort>] --format json   "docs/pbi/opencode/<報告名>.prompt.md を読み、その指示どおりに作業してください。"   < /dev/null > docs/pbi/opencode/<報告名>.jsonl 2> docs/pbi/opencode/<報告名>.err
 ```
 
+- effort: route の effort が null でなければ `#<effort>` を付ける (例 `opencode-go/deepseek-v4.1-flash#max`)。null なら付けない。無い effort 名は `provider.no-route` の `Variant unavailable` で落ちる
 - **同時に起動するときは 30 秒ずつずらす**: opencode はデータベース（SQLite）を共有するので、同時に起動すると `.err` に `database is locked` が出て、起動直後に落ちる（`.jsonl` は 0 行、作業ツリーは無変更）。2 件目以降は、コマンドの先頭に `sleep 30;`・`sleep 60;` … を付けて起動する。5 件までなら、これで落ちなかった
 - **`database is locked` で落ちたら**: PBI の失敗とは数えない。下の「使えないとき」として 1 回だけ、単独で再実行する
 - **権限**: `opencode.config.json`（このディレクトリ）を `OPENCODE_CONFIG` で渡す。編集とコマンドは許可し、`git push`・`git reset --hard`・`git clean`・`rm -rf`・`rm -r` とリポジトリ外への操作を拒否する。`--auto` は付けない。ユーザー全体の設定（`~/.config/opencode/`）は変えない（rtk のプラグインを入れていれば、それはそのまま使う）

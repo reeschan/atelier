@@ -7,7 +7,8 @@ PBI を起票する前に読む。検証コマンドは 1 行に 1 つ、`番号
 - **`$`・`[` を含むパス**はシングルクォートで囲む (`'src/routes/api/recipes/$id.ts'`)。
 - **rtk の `grep -h`**: rtk grep では `-h` がヘルプの意味になる。同梱の `rtk/rtk-gate.mjs` は grep / rg の `-h` を含むコマンドを書き換えないが、`rtk grep` を直接書くときは `-h` を使わない。
 - **Bash ツールの eval で壊れる組み合わせ**: Windows の Claude Code の Bash ツールは、`$( )` の中の `<` リダイレクトと `$'…'` (例 `$'\r$'`) が同じコマンドにあると `eval: unexpected EOF` で落ちる (素の bash では通る)。検証コマンドではこの 2 つを別のコマンドに分ける。CR を数えるなら `grep -c $'\r$' file` を単独で書く。複数行の本文は Bash の heredoc ではなく Write ツールで書く。2026-10 のベンチで、18 本中 11 本がこれで 1 ターン以上を無駄にした (rtk のせいではない)。
-- **HEAD との比較**: 前段の PBI の変更が未コミットだと `git diff --exit-code -- <file>` は必ず落ちる。波ごとにコミットするか、`git status --porcelain -- <file>` で「その PBI が触っていない」を見る。並列で動く PBI が触るファイルは、検証の対象に入れない。
+- **HEAD との比較**: 前段の PBI の変更が未コミットだと `git diff --exit-code -- <file>` は必ず落ちる。「その PBI が触っていない」は次の項目の `unchanged.py` で見る。
+- **触らない範囲は `unchanged.py` で見る (`git status` で書かない)**: `git status --porcelain -- <files>` は、前の波の未コミットの新しいファイル (`??`) と、並列で動く PBI の変更でも行を出すので誤検知する (2026-10-16、7 PBI・3 波で 2 回)。設計者は PBI を起動する直前に `python docs/pbi/tools/unchanged.py save PBI-<連番> <files...>` でハッシュを取り、検証コマンドは `python docs/pbi/tools/unchanged.py check PBI-<連番>` にする (変わったファイルだけを `changed <パス>` で出し、終了コード 1。何も変わっていなければ出力なしで 0)。save は起票時ではなく起動の直前に行う (前の波が触るファイルを含むと誤検知する)。並列の PBI が触るファイルは対象に入れない。
 - **書式の検査が作業記録を見る**: `prettier --check .` は追跡していないファイルも見るので、最初に `docs/pbi/` を `.prettierignore` に入れる (依頼文・報告で検証が落ちないように)。
 - **`/tmp` のファイルを Windows の node・python に渡さない**: Git Bash の `/tmp` は node・python からは `C:\tmp` になり見つからない。作業用の一時ファイルはリポジトリの中か Windows のパス (`C:/...`) に置く。
 - **開発サーバー**: Windows では `&` と `kill` で止まらない。起動・要求・停止をまとめるスクリプト (プロセスツリーごと止める。`docs/pbi/tools/smoke.mjs` のように置く) を作り、ポートは PBI ごとに分ける。本番のデータに触れないよう、接続先の環境変数はダミーにして起動する。`.env*` をコピーさせない。
