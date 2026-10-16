@@ -1,6 +1,7 @@
 # pbi-orchestration-jev のアーキテクチャ図
 # __MONO__ は単色ロゴの色。render.py がライト用 (000000) とダーク用 (ffffff) に置き換えて 2 枚描く
 # 生成: python ~/.claude/skills/arch-diagram/versions/v1.1/scripts/render.py assets/architecture.d2
+# 2026-10-14 の Template Studio 追加分は d2 v0.7.1 (elk、ライト theme 0 / ダーク theme 200) で描き直した
 direction: right
 
 vars: {
@@ -86,6 +87,26 @@ jev: "Jev (TypeSafe)\njudgment API" {
   shape: hexagon
 }
 
+studio: Template Studio {
+  class: zone
+
+  page: "Studio page (browser)\nopened by /pbi-orchestration-jev templates\npick models, 3 proposals, reorder" {
+    class: svc
+  }
+  serve: "studio/serve.py\n127.0.0.1 + token, POST /apply" {
+    class: svc
+    icon: https://cdn.simpleicons.org/python
+  }
+  catalog: "studio/update_catalog.py\ncatalog.json" {
+    class: svc
+    icon: https://cdn.simpleicons.org/python
+  }
+}
+
+bench: "OpenRouter / Artificial Analysis\nprices, new models, coding index" {
+  shape: hexagon
+}
+
 repo: Target repository {
   class: zone
   icon: https://cdn.simpleicons.org/git
@@ -94,6 +115,10 @@ repo: Target repository {
     class: svc
   }
   pbi: "docs/pbi/\nPBIs, STATUS, reports, HANDOFF, stats" {
+    class: svc
+    shape: page
+  }
+  routing: "docs/pbi/routing.json\ntry order, read by select_model.py" {
     class: svc
     shape: page
   }
@@ -113,3 +138,8 @@ runners.agy -> repo.code
 cc.agent -> repo.code
 cc.orch -> repo.pbi: status & logs
 cc.stats -> repo.pbi: stats {style.stroke-dash: 4}
+dev -> studio.page: pick & apply
+bench -> studio.catalog: fetch
+studio.catalog -> studio.page: models
+studio.page -> studio.serve: routing.json
+studio.serve -> repo.routing: write

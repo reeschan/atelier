@@ -32,8 +32,9 @@ from pathlib import Path
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,62}$')
 RUNNERS = ('opencode', 'codex', 'agy', 'agent')
 TIERS = ('haiku', 'sonnet', 'opus')
-TEMPLATE_KEYS = frozenset(('name', 'description', 'tiers'))
-STEP_KEYS = frozenset(('runner', 'model', 'effort'))
+# 形は振り分けテンプレート (routing.json) に揃える。$schema_note と手順の until (日付) も書ける
+TEMPLATE_KEYS = frozenset(('name', 'description', 'tiers', '$schema_note'))
+STEP_KEYS = frozenset(('runner', 'model', 'effort', 'until'))
 EMPTY_OVERRIDES = {'synced_at': None, 'application': None}
 
 
@@ -111,6 +112,12 @@ def step_problems(tier: str, i: int, step) -> list[str]:
     effort = step.get('effort')
     if effort is not None and not isinstance(effort, str):
         problems.append(f'{where} の effort が文字列でも null でもない')
+    until = step.get('until')
+    if until is not None:
+        try:
+            datetime.date.fromisoformat(until)
+        except (TypeError, ValueError):
+            problems.append(f'{where} の until が日付 (YYYY-MM-DD) でない: {until!r}')
     extra = sorted(set(step) - STEP_KEYS)
     if extra:
         problems.append(f"{where} の余計なキー: {', '.join(extra)}")

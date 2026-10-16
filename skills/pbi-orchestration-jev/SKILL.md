@@ -10,11 +10,12 @@ description: 複数ファイルにまたがる実装を、PBI起票・モデル�
 | 場面 | 読むもの |
 |---|---|
 | 引数が `resume` / 6.3 で文脈が 150,000 以上 | `appendix/handoff.md` |
+| 引数が `templates`（振り分けテンプレートを画面で決める） | `appendix/templates.md` |
 | 作業キーを決める・ref を書く・引き継ぐ・終わる | `appendix/memory.md` |
 | 差し戻す・止まる条件に当たった | `appendix/rework.md` |
 | Jev を直接呼ぶ（報告の仕分け・差し戻しのゲート） | `appendix/jev.md` |
 | すべての PBI が終わった | `appendix/finish.md` |
-| テンプレート・適用を扱う (開始時の同期、チャットでの適用・作成、期限切れの確認、Web ページ) | `appendix/templates.md` |
+| 優先テンプレート・適用を扱う (開始時の同期、チャットでの適用・作成、期限切れの確認、Web ページ) | `appendix/priority-templates.md` |
 | 実行先が opencode・codex・agy | `runners.md` |
 | PBI を起票する前 | `verify-commands.md` |
 
@@ -86,7 +87,7 @@ shared-memory（`search`・`get`・`write` を持つ共有メモリの MCP。ツ
 
 ## 2. 分解と起票
 
-- 開始時に Web と同期する (`appendix/templates.md` の「開始時の同期」)
+- 開始時に Web と同期する (`appendix/priority-templates.md` の「開始時の同期」)
 
 既存コードと 0.8 の範囲のメモリを調べて設計を決め、PBIに分解する。起票の前に `verify-commands.md` を読む。最初に、このディレクトリの `worker.md` を `docs/pbi/worker.md` に、`unchanged.py`（触らない範囲の検証。`verify-commands.md`）を `docs/pbi/tools/unchanged.py` にコピーする（opencode はリポジトリ外を読めないため）。1 PBI は小さく（変更ファイル 3 以下を目安に）切り、`docs/pbi/PBI-<連番>.md` に1件1ファイルで書く。実装担当は設計時の文脈を持たないので、PBIと参照欄の ref だけで作業できるように書く。
 
@@ -150,14 +151,14 @@ python <このディレクトリ>/prepare.py docs/pbi [--skip opencode,codex,agy
 
 出力の表（段・route の先頭・review・Jev の score・品質の警告）を、PBI の「担当モデル」と STATUS.md に写す。PBI を書き直したら `--only PBI-<連番>` を付けて、その PBI だけ判定し直す。
 - 決定表: 新規性=2 かつ あいまいさ=2 → opus（normal）／ sensitive → sonnet（Agent だけ、deep）／ 結合度=2 → sonnet（deep）／ どれかの score が 1 以上、変更 4 ファイル以上、2 モジュール以上 → sonnet（normal）／ それ以外 → haiku（normal）
-- 適用中のテンプレートは決定表のあとに当たる。sensitive には当たらず、最後は元の段の agent。prepare.py の先頭の行と列「テンプレート」を承認一覧に写す
+- 適用中の優先テンプレートは決定表のあとに、振り分けテンプレート (routing.json) より先に当たる。sensitive には当たらず、最後は routing.json のその段の agent。prepare.py の先頭の行と列「優先テンプレート」を承認一覧に写す
 - 品質の警告は合否に使わず、承認一覧に出す。書き直しは警告が出たときに 1 回まで（任意）
 - 設計者が決定表を上書きするときは、理由を STATUS.md のメモと jev-log に書く
 
 ## 5. 承認
 
 PBIの一覧をユーザーに見せ、承認を得てから実行に入る。一覧には、ID、タイトル、担当（段・route の先頭・review）とその理由、依存、品質の警告を載せる。
-- 承認一覧にテンプレートの行を載せる。期限切れの ask があれば、承認と一緒に「延長 / やめる / 期限なし」を聞き (`appendix/templates.md` の「期限切れの確認」)、答えを反映してから prepare.py を `--only` なしでもう一度実行する。同期できなかったときは「Web と同期できず、<synced_at> 時点の写しを使用」と書く
+- 承認一覧に優先テンプレートの行を載せる。期限切れの ask があれば、承認と一緒に「延長 / やめる / 期限なし」を聞き (`appendix/priority-templates.md` の「期限切れの確認」)、答えを反映してから prepare.py を `--only` なしでもう一度実行する。同期できなかったときは「Web と同期できず、<synced_at> 時点の写しを使用」と書く
 
 ## 6. 実行
 

@@ -1,4 +1,4 @@
-"""prepare.py の「テンプレート: …」の 1 行、表の列「テンプレート」、jev-log の template を確かめる。
+"""prepare.py の「優先テンプレート: …」の 1 行、表の列「優先テンプレート」、jev-log の template を確かめる。
 
 Jev を呼ばせないため、応答 (jev/<PBI>.brief.json・.pbi_quality.json) を先に置いてから
 prepare.py を別プロセスで起動する。テンプレートの home は別の一時ディレクトリに作り --home で渡す。
@@ -88,8 +88,8 @@ class PrepareTemplateTest(unittest.TestCase):
         out, log = self.run_case({'deepseek-all': ALL_TIERS}, application(), '--now', NOW)
         self.assertEqual(out.returncode, 0, out.stderr)
         lines = out.stdout.splitlines()
-        self.assertEqual(lines[0], f'テンプレート: deepseek-all を適用中 ({UNTIL} まで、期限切れは ask) / 写し: {SYNCED} 時点')
-        self.assertIn('| テンプレート |', lines[1])
+        self.assertEqual(lines[0], f'優先テンプレート: deepseek-all を適用中 ({UNTIL} まで、期限切れは ask) / 写し: {SYNCED} 時点')
+        self.assertIn('| 優先テンプレート |', lines[1])
         self.assertIn(f'deepseek-all を当てた ({UNTIL} まで)', rows(out)[0])
         brief = [line for line in log if line['gate'] == 'brief'][0]
         self.assertEqual(brief['template']['name'], 'deepseek-all')
@@ -99,20 +99,20 @@ class PrepareTemplateTest(unittest.TestCase):
         out, _ = self.run_case({'deepseek-all': ALL_TIERS}, application(), '--now', PAST)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout.splitlines()[0],
-                         f'テンプレート: deepseek-all は期限切れ。承認で「延長 / やめる / 期限なし」を確認する / 写し: {SYNCED} 時点')
+                         f'優先テンプレート: deepseek-all は期限切れ。承認で「延長 / やめる / 期限なし」を確認する / 写し: {SYNCED} 時点')
         self.assertIn('期限切れ: 延長・やめる・期限なしの確認が要る', rows(out)[0])
 
     def test_expired_drop_says_not_applied(self):
         out, _ = self.run_case({'deepseek-all': ALL_TIERS}, application(on_expire='drop'), '--now', PAST)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout.splitlines()[0],
-                         f'テンプレート: deepseek-all は期限切れ (drop)。当てない / 写し: {SYNCED} 時点')
+                         f'優先テンプレート: deepseek-all は期限切れ (drop)。当てない / 写し: {SYNCED} 時点')
         self.assertIn('期限切れ (drop) のため当てない', rows(out)[0])
 
     def test_without_overrides_says_no_application(self):
         out, log = self.run_case({'deepseek-all': ALL_TIERS}, None, '--now', NOW)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertEqual(out.stdout.splitlines()[0], 'テンプレート: 適用なし / 写し: なし')
+        self.assertEqual(out.stdout.splitlines()[0], '優先テンプレート: 適用なし / 写し: なし')
         self.assertIn('適用なし', rows(out)[0])
         brief = [line for line in log if line['gate'] == 'brief'][0]
         self.assertFalse(brief['template']['applied'])
@@ -120,7 +120,7 @@ class PrepareTemplateTest(unittest.TestCase):
     def test_until_null_shows_no_deadline(self):
         out, _ = self.run_case({'deepseek-all': ALL_TIERS}, application(until=None), '--now', PAST)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertEqual(out.stdout.splitlines()[0], f'テンプレート: deepseek-all を適用中 (期限なし) / 写し: {SYNCED} 時点')
+        self.assertEqual(out.stdout.splitlines()[0], f'優先テンプレート: deepseek-all を適用中 (期限なし) / 写し: {SYNCED} 時点')
         self.assertIn('期限なしで当てた', rows(out)[0])
 
     def test_template_note_falls_back_to_dash(self):

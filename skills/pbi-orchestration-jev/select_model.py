@@ -1,22 +1,25 @@
 """担当を決める。
 
-  python select_model.py <facts.json> [<brief の Jev 応答.json>] [--today YYYY-MM-DD] [--tier haiku|sonnet|opus] [--skip opencode,agy] [--home DIR] [--now ISO]
-  python select_model.py --all docs/pbi [--today ...] [--skip ...] [--home ...] [--now ...]
+  python select_model.py <facts.json> [<brief の Jev 応答.json>] [--today YYYY-MM-DD] [--tier haiku|sonnet|opus] [--skip opencode,agy] [--routing <routing.json>] [--home DIR] [--now ISO]
+  python select_model.py --all docs/pbi [--today ...] [--skip ...] [--routing ...] [--home ...] [--now ...]
 
 facts.json: {"files_changed", "files_new", "files_deleted", "modules", "criteria", "sensitive"}
 Jev 応答: ゲート brief（novelty / coupling / ambiguity）の API 応答。無い・エラーのときは各 score を 1 とする。
 --tier: 決定表を飛ばして段を指定する（9.1 の昇格で route を出し直すとき）。
 --skip: route から外す実行先（このセッションで上限・拒否が出た実行先、昇格で外す opencode）。agent は外せない。
---home: テンプレートの home（templates.resolve_home）。--now: 今の時刻（templates.parse_time）。
-        --today を省いて --now があれば、今日は --now の日付。--all でも同じ引数が効く。
 --all: <dir>/PBI-*.facts.json と <dir>/jev/PBI-*.brief.json を全部判定し、<dir>/PBI-*.route.json に書いて、
        標準出力には 1 PBI 1 行の表だけを出す（オーケストレーターの文脈を細く保つため）。
+--routing: 段ごとの route を書いたテンプレート（routing.default.json と同じ形。studio/ の画面で作れる。studio/serve.py なら画面から直接置ける）。
+       指定が無ければ、--all のときは <dir>/routing.json、次にこのディレクトリの routing.json を探し、
+       どちらも無ければ下の既定の表を使う。
+--home: 優先テンプレートの home（templates.resolve_home）。--now: 今の時刻（templates.parse_time）。
+        --today を省いて --now があれば、今日は --now の日付。--all でも同じ引数が効く。
 標準出力（1 件のとき）: {"tier", "route": [{"runner", "model", "effort"}, ...], "review", "scores", "reasons",
 "template": {"name", "applied", "note"}}
 
-写し (overrides.json) の適用が active で、テンプレートにその段の上書きがあり、sensitive でなければ、
-route を「テンプレートの手順（--skip の runner は外す）＋ AGENT[tier]」に置き換える。当てたときは
-reasons[0] の末尾にも書く。
+優先テンプレート（期限付きの上書き。appendix/priority-templates.md）は振り分けテンプレート（routing）より先に当たる。
+写し (overrides.json) の適用が active で、優先テンプレートにその段の上書きがあり、sensitive でなければ、
+route を「優先テンプレートの手順（--skip の runner と until を過ぎた手順は外す）＋ routing のその段の agent」に置き換える。
 
 route は上から順に試す実行先。runner は opencode（opencode CLI の OpenCode Go）/ codex（Codex CLI）/ agy（Antigravity
 CLI の Claude）/ agent（Claude Code の Agent ツール = Anthropic のサブスク）。
@@ -89,26 +92,97 @@ def claude_tier(facts: dict, scores: dict) -> tuple[str, str]:
     return 'haiku', 'どの条件にも当たらない'
 
 
-def route(tier: str, today: datetime.date, sensitive: bool = False, skip: frozenset = frozenset()) -> list[dict]:
-    steps = []
-    if not sensitive:
-        if tier in OPENCODE:
-            steps.append(OPENCODE[tier])
-        if tier in CODEX and today <= CODEX_UNTIL:
-            steps.append(CODEX[tier])
-        if tier in AGY:
-            steps.append(AGY[tier])
-    steps = [s for s in steps if s['runner'] not in skip]
-    steps.append(AGENT[tier])
-    return steps
+def default_routing() -> dict:
+    """テンプレートが無いときの表。routing.default.json と同じ中身。"""
+    def until(step, day):
+        return {**step, 'until': day.isoformat()}
+    return {'name': 'default', 'tiers': {
+        'haiku': [OPENCODE['haiku'], until(CODEX['haiku'], CODEX_UNTIL), AGY['haiku'], AGENT['haiku']],
+        'sonnet': [OPENCODE['sonnet'], until(CODEX['sonnet'], CODEX_UNTIL), AGY['sonnet'], AGENT['sonnet']],
+        'opus': [AGENT['opus']],
+    }}
 
 
-def apply_template(tier: str, sensitive: bool, skip: frozenset, home: Path,
-                   now: datetime.datetime) -> dict:
+def nonempty_str(v) -> bool:
+    return isinstance(v, str) and bool(v.strip())
+
+
+def routing_error(table) -> str | None:
+    """テンプレートの形を確かめ、問題があればその説明を返す。どの段も最後の 1 つだけが agent で、間は RUNNERS のどれか。"""
+    tiers = table.get('tiers') if isinstance(table, dict) else None
+    if not isinstance(tiers, dict):
+        return 'tiers が無い'
+    for tier in TIERS:
+        steps = tiers.get(tier)
+        if not isinstance(steps, list) or not steps or not all(isinstance(s, dict) for s in steps):
+            return f'tiers.{tier} が無いか、形が違う'
+        if steps[-1].get('runner') != 'agent':
+            return f'tiers.{tier} の最後は agent の実行先にする'
+        if not nonempty_str(steps[-1].get('model')):
+            return f'tiers.{tier} の agent に model が無い'
+        for s in steps[:-1]:
+            if s.get('runner') not in RUNNERS:
+                return f'tiers.{tier} の途中は {"/".join(RUNNERS)} のどれか（{s.get("runner")}）'
+            if not nonempty_str(s.get('model')):
+                return f'tiers.{tier} の {s["runner"]} に model が無い'
+            if s.get('until'):
+                try:
+                    datetime.date.fromisoformat(s['until'])
+                except (TypeError, ValueError):
+                    return f'tiers.{tier} の until が日付でない（{s["until"]}）'
+    return None
+
+
+def load_routing(path) -> dict:
+    table = json.load(open(path, encoding='utf-8'))
+    err = routing_error(table)
+    if err:
+        sys.exit(f'{path}: {err}')
+    return table
+
+
+def find_routing(explicit: str | None, all_dir: str | None) -> tuple[dict, str]:
+    candidates = [Path(explicit)] if explicit else []
+    if not explicit:
+        if all_dir:
+            candidates.append(Path(all_dir) / 'routing.json')
+        candidates.append(Path(__file__).resolve().parent / 'routing.json')
+    for c in candidates:
+        if c.exists():
+            return load_routing(c), str(c)
+    if explicit:
+        sys.exit(f'--routing のファイルが無い: {explicit}')
+    return default_routing(), ''
+
+
+def route(tier: str, today: datetime.date, sensitive: bool = False, skip: frozenset = frozenset(),
+          routing: dict | None = None) -> list[dict]:
+    """sensitive はリポジトリの外のサービスに出さないため、その段の agent だけにする。"""
+    steps = (routing or default_routing())['tiers'][tier]
+    if sensitive:
+        return [strip(steps[-1])]
+    out = []
+    for s in steps[:-1]:
+        if s['runner'] in skip:
+            continue
+        if s.get('until') and today > datetime.date.fromisoformat(s['until']):
+            continue
+        out.append(strip(s))
+    out.append(strip(steps[-1]))
+    return out
+
+
+def strip(step: dict) -> dict:
+    return {'runner': step['runner'], 'model': step['model'], 'effort': step.get('effort')}
+
+
+def apply_template(tier: str, sensitive: bool, skip: frozenset, today: datetime.date, routing: dict,
+                   home: Path, now: datetime.datetime) -> dict:
     """写しの適用から route（当てないときは None）と template の欄を組む。
 
-    当てる条件は、適用の状態が active・テンプレートが読める・その段がある・sensitive でない、の全部。
-    route はテンプレートの手順（--skip の runner は外す）のあとに AGENT[tier] を付けたもの。
+    当てる条件は、適用の状態が active・優先テンプレートが読める・その段がある・sensitive でない、の全部。
+    route は優先テンプレートの手順（--skip の runner と until を過ぎた手順は外す）のあとに、
+    routing のその段の agent（最後の手順）を付けたもの。
     """
     application = templates.load_overrides(home).get('application')
     if not isinstance(application, dict):
@@ -132,12 +206,14 @@ def apply_template(tier: str, sensitive: bool, skip: frozenset, home: Path,
     tier_steps = template['tiers'].get(tier)
     if not tier_steps:
         return {'name': name, 'applied': False, 'note': 'この段の上書きなし', 'route': None}
-    steps = [{'runner': s['runner'], 'model': s['model'], 'effort': s.get('effort')}
-             for s in tier_steps if s['runner'] not in skip]
-    if not steps or steps[-1] != AGENT[tier]:
-        steps = steps + [dict(AGENT[tier])]
+    fallback = strip(routing['tiers'][tier][-1])
+    steps = [strip(s) for s in tier_steps
+             if s['runner'] not in skip
+             and not (s.get('until') and today > datetime.date.fromisoformat(s['until']))]
+    if not steps or steps[-1] != fallback:
+        steps = steps + [fallback]
     until = application.get('until')
-    note = '期限なしで当てた' if until is None else f'{name} を当てた ({until} まで)'
+    note = f'{name} を期限なしで当てた' if until is None else f'{name} を当てた ({until} まで)'
     return {'name': name, 'applied': True, 'note': note, 'route': steps}
 
 
@@ -151,7 +227,7 @@ def load_answers(path) -> dict:
 
 
 def decide(facts: dict, answers: dict, today: datetime.date, forced: str | None = None,
-           skip: frozenset = frozenset(), home: Path | None = None,
+           skip: frozenset = frozenset(), routing: dict | None = None, home: Path | None = None,
            now: datetime.datetime | None = None) -> dict:
     scores, reasons = {}, []
     for k in KEYS:
@@ -162,20 +238,24 @@ def decide(facts: dict, answers: dict, today: datetime.date, forced: str | None 
     else:
         tier, why = claude_tier(facts, scores)
     sensitive = bool(facts.get('sensitive'))
+    routing = routing or default_routing()
     if now is None:
         now = datetime.datetime.now().astimezone()
-    tpl = apply_template(tier, sensitive, skip, home if home is not None else templates.resolve_home(None), now)
-    steps = tpl['route'] if tpl['applied'] else route(tier, today, sensitive, skip)
+    tpl = apply_template(tier, sensitive, skip, today, routing,
+                         home if home is not None else templates.resolve_home(None), now)
+    steps = tpl['route'] if tpl['applied'] else route(tier, today, sensitive, skip, routing)
     review = 'deep' if sensitive or scores['coupling'] == 2 else 'normal'
-    if not tpl['applied']:
+    if tpl['applied']:
+        why += f"（優先テンプレート {tpl['name']} を当てた）"
+    else:
         if steps[0]['runner'] == 'opencode':
             why += '（opencode の DeepSeek を先に試す）'
         if any(s['runner'] == 'codex' for s in steps):
-            why += f'（{CODEX_UNTIL} までは codex を agy より先に試す）'
+            why += f'（{CODEX_UNTIL} までは codex を agy より先に試す）' if routing.get('name') == 'default' else ''
+        if routing.get('name') != 'default':
+            why += f"（テンプレート {routing.get('name', '?')}）"
     if skip:
         why += f"（{','.join(sorted(skip))} を外した）"
-    if tpl['applied']:
-        why += f"（テンプレート {tpl['name']} を当てた）"
     reasons.insert(0, f'決定: {tier}。{why}')
     return {'tier': tier, 'route': steps, 'review': review, 'scores': scores, 'reasons': reasons,
             'template': {'name': tpl['name'], 'applied': tpl['applied'], 'note': tpl['note']}}
@@ -186,15 +266,15 @@ def label(step: dict) -> str:
     return f"{step['runner']} {model}" + (f" {step['effort']}" if step['effort'] else '')
 
 
-def run_all(base: Path, today: datetime.date, skip: frozenset, home: Path,
-            now: datetime.datetime) -> None:
-    print('| PBI | 段 | route の先頭 | review | テンプレート | 理由 |')
+def run_all(base: Path, today: datetime.date, skip: frozenset, routing: dict | None = None,
+            home: Path | None = None, now: datetime.datetime | None = None) -> None:
+    print('| PBI | 段 | route の先頭 | review | 優先テンプレート | 理由 |')
     print('|---|---|---|---|---|---|')
     for fp in sorted(base.glob('PBI-*.facts.json')):
         pbi = fp.name.removesuffix('.facts.json')
         brief = base / 'jev' / f'{pbi}.brief.json'
         out = decide(json.load(open(fp, encoding='utf-8')), load_answers(brief if brief.exists() else None),
-                     today, skip=skip, home=home, now=now)
+                     today, skip=skip, routing=routing, home=home, now=now)
         (base / f'{pbi}.route.json').write_text(json.dumps(out, ensure_ascii=False), encoding='utf-8')
         print(f"| {pbi} | {out['tier']} | {label(out['route'][0])} | {out['review']} | {out['template']['note']} | "
               f"{out['reasons'][0].removeprefix('決定: ')} |")
@@ -232,13 +312,14 @@ def main():
         sys.exit(f'--today / --now が不正: {error}')
     home = templates.resolve_home(home_s)
     all_dir = pop_opt(args, '--all')
+    routing, _ = find_routing(pop_opt(args, '--routing'), all_dir)
     if all_dir:
-        run_all(Path(all_dir), today, skip, home, now)
+        run_all(Path(all_dir), today, skip, routing, home, now)
         return
 
     facts = json.load(open(args[0], encoding='utf-8'))
     answers = load_answers(args[1] if len(args) > 1 else None)
-    print(json.dumps(decide(facts, answers, today, forced, skip, home, now), ensure_ascii=False))
+    print(json.dumps(decide(facts, answers, today, forced, skip, routing, home, now), ensure_ascii=False))
 
 
 if __name__ == '__main__':

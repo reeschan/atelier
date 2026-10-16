@@ -164,3 +164,4 @@
 - opencode v2.0.29 で `opencode-go/deepseek-v4.1-flash#max` が通り、存在しない variant は `provider.no-route` (`Variant unavailable`) で拒否されることを、2026-10-16 に確かめた。
 - OpenCode Go で使える DeepSeek 4.1 は Flash だけ (Pro は v4 のみ)。
 - Web ページからはスケジュールタスクを予約できない。前日通知を毎朝のタスクにした理由はこれ。
+- main に先に入った振り分けテンプレート (routing.json、Template Studio。PR #2・#3) との統合 (2026-10-16 にユーザーが決定): 2 層で共存させる。優先順は「適用中の優先テンプレート > 振り分けテンプレート (routing.json) > 組み込みの表」。優先テンプレートの形は routing.json に揃え、手順の `until` (日付) と `$schema_note` を書ける。最後に受ける agent は routing.json のその段のもの。手順書は `appendix/priority-templates.md` に分け、`appendix/templates.md` は Template Studio の手順のまま。用語は CONTEXT.md で「振り分けテンプレート」と「優先テンプレート」に分けた。
