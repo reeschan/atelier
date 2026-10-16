@@ -23,6 +23,14 @@ ALL_TIERS = {'name': 'deepseek-all', 'description': '全段に当てる', 'tiers
 HAIKU_ONLY = {'name': 'light-only', 'description': 'haiku だけ', 'tiers': {'haiku': FLASH}}
 
 
+def empty_home_env(d):
+    """PBI_TEMPLATES_HOME を d の下の空のディレクトリにした環境。--home を渡さない実行が、
+    版配置 (versions/<版>/) でスキルのホームの overrides.json を読まないようにする。"""
+    home = os.path.join(d, 'empty-home')
+    os.makedirs(home, exist_ok=True)
+    return {**os.environ, 'PBI_TEMPLATES_HOME': home}
+
+
 def run(facts, answers=None, *extra):
     with tempfile.TemporaryDirectory() as d:
         fp = os.path.join(d, 'facts.json')
@@ -35,7 +43,7 @@ def run(facts, answers=None, *extra):
                 json.dump({'answers': answers}, f)
             args.append(bp)
         out = subprocess.run(args + list(extra), capture_output=True, text=True, encoding='utf-8',
-                             errors='replace')
+                             errors='replace', env=empty_home_env(d))
         return out.returncode, (json.loads(out.stdout) if out.returncode == 0 else None)
 
 
@@ -143,7 +151,7 @@ class SelectModelTest(unittest.TestCase):
                 with open(os.path.join(d, 'jev', f'{pbi}.brief.json'), 'w', encoding='utf-8') as f:
                     json.dump({'answers': ALL_ZERO}, f)
             out = subprocess.run([sys.executable, SCRIPT, '--all', d, '--today', AFTER],
-                                 capture_output=True, text=True, encoding='utf-8')
+                                 capture_output=True, text=True, encoding='utf-8', env=empty_home_env(d))
             self.assertEqual(out.returncode, 0)
             rows = [line for line in out.stdout.splitlines() if line.startswith('| PBI-')]
             self.assertEqual(len(rows), 2)
