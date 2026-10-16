@@ -1,7 +1,10 @@
 import json
+import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import agent_stats
 
@@ -93,6 +96,42 @@ class SessionTest(unittest.TestCase):
     def test_project_dir_for(self):
         p = agent_stats.project_dir_for("C:/Users/alice/dev/my-app")
         self.assertEqual(p.name, "C--Users-alice-dev-my-app")
+
+
+@unittest.skipUnless(os.name == "nt", "260 文字の上限は Windows だけ")
+class LongPathTest(unittest.TestCase):
+    """フォルダを選ばずに始めたセッションのように、会話記録のパスが 260 文字を超えても統計に入る。"""
+
+    def setUp(self):
+        root = Path(tempfile.mkdtemp()).resolve()
+        self.root = root
+        self.addCleanup(shutil.rmtree, "\\\\?\\" + str(root))
+        self.project = "C--Users-alice-scratch-" + "x" * 200
+        # 作るときだけ \\?\ を直接付ける (テスト対象の long_path を使わない)
+        proj = Path("\\\\?\\" + str(root / self.project))
+        sub = proj / "s1" / "subagents"
+        sub.mkdir(parents=True)
+        write_jsonl(proj / "s1.jsonl", [row("m1", "2026-10-11T00:00:00Z", model="claude-opus-5-5", w1=5000)])
+        write_jsonl(sub / "agent-a1.jsonl", [row("a1", "2026-10-11T00:01:00Z", w5=100)])
+        (sub / "agent-a1.meta.json").write_text(json.dumps({"description": "PBI-7 long path"}), encoding="utf-8")
+        self.meta = root / self.project / "s1" / "subagents" / "agent-a1.meta.json"
+        self.assertGreater(len(str(self.meta)), 260)
+
+    def test_all_includes_long_path_agent(self):
+        with mock.patch.object(agent_stats, "PROJECTS", self.root):
+            paths = agent_stats.pbi_sessions()
+        self.assertEqual(len(paths), 1)
+        s = agent_stats.session_stats(paths[0])
+        self.assertEqual(s["project_dir"], self.project)
+        self.assertEqual(s["by_pbi"]["PBI-007"]["agents"], 1)
+        self.assertEqual(s["totals"]["by_model"]["claude-haiku-5-5"]["cache_write_5m"], 100)
+
+    def test_session_stats_accepts_plain_long_path(self):
+        s = agent_stats.session_stats(self.root / self.project / "s1.jsonl")
+        self.assertEqual(s["by_pbi"]["PBI-007"]["agents"], 1)
+
+    def test_shown_strips_prefix(self):
+        self.assertEqual(agent_stats.shown(agent_stats.long_path(self.meta)), str(self.meta))
 
 
 if __name__ == "__main__":
