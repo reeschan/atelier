@@ -113,6 +113,24 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py --target <target r
 - The server only writes `docs/pbi/routing.json`, and only when the per-run token, the Host header and the template shape all check out.
 - Design notes (Japanese): [docs/template-studio.md](docs/template-studio.md).
 
+## Priority templates
+
+A **priority template** overrides the routing for a while. Template Studio sets the usual routing (`routing.json`); a priority template sits on top of it. Save per-tier routes under a name (the same shape as `routing.json`), turn the template on with a deadline, and until that deadline the overridden tiers take their route from the template instead of the usual one; tiers without an override are unaffected, and the last fallback is still that tier's Claude Code agent from `routing.json`. When the deadline passes, your choice of expiry behaviour decides the rest: with `ask`, the skill asks whether to continue (extend, stop, or make it indefinite); with `drop`, it quietly stops applying the template. The bundled web page (an artifact with its own database) shows the current application, the templates and the history, and starts, extends and stops applications from anywhere, phone included.
+
+Two things a template cannot change:
+
+- `sensitive` PBIs never go to an external runner, whatever the template says.
+- Design reassessment and review duties stay with the decision table.
+
+Templates are personal settings: they live in `templates/` next to the skill, outside version control, together with the synced copy (`overrides.json`) and the web page URL (`web.json`). To try the bundled example, copy it into place:
+
+```sh
+mkdir -p skills/pbi-orchestration-jev/templates
+cp skills/pbi-orchestration-jev/examples/templates/deepseek-all.json skills/pbi-orchestration-jev/templates/
+```
+
+The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `max`. For the file format, the home rules and the full walkthrough, see `skills/pbi-orchestration-jev/appendix/priority-templates.md`.
+
 ## Requirements
 
 | Tool | Required | Used for |
@@ -224,6 +242,10 @@ skills/pbi-orchestration-jev/
 ├── select_model.py             # decision table: tier, route and review depth
 ├── routing.default.json        # default routing template (override with docs/pbi/routing.json)
 ├── studio/                     # build templates in a browser (index.html, serve.py, update_catalog.py, catalog.json)
+├── templates.py                # priority templates: validate, sync from the web page, apply / answer / push writes
+├── web/priority-templates.html # web page (artifact) to view and set priority templates
+├── examples/templates/         # example priority template (copy to templates/)
+├── unchanged.py                # hash snapshot to check files a PBI must not touch
 ├── agent_stats.py              # tokens, cache rebuilds and context size from transcripts
 ├── jev.config.template.json    # template for Jev gates and thresholds
 ├── opencode.config.json        # opencode permissions (no push, no reset, no outside dirs)
@@ -234,6 +256,7 @@ skills/pbi-orchestration-jev/
 │   ├── jev.py / jev.mjs        # Jev client (Python / JS)
 │   └── test_jev.py / jev.test.mjs
 ├── test_select_model.py
+├── test_templates.py / test_prepare.py / test_unchanged.py
 └── test_agent_stats.py
 ```
 

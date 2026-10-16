@@ -111,6 +111,24 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py --target <対象�
 - サーバーが書くのは `docs/pbi/routing.json` だけです。起動ごとの合言葉、Host の確認、形の確認のどれかが合わなければ書きません。
 - 設計の詳細は [docs/template-studio.md](docs/template-studio.md) にあります。
 
+## 優先テンプレート
+
+**優先テンプレート**は、振り分けを期限付きで上書きする仕組みです。いつもの振り分けは Template Studio で決める `routing.json` で、優先テンプレートはその上に重なります。段ごとの route に名前を付けて保存し (形は `routing.json` と同じ)、期限を決めてオンにすると、その間は上書きした段の route がテンプレートのものになります (上書きの無い段はそのまま。最後に受ける Claude Code は `routing.json` のその段のもの)。期限を過ぎたときの扱いは、`ask` なら続けるかを聞き (「延長 / やめる / 期限なし」に答えます)、`drop` なら黙って外れます。同梱の Web ページ (専用のデータベースを持つ Artifact) では、今の適用・テンプレートの一覧・履歴を見られ、適用の開始・延長・停止ができます (スマホからも使えます)。
+
+テンプレートで変えられないことが 2 つあります。
+
+- `sensitive` な PBI は、テンプレートが何を言っても外部の実行先に出ません。
+- 設計判断の見直しとレビューの担当は、決定表のままです。
+
+テンプレートは個人の設定です。`templates/` (スキルの隣、版管理の外) に、写し (`overrides.json`)・Web ページの URL (`web.json`) とともに置き、リポジトリにはコミットしません。同梱の例を試すには、コピーして置きます。
+
+```sh
+mkdir -p skills/pbi-orchestration-jev/templates
+cp skills/pbi-orchestration-jev/examples/templates/deepseek-all.json skills/pbi-orchestration-jev/templates/
+```
+
+この例は全段の route を `opencode-go/deepseek-v4.1-flash` の effort `max` にします。ファイルの形・置き場所の決め方・手順の全部は `skills/pbi-orchestration-jev/appendix/priority-templates.md` にあります。
+
 ## 必要なもの
 
 | もの | 必須 | 用途 |
@@ -222,6 +240,10 @@ skills/pbi-orchestration-jev/
 ├── select_model.py             # 決定表: 段・route・レビューの深さ
 ├── routing.default.json        # 振り分けテンプレートの既定 (docs/pbi/routing.json で差し替え)
 ├── studio/                     # テンプレートを画面で組む (index.html・serve.py・update_catalog.py・catalog.json)
+├── templates.py                # 優先テンプレート: 検査、Web ページからの同期、適用・回答・写しの書き込み
+├── web/priority-templates.html # 優先テンプレートを見て設定する Web ページ (Artifact)
+├── examples/templates/         # 優先テンプレートの例 (templates/ にコピーして使う)
+├── unchanged.py                # PBI が触ってはいけないファイルをハッシュで確かめる
 ├── agent_stats.py              # 会話記録からトークン・キャッシュ・文脈の大きさを集計
 ├── jev.config.template.json    # Jev のゲートとしきい値の雛形
 ├── opencode.config.json        # opencode の権限 (push・reset・リポジトリ外を拒否)
@@ -232,6 +254,7 @@ skills/pbi-orchestration-jev/
 │   ├── jev.py / jev.mjs        # Jev クライアント (Python / JS)
 │   └── test_jev.py / jev.test.mjs
 ├── test_select_model.py
+├── test_templates.py / test_prepare.py / test_unchanged.py
 └── test_agent_stats.py
 ```
 
