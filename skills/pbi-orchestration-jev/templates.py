@@ -35,6 +35,8 @@ TIERS = ('haiku', 'sonnet', 'opus')
 # 形は振り分けテンプレート (routing.json) に揃える。$schema_note と手順の until (日付) も書ける
 TEMPLATE_KEYS = frozenset(('name', 'description', 'tiers', '$schema_note'))
 STEP_KEYS = frozenset(('runner', 'model', 'effort', 'until'))
+# 交互グループ {"rotate": [手順, ...]}。PBI の番号で先頭を回す (select_model.expand_rotate)
+ROTATE_KEY = 'rotate'
 EMPTY_OVERRIDES = {'synced_at': None, 'application': None}
 
 
@@ -94,13 +96,38 @@ def validate(template: dict, filename_stem: str | None = None) -> list[str]:
             problems.append(f'{tier} が空でない配列でない')
             continue
         for i, step in enumerate(steps):
-            problems.extend(step_problems(tier, i, step))
+            if isinstance(step, dict) and ROTATE_KEY in step:
+                problems.extend(rotate_problems(tier, i, step))
+            else:
+                problems.extend(step_problems(tier, i, step))
     return problems
 
 
-def step_problems(tier: str, i: int, step) -> list[str]:
-    """段の手順 1 つの問題の一覧。"""
+def rotate_problems(tier: str, i: int, group: dict) -> list[str]:
+    """交互グループ 1 つの問題の一覧。メンバーは 2 つ以上の通常の手順で、agent と入れ子は不可。"""
     where = f'{tier}[{i}]'
+    problems = []
+    extra = sorted(set(group) - {ROTATE_KEY})
+    if extra:
+        problems.append(f"{where} の余計なキー: {', '.join(extra)}")
+    members = group[ROTATE_KEY]
+    if not isinstance(members, list) or len(members) < 2:
+        return problems + [f'{where} の rotate は手順 2 つ以上の配列にする']
+    for j, member in enumerate(members):
+        at = f'{where}.rotate[{j}]'
+        if isinstance(member, dict) and ROTATE_KEY in member:
+            problems.append(f'{at} は交互グループの入れ子にできない')
+            continue
+        if isinstance(member, dict) and member.get('runner') == 'agent':
+            problems.append(f'{at} に agent は置けない (agent は route の最後に付く)')
+            continue
+        problems.extend(step_problems(tier, i, member, at))
+    return problems
+
+
+def step_problems(tier: str, i: int, step, where: str | None = None) -> list[str]:
+    """段の手順 1 つの問題の一覧。"""
+    where = where or f'{tier}[{i}]'
     if not isinstance(step, dict):
         return [f'{where} がオブジェクトでない']
     problems = []

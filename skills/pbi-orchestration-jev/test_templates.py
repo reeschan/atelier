@@ -116,6 +116,64 @@ class ValidateTest(unittest.TestCase):
         self.assertTrue(templates.validate(template(effort=3), 'deepseek-all'))
 
 
+FREE = {'runner': 'opencode', 'model': 'opencode/deepseek-v4.1-flash-free', 'effort': 'max'}
+GLM = {'runner': 'opencode', 'model': 'opencode/glm-5.3-flash-free', 'effort': 'max'}
+
+
+def rotate_template(*steps):
+    return {'name': 'flash-rotate', 'description': '', 'tiers': {'haiku': list(steps)}}
+
+
+class RotateValidateTest(unittest.TestCase):
+    """交互グループ {"rotate": [手順, ...]} の検査。"""
+
+    def problems(self, *steps):
+        return templates.validate(rotate_template(*steps), 'flash-rotate')
+
+    def test_good_group_is_ok(self):
+        self.assertEqual(self.problems({'rotate': [FREE, GLM]}, {'rotate': [FREE, {**GLM, 'until': '2026-10-23'}]}), [])
+
+    def test_group_with_plain_step_is_ok(self):
+        self.assertEqual(self.problems(FREE, {'rotate': [FREE, GLM]}), [])
+
+    def test_fewer_than_two_members(self):
+        problems = self.problems({'rotate': [FREE]})
+        self.assertTrue(any('2 つ以上' in p for p in problems), problems)
+
+    def test_not_a_list(self):
+        self.assertTrue(self.problems({'rotate': FREE}))
+
+    def test_agent_member_is_rejected(self):
+        problems = self.problems({'rotate': [FREE, {'runner': 'agent', 'model': 'haiku'}]})
+        self.assertTrue(any('agent' in p for p in problems), problems)
+
+    def test_nested_group_is_rejected(self):
+        problems = self.problems({'rotate': [FREE, {'rotate': [FREE, GLM]}]})
+        self.assertTrue(any('入れ子' in p for p in problems), problems)
+
+    def test_bad_member_is_reported_with_its_place(self):
+        problems = self.problems({'rotate': [FREE, {**GLM, 'model': ''}]})
+        self.assertTrue(any('haiku[0].rotate[1]' in p for p in problems), problems)
+
+    def test_extra_key_on_group(self):
+        problems = self.problems({'rotate': [FREE, GLM], 'note': 'x'})
+        self.assertTrue(any('余計なキー' in p for p in problems), problems)
+
+    def test_check_command_reports_ng(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'flash-rotate.json'), rotate_template({'rotate': [FREE]}))
+            out = run('check', '--home', d)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn('ng flash-rotate', out.stdout)
+
+    def test_check_command_reports_ok(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'flash-rotate.json'), rotate_template({'rotate': [FREE, GLM]}))
+            out = run('check', '--home', d)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn('ok flash-rotate', out.stdout)
+
+
 class StateOfTest(unittest.TestCase):
     def test_none(self):
         self.assertEqual(templates.state_of(None, NOW), 'none')
