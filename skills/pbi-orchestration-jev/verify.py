@@ -2,7 +2,8 @@
 
 出力は docs/pbi/verify/<PBI>.<番号>.log に全部書き、設計者の文脈には表だけが入る。
 番号ごとのコマンドと終了コードは docs/pbi/verify/<名前>.json にも書く (record_run.py が読む)。
-差し戻しの検証では --name に報告名 (PBI-003.rework-1) を渡す。
+差し戻しの検証では --name に報告名 (PBI-003.rework-1) を渡す。--only で一部だけ再実行したときは、
+前の <名前>.json の結果に番号ごとに重ねる。
 受け入れ条件の pass / fail の判定は設計者がする (このスクリプトは判定しない)。
 
 使い方 (リポジトリのルートで):
@@ -91,8 +92,17 @@ def main():
         tail = " / ".join(t[:120] for t in tail).replace("|", "\\|") or "(出力なし)"
         print(f"| {n} | {code} | {tail} | {log.as_posix()} |")
         results.append({"n": n, "command": cmd, "code": code, "log": log.as_posix()})
-    (logdir / f"{name}.json").write_text(json.dumps({"name": name, "pbi": args.pbi, "results": results},
-                                                    ensure_ascii=False), encoding="utf-8")
+    # --only で一部だけ再実行したときは、前の結果に番号ごとに重ねる (record_run.py が全体の件数を読むため)
+    out = logdir / f"{name}.json"
+    merged = {}
+    if only and out.is_file():
+        try:
+            merged = {r["n"]: r for r in json.loads(out.read_text(encoding="utf-8")).get("results", [])}
+        except (ValueError, KeyError, TypeError, AttributeError):
+            merged = {}
+    merged.update({r["n"]: r for r in results})
+    out.write_text(json.dumps({"name": name, "pbi": args.pbi, "results": [merged[k] for k in sorted(merged)]},
+                              ensure_ascii=False), encoding="utf-8")
 
 
 if __name__ == "__main__":

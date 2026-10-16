@@ -430,14 +430,18 @@ def main():
         'judged': {'outcome': args.outcome, 'findings': findings},
         'archive': archive_info,
     }
+    # 保全先の runs.jsonl はこの作業キーの行だけにする (前の作業の行を写すと --archive で二重に数える)。
+    # 写すのに失敗したら archive.ok を false にしてから手元に追記するので、失敗が行に残る
+    if archive_info['ok']:
+        mine = [r for r in read_rows(runs) if r.get('work_key') == key] + [row]
+        try:
+            (group / 'runs.jsonl').write_text(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in mine),
+                                              encoding='utf-8')
+        except OSError as error:
+            archive_info.update(ok=False, error=str(error))
     base.mkdir(parents=True, exist_ok=True)
     with open(runs, 'a', encoding='utf-8') as f:
         f.write(json.dumps(row, ensure_ascii=False) + '\n')
-    if archive_info['ok']:
-        try:
-            shutil.copy2(runs, group / 'runs.jsonl')
-        except OSError as error:
-            archive_info.update(ok=False, error=str(error))
     total = got['tokens']['total']
     cost = cost_reported if cost_reported is not None else cost_api
     saved = '保全 ok' if archive_info['ok'] else f"保全に失敗 ({archive_info['error']})。作業は続けてよい"
