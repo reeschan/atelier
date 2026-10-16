@@ -30,6 +30,7 @@
 - **試す順番を画面で決める**: Template Studio で、使うモデルを選ぶと性能・コスパ・バランスの 3 案が出ます。並べ替えて「適用」を押すと、`docs/pbi/routing.json` に書かれます (下の「Template Studio」)。
 - **期限付きで振り分けを上書きする**: 優先テンプレートをオンにすると、期限までのあいだ段ごとの route を差し替えます。期限が来たら続けるかを聞きます。設定は Web ページ (Artifact) からもできます (下の「優先テンプレート」)。
 - **統計を取る**: `agent_stats.py` が、Claude Code の会話記録からモデル別・エージェント別のトークン数、プロンプトキャッシュの作り直しの回数、今の文脈の大きさを集計します。
+- **実行ごとに記録する**: 実行の合否 (合格・差し戻し・昇格・使えず・保留) を決めるたびに、`record_run.py` が `docs/pbi/runs.jsonl` に 1 行を足します。実行先・モデル・effort・トークン・コスト・ステップ数・時間・検証の結果はログから読み、オーケストレーターが渡すのは結果とレビュー指摘の件数だけです。読めない値は null のままにします。その実行の生ログはリポジトリの外の保全先にコピーします。保全先は環境変数 `PBI_RUNS_ARCHIVE` (同期するフォルダを指せば、ほかの場所にも残せます)、無ければ `~/.claude/pbi-runs` です。`model_report.py` はモデル別に集計し (`--archive` でリポジトリをまたいで)、後から人が調整する目安として仮の評価 A〜D を付けます。振り分けは変えません。
 
 ## 流れ
 
@@ -255,6 +256,9 @@ skills/pbi-orchestration-jev/
 ├── examples/templates/         # 優先テンプレートの例 (templates/ にコピーして使う)
 ├── unchanged.py                # PBI が触ってはいけないファイルをハッシュで確かめる
 ├── agent_stats.py              # 会話記録からトークン・キャッシュ・文脈の大きさを集計
+├── record_run.py               # 1 回の実行を runs.jsonl に 1 行で記録し、生ログを保全先にコピー
+├── model_report.py             # runs.jsonl からモデル別の結果・トークン・コスト・仮の評価を集計
+├── prices.json                 # API 換算コスト (cost_api_equiv) の料金表 (請求額ではない)
 ├── jev.config.template.json    # Jev のゲートとしきい値の雛形
 ├── opencode.config.json        # opencode の権限 (push・reset・リポジトリ外を拒否)
 ├── rtk/
@@ -265,6 +269,7 @@ skills/pbi-orchestration-jev/
 │   └── test_jev.py / jev.test.mjs
 ├── test_select_model.py
 ├── test_templates.py / test_prepare.py / test_unchanged.py
+├── test_record_run.py / test_model_report.py
 └── test_agent_stats.py
 ```
 
@@ -279,7 +284,7 @@ python jev/jev.py --request <request.json>                 # リクエストを�
 
 ## 調整
 
-- 決定表としきい値は仮の値です。PBI が 10〜20 件たまったら、モデル別の結果 (一発合格・差し戻し・昇格) を見て、`select_model.py` と `jev.config.json` を見直してください。
+- 決定表としきい値は仮の値です。PBI が 10〜20 件たまったら、モデル別の結果 (`model_report.py --archive` の一発合格・差し戻し・昇格・トークン・コスト) を見て、`select_model.py` と `jev.config.json` を見直してください。
 - 実行先のモデルと effort は、テンプレート `routing.json` で変えられます (形は `routing.default.json`)。対象リポジトリの `docs/pbi/routing.json`、またはスキルのディレクトリの `routing.json` に置くと、`select_model.py` がそちらを使います。無ければ今までの表のままです。
 - テンプレートは画面でも組めます (上の「Template Studio」)。
 - 引き継ぎのしきい値 (250,000 トークン) と、sonnet の段の opencode の結果も同じ時期に見直してください。

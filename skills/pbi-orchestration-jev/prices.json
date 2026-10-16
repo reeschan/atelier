@@ -1,0 +1,10 @@
+{
+  "$note": "API 換算コスト (cost_api_equiv) の料金表。USD / 100 万トークン。サブスクで使った分を API の単価に置き換えた参考値で、実際の請求額ではない。モデル ID は会話記録の model の先頭と照らす (日付などの後ろの文字は無視)。載っていないモデルの換算は null。claude-haiku-5-5 はプロンプトが 100,000 トークンを超えると単価が上がる (input 0.50 / 5m 0.625 / 1h 1 / 読み 0.05 / output 2.50) が、実行単位では判別できないので低い方で換算する。",
+  "checked_at": "2026-10-16",
+  "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+  "models": {
+    "claude-opus-5-5": {"input": 4, "cache_write_5m": 5, "cache_write_1h": 8, "cache_read": 0.20, "output": 20},
+    "claude-sonnet-5-5": {"input": 2, "cache_write_5m": 2.50, "cache_write_1h": 4, "cache_read": 0.10, "output": 10},
+    "claude-haiku-5-5": {"input": 0.10, "cache_write_5m": 0.125, "cache_write_1h": 0.20, "cache_read": 0.01, "output": 0.50}
+  }
+}

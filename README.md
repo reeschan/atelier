@@ -32,6 +32,7 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - **Pick the try order in a browser.** Template Studio turns the models you have into performance, cost and balanced proposals; reorder and press Apply to write `docs/pbi/routing.json` (see Template Studio below).
 - **Override routing for a while.** Turn on a priority template and it replaces per-tier routes until its deadline, then asks whether to continue. You can also set it from a web page (an artifact); see Priority templates below.
 - **Usage stats.** `agent_stats.py` reads Claude Code transcripts and reports tokens per model and per agent, how often the prompt cache had to be rebuilt, and the current context size.
+- **A record per run.** Each time the orchestrator decides a run (pass, rework, promotion, unavailable, on hold), `record_run.py` appends one line to `docs/pbi/runs.jsonl`: runner, model, effort, tokens, cost, steps, time and verification results are read from the logs, and only the outcome and the review finding counts come from the orchestrator. Values it cannot read stay null. It also copies that run's raw logs to an archive outside the repository: `$PBI_RUNS_ARCHIVE` if set (point it at a synced folder to keep logs off the machine), otherwise `~/.claude/pbi-runs`. `model_report.py` sums the runs per model, across repositories with `--archive`, and adds a provisional A–D grade for people to adjust later; it never changes routing.
 
 ## Flow
 
@@ -249,6 +250,9 @@ skills/pbi-orchestration-jev/
 ├── agents/pbi-worker.md        # worker / reviewer sub-agent (copy to ~/.claude/agents)
 ├── prepare.py                  # Jev gate 1 + decision table in one call; prints a table
 ├── verify.py                   # runs a PBI's verification commands; prints exit codes and tails
+├── record_run.py               # one line per run in runs.jsonl, and a copy of its raw logs in the archive
+├── model_report.py             # results, tokens, cost and a provisional grade per model, from runs.jsonl
+├── prices.json                 # API prices for the cost_api_equiv estimate (not what you are billed)
 ├── select_model.py             # decision table: tier, route and review depth
 ├── routing.default.json        # default routing template (override with docs/pbi/routing.json)
 ├── studio/                     # build templates in a browser (index.html, serve.py, update_catalog.py, catalog.json)
@@ -267,6 +271,7 @@ skills/pbi-orchestration-jev/
 │   └── test_jev.py / jev.test.mjs
 ├── test_select_model.py
 ├── test_templates.py / test_prepare.py / test_unchanged.py
+├── test_record_run.py / test_model_report.py
 └── test_agent_stats.py
 ```
 
@@ -281,7 +286,7 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 
 ## Tuning
 
-- The decision table and thresholds are starting points. After 10–20 PBIs, look at the results per model (first-try pass, reworks, promotions) and adjust `select_model.py` and `jev.config.json`.
+- The decision table and thresholds are starting points. After 10–20 PBIs, look at the results per model (`model_report.py --archive`: first-try pass, reworks, promotions, tokens and cost) and adjust `select_model.py` and `jev.config.json`.
 - Runner models and effort levels come from a routing template (`routing.json`, same shape as `routing.default.json`). Put it at `docs/pbi/routing.json` in the target repo, or `routing.json` in the skill directory, and `select_model.py` uses it; without one, the built-in table applies.
 - You can also build the template in a browser (see Template Studio above).
 - Review the hand-off threshold (250,000 tokens) and the opencode results on the sonnet tier at the same time.
