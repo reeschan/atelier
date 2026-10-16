@@ -1,12 +1,15 @@
 """担当を決める。
 
-  python select_model.py <facts.json> [<brief の Jev 応答.json>] [--today YYYY-MM-DD] [--tier haiku|sonnet|opus] [--skip opencode,agy] [--routing <routing.json>] [--home DIR] [--now ISO]
+  python select_model.py <facts.json> [<brief の Jev 応答.json>] [--today YYYY-MM-DD] [--tier haiku|sonnet|opus] [--skip opencode,agy,<model>] [--pbi N] [--routing <routing.json>] [--home DIR] [--now ISO]
   python select_model.py --all docs/pbi [--today ...] [--skip ...] [--routing ...] [--home ...] [--now ...]
 
 facts.json: {"files_changed", "files_new", "files_deleted", "modules", "criteria", "sensitive"}
 Jev 応答: ゲート brief（novelty / coupling / ambiguity）の API 応答。無い・エラーのときは各 score を 1 とする。
 --tier: 決定表を飛ばして段を指定する（9.1 の昇格で route を出し直すとき）。
 --skip: route から外す実行先（このセッションで上限・拒否が出た実行先、昇格で外す opencode）。agent は外せない。
+        runner 名（opencode など）はその runner の手順を全部、モデル ID（/ を含む値。opencode/glm-5.3-flash-free など）は
+        その model の手順だけを外す。
+--pbi: 交互グループを回す数（PBI の番号）。省くと facts のファイル名の PBI-<番号> から取り、取れなければ 0。
 --all: <dir>/PBI-*.facts.json と <dir>/jev/PBI-*.brief.json を全部判定し、<dir>/PBI-*.route.json に書いて、
        標準出力には 1 PBI 1 行の表だけを出す（オーケストレーターの文脈を細く保つため）。
 --routing: 段ごとの route を書いたテンプレート（routing.default.json と同じ形。studio/ の画面で作れる。studio/serve.py なら画面から直接置ける）。
@@ -19,7 +22,9 @@ Jev 応答: ゲート brief（novelty / coupling / ambiguity）の API 応答。
 
 優先テンプレート（期限付きの上書き。appendix/priority-templates.md）は振り分けテンプレート（routing）より先に当たる。
 写し (overrides.json) の適用が active で、優先テンプレートにその段の上書きがあり、sensitive でなければ、
-route を「優先テンプレートの手順（--skip の runner と until を過ぎた手順は外す）＋ routing のその段の agent」に置き換える。
+route を「優先テンプレートの手順（--skip の runner・model と until を過ぎた手順は外す）＋ routing のその段の agent」に置き換える。
+優先テンプレートの手順には交互グループ {"rotate": [手順, ...]} を書ける。PBI の番号 mod メンバー数 番目を先頭にして
+元の並びを回し、残りはその PBI の控えとして後ろに続ける（expand_rotate）。展開してから skip と until で絞る。
 
 route は上から順に試す実行先。runner は opencode（opencode CLI の OpenCode Go）/ codex（Codex CLI）/ agy（Antigravity
 CLI の Claude）/ agent（Claude Code の Agent ツール = Anthropic のサブスク）。
@@ -30,6 +35,7 @@ CLI の Claude）/ agent（Claude Code の Agent ツール = Anthropic のサブ
 """
 import datetime
 import json
+import re
 import sys
 import templates
 from pathlib import Path
@@ -155,6 +161,30 @@ def find_routing(explicit: str | None, all_dir: str | None) -> tuple[dict, str]:
     return default_routing(), ''
 
 
+def skipped(step: dict, skip: frozenset) -> bool:
+    """skip の runner 名か model ID に当たる手順。"""
+    return step['runner'] in skip or step['model'] in skip
+
+
+def pbi_number(name: str) -> int:
+    """PBI-007.facts.json などから 7。取れなければ 0。"""
+    m = re.search(r'PBI-(\d+)', name)
+    return int(m.group(1)) if m else 0
+
+
+def expand_rotate(steps: list, pbi: int) -> list[dict]:
+    """交互グループを、pbi mod メンバー数 番目を先頭にして回した平らな手順の列に展開する。"""
+    out = []
+    for s in steps:
+        if templates.ROTATE_KEY in s:
+            members = s[templates.ROTATE_KEY]
+            k = pbi % len(members)
+            out.extend(members[k:] + members[:k])
+        else:
+            out.append(s)
+    return out
+
+
 def route(tier: str, today: datetime.date, sensitive: bool = False, skip: frozenset = frozenset(),
           routing: dict | None = None) -> list[dict]:
     """sensitive はリポジトリの外のサービスに出さないため、その段の agent だけにする。"""
@@ -163,7 +193,7 @@ def route(tier: str, today: datetime.date, sensitive: bool = False, skip: frozen
         return [strip(steps[-1])]
     out = []
     for s in steps[:-1]:
-        if s['runner'] in skip:
+        if skipped(s, skip):
             continue
         if s.get('until') and today > datetime.date.fromisoformat(s['until']):
             continue
@@ -177,12 +207,12 @@ def strip(step: dict) -> dict:
 
 
 def apply_template(tier: str, sensitive: bool, skip: frozenset, today: datetime.date, routing: dict,
-                   home: Path, now: datetime.datetime) -> dict:
+                   home: Path, now: datetime.datetime, pbi: int = 0) -> dict:
     """写しの適用から route（当てないときは None）と template の欄を組む。
 
     当てる条件は、適用の状態が active・優先テンプレートが読める・その段がある・sensitive でない、の全部。
-    route は優先テンプレートの手順（--skip の runner と until を過ぎた手順は外す）のあとに、
-    routing のその段の agent（最後の手順）を付けたもの。
+    route は優先テンプレートの手順（交互グループは pbi で回して展開し、--skip の runner・model と
+    until を過ぎた手順は外す）のあとに、routing のその段の agent（最後の手順）を付けたもの。
     """
     application = templates.load_overrides(home).get('application')
     if not isinstance(application, dict):
@@ -207,8 +237,8 @@ def apply_template(tier: str, sensitive: bool, skip: frozenset, today: datetime.
     if not tier_steps:
         return {'name': name, 'applied': False, 'note': 'この段の上書きなし', 'route': None}
     fallback = strip(routing['tiers'][tier][-1])
-    steps = [strip(s) for s in tier_steps
-             if s['runner'] not in skip
+    steps = [strip(s) for s in expand_rotate(tier_steps, pbi)
+             if not skipped(s, skip)
              and not (s.get('until') and today > datetime.date.fromisoformat(s['until']))]
     if not steps or steps[-1] != fallback:
         steps = steps + [fallback]
@@ -228,7 +258,7 @@ def load_answers(path) -> dict:
 
 def decide(facts: dict, answers: dict, today: datetime.date, forced: str | None = None,
            skip: frozenset = frozenset(), routing: dict | None = None, home: Path | None = None,
-           now: datetime.datetime | None = None) -> dict:
+           now: datetime.datetime | None = None, pbi: int = 0) -> dict:
     scores, reasons = {}, []
     for k in KEYS:
         scores[k], note = level(answers.get(k))
@@ -242,7 +272,7 @@ def decide(facts: dict, answers: dict, today: datetime.date, forced: str | None 
     if now is None:
         now = datetime.datetime.now().astimezone()
     tpl = apply_template(tier, sensitive, skip, today, routing,
-                         home if home is not None else templates.resolve_home(None), now)
+                         home if home is not None else templates.resolve_home(None), now, pbi)
     steps = tpl['route'] if tpl['applied'] else route(tier, today, sensitive, skip, routing)
     review = 'deep' if sensitive or scores['coupling'] == 2 else 'normal'
     if tpl['applied']:
@@ -274,7 +304,7 @@ def run_all(base: Path, today: datetime.date, skip: frozenset, routing: dict | N
         pbi = fp.name.removesuffix('.facts.json')
         brief = base / 'jev' / f'{pbi}.brief.json'
         out = decide(json.load(open(fp, encoding='utf-8')), load_answers(brief if brief.exists() else None),
-                     today, skip=skip, routing=routing, home=home, now=now)
+                     today, skip=skip, routing=routing, home=home, now=now, pbi=pbi_number(pbi))
         (base / f'{pbi}.route.json').write_text(json.dumps(out, ensure_ascii=False), encoding='utf-8')
         print(f"| {pbi} | {out['tier']} | {label(out['route'][0])} | {out['review']} | {out['template']['note']} | "
               f"{out['reasons'][0].removeprefix('決定: ')} |")
@@ -300,8 +330,11 @@ def main():
         sys.exit(f'--tier は {"/".join(TIERS)} のどれか')
     skip_s = pop_opt(args, '--skip')
     skip = frozenset(s for s in (skip_s or '').split(',') if s)
-    if skip - set(RUNNERS):
-        sys.exit(f'--skip は {"/".join(RUNNERS)} のどれか（カンマ区切り）')
+    if {s for s in skip if '/' not in s} - set(RUNNERS):
+        sys.exit(f'--skip は {"/".join(RUNNERS)} のどれかかモデル ID（/ を含む値）（カンマ区切り）')
+    pbi_s = pop_opt(args, '--pbi')
+    if pbi_s is not None and not pbi_s.isdigit():
+        sys.exit('--pbi は 0 以上の整数')
     try:
         now = templates.parse_time(now_s) if now_s else datetime.datetime.now().astimezone()
         if today_s:
@@ -319,7 +352,8 @@ def main():
 
     facts = json.load(open(args[0], encoding='utf-8'))
     answers = load_answers(args[1] if len(args) > 1 else None)
-    print(json.dumps(decide(facts, answers, today, forced, skip, routing, home, now), ensure_ascii=False))
+    pbi = int(pbi_s) if pbi_s is not None else pbi_number(Path(args[0]).name)
+    print(json.dumps(decide(facts, answers, today, forced, skip, routing, home, now, pbi), ensure_ascii=False))
 
 
 if __name__ == '__main__':

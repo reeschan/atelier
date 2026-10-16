@@ -382,5 +382,128 @@ class PriorityOverRoutingTest(unittest.TestCase):
         self.assertEqual([s['runner'] for s in r['route']], ['opencode', 'agent'])
 
 
+DS_FREE = {'runner': 'opencode', 'model': 'opencode/deepseek-v4.1-flash-free', 'effort': 'max'}
+GLM_FREE = {'runner': 'opencode', 'model': 'opencode/glm-5.3-flash-free', 'effort': 'max'}
+DS_GO = {'runner': 'opencode', 'model': 'opencode-go/deepseek-v4.1-flash', 'effort': 'max'}
+GLM_GO = {'runner': 'opencode', 'model': 'opencode-go/glm-5.3-flash', 'effort': 'max'}
+ROTATE_STEPS = [{'rotate': [DS_FREE, GLM_FREE]}, {'rotate': [DS_GO, GLM_GO]}]
+FLASH_ROTATE = {'name': 'flash-rotate', 'description': '交互', 'tiers': {t: ROTATE_STEPS for t in select_model.TIERS}}
+
+
+class RotateTest(unittest.TestCase):
+    """交互グループは PBI の番号 mod メンバー数 を先頭にして回し、残りは控えとして後ろに並ぶ。"""
+
+    def run_pbi(self, pbi, templates_=None, *extra, facts=SMALL):
+        """facts を <pbi>.facts.json に書いて単体で判定する。pbi が None なら facts.json。"""
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.join(d, 'home')
+            name = next(iter(templates_)) if templates_ else 'flash-rotate'
+            write_home(home, templates_ or {'flash-rotate': FLASH_ROTATE}, application(name))
+            fp = os.path.join(d, f'{pbi}.facts.json' if pbi else 'facts.json')
+            with open(fp, 'w', encoding='utf-8') as f:
+                json.dump(facts, f)
+            bp = os.path.join(d, 'brief.json')
+            with open(bp, 'w', encoding='utf-8') as f:
+                json.dump({'answers': ALL_ZERO}, f)
+            out = subprocess.run([sys.executable, SCRIPT, fp, bp, '--home', home, '--now', NOW, *extra],
+                                 capture_output=True, text=True, encoding='utf-8', errors='replace',
+                                 env=empty_home_env(d))
+            return out.returncode, (json.loads(out.stdout) if out.returncode == 0 else None)
+
+    def models(self, r):
+        return [s['model'] for s in r['route']]
+
+    def test_odd_and_even_pbi_swap_the_head(self):
+        code, odd = self.run_pbi('PBI-007')
+        self.assertEqual(code, 0)
+        self.assertTrue(odd['template']['applied'])
+        self.assertEqual(self.models(odd), [GLM_FREE['model'], DS_FREE['model'], GLM_GO['model'], DS_GO['model'],
+                                            'haiku'])
+        code, even = self.run_pbi('PBI-008')
+        self.assertEqual(code, 0)
+        self.assertEqual(self.models(even), [DS_FREE['model'], GLM_FREE['model'], DS_GO['model'], GLM_GO['model'],
+                                             'haiku'])
+        self.assertEqual(even['route'][0], DS_FREE)
+
+    def test_three_members_rotate_evenly(self):
+        a, b, c = ({'runner': 'opencode', 'model': f'opencode/m{i}', 'effort': None} for i in range(3))
+        three = {'name': 'three', 'description': '', 'tiers': {'haiku': [{'rotate': [a, b, c]}]}}
+        heads = []
+        for n in (3, 4, 5):
+            code, r = self.run_pbi(f'PBI-{n:03d}', {'three': three})
+            self.assertEqual(code, 0)
+            heads.append(r['route'][0]['model'])
+        self.assertEqual(heads, ['opencode/m0', 'opencode/m1', 'opencode/m2'])
+        code, r = self.run_pbi('PBI-004', {'three': three})
+        self.assertEqual(self.models(r), ['opencode/m1', 'opencode/m2', 'opencode/m0', 'haiku'])
+
+    def test_pbi_option_overrides_the_filename(self):
+        code, r = self.run_pbi('PBI-007', None, '--pbi', '8')
+        self.assertEqual(code, 0)
+        self.assertEqual(r['route'][0]['model'], DS_FREE['model'])
+
+    def test_no_number_counts_as_zero(self):
+        code, r = self.run_pbi(None)
+        self.assertEqual(code, 0)
+        self.assertEqual(r['route'][0]['model'], DS_FREE['model'])
+
+    def test_all_matches_single(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.join(d, 'home')
+            write_home(home, {'flash-rotate': FLASH_ROTATE}, application('flash-rotate'))
+            base = os.path.join(d, 'pbi')
+            os.makedirs(base)
+            for n in (1, 2):
+                with open(os.path.join(base, f'PBI-00{n}.facts.json'), 'w', encoding='utf-8') as f:
+                    json.dump(SMALL, f)
+            out = subprocess.run([sys.executable, SCRIPT, '--all', base, '--home', home, '--now', NOW],
+                                 capture_output=True, text=True, encoding='utf-8', errors='replace',
+                                 env=empty_home_env(d))
+            self.assertEqual(out.returncode, 0, out.stderr)
+            routes = {}
+            for n in (1, 2):
+                with open(os.path.join(base, f'PBI-00{n}.route.json'), encoding='utf-8') as f:
+                    routes[n] = json.load(f)['route']
+        self.assertEqual(routes[1][0]['model'], GLM_FREE['model'])
+        self.assertEqual(routes[2][0]['model'], DS_FREE['model'])
+        for n in (1, 2):
+            code, r = self.run_pbi(f'PBI-00{n}')
+            self.assertEqual(code, 0)
+            # --all は Jev の答えが無く段が違いうるので、最後の agent を除いた並びを比べる
+            self.assertEqual(self.models(r)[:-1], [s['model'] for s in routes[n]][:-1])
+
+    def test_skip_a_model_keeps_the_partner_and_paid(self):
+        code, r = self.run_pbi('PBI-008', None, '--skip', DS_FREE['model'])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.models(r), [GLM_FREE['model'], DS_GO['model'], GLM_GO['model'], 'haiku'])
+
+    def test_skip_both_free_models_drops_the_group(self):
+        code, r = self.run_pbi('PBI-007', None, '--skip', f"{DS_FREE['model']},{GLM_FREE['model']}")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.models(r), [GLM_GO['model'], DS_GO['model'], 'haiku'])
+
+    def test_skip_runner_still_drops_every_opencode_step(self):
+        code, r = self.run_pbi('PBI-007', None, '--skip', 'opencode')
+        self.assertEqual(code, 0)
+        self.assertEqual([s['runner'] for s in r['route']], ['agent'])
+
+    def test_unknown_runner_name_is_rejected(self):
+        code, _ = self.run_pbi('PBI-007', None, '--skip', 'nosuch')
+        self.assertNotEqual(code, 0)
+
+    def test_sensitive_is_not_rotated(self):
+        code, r = self.run_pbi('PBI-007', None, facts={**SMALL, 'sensitive': True})
+        self.assertEqual(code, 0)
+        self.assertFalse(r['template']['applied'])
+        self.assertEqual(r['route'], [{'runner': 'agent', 'model': 'sonnet', 'effort': 'high'}])
+
+    def test_member_past_its_until_is_dropped(self):
+        dated = {'name': 'dated', 'description': '', 'tiers': {'haiku': [
+            {'rotate': [{**DS_FREE, 'until': '2026-10-19'}, GLM_FREE]}]}}
+        code, r = self.run_pbi('PBI-008', {'dated': dated})
+        self.assertEqual(code, 0)
+        self.assertEqual(self.models(r), [GLM_FREE['model'], 'haiku'])
+
+
 if __name__ == '__main__':
     unittest.main()
