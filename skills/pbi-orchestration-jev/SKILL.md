@@ -9,7 +9,7 @@ description: 複数ファイルにまたがる実装を、PBI起票・モデル�
 
 | 場面 | 読むもの |
 |---|---|
-| 引数が `resume` / 6.3 で文脈が 150,000 以上 | `appendix/handoff.md` |
+| 引数が `resume`（`resume <リポジトリのパス>` を含む） / 6.3 で文脈が 150,000 以上 | `appendix/handoff.md` |
 | 引数が `templates`（振り分けテンプレートを画面で決める） | `appendix/templates.md` |
 | 作業キーを決める・ref を書く・引き継ぐ・終わる | `appendix/memory.md` |
 | 差し戻す・止まる条件に当たった | `appendix/rework.md` |
@@ -65,7 +65,7 @@ shared-memory（`search`・`get`・`write` を持つ共有メモリの MCP。ツ
 
 - 設計者はメモリを幅広く見て PBI を作る。実装担当は PBI と参照欄の ref だけを見る（`pbi-worker` は memory の `get` だけを持つ）
 - リポジトリの安定した知識は階層化した CLAUDE.md にあるものとして扱う。CLAUDE.md の事実は ref にも補足にも写さない
-- 設計者の search は、CLAUDE.md に無いものを探す補助として `repo:<repo>` と `global` を scope 付きで 1 回ずつまで。scope なしの search はしない
+- 設計者の search は、CLAUDE.md に無いものを探す補助として `repo:<repo>` と `global` を scope 付きで 1 回ずつまで。scope なしの search はしない（例外は `resume` で作業リポジトリが分からないときの tags `handoff` の 1 回だけ。`appendix/handoff.md`）
 - ref は 2 つ以上の PBI・引き継ぎ・レビューの注意で使う事実だけを、作業空間（`project:work.<repo>.<branch>.<work-num>`）に、並列で 1 ターンにまとめて書く。1 つの PBI だけの事実は PBI の補足へ。write の直後に get しない
 - 作業キーの決め方、ref の書式、引き継ぎ、完了時の昇格（最大 3 件）は `appendix/memory.md`
 - shared-memory が無い、または write が禁止されているセッションでは、ref と昇格を飛ばして補足に書き、完了報告の「発見」に書く
