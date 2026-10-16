@@ -128,7 +128,7 @@ mkdir -p skills/pbi-orchestration-jev/templates
 cp skills/pbi-orchestration-jev/examples/templates/deepseek-all.json skills/pbi-orchestration-jev/templates/
 ```
 
-The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `max`. For the file format, the home rules and the full walkthrough, see `skills/pbi-orchestration-jev/appendix/priority-templates.md`.
+The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `max`. A step in a priority template can also be a rotate group, `{"rotate": [step, step, ...]}`: the PBI number picks which member goes first, and the other members follow as that PBI's fallbacks, so PBIs are spread evenly across the members (for example, alternating between two free-tier models before two paid ones). For the file format, the home rules and the full walkthrough, see `skills/pbi-orchestration-jev/appendix/priority-templates.md`.
 
 ## Requirements
 
