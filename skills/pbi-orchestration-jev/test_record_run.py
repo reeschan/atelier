@@ -267,6 +267,29 @@ class RecordRunTest(unittest.TestCase):
         self.assertFalse(row['archive']['ok'])
         self.assertIn('保全', r.stdout)
 
+    def test_failed_copy_of_runs_is_kept_in_the_row(self):
+        self.write_opencode('PBI-007', [])
+        (self.archive / 'myrepo' / 'feature-x__W-002' / 'runs.jsonl').mkdir(parents=True)
+        r = self.record('PBI-007', 1, '使えず')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        self.assertFalse(row['archive']['ok'])
+        self.assertIsNotNone(row['archive']['error'])
+        self.assertIn('保全に失敗', r.stdout)
+
+    def test_archived_runs_has_only_this_work_key(self):
+        self.write_opencode('PBI-007', [])
+        self.assertEqual(self.record('PBI-007', 1, '使えず').returncode, 0)
+        (self.pbi / 'STATUS.md').write_text('作業キー: myrepo:feature/x:W-003\n', encoding='utf-8')
+        self.assertEqual(self.record('PBI-007', 2, '使えず').returncode, 0)
+
+        def archived(group):
+            text = (self.archive / 'myrepo' / group / 'runs.jsonl').read_text(encoding='utf-8')
+            return [(r['work_key'], r['attempt']) for r in map(json.loads, text.splitlines())]
+        self.assertEqual(archived('feature-x__W-002'), [('myrepo:feature/x:W-002', 1)])
+        self.assertEqual(archived('feature-x__W-003'), [('myrepo:feature/x:W-003', 2)])
+        self.assertEqual(len(self.rows()), 2)
+
     def test_runner_override_for_promotion(self):
         self.write_agent('PBI-007.rework-1 昇格', [
             assistant('2026-10-16T10:10:00Z', 'r1', 'claude-sonnet-5-5', 1, 1, 0, 0, 0)])
@@ -295,6 +318,25 @@ class VerifyJsonTest(unittest.TestCase):
         self.assertEqual(data['name'], 'PBI-003.rework-1')
         self.assertEqual([(x['n'], x['command'], x['code']) for x in data['results']],
                          [(1, 'exit 0', 0), (2, 'exit 3', 3)])
+
+    def test_only_rerun_is_merged_by_number(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / 'docs' / 'pbi'
+            base.mkdir(parents=True)
+            pbi = base / 'PBI-003.md'
+
+            def verify(codes, *extra):
+                cmds = ''.join(f'{i}. `exit {c}`\n' for i, c in enumerate(codes, 1))
+                pbi.write_text(f'# PBI-003\n\n## 検証コマンド\n\n{cmds}', encoding='utf-8')
+                r = subprocess.run([sys.executable, VERIFY, 'PBI-003', *extra], cwd=d,
+                                   capture_output=True, text=True, encoding='utf-8')
+                self.assertEqual(r.returncode, 0, r.stderr)
+                return json.loads((base / 'verify' / 'PBI-003.json').read_text(encoding='utf-8'))['results']
+            verify((0, 3, 0))
+            only = verify((0, 0, 0), '--only', '2')
+            full = verify((0, 0))
+        self.assertEqual([(x['n'], x['code']) for x in only], [(1, 0), (2, 0), (3, 0)])
+        self.assertEqual([(x['n'], x['code']) for x in full], [(1, 0), (2, 0)])
 
 
 if __name__ == '__main__':
