@@ -36,7 +36,7 @@ PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<このディレクトリ>/opencode.confi
 - **拒否は成功扱いで返る**: 拒否されても終了コードは 0。`grep -c 'rule which prevents' <報告名>.jsonl` が 1 以上なら拒否がある（`"tool"` イベントの `"status":"error"`）。検証コマンドだけの拒否なら 8 章で自分で実行すれば足りる。作業が進んでいなければ `route` の次へ進む
 - **使えないとき**（終了コードが 0 以外、`grep -m 3 '"type":"error"'` に当たる（利用上限・認証・リージョン・接続のエラー）、または `.last.md` が無いか空）: 1 回だけ再実行し、だめなら `route` の次へ進む。利用上限で落ちたときは STATUS.md の上に「opencode <model>: 上限到達（日時）」と書き、このセッションの残りの PBI では `--skip <model>`（例 `--skip opencode/deepseek-v4.1-flash-free`）を付けて route を出し直す。外れるのはそのモデルの手順だけで、同じ opencode の別のモデル（交互グループの相方や有料のモデル）は使い続ける。複数のモデルが上限なら、カンマでつなぐ。opencode そのものが動かない（認証・接続のエラー）ときは `--skip opencode` で opencode の手順を全部外す
 - opencode は AGENTS.md を読むが CLAUDE.md は読まない。PBI に要る規約は PBI 本文に書く
-- トークン数は 12 章の統計に入らない。`.jsonl` の `step_finish` の `tokens` と `cost` を小さなスクリプトで足し、合計の 1 行だけを出して、jev-log の完了時の行に「opencode / モデル名 / tokens / cost」と書く
+- トークン数・cost・ステップ数・時間は、合否を決めたときの `record_run.py`（SKILL.md 8 章）が `.jsonl` の `step_finish` から読んで runs.jsonl に書く。手で足さない。無料枠（`opencode/…-free`）の cost は 0 で出る
 
 ## Codex（`select_model.py` の `CODEX_UNTIL` まで。haiku・sonnet の段）
 
@@ -45,7 +45,7 @@ mkdir -p docs/pbi/codex
 codex exec -m gpt-6-astra -c model_reasoning_effort='"<route の effort>"' -s workspace-write   -o docs/pbi/codex/<報告名>.last.md - < docs/pbi/codex/<報告名>.prompt.md   > docs/pbi/codex/<報告名>.log 2>&1
 ```
 
-- `-o` の `.last.md` には最後のメッセージ（worker.md の 4 行）が入る。トークン数は `grep -A1 'tokens used' <報告名>.log | tail -n 1` の 1 行だけを取り、jev-log の完了時の行に書く（12 章の統計は Codex を数えない）
+- `-o` の `.last.md` には最後のメッセージ（worker.md の 4 行）が入る。トークン数は `record_run.py` が `<報告名>.log` の `tokens used` の合計から読む（内訳は取れないので null になる。12 章の統計は Codex を数えない）
 - effort は route の値（haiku 相当 `medium`、sonnet 相当 `high`）。high より上（xhigh / max）は使わない
 - **使えないとき**（終了コードが 0 以外で、利用上限・認証・接続のエラー、または `.last.md` が空）: 1 回だけ再実行し、だめなら `route` の次へ進む
 - Codex は CLAUDE.md を読まず、リポジトリの AGENTS.md を読む。PBI に要る規約は PBI 本文に書く
