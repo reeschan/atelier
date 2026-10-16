@@ -1,16 +1,19 @@
 """起票した PBI に Jev のゲート (brief・pbi_quality) をかけ、select_model.py で担当を決め、表だけを出す。
 
 設計者 (オーケストレーター) が Jev の呼び出し・応答の読み取り・jev-log の記録・決定表の判定を 1 回のコマンドで済ませ、
-文脈には最後の表だけが入るようにする (SKILL.md 3〜4 章)。
+文脈にはテンプレートの 1 行と最後の表だけが入るようにする (SKILL.md 3〜4 章)。
 
 使い方 (リポジトリのルートで):
-  python <このディレクトリ>/prepare.py [docs/pbi] [--skip opencode,codex,agy] [--today YYYY-MM-DD] [--only PBI-003,PBI-004]
+  python <このディレクトリ>/prepare.py [docs/pbi] [--skip opencode,codex,agy] [--today YYYY-MM-DD] [--only PBI-003,PBI-004] [--home DIR] [--now ISO]
 
 前提: docs/pbi/PBI-<連番>.md・.facts.json・.brief.md が揃っている。
 - jev.config.json が無ければ、このディレクトリの jev.config.template.json をコピーする
 - 応答 (docs/pbi/jev/<PBI>.brief.json・.pbi_quality.json) が既にあれば呼び直さない (--only で指定した PBI は呼び直す)
 - Jev の呼び出しは並列 (同時 4 件)。失敗したゲートは飛ばし、表の「メモ」に出す (select_model.py は score を 1 として扱う)
-- 判定ごとに docs/pbi/jev-log.jsonl に 1 行ずつ追記する
+- 判定ごとに docs/pbi/jev-log.jsonl に 1 行ずつ追記する (brief の行に route.json の template を足す)
+- 表の前に 1 行「テンプレート: …」を出し (写しと適用の状態。templates.load_overrides・state_of)、
+  表の列「テンプレート」に route.json の template.note を出す (無ければ —)
+- --home・--now はテンプレートの home (templates.resolve_home) と今の時刻 (templates.parse_time)。select_model.py にもそのまま渡す
 """
 
 import argparse
@@ -18,6 +21,7 @@ import json
 import shutil
 import subprocess
 import sys
+import templates
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -67,15 +71,54 @@ def quality_warnings(data):
     return warns
 
 
+def template_line(home, now):
+    """表の前に出す 1 行。写し (overrides.json) と適用の状態から決める。"""
+    overrides = templates.load_overrides(home)
+    application = overrides.get("application")
+    if not isinstance(application, dict):
+        text = "テンプレート: 適用なし"
+    else:
+        name = application.get("template")
+        name = name if isinstance(name, str) else "（名前なし）"
+        try:
+            state = templates.state_of(application, now)
+        except ValueError:
+            text = f"テンプレート: {name} の適用の時刻が不正"
+        else:
+            until = application.get("until")
+            if state == "active":
+                when = "期限なし" if until is None else f"{until} まで、期限切れは {application.get('on_expire')}"
+                text = f"テンプレート: {name} を適用中 ({when})"
+            elif state == "expired_ask":
+                text = f"テンプレート: {name} は期限切れ。承認で「延長 / やめる / 期限なし」を確認する"
+            else:
+                text = f"テンプレート: {name} は期限切れ (drop)。当てない"
+    synced = overrides.get("synced_at")
+    return text + " / " + (f"写し: {synced} 時点" if synced else "写し: なし")
+
+
+def template_note(route):
+    """route.json の template.note。template が無ければ —。"""
+    tpl = route.get("template")
+    return tpl.get("note") if isinstance(tpl, dict) else "—"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("dir", nargs="?", default="docs/pbi")
     ap.add_argument("--skip", default="")
     ap.add_argument("--today")
     ap.add_argument("--only", default="")
+    ap.add_argument("--home", help="テンプレートの home (省略時は templates.resolve_home の解決順)")
+    ap.add_argument("--now", help="今の時刻 (タイムゾーン付き ISO 8601。省略時は現在時刻)")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    try:
+        now = templates.parse_time(args.now) if args.now else datetime.now().astimezone()
+    except ValueError as error:
+        sys.exit(f"--now が不正: {error}")
+    home = templates.resolve_home(args.home)
 
     base = Path(args.dir)
     (base / "jev").mkdir(parents=True, exist_ok=True)
@@ -102,14 +145,19 @@ def main():
         cmd += ["--skip", args.skip]
     if args.today:
         cmd += ["--today", args.today]
+    if args.home:
+        cmd += ["--home", args.home]
+    if args.now:
+        cmd += ["--now", args.now]
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit(f"select_model.py が失敗した: {r.stderr[-500:]}")
 
-    now = datetime.now().isoformat(timespec="seconds")
+    ts = datetime.now().isoformat(timespec="seconds")
     lines = []
-    print("| PBI | 段 | route の先頭 | review | 新規性/結合度/あいまいさ (確信度) | 品質の警告 | メモ |")
-    print("|---|---|---|---|---|---|---|")
+    print(template_line(home, now))
+    print("| PBI | 段 | route の先頭 | review | テンプレート | 新規性/結合度/あいまいさ (確信度) | 品質の警告 | メモ |")
+    print("|---|---|---|---|---|---|---|---|")
     for p in pbis:
         brief, quality = load(base / "jev" / f"{p}.brief.json"), load(base / "jev" / f"{p}.pbi_quality.json")
         route = json.loads((base / f"{p}.route.json").read_text(encoding="utf-8"))
@@ -125,12 +173,12 @@ def main():
             memo.append("pbi_quality の Jev 失敗")
         head = route["route"][0]
         head_label = f"{head['runner']} {head['model']}" + (f" {head['effort']}" if head.get("effort") else "")
-        print(f"| {p} | {route['tier']} | {head_label} | {route['review']} | {sc} ({conf:.2f}) | "
+        print(f"| {p} | {route['tier']} | {head_label} | {route['review']} | {template_note(route)} | {sc} ({conf:.2f}) | "
               f"{', '.join(warns) or 'なし'} | {'; '.join(memo) or '—'} |")
-        lines.append({"ts": now, "pbi": p, "gate": "brief", "scores": {k: (a.get(k) or {}).get("score") for k in a},
+        lines.append({"ts": ts, "pbi": p, "gate": "brief", "scores": {k: (a.get(k) or {}).get("score") for k in a},
                       "confidence": {k: (a.get(k) or {}).get("confidence") for k in a}, "facts": facts,
-                      "route": route, "action": "担当を決定 (prepare.py)"})
-        lines.append({"ts": now, "pbi": p, "gate": "pbi_quality", "warnings": warns,
+                      "route": route, "template": route.get("template"), "action": "担当を決定 (prepare.py)"})
+        lines.append({"ts": ts, "pbi": p, "gate": "pbi_quality", "warnings": warns,
                       "action": "承認一覧に警告として出す" if warns else "警告なし"})
     with open(base / "jev-log.jsonl", "a", encoding="utf-8") as f:
         for ln in lines:

@@ -76,6 +76,24 @@ flowchart TD
 - `--skip opencode,agy` drops runners that hit a quota or got denied in this session. `--all docs/pbi` routes every PBI at once and prints one line per PBI.
 - "deep" review means the Opus orchestrator reads the whole diff itself. A normal review over 300 lines is delegated to an Opus reviewer agent.
 
+## Priority templates
+
+A **priority template** overrides the routing for a while. Save per-tier routes under a name, turn the template on with a deadline, and until that deadline the overridden tiers take their route from the template instead of the usual one; tiers without an override are unaffected. When the deadline passes, your choice of expiry behaviour decides the rest: with `ask`, the skill asks whether to continue (extend, stop, or make it indefinite); with `drop`, it quietly stops applying the template. The bundled web page (an artifact with its own database) shows the current application, the templates and the history, and starts, extends and stops applications from anywhere, phone included.
+
+Two things a template cannot change:
+
+- `sensitive` PBIs never go to an external runner, whatever the template says.
+- Design reassessment and review duties stay with the decision table.
+
+Templates are personal settings: they live in `templates/` next to the skill, outside version control, together with the synced copy (`overrides.json`) and the web page URL (`web.json`). To try the bundled example, copy it into place:
+
+```sh
+mkdir -p skills/pbi-orchestration-jev/templates
+cp skills/pbi-orchestration-jev/examples/templates/deepseek-all.json skills/pbi-orchestration-jev/templates/
+```
+
+The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `max`. For the file format, the home rules and the full walkthrough, see `skills/pbi-orchestration-jev/appendix/templates.md`.
+
 ## Requirements
 
 | Tool | Required | Used for |

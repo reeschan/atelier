@@ -74,6 +74,24 @@ flowchart TD
 - `--skip opencode,agy` で、このセッションで上限や拒否が出た実行先を外せます。`--all docs/pbi` は全 PBI を 1 回で判定し、1 PBI 1 行の表だけを出します。
 - レビューが deep の PBI は、Opus のオーケストレーターが diff を全部自分で読みます。normal で 300 行を超える diff は、Opus のレビュー担当のエージェントに読ませます。
 
+## 優先テンプレート
+
+**優先テンプレート**は、振り分けを期限付きで上書きする仕組みです。段ごとの route に名前を付けて保存し、期限を決めてオンにすると、その間は上書きした段の route がテンプレートのものになります (上書きの無い段はそのまま)。期限を過ぎたときの扱いは、`ask` なら続けるかを聞き (「延長 / やめる / 期限なし」に答えます)、`drop` なら黙って外れます。同梱の Web ページ (専用のデータベースを持つ Artifact) では、今の適用・テンプレートの一覧・履歴を見られ、適用の開始・延長・停止ができます (スマホからも使えます)。
+
+テンプレートで変えられないことが 2 つあります。
+
+- `sensitive` な PBI は、テンプレートが何を言っても外部の実行先に出ません。
+- 設計判断の見直しとレビューの担当は、決定表のままです。
+
+テンプレートは個人の設定です。`templates/` (スキルの隣、版管理の外) に、写し (`overrides.json`)・Web ページの URL (`web.json`) とともに置き、リポジトリにはコミットしません。同梱の例を試すには、コピーして置きます。
+
+```sh
+mkdir -p skills/pbi-orchestration-jev/templates
+cp skills/pbi-orchestration-jev/examples/templates/deepseek-all.json skills/pbi-orchestration-jev/templates/
+```
+
+この例は全段の route を `opencode-go/deepseek-v4.1-flash` の effort `max` にします。ファイルの形・置き場所の決め方・手順の全部は `skills/pbi-orchestration-jev/appendix/templates.md` にあります。
+
 ## 必要なもの
 
 | もの | 必須 | 用途 |

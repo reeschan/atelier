@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>優先テンプレート</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f3f4f6;
+  --bg-soft: #eef0f3;
+  --card: #ffffff;
+  --fg: #1b1f24;
+  --muted: #5f6b76;
+  --border: #d8dde3;
+  --chip: #e9ecf0;
+  --accent: #2f6feb;
+  --accent-fg: #ffffff;
+  --ok-bg: #e6f4ea;
+  --ok-fg: #206b3a;
+  --warn-bg: #fff5e6;
+  --warn-border: #ecc48d;
+  --warn-fg: #7a4d00;
+  --danger: #b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121518;
+    --bg-soft: #191d22;
+    --card: #1c2127;
+    --fg: #e7eaee;
+    --muted: #98a2ad;
+    --border: #343b43;
+    --chip: #262c33;
+    --accent: #6b9bff;
+    --accent-fg: #0c1016;
+    --ok-bg: #12291b;
+    --ok-fg: #86d9a0;
+    --warn-bg: #33280f;
+    --warn-border: #6b5426;
+    --warn-fg: #f2c98a;
+    --danger: #f2938c;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121518;
+  --bg-soft: #191d22;
+  --card: #1c2127;
+  --fg: #e7eaee;
+  --muted: #98a2ad;
+  --border: #343b43;
+  --chip: #262c33;
+  --accent: #6b9bff;
+  --accent-fg: #0c1016;
+  --ok-bg: #12291b;
+  --ok-fg: #86d9a0;
+  --warn-bg: #33280f;
+  --warn-border: #6b5426;
+  --warn-fg: #f2c98a;
+  --danger: #f2938c;
+}
+* {
+  box-sizing: border-box;
+}
+html {
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  margin: 0;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", Meiryo, sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+  overflow-wrap: break-word;
+}
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+}
+h1 {
+  font-size: 20px;
+  margin: 0;
+}
+.sub {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 2px 0 18px;
+}
+section {
+  margin-bottom: 22px;
+}
+h2 {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+.card + .card {
+  margin-top: 10px;
+}
+.card.state-active {
+  border-left: 4px solid var(--accent);
+}
+.card.state-expired_ask {
+  border-left: 4px solid var(--warn-border);
+}
+.card.state-expired_drop {
+  border-left: 4px solid var(--muted);
+}
+.head-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 6px;
+}
+.head-line .name {
+  font-size: 16px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.badge {
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 1px 9px;
+  background: var(--chip);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.badge.ok {
+  background: var(--ok-bg);
+  color: var(--ok-fg);
+}
+.badge.warn {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 12px;
+  padding: 5px 0;
+  border-top: 1px solid var(--border);
+}
+.row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.row:last-child {
+  padding-bottom: 0;
+}
+.k {
+  flex: 0 0 7.5em;
+  color: var(--muted);
+  font-size: 13px;
+}
+.v {
+  flex: 1 1 10em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.alert {
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+.alert.plain {
+  border-color: var(--border);
+  background: var(--chip);
+  color: var(--muted);
+}
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  margin-top: 10px;
+}
+.controls .input-wrap {
+  flex: 1 1 190px;
+  min-width: 0;
+}
+.controls label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+button.ghost-danger {
+  color: var(--danger);
+}
+button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+input[type="text"],
+input[type="datetime-local"],
+select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.field {
+  margin-bottom: 12px;
+}
+.field > label,
+.field-label {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+.checkline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.checkline input {
+  width: auto;
+  flex: 0 0 auto;
+}
+.checkline label {
+  font-size: 14px;
+  color: var(--fg);
+}
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--fg);
+}
+.opt input {
+  width: auto;
+  flex: 0 0 auto;
+  margin-top: 4px;
+}
+.opt span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.note {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 8px 0 0;
+}
+.error {
+  font-size: 13px;
+  color: var(--danger);
+  margin: 8px 0 0;
+}
+.status {
+  font-size: 13px;
+  color: var(--ok-fg);
+  margin: 8px 0 0;
+}
+.tpl-desc {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+.tier {
+  margin-top: 10px;
+}
+.tier-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.tier-note {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+.steps {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.steps li {
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  border-radius: 8px;
+  padding: 6px 9px;
+  margin-top: 5px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.chip {
+  display: inline-block;
+  font-size: 12px;
+  background: var(--chip);
+  border-radius: 6px;
+  padding: 0 6px;
+  margin-right: 6px;
+}
+.step-effort {
+  color: var(--muted);
+}
+.empty {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0;
+}
+#notice {
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 18px;
+}
+#notice[hidden] {
+  display: none;
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>優先テンプレート</h1>
+    <p class="sub">今の適用・テンプレート・履歴の確認と、適用の操作</p>
+  </header>
+
+  <div id="notice" hidden role="alert"></div>
+
+  <section>
+    <h2>今の適用</h2>
+    <div id="current"></div>
+  </section>
+
+  <section>
+    <h2>適用を始める</h2>
+    <form id="start-form" novalidate>
+      <div class="field">
+        <label for="start-template">テンプレート</label>
+        <select id="start-template"></select>
+      </div>
+      <div class="field">
+        <label for="start-until">期限</label>
+        <input type="datetime-local" id="start-until">
+        <div class="checkline">
+          <input type="checkbox" id="start-no-until">
+          <label for="start-no-until">期限なし</label>
+        </div>
+      </div>
+      <div class="field">
+        <span class="field-label">期限切れの扱い</span>
+        <div class="radio-group">
+          <label class="opt">
+            <input type="radio" name="start-on-expire" id="start-ask" value="ask" checked>
+            <span>確認する (ask): 期限後は自動で当てず、延長 / やめる / 期限なし を聞く</span>
+          </label>
+          <label class="opt">
+            <input type="radio" name="start-on-expire" id="start-drop" value="drop">
+            <span>自動で外す (drop): 期限後は自動で当てない</span>
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <label for="start-reason">理由</label>
+        <input type="text" id="start-reason" placeholder="例: 見直しの間だけ (任意)">
+      </div>
+      <p id="start-note" class="note" hidden></p>
+      <p id="start-error" class="error" hidden role="alert"></p>
+      <p id="start-status" class="status" hidden></p>
+      <div class="controls">
+        <button type="submit" id="start-submit" class="primary">適用を始める</button>
+      </div>
+    </form>
+  </section>
+
+  <section>
+    <h2>テンプレートの一覧</h2>
+    <div id="templates"></div>
+  </section>
+
+  <section>
+    <h2>適用の履歴</h2>
+    <div id="history"></div>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var TIERS = ["haiku", "sonnet", "opus"];
+  var END_LABELS = {
+    expired: "期限切れで終了",
+    stopped: "手動で停止",
+    declined: "期限切れの確認でやめる",
+    replaced: "新しい適用に置き換え"
+  };
+
+  var store = {
+    db: null,
+    phase: "loading",
+    canWrite: null,
+    writeBlocked: false,
+    subError: "",
+    lastError: "",
+    currentLoaded: false,
+    current: null,
+    templates: [],
+    templatesLoaded: false,
+    history: [],
+    historyLoaded: false
+  };
+
+  var currentKind = "loading";
+  var remainingNode = null;
+  var opBusy = false;
+  var el = {};
+
+  function byId(id) {
+    return document.getElementById(id);
+  }
+
+  function h(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+  }
+
+  function clear(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  function pad2(n) {
+    return (n < 10 ? "0" : "") + n;
+  }
+
+  function sleep(ms) {
+    return new Promise(function (resolve) { window.setTimeout(resolve, ms); });
+  }
+
+  // ---- 時刻 ----
+
+  function toLocalIso(d) {
+    var off = -d.getTimezoneOffset();
+    var sign = off >= 0 ? "+" : "-";
+    var oh = Math.floor(Math.abs(off) / 60);
+    var om = Math.abs(off) % 60;
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) +
+      "T" + pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds()) +
+      sign + pad2(oh) + ":" + pad2(om);
+  }
+
+  function hasTimeZone(s) {
+    return typeof s === "string" && /(?:Z|[+-]\d{2}:?\d{2})$/.test(s);
+  }
+
+  function parseIso(s) {
+    if (!hasTimeZone(s)) return null;
+    var d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function formatDateTime(iso) {
+    var d = parseIso(iso);
+    if (!d) return iso ? String(iso) : "—";
+    return d.getFullYear() + "/" + pad2(d.getMonth() + 1) + "/" + pad2(d.getDate()) +
+      " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+  }
+
+  function formatRemaining(ms) {
+    if (ms <= 0) return "0分";
+    var total = Math.floor(ms / 1000);
+    var d = Math.floor(total / 86400);
+    var hh = Math.floor((total % 86400) / 3600);
+    var mm = Math.floor((total % 3600) / 60);
+    var ss = total % 60;
+    if (d > 0) return d + "日" + hh + "時間";
+    if (hh > 0) return hh + "時間" + mm + "分";
+    if (mm > 0) return mm + "分";
+    return ss + "秒";
+  }
+
+  function appId(d) {
+    return "a-" + d.getUTCFullYear() + pad2(d.getUTCMonth() + 1) + pad2(d.getUTCDate()) +
+      "T" + pad2(d.getUTCHours()) + pad2(d.getUTCMinutes()) + pad2(d.getUTCSeconds());
+  }
+
+  // ---- データの正規化 ----
+
+  function normalizeApp(a) {
+    if (!a || typeof a !== "object") return null;
+    if (typeof a.id !== "string" || !a.id) return null;
+    if (typeof a.template !== "string" || !a.template) return null;
+    var until = null;
+    if (a.until !== null && a.until !== undefined) {
+      if (!parseIso(a.until)) return null;
+      until = a.until;
+    }
+    if (a.on_expire !== "ask" && a.on_expire !== "drop") return null;
+    return {
+      id: a.id,
+      template: a.template,
+      until: until,
+      on_expire: a.on_expire,
+      reason: typeof a.reason === "string" ? a.reason : "",
+      started_at: typeof a.started_at === "string" ? a.started_at : "",
+      started_via: a.started_via === "chat" ? "chat" : (a.started_via === "web" ? "web" : "")
+    };
+  }
+
+  function copyApp(a) {
+    return {
+      id: a.id,
+      template: a.template,
+      until: a.until,
+      on_expire: a.on_expire,
+      reason: a.reason,
+      started_at: a.started_at,
+      started_via: a.started_via
+    };
+  }
+
+  function endedApp(a, endedAt, endedHow) {
+    var out = copyApp(a);
+    out.ended_at = endedAt;
+    out.ended_how = endedHow;
+    return out;
+  }
+
+  function appState(app, nowMs) {
+    if (!app) return "none";
+    if (app.until === null) return "active";
+    var untilMs = new Date(app.until).getTime();
+    if (nowMs < untilMs) return "active";
+    return app.on_expire === "drop" ? "expired_drop" : "expired_ask";
+  }
+
+  function normalizeTemplate(t) {
+    if (!t || typeof t !== "object") return null;
+    if (typeof t.name !== "string" || !t.name) return null;
+    var tiers = (t.tiers && typeof t.tiers === "object" && !Array.isArray(t.tiers)) ? t.tiers : null;
+    return {
+      name: t.name,
+      description: typeof t.description === "string" ? t.description : "",
+      tiers: tiers
+    };
+  }
+
+  function normalizeStep(s) {
+    if (!s || typeof s !== "object") return null;
+    if (typeof s.runner !== "string" || !s.runner) return null;
+    if (typeof s.model !== "string" || !s.model) return null;
+    var effort = (typeof s.effort === "string" && s.effort) ? s.effort : null;
+    return { runner: s.runner, model: s.model, effort: effort };
+  }
+
+  function makeApplication(name, untilIso, onExpire, reason) {
+    var now = new Date();
+    return {
+      id: appId(now),
+      template: name,
+      until: untilIso,
+      on_expire: onExpire,
+      reason: reason,
+      started_at: toLocalIso(now),
+      started_via: "web"
+    };
+  }
+
+  // ---- 表示 ----
+
+  function canWriteNow() {
+    return store.phase === "ready" && store.canWrite !== false && !store.writeBlocked;
+  }
+
+  function readOnlyNote() {
+    if (store.writeBlocked) return "書き込みが拒否されたため、この画面は閲覧のみです。";
+    if (store.canWrite === false) return "この表示では変更できません (閲覧のみ)。";
+    return "データベースに接続できないため変更できません。";
+  }
+
+  function infoRow(k, v) {
+    var row = h("div", "row");
+    row.appendChild(h("span", "k", k));
+    row.appendChild(h("span", "v", v));
+    return row;
+  }
+
+  function renderNotice() {
+    var msg = "";
+    if (store.phase === "unavailable") {
+      msg = "データベースに接続できないため、読み取り専用の表示です。claude.ai の Artifact として開いてください。";
+    } else if (store.subError) {
+      msg = store.subError;
+    } else if (store.writeBlocked) {
+      msg = "書き込みが拒否されたため、この画面は以後、閲覧のみです。";
+    } else if (store.canWrite === false) {
+      msg = "この表示では変更できません (閲覧のみ)。";
+    } else if (store.lastError) {
+      msg = store.lastError;
+    }
+    if (!msg) {
+      el.notice.hidden = true;
+      el.notice.textContent = "";
+      return;
+    }
+    el.notice.hidden = false;
+    el.notice.textContent = msg;
+  }
+
+  function renderCurrent() {
+    var box = el.current;
+    clear(box);
+    remainingNode = null;
+
+    if (store.phase === "unavailable") {
+      currentKind = "unavailable";
+      box.appendChild(h("p", "empty", "データベースに接続できないため表示できません。"));
+      return;
+    }
+    if (store.phase !== "ready" || !store.currentLoaded) {
+      currentKind = "loading";
+      box.appendChild(h("p", "empty", "読み込み中…"));
+      return;
+    }
+
+    var app = store.current;
+    var kind = appState(app, Date.now());
+    currentKind = kind;
+
+    if (kind === "none") {
+      box.appendChild(h("p", "empty", "適用なし (通常の振り分け)"));
+      return;
+    }
+
+    var card = h("div", "card state-" + kind);
+    var head = h("div", "head-line");
+    head.appendChild(h("span", "name", app.template));
+    if (kind === "active") {
+      head.appendChild(h("span", "badge ok", "有効"));
+    } else if (kind === "expired_ask") {
+      head.appendChild(h("span", "badge warn", "期限切れ (確認待ち)"));
+    } else {
+      head.appendChild(h("span", "badge", "期限切れ (自動で終了)"));
+    }
+    card.appendChild(head);
+
+    var untilDate = app.until ? parseIso(app.until) : null;
+    if (untilDate) {
+      card.appendChild(infoRow("期限", formatDateTime(app.until) + (kind === "active" ? "" : " (過ぎています)")));
+    } else {
+      card.appendChild(infoRow("期限", "期限なし"));
+    }
+    if (kind === "active" && untilDate) {
+      var row = infoRow("残り", "残り " + formatRemaining(untilDate.getTime() - Date.now()));
+      remainingNode = row.lastChild;
+      card.appendChild(row);
+    }
+    card.appendChild(infoRow("期限切れの扱い", app.on_expire === "drop" ? "自動で外す (drop)" : "確認する (ask)"));
+    card.appendChild(infoRow("理由", app.reason ? app.reason : "(なし)"));
+
+    if (kind === "expired_ask") {
+      card.appendChild(h("p", "alert", "期限を過ぎています。延長 / やめる / 期限なし のどれかを選んでください。"));
+    } else if (kind === "expired_drop") {
+      card.appendChild(h("p", "alert plain", "期限切れ (自動で終了)。新しく始めると、この適用は履歴に移ります。"));
+    }
+
+    if (canWriteNow()) {
+      var err = h("p", "error", "");
+      err.hidden = true;
+      card.appendChild(buildExtendControls(err));
+
+      if (kind === "expired_ask") {
+        var ansRow = h("div", "controls");
+        var foreverBtn = h("button", null, "期限なしにする");
+        foreverBtn.type = "button";
+        foreverBtn.addEventListener("click", function () {
+          withBusy(foreverBtn, err, function () { return updateUntil(null); });
+        });
+        var declineBtn = h("button", "ghost-danger", "やめる");
+        declineBtn.type = "button";
+        declineBtn.addEventListener("click", function () {
+          if (!window.confirm("この適用をやめますか? (" + app.template + ")")) return;
+          withBusy(declineBtn, err, function () { return stopApplication(app, kind); });
+        });
+        ansRow.appendChild(foreverBtn);
+        ansRow.appendChild(declineBtn);
+        card.appendChild(ansRow);
+      } else if (kind === "active") {
+        var stopRow = h("div", "controls");
+        var stopBtn = h("button", "ghost-danger", "止める");
+        stopBtn.type = "button";
+        stopBtn.addEventListener("click", function () {
+          if (!window.confirm("今の適用を止めますか? (" + app.template + ")")) return;
+          withBusy(stopBtn, err, function () { return stopApplication(app, kind); });
+        });
+        stopRow.appendChild(stopBtn);
+        card.appendChild(stopRow);
+      }
+      card.appendChild(err);
+    } else {
+      card.appendChild(h("p", "note", readOnlyNote()));
+    }
+
+    box.appendChild(card);
+  }
+
+  function buildExtendControls(err) {
+    var row = h("div", "controls");
+    var wrap = h("div", "input-wrap");
+    var lab = h("label", null, "新しい期限");
+    lab.setAttribute("for", "extend-until");
+    var input = document.createElement("input");
+    input.type = "datetime-local";
+    input.id = "extend-until";
+    wrap.appendChild(lab);
+    wrap.appendChild(input);
+    row.appendChild(wrap);
+    var btn = h("button", "primary", "延長する");
+    btn.type = "button";
+    btn.addEventListener("click", function () {
+      var v = input.value;
+      if (!v) { showErr(err, "新しい期限を入力してください。"); return; }
+      var d = new Date(v);
+      if (isNaN(d.getTime())) { showErr(err, "期限の形式が正しくありません。"); return; }
+      if (d.getTime() <= Date.now()) { showErr(err, "期限は今より後の日時を指定してください。"); return; }
+      withBusy(btn, err, function () { return updateUntil(toLocalIso(d)); });
+    });
+    row.appendChild(btn);
+    return row;
+  }
+
+  function renderStep(s) {
+    var li = h("li", "step");
+    li.appendChild(h("span", "chip", s.runner));
+    li.appendChild(h("span", "chip", s.model));
+    li.appendChild(h("span", "step-effort", s.effort ? "effort: " + s.effort : "effort: 指定なし"));
+    return li;
+  }
+
+  function renderTemplates() {
+    var box = el.templates;
+    clear(box);
+
+    if (store.phase === "unavailable") {
+      box.appendChild(h("p", "empty", "データベースに接続できないため表示できません。"));
+      return;
+    }
+    if (store.phase !== "ready" || !store.templatesLoaded) {
+      box.appendChild(h("p", "empty", "読み込み中…"));
+      return;
+    }
+    if (!store.templates.length) {
+      box.appendChild(h("p", "empty", "テンプレートはまだありません。テンプレートの作成・変更はチャットで行います。"));
+      return;
+    }
+
+    store.templates.forEach(function (t) {
+      var card = h("div", "card");
+      var head = h("div", "head-line");
+      head.appendChild(h("span", "name", t.name));
+      card.appendChild(head);
+      if (t.description) card.appendChild(h("p", "tpl-desc", t.description));
+
+      TIERS.forEach(function (tier) {
+        var wrap = h("div", "tier");
+        wrap.appendChild(h("div", "tier-name", tier));
+        var arr = (t.tiers && Array.isArray(t.tiers[tier])) ? t.tiers[tier] : null;
+        var steps = [];
+        var bad = 0;
+        if (arr) {
+          arr.forEach(function (s) {
+            var step = normalizeStep(s);
+            if (step) steps.push(step);
+            else bad++;
+          });
+        }
+        if (steps.length) {
+          var ul = h("ul", "steps");
+          steps.forEach(function (s) { ul.appendChild(renderStep(s)); });
+          wrap.appendChild(ul);
+        } else {
+          wrap.appendChild(h("p", "tier-note", bad > 0 ? "上書きを読み取れないため通常どおり" : "通常どおり"));
+        }
+        card.appendChild(wrap);
+      });
+
+      box.appendChild(card);
+    });
+  }
+
+  function renderHistory() {
+    var box = el.history;
+    clear(box);
+
+    if (store.phase === "unavailable") {
+      box.appendChild(h("p", "empty", "データベースに接続できないため表示できません。"));
+      return;
+    }
+    if (store.phase !== "ready" || !store.historyLoaded) {
+      box.appendChild(h("p", "empty", "読み込み中…"));
+      return;
+    }
+    if (!store.history.length) {
+      box.appendChild(h("p", "empty", "履歴はまだありません。"));
+      return;
+    }
+
+    store.history.forEach(function (a) {
+      var card = h("div", "card");
+      var head = h("div", "head-line");
+      head.appendChild(h("span", "name", (typeof a.template === "string" && a.template) ? a.template : "(不明)"));
+      var label = END_LABELS[a.ended_how] || ((typeof a.ended_how === "string" && a.ended_how) ? a.ended_how : "終了");
+      head.appendChild(h("span", "badge", label));
+      card.appendChild(head);
+
+      var from = a.started_at ? formatDateTime(a.started_at) : "—";
+      var to = a.ended_at ? formatDateTime(a.ended_at) : "—";
+      card.appendChild(infoRow("期間", from + " 〜 " + to));
+      card.appendChild(infoRow("理由", (typeof a.reason === "string" && a.reason) ? a.reason : "(なし)"));
+      box.appendChild(card);
+    });
+  }
+
+  function fillTemplateSelect() {
+    var sel = el.startTemplate;
+    var names = store.templates.map(function (t) { return t.name; });
+    var key = names.join("\n");
+    if (sel.dataset.key === key) return;
+    sel.dataset.key = key;
+    var prev = sel.value;
+    clear(sel);
+    if (!names.length) {
+      var opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "テンプレートがありません";
+      sel.appendChild(opt);
+      return;
+    }
+    names.forEach(function (n) {
+      var o = document.createElement("option");
+      o.value = n;
+      o.textContent = n;
+      sel.appendChild(o);
+    });
+    if (names.indexOf(prev) >= 0) sel.value = prev;
+  }
+
+  function renderStartNote(hasTpl) {
+    var text = "";
+    if (store.phase === "loading") {
+      text = "読み込み中…";
+    } else if (store.phase === "unavailable") {
+      text = "データベースに接続できないため操作できません。";
+    } else if (store.writeBlocked) {
+      text = "書き込みが拒否されたため、この画面は閲覧のみです。";
+    } else if (store.canWrite === false) {
+      text = "この表示では変更できません (閲覧のみ)。";
+    } else if (!hasTpl) {
+      text = "テンプレートはまだありません。テンプレートの作成・変更はチャットで行います。";
+    } else if (store.current) {
+      text = "始めると、今の適用は先に履歴へ移ります。";
+    }
+    el.startNote.textContent = text;
+    el.startNote.hidden = !text;
+  }
+
+  function syncControls() {
+    var enabled = canWriteNow();
+    var hasTpl = store.templatesLoaded && store.templates.length > 0;
+    var noUntil = el.startNoUntil.checked;
+    el.startTemplate.disabled = !enabled || !hasTpl;
+    el.startNoUntil.disabled = !enabled;
+    el.startUntil.disabled = !enabled || noUntil;
+    el.startAsk.disabled = !enabled;
+    el.startDrop.disabled = !enabled;
+    el.startReason.disabled = !enabled;
+    el.startSubmit.disabled = !enabled || !hasTpl;
+    renderStartNote(hasTpl);
+  }
+
+  function render() {
+    renderNotice();
+    renderCurrent();
+    renderTemplates();
+    fillTemplateSelect();
+    syncControls();
+    renderHistory();
+  }
+
+  // ---- 書き込み ----
+
+  async function dbSet(path, data) {
+    var ref = store.db.doc(path);
+    try {
+      await ref.set(data);
+    } catch (e) {
+      if (e && e.code === "unavailable") {
+        await sleep(400 + Math.random() * 600);
+        await ref.set(data);
+        return;
+      }
+      throw e;
+    }
+  }
+
+  function writeErrorText(e) {
+    var code = (e && e.code) ? e.code : "unavailable";
+    if (code === "invalid_argument") {
+      return "書き込みが拒否されました (権限がないか、内容が不正です)。この画面は以後、閲覧のみになります。";
+    }
+    if (code === "quota_exceeded") {
+      return "保存できませんでした。データベースがいっぱいです。古い履歴を減らしてください。";
+    }
+    if (code === "resource_exhausted") {
+      return "いまは混み合っています。少し待ってからもう一度試してください。";
+    }
+    return "保存に失敗しました。もう一度試してください。";
+  }
+
+  async function withBusy(btn, errNode, fn) {
+    if (opBusy) return false;
+    opBusy = true;
+    btn.disabled = true;
+    if (errNode) {
+      errNode.hidden = true;
+      errNode.textContent = "";
+    }
+    store.lastError = "";
+    renderNotice();
+    try {
+      await fn();
+      return true;
+    } catch (e) {
+      var text = writeErrorText(e);
+      if (errNode && errNode.isConnected) {
+        errNode.hidden = false;
+        errNode.textContent = text;
+      }
+      if (e && e.code === "invalid_argument") {
+        store.writeBlocked = true;
+        store.lastError = text;
+        render();
+      } else {
+        store.lastError = text;
+        renderNotice();
+      }
+      return false;
+    } finally {
+      opBusy = false;
+      if (btn.isConnected) btn.disabled = false;
+      syncControls();
+    }
+  }
+
+  function commitApplication(next) {
+    var prev = store.current;
+    var now = new Date();
+    var nowIso = toLocalIso(now);
+    var chain = Promise.resolve();
+    if (prev) {
+      var st = appState(prev, now.getTime());
+      var endedHow = st === "expired_drop" ? "expired" : "replaced";
+      var endedAt = (st === "expired_drop" && prev.until) ? prev.until : nowIso;
+      chain = chain.then(function () {
+        return dbSet("history/" + prev.id, endedApp(prev, endedAt, endedHow));
+      });
+    }
+    return chain.then(function () {
+      return dbSet("state/current", { application: next, updated_at: nowIso });
+    });
+  }
+
+  function stopApplication(app, kind) {
+    var now = new Date();
+    var endedHow = kind === "expired_ask" ? "declined" : "stopped";
+    return dbSet("history/" + app.id, endedApp(app, toLocalIso(now), endedHow)).then(function () {
+      return dbSet("state/current", { application: null, updated_at: toLocalIso(new Date()) });
+    });
+  }
+
+  function updateUntil(untilIso) {
+    var app = store.current;
+    if (!app) return Promise.resolve();
+    var next = copyApp(app);
+    next.until = untilIso;
+    return dbSet("state/current", { application: next, updated_at: toLocalIso(new Date()) });
+  }
+
+  // ---- 操作 ----
+
+  function showStartError(msg) {
+    el.startError.hidden = false;
+    el.startError.textContent = msg;
+  }
+
+  function showStatus(msg) {
+    el.startStatus.hidden = false;
+    el.startStatus.textContent = msg;
+  }
+
+  function clearStatus() {
+    el.startStatus.hidden = true;
+    el.startStatus.textContent = "";
+  }
+
+  function showErr(errNode, msg) {
+    errNode.hidden = false;
+    errNode.textContent = msg;
+  }
+
+  function onSubmitStart(ev) {
+    ev.preventDefault();
+    clearStatus();
+    if (!canWriteNow()) return;
+    var name = el.startTemplate.value;
+    if (!name) {
+      showStartError("テンプレートを選んでください。");
+      return;
+    }
+    var untilIso = null;
+    if (!el.startNoUntil.checked) {
+      var v = el.startUntil.value;
+      if (!v) {
+        showStartError("期限を入力するか、「期限なし」にチェックしてください。");
+        return;
+      }
+      var d = new Date(v);
+      if (isNaN(d.getTime())) {
+        showStartError("期限の形式が正しくありません。");
+        return;
+      }
+      if (d.getTime() <= Date.now()) {
+        showStartError("期限は今より後の日時を指定してください。");
+        return;
+      }
+      untilIso = toLocalIso(d);
+    }
+    var onExpire = el.startDrop.checked ? "drop" : "ask";
+    var reason = el.startReason.value.trim();
+    var app = makeApplication(name, untilIso, onExpire, reason);
+    withBusy(el.startSubmit, el.startError, function () {
+      return commitApplication(app);
+    }).then(function (ok) {
+      if (!ok) return;
+      el.startReason.value = "";
+      el.startUntil.value = "";
+      el.startNoUntil.checked = false;
+      syncControls();
+      showStatus("適用を始めました。");
+    });
+  }
+
+  // ---- 起動 ----
+
+  function tick() {
+    if (store.phase !== "ready" || !store.current) return;
+    var kind = appState(store.current, Date.now());
+    if (kind !== currentKind) {
+      renderCurrent();
+      return;
+    }
+    if (kind === "active" && store.current.until && remainingNode && remainingNode.isConnected) {
+      var until = parseIso(store.current.until);
+      if (until) remainingNode.textContent = "残り " + formatRemaining(until.getTime() - Date.now());
+    }
+  }
+
+  function onSubError() {
+    store.subError = "データの受信が止まりました。ページを再読み込みしてください。";
+    renderNotice();
+  }
+
+  async function init() {
+    try {
+      if (!window.claude || typeof window.claude.use !== "function") {
+        store.phase = "unavailable";
+        render();
+        return;
+      }
+      var db = await window.claude.use("db");
+      if (!db) {
+        store.phase = "unavailable";
+        render();
+        return;
+      }
+      store.db = db;
+      store.phase = "ready";
+      render();
+
+      window.claude.use("user").then(function (user) {
+        if (!user) return null;
+        return user.can("data.write").then(function (v) {
+          if (v === false) {
+            store.canWrite = false;
+            render();
+          }
+        });
+      }).catch(function () {});
+
+      db.doc("state/current").onSnapshot(function (snap) {
+        store.currentLoaded = true;
+        var body = snap.exists ? (snap.data() || {}) : null;
+        store.current = body ? normalizeApp(body.application) : null;
+        renderCurrent();
+        syncControls();
+      }, onSubError);
+
+      db.collection("templates").onSnapshot(function (qs) {
+        store.templatesLoaded = true;
+        var list = [];
+        qs.docs.forEach(function (d) {
+          var t = normalizeTemplate(d.data());
+          if (t) list.push(t);
+        });
+        list.sort(function (a, b) { return a.name.localeCompare(b.name); });
+        store.templates = list;
+        renderTemplates();
+        fillTemplateSelect();
+        syncControls();
+      }, onSubError);
+
+      db.collection("history").orderBy("ended_at", "desc").onSnapshot(function (qs) {
+        store.historyLoaded = true;
+        store.history = qs.docs.map(function (d) { return d.data() || {}; });
+        renderHistory();
+      }, onSubError);
+    } catch (e) {
+      store.phase = "unavailable";
+      render();
+    }
+  }
+
+  el = {
+    notice: byId("notice"),
+    current: byId("current"),
+    templates: byId("templates"),
+    history: byId("history"),
+    startForm: byId("start-form"),
+    startTemplate: byId("start-template"),
+    startUntil: byId("start-until"),
+    startNoUntil: byId("start-no-until"),
+    startAsk: byId("start-ask"),
+    startDrop: byId("start-drop"),
+    startReason: byId("start-reason"),
+    startSubmit: byId("start-submit"),
+    startError: byId("start-error"),
+    startStatus: byId("start-status"),
+    startNote: byId("start-note")
+  };
+
+  el.startNoUntil.addEventListener("change", syncControls);
+  el.startForm.addEventListener("submit", onSubmitStart);
+
+  render();
+  init();
+  window.setInterval(tick, 10000);
+})();
+</script>
+</body>
+</html>
