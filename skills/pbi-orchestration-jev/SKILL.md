@@ -27,14 +27,16 @@ description: 複数ファイルにまたがる実装を、PBI起票・モデル�
 | Opus のサブエージェント（設計者が Opus でないときだけ） | 設計判断の見直しと、deep・大きな diff のレビュー（下の「設計者のモデル」） | 実装 |
 | 実装担当（Agent ツールの `pbi-worker` / opencode / Codex / Antigravity） | PBIと参照欄の ref だけを材料に、PBIの実装と検証（`worker.md`） | PBIの範囲外の変更、メモリの search・write |
 | `prepare.py` | Jev のゲート 1（brief・pbi_quality）、jev-log の記録、`select_model.py` の判定を 1 回で行い、表だけを出す | — |
-| `verify.py` | PBI の検証コマンドを実行し、番号ごとの終了コードと末尾だけを表で出す | 合否の判定 |
+| `verify.py` | PBI の検証コマンドを実行し、番号ごとの終了コードと末尾だけを表で出す（終了コードは `docs/pbi/verify/<報告名>.json` にも書く） | 合否の判定 |
+| `record_run.py` | 1 回の実行（報告名 × route の何番目）を `docs/pbi/runs.jsonl` に 1 行で記録し（トークン・コスト・時間・検証はログから読む）、生ログを保全先にコピーする | 合否の判定・評価 |
+| `model_report.py` | runs.jsonl をモデル別に集計する（保全先の全リポジトリも可）。仮の評価 A〜D も出す | 振り分けを変えること |
 
 合否は検証コマンドの実行結果で決める。回数は `docs/pbi/STATUS.md` で決める。モデルは `select_model.py` の出力で決める。
 
 ### 設計者のモデル
 
 設計者は起動時のモデル（`--model`）で動く。Opus でないとき（例: Sonnet の effort max）は、次の 2 つを Opus のサブエージェント（`subagent_type: "pbi-worker"`、`model: "opus"`）に任せる。それ以外は設計者が自分で行う。
-- **設計判断の見直し**: `prepare.py` の表で段が opus になった PBI は、実装に回す前に見直させる。description は `PBI-<連番> design`。依頼文は「PBI ファイル（と参照欄の ref）を読み、設計上の問題・抜け・あいまいさだけを `docs/pbi/reviews/PBI-<連番>.design.md` に書く。最後のメッセージは件数と各 1 行だけ」。結果を PBI に反映してから実装に回す
+- **設計判断の見直し**: `prepare.py` の表で段が opus になった PBI は、実装に回す前に見直させる。description は `PBI-<連番>.design`。依頼文は「PBI ファイル（と参照欄の ref）を読み、設計上の問題・抜け・あいまいさだけを `docs/pbi/reviews/PBI-<連番>.design.md` に書く。最後のメッセージは件数と各 1 行だけ」。結果を PBI に反映してから実装に回す
 - **レビュー**: review が deep の PBI と、diff が 300 行を超える PBI（8章の 3）
 
 ## 0. 止まる場面
@@ -164,9 +166,9 @@ PBIの一覧をユーザーに見せ、承認を得てから実行に入る。�
 
 依存のない PBI の集まりを「波」として起動し、波の全 PBI のレビューが終わってから次の波に進む。
 - PBIごとに `route` の先頭から試す。agent なら Agent ツールを `subagent_type: "pbi-worker"` で起動する（`model` と `effort` は route の値。effort が null なら付けない。pbi-worker が無ければ general-purpose で起動し、STATUS.md に書く）。opencode・codex・agy なら `runners.md` を読む
-- 実行先が使えないとき（`runners.md` の条件）は `route` の次へ進み、STATUS.md のモデルとメモを書き換える。PBI の失敗とは数えない
+- 実行先が使えないとき（`runners.md` の条件）は、次へ進む前に `record_run.py <報告名> --attempt <route の何番目> --outcome 使えず` で記録し（生ログが次の実行で上書きされる前に保全するため）、`route` の次へ進み、STATUS.md のモデルとメモを書き換える。PBI の失敗とは数えない
 - **1 PBI 1 実装担当で使い捨てる**。差し戻しも新しく起動する。同じ実装担当に SendMessage で送るのは、7章の続行の指示だけ
-- Agent ツールの `description` は必ず `PBI-<連番> <短い説明>` で始める（統計はこの番号で PBI に結び付ける）
+- 実装担当の Agent ツールの `description` は必ず報告名と空白で始める（`PBI-007 <短い説明>`、差し戻しは `PBI-007.rework-1 <短い説明>`）。record_run.py と agent_stats.py は、この文字列で会話記録を実行に結び付ける。設計者のレビュー・設計見直しは `PBI-<連番>.review` / `PBI-<連番>.design` にして、実装と分ける
 - 同じファイル・設定ファイルを触る PBI は並列にしない。同時に動かすのは 5 件まで。実行先は 1 件ずつ別のバックグラウンドとして起動する（1 つのコマンドの中で `&` でまとめない）
 
 ### 6.1 依頼文
@@ -197,13 +199,18 @@ PBI: docs/pbi/PBI-<連番>.md
 実装担当の報告もJevの仕分けも鵜呑みにしない。
 1. 検証コマンドを `verify.py` で実行し、表だけを見る。出力が要る番号だけ、表のログを Grep・tail で読む
    ```bash
-   python <このディレクトリ>/verify.py PBI-<連番> [--only 2,4]
+   python <このディレクトリ>/verify.py PBI-<連番> --name <報告名> [--only 2,4]
    ```
    `verify.py` がコマンドを読めなかったとき（終了コード 2）は、1 回の Bash で番号ごとにログへリダイレクトして実行する
 2. 受け入れ条件を1つずつ pass / fail で判定する
 3. `git diff --stat` で大きさを見てから diff を読み、マージを止めるべき問題だけを挙げる（ファイル、行、なぜ、再現方法）
    - review が deep の PBI は diff を全部読む（認証・権限・入力の検証・データの消え方・モジュール間の契約を重点に）
-   - diff が 300 行を超える PBI と、設計者が Opus でないときの deep の PBI は、Opus の `pbi-worker` に読ませる（description `PBI-<連番> review`）。依頼文は「PBI ファイルと参照欄の ref（`get`）を前提に、`git diff -- <対象>` を読み、マージを止めるべき問題だけを `docs/pbi/reviews/PBI-<連番>.md` に書く（ファイル・行・なぜ・再現）。最後のメッセージは問題の件数と各 1 行だけ。レビュー系のスキルやサブエージェントは呼ばない」。結果は判断の材料にし、鵜呑みにしない
+   - diff が 300 行を超える PBI と、設計者が Opus でないときの deep の PBI は、Opus の `pbi-worker` に読ませる（description `PBI-<連番>.review`）。依頼文は「PBI ファイルと参照欄の ref（`get`）を前提に、`git diff -- <対象>` を読み、マージを止めるべき問題だけを `docs/pbi/reviews/PBI-<連番>.md` に書く（ファイル・行・なぜ・再現）。最後のメッセージは問題の件数と各 1 行だけ。レビュー系のスキルやサブエージェントは呼ばない」。結果は判断の材料にし、鵜呑みにしない
+
+合否（合格 / 差し戻し / 昇格 / 保留）を決めたら、すぐに 1 回記録する。判断で渡すのは結果とレビュー指摘の件数（重大,中,軽微）だけで、ほかはログから読まれる。route.json と違う実行先で動かしたとき（昇格など）は `--runner --model --effort --tier` も渡す。標準出力の 1 行に「保全に失敗」と出ても作業は続け、完了報告の「発見」に書く。
+```bash
+python <このディレクトリ>/record_run.py <報告名> --attempt <route の何番目> --outcome 合格 --findings 0,1,2
+```
 
 検証コマンドが PBI の書き方の不備（設計者の誤り）で fail したら、差し戻さずに検証コマンドを直して記録する。好みや書き方の違いでは差し戻さない。受け入れ条件の fail、触らない範囲の侵害、再現できる不具合のいずれかがあるときだけ差し戻す（`appendix/rework.md`）。
 
