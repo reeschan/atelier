@@ -22,4 +22,4 @@
    - `APPLIED <パス>`: `docs/pbi/routing.json` が書かれた。前のものは `routing.prev.json` に残っている。`docs/pbi/PBI-*.facts.json` があれば `python <このディレクトリ>/select_model.py --all docs/pbi` を実行して、新しい表で担当がどう変わったかを 1 PBI 1 行で伝える
    - `TIMEOUT`: 30 分のあいだ適用されなかった。何も書いていない。もう一度開くか聞く
 
-`docs/pbi/` は対象リポジトリの作業記録なので、routing.json もそこに置く。全リポジトリで同じ表を使いたいときは、ユーザーに確認してから、このディレクトリの `routing.json` にコピーする。
+`docs/pbi/` は対象リポジトリの作業記録なので、routing.json もそこに置く。全リポジトリで同じ表を使いたいときは、ユーザーに確認してから、home の `routing.json` にコピーする。home は優先テンプレートの置き場と同じで、解決順は `--home` → 環境変数 `PBI_TEMPLATES_HOME` → このディレクトリの親が `versions` ならスキルのルート (版管理の配置。版を切り替えても引き継がれる) → このディレクトリ。select_model.py は `--routing` → `docs/pbi/routing.json` (`--all` のとき) → home の `routing.json` → 既定の表の順に探す。
