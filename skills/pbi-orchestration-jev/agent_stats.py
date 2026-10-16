@@ -14,6 +14,7 @@
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -26,6 +27,32 @@ TTL_1H = 3600
 REBUILD_RATIO = 0.5
 PBI_RE = re.compile(r"\bPBI-(\d+)", re.IGNORECASE)
 TOKEN_KEYS = ("input", "output", "cache_read", "cache_write_5m", "cache_write_1h")
+
+
+def long_path(p):
+    """Windows で 260 文字を超えるパスを開けるように \\\\?\\ を付ける (会話記録のパスは超えることがある)。
+
+    フォルダを選ばずに始めたセッションは、プロジェクト名が長く、サブエージェントの会話記録が 260 文字を超える。
+    glob の根に付ければ、そこから出てくるパスすべてに効く。
+    """
+    if os.name != "nt":
+        return p
+    s = str(Path(p).resolve())
+    return Path(p) if s.startswith("\\\\?\\") else Path("\\\\?\\" + s)
+
+
+def shown(p):
+    """表示用のパス (\\\\?\\ を外す)。"""
+    return str(p).removeprefix("\\\\?\\")
+
+
+def read_meta(path):
+    """サブエージェントの meta.json を読む。読めなければ警告を出して {} を返す。"""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"meta を読めない: {shown(path)} ({type(e).__name__})", file=sys.stderr)
+        return {}
 
 
 def parse_ts(s):
@@ -197,7 +224,7 @@ def analyze(reqs):
 
 
 def find_session(session_id):
-    hits = list(PROJECTS.glob(f"*/{session_id}.jsonl"))
+    hits = list(long_path(PROJECTS).glob(f"*/{session_id}.jsonl"))
     if not hits:
         sys.exit(f"セッション {session_id} の会話記録が見つからない")
     return hits[0]
@@ -205,7 +232,7 @@ def find_session(session_id):
 
 def project_dir_for(cwd):
     """Claude Code が会話記録を置くディレクトリ名 (英数字以外を - にしたもの)。"""
-    return PROJECTS / "".join(c if c.isalnum() else "-" for c in str(cwd))
+    return long_path(PROJECTS) / "".join(c if c.isalnum() else "-" for c in str(cwd))
 
 
 def cwd_session():
@@ -215,7 +242,7 @@ def cwd_session():
 
 
 def latest_session():
-    files = list(PROJECTS.glob("*/*.jsonl"))
+    files = list(long_path(PROJECTS).glob("*/*.jsonl"))
     if not files:
         sys.exit("会話記録が見つからない")
     return max(files, key=lambda p: p.stat().st_mtime)
@@ -223,21 +250,21 @@ def latest_session():
 
 def pbi_sessions():
     out = []
-    for main in PROJECTS.glob("*/*.jsonl"):
+    for main in long_path(PROJECTS).glob("*/*.jsonl"):
         sub = main.with_suffix("") / "subagents"
-        if any(PBI_RE.search(json.loads(m.read_text(encoding="utf-8")).get("description", ""))
-               for m in sub.glob("*.meta.json")):
+        if any(PBI_RE.search(read_meta(m).get("description", "")) for m in sub.glob("*.meta.json")):
             out.append(main)
     return sorted(out, key=lambda p: p.stat().st_mtime)
 
 
 def session_stats(main_path):
+    main_path = long_path(main_path)
     sid = main_path.stem
     agents = []
     sub = main_path.with_suffix("") / "subagents"
     for jl in sorted(sub.glob("agent-*.jsonl")):
         meta_path = jl.with_suffix(".meta.json")
-        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        meta = read_meta(meta_path) if meta_path.exists() else {}
         desc = meta.get("description", "")
         mt = PBI_RE.search(desc)
         reqs = load_requests(jl)
