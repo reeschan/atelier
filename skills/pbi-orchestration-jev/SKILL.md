@@ -88,7 +88,7 @@ shared-memory（`search`・`get`・`write` を持つ共有メモリの MCP。ツ
 
 - 開始時に Web と同期する (`appendix/templates.md` の「開始時の同期」)
 
-既存コードと 0.8 の範囲のメモリを調べて設計を決め、PBIに分解する。起票の前に `verify-commands.md` を読む。最初に、このディレクトリの `worker.md` を `docs/pbi/worker.md` にコピーする（opencode はリポジトリ外を読めないため）。1 PBI は小さく（変更ファイル 3 以下を目安に）切り、`docs/pbi/PBI-<連番>.md` に1件1ファイルで書く。実装担当は設計時の文脈を持たないので、PBIと参照欄の ref だけで作業できるように書く。
+既存コードと 0.8 の範囲のメモリを調べて設計を決め、PBIに分解する。起票の前に `verify-commands.md` を読む。最初に、このディレクトリの `worker.md` を `docs/pbi/worker.md` に、`unchanged.py`（触らない範囲の検証。`verify-commands.md`）を `docs/pbi/tools/unchanged.py` にコピーする（opencode はリポジトリ外を読めないため）。1 PBI は小さく（変更ファイル 3 以下を目安に）切り、`docs/pbi/PBI-<連番>.md` に1件1ファイルで書く。実装担当は設計時の文脈を持たないので、PBIと参照欄の ref だけで作業できるように書く。
 
 ```markdown
 # PBI-<連番>: <タイトル>
