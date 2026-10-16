@@ -10,9 +10,10 @@ Jev 応答: ゲート brief（novelty / coupling / ambiguity）の API 応答。
 --all: <dir>/PBI-*.facts.json と <dir>/jev/PBI-*.brief.json を全部判定し、<dir>/PBI-*.route.json に書いて、
        標準出力には 1 PBI 1 行の表だけを出す（オーケストレーターの文脈を細く保つため）。
 --routing: 段ごとの route を書いたテンプレート（routing.default.json と同じ形。studio/ の画面で作れる。studio/serve.py なら画面から直接置ける）。
-       指定が無ければ、--all のときは <dir>/routing.json、次にこのディレクトリの routing.json を探し、
-       どちらも無ければ下の既定の表を使う。
---home: 優先テンプレートの home（templates.resolve_home）。--now: 今の時刻（templates.parse_time）。
+       指定が無ければ、--all のときは <dir>/routing.json、次に home（--home と同じ解決順。templates.resolve_home）の
+       routing.json を探し、どちらも無ければ下の既定の表を使う。全リポジトリで共通の表は home に置く
+       （版管理の配置ではスキルのルートなので、版を切り替えても引き継がれる）。
+--home: 優先テンプレートと共通の routing.json を置く home（templates.resolve_home）。--now: 今の時刻（templates.parse_time）。
         --today を省いて --now があれば、今日は --now の日付。--all でも同じ引数が効く。
 標準出力（1 件のとき）: {"tier", "route": [{"runner", "model", "effort"}, ...], "review", "scores", "reasons",
 "template": {"name", "applied", "note"}}
@@ -141,12 +142,13 @@ def load_routing(path) -> dict:
     return table
 
 
-def find_routing(explicit: str | None, all_dir: str | None) -> tuple[dict, str]:
+def find_routing(explicit: str | None, all_dir: str | None, home: Path) -> tuple[dict, str]:
+    """--routing → <all_dir>/routing.json → <home>/routing.json → 既定の表。home は優先テンプレートと同じ置き場。"""
     candidates = [Path(explicit)] if explicit else []
     if not explicit:
         if all_dir:
             candidates.append(Path(all_dir) / 'routing.json')
-        candidates.append(Path(__file__).resolve().parent / 'routing.json')
+        candidates.append(Path(home) / 'routing.json')
     for c in candidates:
         if c.exists():
             return load_routing(c), str(c)
@@ -312,7 +314,7 @@ def main():
         sys.exit(f'--today / --now が不正: {error}')
     home = templates.resolve_home(home_s)
     all_dir = pop_opt(args, '--all')
-    routing, _ = find_routing(pop_opt(args, '--routing'), all_dir)
+    routing, _ = find_routing(pop_opt(args, '--routing'), all_dir, home)
     if all_dir:
         run_all(Path(all_dir), today, skip, routing, home, now)
         return
