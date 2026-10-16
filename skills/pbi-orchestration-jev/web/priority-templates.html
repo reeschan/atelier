@@ -339,6 +339,12 @@ select {
 .step-effort {
   color: var(--muted);
 }
+.chip-rotate {
+  font-weight: 600;
+}
+.rotate-members li {
+  background: var(--bg);
+}
 .empty {
   font-size: 14px;
   color: var(--muted);
@@ -589,6 +595,18 @@ select {
 
   function normalizeStep(s) {
     if (!s || typeof s !== "object") return null;
+    if (Array.isArray(s.rotate)) {
+      // 交互グループ: PBI の番号で先頭が回る。メンバーが 2 つ以上読めたときだけ表示する
+      var members = [];
+      for (var i = 0; i < s.rotate.length; i++) {
+        var m = s.rotate[i];
+        if (m && typeof m === "object" && !Array.isArray(m.rotate)) {
+          var step = normalizeStep(m);
+          if (step) members.push(step);
+        }
+      }
+      return members.length >= 2 ? { rotate: members } : null;
+    }
     if (typeof s.runner !== "string" || !s.runner) return null;
     if (typeof s.model !== "string" || !s.model) return null;
     var effort = (typeof s.effort === "string" && s.effort) ? s.effort : null;
@@ -772,6 +790,15 @@ select {
   }
 
   function renderStep(s) {
+    if (s.rotate) {
+      var group = h("li", "step rotate");
+      group.appendChild(h("span", "chip chip-rotate", "交互"));
+      group.appendChild(h("span", "step-effort", "PBI ごとに先頭が入れ替わり、残りは控え"));
+      var ul = h("ul", "steps rotate-members");
+      s.rotate.forEach(function (m) { ul.appendChild(renderStep(m)); });
+      group.appendChild(ul);
+      return group;
+    }
     var li = h("li", "step");
     li.appendChild(h("span", "chip", s.runner));
     li.appendChild(h("span", "chip", s.model));

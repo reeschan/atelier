@@ -12,6 +12,8 @@ route に出た実行先を初めて使う前に、その節だけを読む。�
 
 opencode CLI（`npm i -g opencode-ai`）で OpenCode Go のサブスクの `opencode-go/deepseek-v4.1-flash` を使う。DeepSeek は Go のワークスペースの Privacy 設定が Global でないと 400 エラーになる（Global にしておく）。
 
+優先テンプレートは無料枠のモデル（OpenCode Zen。model ID が `opencode/` で始まる。例 `opencode/deepseek-v4.1-flash-free`）も route に入れられる。渡し方は Go のモデルと同じ。無料枠は提供元が入力を記録・利用することがあるので、sensitive の PBI には当たらない（優先テンプレートは sensitive に当たらない）。
+
 **最初に opencode の場所を確かめる。** opencode を fnm や nvm で入れた Node のグローバルに入れていると、Claude Code のシェルの PATH には出ないことがある。`which opencode` で見つからなくても「入っていない」と判断しない。次のように探し、見つかったディレクトリ（`<OC_DIR>`）を起動のたびに PATH の先頭に足す。
 
 ```bash
@@ -32,7 +34,7 @@ PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<このディレクトリ>/opencode.confi
 - **`database is locked` で落ちたら**: PBI の失敗とは数えない。下の「使えないとき」として 1 回だけ、単独で再実行する
 - **権限**: `opencode.config.json`（このディレクトリ）を `OPENCODE_CONFIG` で渡す。編集とコマンドは許可し、`git push`・`git reset --hard`・`git clean`・`rm -rf`・`rm -r` とリポジトリ外への操作を拒否する。`--auto` は付けない。ユーザー全体の設定（`~/.config/opencode/`）は変えない（rtk のプラグインを入れていれば、それはそのまま使う）
 - **拒否は成功扱いで返る**: 拒否されても終了コードは 0。`grep -c 'rule which prevents' <報告名>.jsonl` が 1 以上なら拒否がある（`"tool"` イベントの `"status":"error"`）。検証コマンドだけの拒否なら 8 章で自分で実行すれば足りる。作業が進んでいなければ `route` の次へ進む
-- **使えないとき**（終了コードが 0 以外、`grep -m 3 '"type":"error"'` に当たる（利用上限・認証・リージョン・接続のエラー）、または `.last.md` が無いか空）: 1 回だけ再実行し、だめなら `route` の次へ進む。Go の利用上限で落ちたときは STATUS.md の上に「opencode: 上限到達（日時）」と書き、このセッションの残りの PBI では `--skip opencode` を付けて route を出し直す
+- **使えないとき**（終了コードが 0 以外、`grep -m 3 '"type":"error"'` に当たる（利用上限・認証・リージョン・接続のエラー）、または `.last.md` が無いか空）: 1 回だけ再実行し、だめなら `route` の次へ進む。利用上限で落ちたときは STATUS.md の上に「opencode <model>: 上限到達（日時）」と書き、このセッションの残りの PBI では `--skip <model>`（例 `--skip opencode/deepseek-v4.1-flash-free`）を付けて route を出し直す。外れるのはそのモデルの手順だけで、同じ opencode の別のモデル（交互グループの相方や有料のモデル）は使い続ける。複数のモデルが上限なら、カンマでつなぐ。opencode そのものが動かない（認証・接続のエラー）ときは `--skip opencode` で opencode の手順を全部外す
 - opencode は AGENTS.md を読むが CLAUDE.md は読まない。PBI に要る規約は PBI 本文に書く
 - トークン数は 12 章の統計に入らない。`.jsonl` の `step_finish` の `tokens` と `cost` を小さなスクリプトで足し、合計の 1 行だけを出して、jev-log の完了時の行に「opencode / モデル名 / tokens / cost」と書く
 
