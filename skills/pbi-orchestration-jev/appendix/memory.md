@@ -27,6 +27,7 @@ shared-memory の MCP（`mcp__shared-memory__*`）が使えないセッション
 **設計者が search するとき**
 - search は CLAUDE.md に無いもの（過去の判断の理由、ほかのリポジトリで分かった落とし穴）を探す補助にとどめる。`repo:<repo>` と `global` を、scope を付けて 1 回ずつまで。scope を付けない search はしない（ほかの作業・ほかのブランチの ref が混ざる）
 - 作業空間の scope の search は、引き継ぎから再開するときだけにする
+- 例外: 引き継ぎから再開するときに作業ディレクトリに `docs/pbi/STATUS.md` が無く、引数にパスも無ければ、`tags: ["handoff"]`・`kind: "episodic"` を付けて scope なしで 1 回だけ search してよい（作業空間の scope がまだ分からないため。手順は `appendix/handoff.md` の「再開」）
 
 **ref を書くとき（設計者だけ）**
 - ref にするのは、2 つ以上の PBI・引き継ぎ・レビューの注意で使う事実だけ。1 つの PBI にしか関わらない事実は ref にせず、その PBI の「補足」に書く
@@ -42,6 +43,7 @@ shared-memory の MCP（`mcp__shared-memory__*`）が使えないセッション
 
 **引き継ぐとき（6.3）**
 - HANDOFF.md に加えて、作業空間に引き継ぎのメモリ（kind episodic、tags `handoff` と `work:<branch>/<work-num>`）を書く。2 回目以降は前の引き継ぎのメモリを `supersedes` に指定し、常に最新の 1 件にする
+- 引き継ぎのメモリには、タイトルにリポジトリ名と作業キーの番号を入れ、本文の先頭に必ず次の 3 つを書く: 作業キー、リポジトリの絶対パス（ワークツリーならその作業ルート）、ブランチ。フォルダを選ばずに始めたセッションの `resume` は、このパスを頼りに作業リポジトリを探す（`appendix/handoff.md` の「再開」）
 
 **終わるとき（11章）**
 - 次の 3 つをすべて満たす ref を最大 3 件選んで昇格させる: 次の作業でも使える、コードを読んでも分からない、検証済み
