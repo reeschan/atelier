@@ -85,6 +85,9 @@ runners: Other runners {
     class: svc
     icon: https://cdn.simpleicons.org/google
   }
+  dsh: "DeepSeek Harness (dsh)\npriority templates only\ne.g. DeepSeek API V4.1 Flash" {
+    shape: hexagon
+  }
 }
 
 jev: "Jev (TypeSafe)\njudgment API, text only" {
@@ -137,11 +140,13 @@ cc.orch -> cc.verify: checks
 cc.orch -> runners.opencode: PBI path
 cc.orch -> runners.codex: "" {style.stroke-dash: 4}
 cc.orch -> runners.agy: "" {style.stroke-dash: 4}
+cc.orch -> runners.dsh: "" {style.stroke-dash: 4}
 cc.orch -> cc.worker: "" {style.stroke-dash: 4}
 cc.orch -> cc.rtk: Bash / PowerShell {style.stroke-dash: 4}
 runners.opencode -> repo.code
 runners.codex -> repo.code
 runners.agy -> repo.code
+runners.dsh -> repo.code
 cc.worker -> repo.code
 cc.orch -> repo.pbi: status, HANDOFF
 cc.orch <-> memory: write refs, handoff {style.stroke-dash: 4}

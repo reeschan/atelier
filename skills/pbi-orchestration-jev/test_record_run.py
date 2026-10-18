@@ -136,6 +136,43 @@ class RecordRunTest(unittest.TestCase):
         self.assertEqual(row['judged'], {'outcome': '合格', 'findings': {'重大': 0, '中': 1, '軽微': 2}})
         self.assertTrue(row['archive']['ok'])
 
+    def test_dsh_tokens_steps_and_time_from_status_usage_and_run_json(self):
+        dsh = {'runner': 'dsh', 'model': 'deepseek-official/deepseek-flash', 'effort': 'high'}
+        self.write_route('PBI-007', [dsh, AGENT], tier='sonnet')
+        d = self.pbi / 'dsh'
+        d.mkdir()
+        events = [{'type': 'session', 'sessionId': 's', 'cwd': '.'},
+                  {'type': 'status', 'phase': 'step', 'turn': 1, 'step': 1},
+                  {'type': 'status', 'phase': 'step', 'turn': 1, 'step': 1,
+                   'usage': {'inputTokens': 100, 'outputTokens': 20, 'cacheReadTokens': 1000,
+                             'cacheWriteTokens': 0, 'totalTokens': 1120}},
+                  {'type': 'tool_call', 'callId': 'c', 'tool': 'write', 'input': {}},
+                  {'type': 'status', 'phase': 'step', 'turn': 1, 'step': 2,
+                   'usage': {'inputTokens': 50, 'outputTokens': 30, 'cacheReadTokens': 2000,
+                             'cacheWriteTokens': 5, 'totalTokens': 2085}},
+                  {'type': 'final', 'text': 'OK'}]
+        (d / 'PBI-007.jsonl').write_text(''.join(json.dumps(e) + chr(10) for e in events), encoding='utf-8')
+        (d / 'PBI-007.run.json').write_text(json.dumps(
+            {'start': '2026-10-18T15:00:00+09:00', 'end': '2026-10-18T15:01:30+09:00', 'exit': 0}), encoding='utf-8')
+        for suffix in ('.prompt.md', '.err', '.patch.yml', '.final.md', '.last.md'):
+            (d / f'PBI-007{suffix}').write_text('x', encoding='utf-8')
+        self.write_verify('PBI-007', [{'n': 1, 'command': 'x', 'code': 0}])
+        r = self.record('PBI-007', 1, '合格')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        self.assertEqual((row['runner'], row['model'], row['effort'], row['tier']),
+                         ('dsh', 'deepseek-official/deepseek-flash', 'high', 'sonnet'))
+        t = row['tokens']
+        self.assertEqual((t['input'], t['output'], t['reasoning'], t['cache_read'], t['cache_write']),
+                         (150, 50, None, 3000, 5))
+        self.assertEqual(t['total'], 3205)
+        self.assertEqual(row['steps'], 2)
+        self.assertIsNone(row['cost_reported'])
+        self.assertEqual(row['time']['seconds'], 90)
+        base = self.archive / 'myrepo' / 'feature-x__W-002' / 'PBI-007' / 'attempt-1'
+        for name in ('PBI-007.jsonl', 'PBI-007.run.json', 'PBI-007.patch.yml', 'PBI-007.final.md', 'PBI-007.last.md'):
+            self.assertTrue((base / 'dsh' / name).is_file(), name)
+
     def test_raw_logs_are_archived_by_repo_branch_and_work_number(self):
         self.write_opencode('PBI-007', [step_finish(1792117910000, 1, 1, 0, 0, 0, 0.0)])
         self.write_verify('PBI-007', [{'n': 1, 'command': 'x', 'code': 0}])

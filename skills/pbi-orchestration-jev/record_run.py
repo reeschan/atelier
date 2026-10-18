@@ -15,6 +15,8 @@
   agent:    Claude Code の会話記録のうち、description が報告名で始まるサブエージェント (agent_stats.load_requests)
   codex:    docs/pbi/codex/<報告名>.log の「tokens used」の合計だけ (内訳は null)
   agy:      docs/pbi/agy/<報告名>.json に usage があれば読む。無ければ null
+  dsh:      docs/pbi/dsh/<報告名>.jsonl の status イベントの usage (トークンの合計、数をステップ数) と
+            <報告名>.run.json の開始・終了時刻 (dsh_run.py が書く)
   検証:     docs/pbi/verify/<報告名>.json (verify.py が書く)。unchanged.py check の行の終了コードを触らない範囲とする
 取れない値は 0 ではなく null にする。cost_reported は実行先が出した USD (opencode の cost)、cost_api_equiv は
 トークン × prices.json の API 換算 (agent だけ。参考値で請求額ではない)。
@@ -41,8 +43,8 @@ SCHEMA = 1
 OUTCOMES = ('合格', '差し戻し', '昇格', '使えず', '保留')
 SEVERITIES = ('重大', '中', '軽微')
 REPORT_RE = re.compile(r'^(PBI-\d+)(?:\.rework-(\d+))?$')
-RUNNER_DIRS = ('opencode', 'codex', 'agy')
-RUNNER_SUFFIXES = ('.prompt.md', '.jsonl', '.err', '.log', '.last.md', '.json')
+RUNNER_DIRS = ('opencode', 'codex', 'agy', 'dsh')
+RUNNER_SUFFIXES = ('.prompt.md', '.jsonl', '.err', '.log', '.last.md', '.json', '.patch.yml', '.run.json', '.final.md')
 TOKEN_FIELDS = ('input', 'output', 'reasoning', 'cache_read', 'cache_write', 'cache_write_5m', 'cache_write_1h')
 
 
@@ -140,6 +142,38 @@ def read_agy(path: Path) -> dict:
             tokens['output'] = usage.get('output_tokens')
             with_total(tokens)
     return {'tokens': tokens, 'steps': None, 'time': span(None, None), 'cost': None}
+
+
+def read_dsh(path: Path) -> dict:
+    """dsh の --json の status イベントにある usage を合計する。dsh は reasoning を output に含めて数える
+    (reasoning は null)。時刻は dsh_run.py が書く <報告名>.run.json から読む。cost は出ないので null。"""
+    run_json = path.with_name(path.name.removesuffix('.jsonl') + '.run.json')
+    when = span(None, None)
+    if run_json.is_file():
+        try:
+            run = json.loads(run_json.read_text(encoding='utf-8'))
+            when = span(datetime.datetime.fromisoformat(run['start']), datetime.datetime.fromisoformat(run['end']))
+        except (ValueError, KeyError, TypeError):
+            pass
+    if not path.is_file():
+        return {'tokens': empty_tokens(), 'steps': None, 'time': when, 'cost': None}
+    t = {**{k: 0 for k in ('input', 'output', 'cache_read', 'cache_write')},
+         'reasoning': None, 'cache_write_5m': None, 'cache_write_1h': None, 'source': path.as_posix()}
+    steps = 0
+    for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        usage = ev.get('usage') if isinstance(ev, dict) and ev.get('type') == 'status' else None
+        if not isinstance(usage, dict):
+            continue
+        steps += 1
+        t['input'] += usage.get('inputTokens') or 0
+        t['output'] += usage.get('outputTokens') or 0
+        t['cache_read'] += usage.get('cacheReadTokens') or 0
+        t['cache_write'] += usage.get('cacheWriteTokens') or 0
+    return {'tokens': with_total(t), 'steps': steps, 'time': when, 'cost': None}
 
 
 def matches(description: str, name: str) -> bool:
@@ -400,6 +434,9 @@ def main():
         cost_reported, cost_api = None, None
     elif runner == 'agy':
         got = read_agy(base / 'agy' / f'{args.report}.json')
+        cost_reported, cost_api = None, None
+    elif runner == 'dsh':
+        got = read_dsh(base / 'dsh' / f'{args.report}.jsonl')
         cost_reported, cost_api = None, None
     else:
         transcript = find_agent_transcript(Path(args.projects), cwd, args.report)

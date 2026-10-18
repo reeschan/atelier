@@ -570,6 +570,22 @@ class RotateTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual([s['runner'] for s in r['route']], ['agent'])
 
+    def test_dsh_step_heads_route_and_skip_dsh_falls_back(self):
+        ds1017 = {'runner': 'dsh', 'model': 'deepseek-official/deepseek-flash', 'effort': 'high'}
+        go = {'runner': 'opencode', 'model': 'opencode-go/deepseek-v4.1-flash', 'effort': 'max'}
+        t = {'name': 'deepseek-all', 'description': '', 'tiers': {tier: [ds1017, go] for tier in select_model.TIERS}}
+        code, r = run_home(SMALL, ALL_ZERO, {'deepseek-all': t}, application(), '--now', NOW)
+        self.assertEqual(code, 0)
+        self.assertEqual([(s["runner"], s["model"], s["effort"]) for s in r["route"]][:2], [("dsh", "deepseek-official/deepseek-flash", "high"),
+                                               ('opencode', 'opencode-go/deepseek-v4.1-flash', 'max')])
+        code, r = run_home(SMALL, ALL_ZERO, {'deepseek-all': t}, application(), '--now', NOW, '--skip', 'dsh')
+        self.assertEqual(code, 0)
+        self.assertEqual(r['route'][0]['runner'], 'opencode')
+        code, r = run_home(SMALL, ALL_ZERO, {'deepseek-all': t}, application(), '--now', NOW,
+                           '--skip', 'deepseek-official/deepseek-flash')
+        self.assertEqual(code, 0)
+        self.assertEqual(r['route'][0]['runner'], 'opencode')
+
     def test_unknown_runner_name_is_rejected(self):
         code, _ = self.run_pbi('PBI-007', None, '--skip', 'nosuch')
         self.assertNotEqual(code, 0)
