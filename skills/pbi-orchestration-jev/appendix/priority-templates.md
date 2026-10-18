@@ -9,7 +9,7 @@
 - **期限切れの扱い**: `ask` は自動では当てず、ユーザーに「延長 / やめる / 期限なし」を聞く。`drop` は当てない。適用の状態は none / active / expired_ask / expired_drop の 4 つ。
 - **正本は Web ページのデータベース**。コレクションは `state/current`・`templates/<name>`・`history/<id>`。ローカルには写し (`overrides.json`) を置き、手で書き換えない。
 - **home**: `templates/` ディレクトリ・`overrides.json`・`web.json` を置くディレクトリ。解決順は (1) コマンドの `--home DIR` (2) 環境変数 `PBI_TEMPLATES_HOME` (3) スクリプトのディレクトリの親の名前が `versions` ならその親 (版管理のローカル配置。スキルのルート) (4) それ以外はスクリプトのディレクトリ。リポジトリにコミットしない (個人の設定)。
-- **`<home>/templates/<name>.json`**: テンプレート 1 つ (UTF-8)。name は `^[a-z0-9][a-z0-9-]{0,62}$` に合い、ファイル名 (拡張子を除く) と一致すること。description は文字列 (空でもよい)。tiers は空でないオブジェクト。各手順は runner (opencode / codex / agy / agent)・model (空でない文字列)・effort (文字列か null) を持つ。手順の代わりに交互グループを置ける。
+- **`<home>/templates/<name>.json`**: テンプレート 1 つ (UTF-8)。name は `^[a-z0-9][a-z0-9-]{0,62}$` に合い、ファイル名 (拡張子を除く) と一致すること。description は文字列 (空でもよい)。tiers は空でないオブジェクト。各手順は runner (opencode / codex / agy / dsh / agent)・model (空でない文字列)・effort (文字列か null) を持つ。手順の代わりに交互グループを置ける。
 - **交互グループ**: 段の手順の列の 1 要素として書く `{"rotate": [手順, 手順, ...]}`。メンバーは通常の手順で 2 つ以上、agent と入れ子は不可、`rotate` 以外のキーは置かない。PBI ごとに先頭のメンバーが入れ替わり、残りのメンバーはその PBI の控えとして後ろに並ぶ。複数の実行先に PBI を等分に配るために使う。
 - **回す数**: 交互グループの先頭を決める数で、PBI の番号 (PBI-007 なら 7)。先頭は `回す数 mod メンバー数` 番目 (0 始まり) で、元の並びを回した順に続く。select_model.py は facts のファイル名から取り、単体の判定では `--pbi N` で上書きできる。取れなければ 0。差し戻し・昇格で出し直しても同じ PBI は同じ並びになる。
 - 例: `[{"rotate": [A の無料枠, B の無料枠]}, {"rotate": [A の有料, B の有料]}]` は、偶数の PBI で A の無料枠 → B の無料枠 → A の有料 → B の有料、奇数の PBI で B の無料枠 → A の無料枠 → B の有料 → A の有料 の順に試し、最後に routing のその段の agent が付く。route.json の route は展開済みの平らな列。展開してから `--skip` (runner 名かモデル ID) と until で絞る。
@@ -71,7 +71,7 @@
 
 1. `<home>/templates/<name>.json` に JSON を書く (Write ツール。name はファイル名と一致させる)。
 2. `python <このディレクトリ>/templates.py check [NAME]` で形を検査する。1 件 1 行で `ok <name>` / `ng <name>: <問題>`。1 件でも ng なら保存しない。
-3. 実行先でモデル名・effort 名が実在するか確かめる (交互グループのメンバーも 1 つずつ)。opencode なら `opencode run -m <model>#<effort> "Reply with OK"` が `provider.no-route` (`Variant unavailable`) で落ちないこと。effort が null なら `#` を付けない。
+3. 実行先でモデル名・effort 名が実在するか確かめる (交互グループのメンバーも 1 つずつ)。opencode なら `opencode run -m <model>#<effort> "Reply with OK"` が `provider.no-route` (`Variant unavailable`) で落ちないこと。effort が null なら `#` を付けない。dsh なら、依頼文に「Reply with OK」だけを書いて `dsh_run.py` を動かし、終了コード 0 で `.final.md` に OK が出ること (effort 名が無いと `.err` に出る)。
 4. `python <このディレクトリ>/templates.py push --existing NAME,...` を実行する。正しいテンプレートの `templates/<name>` への set と、ローカルに無い名前の delete の writes が出る。`--existing` には Web にある名前 (ArtifactData で読む) を渡す。
 5. `writes` を ArtifactData の batch で書く。Web は読むだけ。
 

@@ -2,13 +2,13 @@
 
 [English](README.md) | 日本語
 
-複数ファイルにまたがる実装を、**PBI (Product Backlog Item) に分けてサブエージェントに渡す**ための [Claude Code](https://claude.com/claude-code) のスキルです。メインのセッションがオーケストレーターになり、PBI の起票・担当モデルの決定・レビュー・差し戻しを受け持ちます。実装はサブエージェント (opencode CLI の DeepSeek / Codex CLI / Antigravity CLI の Claude / Claude Code の Agent ツール) が行います。
+複数ファイルにまたがる実装を、**PBI (Product Backlog Item) に分けてサブエージェントに渡す**ための [Claude Code](https://claude.com/claude-code) のスキルです。メインのセッションがオーケストレーターになり、PBI の起票・担当モデルの決定・レビュー・差し戻しを受け持ちます。実装はサブエージェント (opencode CLI の DeepSeek / Codex CLI / Antigravity CLI の Claude / DeepSeek Harness (`dsh`) / Claude Code の Agent ツール) が行います。
 
 途中の判断の一部は、判定 API の **Jev** ([TypeSafe](https://api.typesafe.ai)) に短い文章で聞きます。ただし合否は検証コマンドの実行結果で決め、回数は状態ファイルで数えます。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎ後に再開する。オーケストレーターは prepare.py (Jev のゲート 1 と select_model.py) で段と実行先の順番を決め、opencode・Codex・Antigravity・pbi-worker (Agent ツール) に PBI を渡し、verify.py と unchanged.py で検証し、Jev には文章だけで報告の仕分けと修正の規模を聞き、対象リポジトリの docs/pbi/ に状態と HANDOFF を記録する。任意の shared-memory には作業ごとの ref と引き継ぎのメモリを書き、pbi-worker は ref を get するだけ。任意で rtk がコマンド出力を圧縮する。Template Studio は OpenRouter と Artificial Analysis から作ったモデル一覧を画面に出し、選んだ試す順番を docs/pbi/routing.json に書く。優先テンプレートの Web ページ (claude.ai の Artifact) は templates.py と同期し、overrides.json で振り分けを期限付きで上書きする。">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎ後に再開する。オーケストレーターは prepare.py (Jev のゲート 1 と select_model.py) で段と実行先の順番を決め、opencode・Codex・Antigravity・DeepSeek Harness (dsh)・pbi-worker (Agent ツール) に PBI を渡し、verify.py と unchanged.py で検証し、Jev には文章だけで報告の仕分けと修正の規模を聞き、対象リポジトリの docs/pbi/ に状態と HANDOFF を記録する。任意の shared-memory には作業ごとの ref と引き継ぎのメモリを書き、pbi-worker は ref を get するだけ。任意で rtk がコマンド出力を圧縮する。Template Studio は OpenRouter と Artificial Analysis から作ったモデル一覧を画面に出し、選んだ試す順番を docs/pbi/routing.json に書く。優先テンプレートの Web ページ (claude.ai の Artifact) は templates.py と同期し、overrides.json で振り分けを期限付きで上書きする。">
 </picture>
 
 図のソースは `assets/architecture.d2` です ([D2](https://d2lang.com) で描いています)。
@@ -140,6 +140,7 @@ cp skills/pbi-orchestration-jev/examples/templates/deepseek-all.json skills/pbi-
 | [opencode](https://opencode.ai) + OpenCode Go | 任意 | haiku・sonnet の段の第一候補 |
 | [Codex CLI](https://github.com/openai/codex) | 任意 | 次の候補 (`CODEX_UNTIL` まで) |
 | Antigravity CLI (`agy`) | 任意 | Google AI のサブスクの Claude |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) | 任意 | 優先テンプレートで使う実行先 (dsh の headless 経由の DeepSeek 公式 API など) |
 | Node.js | 任意 | rtk のフックと、JS 版の Jev クライアント (`jev.mjs`) |
 | [rtk](https://github.com/rtk-ai/rtk) | 任意 | コマンド出力の圧縮 |
 
@@ -192,6 +193,14 @@ Jev の API キーは、次のどちらかに置きます (クライアントは
 - `opencode run` を同時に起動すると `database is locked` で落ちることがあります。スキルは起動を 30 秒ずつずらします。
 - fnm や nvm で入れた Node に opencode を入れていると、Claude Code の PATH に出ないことがあります。探し方は `runners.md` にあります。
 
+### DeepSeek Harness (`dsh`) を使うとき
+
+- `dsh` は既定の振り分けには入っていません。優先テンプレートに書きます。手順は `{"runner": "dsh", "model": "deepseek-official/deepseek-flash", "effort": "high"}` のように書き、model は `<dsh の provider>/<モデル>`、effort は dsh の `reasoningEffort` です (DeepSeek 公式の Flash は `low`・`high`・`max` と指定なしだけで、`medium` はありません)。
+- `dsh_run.py` が PBI を 1 件動かします。実行ごとの上書き設定 (`--patch`) に provider・モデル・effort を書き、`dsh --profile headless --json` を実行して、イベント・最後の回答・開始と終了の時刻を `docs/pbi/dsh/` に残します。`record_run.py` は `status` イベントのトークン数を合計します (料金は出ません)。
+- API キーは環境変数 (`DEEPSEEK_API_KEY`・`OPENCODE_GO_API_KEY`) か、キーだけを書いたファイル (`~/.config/deepseek/deepseek.key`・`~/.config/opencode/opencode-go.key`) から読みます。値は表示しません。
+- PATH の `dsh` (`npm i -g @deepseek-ai/dsh`) を使います。PATH に無ければ `PBI_DSH_BIN`・`PBI_DSH_NODE` で渡します。独自の provider は `DSH_HOME` の `cordis.patch.yml` に書きます。
+- headless は `DSH_PERMISSION_MODE=workspace-write` で動かします。書き込みはリポジトリの中だけで、確認に答える人がいないので昇格は拒否されます。named pipe が要るビルドはサンドボックスの中で落ちることがあり、検証はオーケストレーターが自分で実行します。
+
 ### Antigravity を使うとき
 
 - 2026-10-13 時点では、ヘッドレス (`agy -p`) でコマンドの実行が自動で拒否され (`RunCommand`)、作業が進みませんでした。スキルは、最初にこの拒否が出たら、そのセッションの残りでは `agy` を外します。
@@ -223,7 +232,7 @@ Claude Code で、複数ファイルにまたがる実装を頼むときに呼�
 | `docs/pbi/verify/`、`docs/pbi/reviews/` | 検証コマンドのログと、任せたレビューの結果 |
 | `docs/pbi/jev-log.jsonl` | Jev の判定と採った行動 |
 | `docs/pbi/jev.config.json` | Jev のゲートとしきい値 (初回にテンプレートから作る) |
-| `docs/pbi/opencode/`、`docs/pbi/codex/`、`docs/pbi/agy/` | 各実行先に渡した文章と出力 |
+| `docs/pbi/opencode/`、`docs/pbi/codex/`、`docs/pbi/agy/`、`docs/pbi/dsh/` | 各実行先に渡した文章と出力 |
 | `docs/pbi/stats/` | トークンとキャッシュの統計 |
 
 止まってユーザーを待つのは、PBI 一覧の承認、差し戻しの上限 (または設計の見直し)、破壊的な操作の前、文脈が大きくなったときの引き継ぎの 4 つだけです。引き継いだら `/clear` のあと `/pbi-orchestration-jev resume` を実行します。
@@ -241,7 +250,8 @@ Claude Code で、複数ファイルにまたがる実装を頼むときに呼�
 ```
 skills/pbi-orchestration-jev/
 ├── SKILL.md                    # スキル本文 (オーケストレーターへの指示)
-├── runners.md                  # opencode / Codex / Antigravity への渡し方
+├── runners.md                  # opencode / Codex / Antigravity / dsh への渡し方
+├── dsh_run.py                  # DeepSeek Harness の headless で PBI を 1 件動かす
 ├── verify-commands.md          # 検証コマンドを書くときの注意
 ├── worker.md                   # 実装担当の進め方と報告の形
 ├── appendix/                   # 場面ごとに読む付録 (memory・rework・handoff・finish・jev・templates・priority-templates)

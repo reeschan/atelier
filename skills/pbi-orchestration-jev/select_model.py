@@ -28,7 +28,7 @@ route を「優先テンプレートの手順（--skip の runner・model と un
 元の並びを回し、残りはその PBI の控えとして後ろに続ける（expand_rotate）。展開してから skip と until で絞る。
 
 route は上から順に試す実行先。runner は opencode（opencode CLI の OpenCode Go）/ codex（Codex CLI）/ agy（Antigravity
-CLI の Claude）/ agent（Claude Code の Agent ツール = Anthropic のサブスク）。
+CLI の Claude）/ dsh（DeepSeek Harness の headless。dsh_run.py。優先テンプレートからだけ使う）/ agent（Claude Code の Agent ツール = Anthropic のサブスク）。
 - opus の段は設計判断が要る PBI（novelty=2 かつ ambiguity=2）だけ。agent の opus で実装する。
 - sensitive・coupling=2 は sonnet の段で実装し、review を "deep" にする（Opus のオーケストレーターが重点的に読む）。
   sensitive はリポジトリの外のサービスに出さないため、route を agent の sonnet だけにする。
@@ -44,7 +44,7 @@ from pathlib import Path
 LOW_CONFIDENCE = 0.7
 KEYS = ('novelty', 'coupling', 'ambiguity')
 TIERS = ('haiku', 'sonnet', 'opus')
-RUNNERS = ('opencode', 'codex', 'agy')
+RUNNERS = ('opencode', 'codex', 'agy', 'dsh')
 CODEX_UNTIL = datetime.date(2026, 10, 23)
 CODEX_MODEL = 'gpt-6-astra'
 DEEPSEEK = 'opencode-go/deepseek-v4.1-flash'
