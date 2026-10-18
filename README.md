@@ -2,7 +2,7 @@
 
 English | [日本語](README.ja.md)
 
-A [Claude Code](https://claude.com/claude-code) skill that splits multi-file implementation work into **PBIs (Product Backlog Items) and hands them to sub-agents**. The main session acts as the orchestrator: it writes the PBIs, picks a model for each, reviews the results and sends work back. The sub-agents (the opencode CLI with DeepSeek, Codex CLI, Claude via the Antigravity CLI, or Claude Code's Agent tool) do the implementation.
+A [Claude Code](https://claude.com/claude-code) skill that splits multi-file implementation work into **PBIs (Product Backlog Items) and hands them to sub-agents**. The main session acts as the orchestrator: it writes the PBIs, picks a model for each, reviews the results and sends work back. The sub-agents (the opencode CLI with DeepSeek, Codex CLI, Claude via the Antigravity CLI, DeepSeek Harness (`dsh`), or Claude Code's Agent tool) do the implementation.
 
 Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe.ai)), a judgment API, as short text. Pass/fail is still decided by actually running verification commands, and counts are kept in a status file.
 
@@ -10,7 +10,7 @@ Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator uses prepare.py (Jev gate 1 plus select_model.py) to pick a tier and a route, hands PBIs to opencode, Codex, Antigravity or pbi-worker (the Agent tool), verifies them with verify.py and unchanged.py, asks Jev in plain text to triage reports and size fixes, and records status and HANDOFF in docs/pbi/ of the target repository. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. rtk optionally compresses command output. Template Studio shows a model list built from OpenRouter and Artificial Analysis and writes the chosen try order to docs/pbi/routing.json. The priority templates web page (a claude.ai artifact) syncs with templates.py, which overrides routing for a limited time through overrides.json.">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator uses prepare.py (Jev gate 1 plus select_model.py) to pick a tier and a route, hands PBIs to opencode, Codex, Antigravity, DeepSeek Harness (dsh) or pbi-worker (the Agent tool), verifies them with verify.py and unchanged.py, asks Jev in plain text to triage reports and size fixes, and records status and HANDOFF in docs/pbi/ of the target repository. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. rtk optionally compresses command output. Template Studio shows a model list built from OpenRouter and Artificial Analysis and writes the chosen try order to docs/pbi/routing.json. The priority templates web page (a claude.ai artifact) syncs with templates.py, which overrides routing for a limited time through overrides.json.">
 </picture>
 
 The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lang.com)).
@@ -142,6 +142,7 @@ The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `ma
 | [opencode](https://opencode.ai) + OpenCode Go | no | first runner for the haiku and sonnet tiers |
 | [Codex CLI](https://github.com/openai/codex) | no | next runner, until `CODEX_UNTIL` |
 | Antigravity CLI (`agy`) | no | Claude via a Google AI subscription |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) | no | runner for priority templates, e.g. the official DeepSeek API through dsh headless |
 | Node.js | no | the rtk hook, and the JS Jev client (`jev.mjs`) |
 | [rtk](https://github.com/rtk-ai/rtk) | no | compressing command output |
 
@@ -194,6 +195,14 @@ Without the flag file (`~/.claude/state/rtk/<session_id>.on`), or without `rtk` 
 - Starting several `opencode run` at the same moment can fail with `database is locked`. The skill staggers starts by 30 seconds.
 - If opencode lives in a Node installed by fnm or nvm, it may not be on Claude Code's `PATH`. `runners.md` shows how to find it.
 
+### Notes on DeepSeek Harness (`dsh`)
+
+- `dsh` is not in the default routing; put it in a priority template. A step looks like `{"runner": "dsh", "model": "deepseek-official/deepseek-flash", "effort": "high"}`: the model is `<dsh provider>/<model>`, and the effort is dsh's `reasoningEffort` (the official DeepSeek Flash takes `low`, `high`, `max` or none; there is no `medium`).
+- `dsh_run.py` runs one PBI: it writes a per-run `--patch` overlay with the provider, model and effort, runs `dsh --profile headless --json`, and keeps the events, the final answer and the start/end time under `docs/pbi/dsh/`. `record_run.py` sums the token usage from the `status` events (no cost is reported).
+- API keys come from the environment (`DEEPSEEK_API_KEY`, `OPENCODE_GO_API_KEY`) or from key-only files (`~/.config/deepseek/deepseek.key`, `~/.config/opencode/opencode-go.key`). Values are never printed.
+- It uses `dsh` on the `PATH` (`npm i -g @deepseek-ai/dsh`), or `PBI_DSH_BIN` / `PBI_DSH_NODE`. Custom providers go in the `cordis.patch.yml` of `DSH_HOME`.
+- Headless runs use `DSH_PERMISSION_MODE=workspace-write`: writes stay inside the repository, and escalation requests are denied because nobody is there to approve them. Builds that need named pipes may fail inside the sandbox; the orchestrator runs the verification itself.
+
 ### Notes on Antigravity
 
 - As of 2026-10-13, headless runs (`agy -p`) had command execution auto-denied (`RunCommand`), so work did not progress. The skill drops `agy` for the rest of the session after the first such denial.
@@ -225,7 +234,7 @@ Everything is recorded under `docs/pbi/` in the target repository.
 | `docs/pbi/verify/`, `docs/pbi/reviews/` | verification logs and delegated reviews |
 | `docs/pbi/jev-log.jsonl` | every Jev answer and the action taken |
 | `docs/pbi/jev.config.json` | Jev gates and thresholds (created from the template) |
-| `docs/pbi/opencode/`, `docs/pbi/codex/`, `docs/pbi/agy/` | prompts and outputs for each runner |
+| `docs/pbi/opencode/`, `docs/pbi/codex/`, `docs/pbi/agy/`, `docs/pbi/dsh/` | prompts and outputs for each runner |
 | `docs/pbi/stats/` | token and cache stats |
 
 The orchestrator only stops to wait for the user in four cases: approving the PBI list, hitting the rework limit (or needing a redesign), before destructive operations, and when it hands off a large context. After a hand-off, run `/clear` and then `/pbi-orchestration-jev resume`.
@@ -243,7 +252,8 @@ It then checks that `STATUS.md` and the branch match, and either moves the sessi
 ```
 skills/pbi-orchestration-jev/
 ├── SKILL.md                    # the skill (instructions for the orchestrator)
-├── runners.md                  # how to hand PBIs to opencode / Codex / Antigravity
+├── runners.md                  # how to hand PBIs to opencode / Codex / Antigravity / dsh
+├── dsh_run.py                  # runs one PBI on DeepSeek Harness headless
 ├── verify-commands.md          # pitfalls when writing verification commands
 ├── worker.md                   # how workers proceed and report
 ├── appendix/                   # read only when needed (memory, rework, handoff, finish, jev, templates, priority-templates)

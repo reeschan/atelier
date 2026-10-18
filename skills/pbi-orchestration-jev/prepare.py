@@ -4,7 +4,7 @@
 文脈にはテンプレートの 1 行と最後の表だけが入るようにする (SKILL.md 3〜4 章)。
 
 使い方 (リポジトリのルートで):
-  python <このディレクトリ>/prepare.py [docs/pbi] [--skip opencode,codex,agy] [--today YYYY-MM-DD] [--only PBI-003,PBI-004] [--home DIR] [--now ISO]
+  python <このディレクトリ>/prepare.py [docs/pbi] [--skip opencode,codex,agy,dsh] [--today YYYY-MM-DD] [--only PBI-003,PBI-004] [--home DIR] [--now ISO]
 
 前提: docs/pbi/PBI-<連番>.md・.facts.json・.brief.md が揃っている。
 - jev.config.json が無ければ、このディレクトリの jev.config.template.json をコピーする

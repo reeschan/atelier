@@ -16,7 +16,7 @@ description: 複数ファイルにまたがる実装を、PBI起票・モデル�
 | Jev を直接呼ぶ（報告の仕分け・差し戻しのゲート） | `appendix/jev.md` |
 | すべての PBI が終わった | `appendix/finish.md` |
 | 優先テンプレート・適用を扱う (開始時の同期、チャットでの適用・作成、期限切れの確認、Web ページ) | `appendix/priority-templates.md` |
-| 実行先が opencode・codex・agy | `runners.md` |
+| 実行先が opencode・codex・agy・dsh | `runners.md` |
 | PBI を起票する前 | `verify-commands.md` |
 
 ## 役割
@@ -25,7 +25,7 @@ description: 複数ファイルにまたがる実装を、PBI起票・モデル�
 |---|---|---|
 | 設計者（メインセッション。オーケストレーター） | 設計、全体のメモリの search、ref の記録、PBI起票、facts・brief の作成、レビュー、差し戻し、完了時の昇格 | 実装、モデルを勘で決めること |
 | Opus のサブエージェント（設計者が Opus でないときだけ） | 設計判断の見直しと、deep・大きな diff のレビュー（下の「設計者のモデル」） | 実装 |
-| 実装担当（Agent ツールの `pbi-worker` / opencode / Codex / Antigravity） | PBIと参照欄の ref だけを材料に、PBIの実装と検証（`worker.md`） | PBIの範囲外の変更、メモリの search・write |
+| 実装担当（Agent ツールの `pbi-worker` / opencode / Codex / Antigravity / dsh） | PBIと参照欄の ref だけを材料に、PBIの実装と検証（`worker.md`） | PBIの範囲外の変更、メモリの search・write |
 | `prepare.py` | Jev のゲート 1（brief・pbi_quality）、jev-log の記録、`select_model.py` の判定を 1 回で行い、表だけを出す | — |
 | `verify.py` | PBI の検証コマンドを実行し、番号ごとの終了コードと末尾だけを表で出す（終了コードは `docs/pbi/verify/<報告名>.json` にも書く） | 合否の判定 |
 | `record_run.py` | 1 回の実行（報告名 × route の何番目）を `docs/pbi/runs.jsonl` に 1 行で記録し（トークン・コスト・時間・検証はログから読む）、生ログを保全先にコピーする | 合否の判定・評価 |
@@ -148,7 +148,7 @@ PBI ごとに、次の 2 つを並列の Write でまとめて書く。
 書き終えたら、1 回だけ実行する。
 
 ```bash
-python <このディレクトリ>/prepare.py docs/pbi [--skip opencode,codex,agy]
+python <このディレクトリ>/prepare.py docs/pbi [--skip opencode,codex,agy,dsh]
 ```
 
 出力の表（段・route の先頭・review・Jev の score・品質の警告）を、PBI の「担当モデル」と STATUS.md に写す。PBI を書き直したら `--only PBI-<連番>` を付けて、その PBI だけ判定し直す。
@@ -165,7 +165,7 @@ PBIの一覧をユーザーに見せ、承認を得てから実行に入る。�
 ## 6. 実行
 
 依存のない PBI の集まりを「波」として起動し、波の全 PBI のレビューが終わってから次の波に進む。
-- PBIごとに `route` の先頭から試す。agent なら Agent ツールを `subagent_type: "pbi-worker"` で起動する（`model` と `effort` は route の値。effort が null なら付けない。pbi-worker が無ければ general-purpose で起動し、STATUS.md に書く）。opencode・codex・agy なら `runners.md` を読む
+- PBIごとに `route` の先頭から試す。agent なら Agent ツールを `subagent_type: "pbi-worker"` で起動する（`model` と `effort` は route の値。effort が null なら付けない。pbi-worker が無ければ general-purpose で起動し、STATUS.md に書く）。opencode・codex・agy・dsh なら `runners.md` を読む
 - 実行先が使えないとき（`runners.md` の条件）は、次へ進む前に `record_run.py <報告名> --attempt <route の何番目> --outcome 使えず` で記録し（生ログが次の実行で上書きされる前に保全するため）、`route` の次へ進み、STATUS.md のモデルとメモを書き換える。PBI の失敗とは数えない
 - **1 PBI 1 実装担当で使い捨てる**。差し戻しも新しく起動する。同じ実装担当に SendMessage で送るのは、7章の続行の指示だけ
 - 実装担当の Agent ツールの `description` は必ず報告名と空白で始める（`PBI-007 <短い説明>`、差し戻しは `PBI-007.rework-1 <短い説明>`）。record_run.py と agent_stats.py は、この文字列で会話記録を実行に結び付ける。設計者のレビュー・設計見直しは `PBI-<連番>.review` / `PBI-<連番>.design` にして、実装と分ける

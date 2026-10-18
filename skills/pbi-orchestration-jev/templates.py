@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,62}$')
-RUNNERS = ('opencode', 'codex', 'agy', 'agent')
+RUNNERS = ('opencode', 'codex', 'agy', 'dsh', 'agent')
 TIERS = ('haiku', 'sonnet', 'opus')
 # 形は振り分けテンプレート (routing.json) に揃える。$schema_note と手順の until (日付) も書ける
 TEMPLATE_KEYS = frozenset(('name', 'description', 'tiers', '$schema_note'))

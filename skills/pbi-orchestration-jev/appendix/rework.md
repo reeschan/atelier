@@ -29,6 +29,7 @@ confidence が 0.7 未満なら 0 として扱う。
 昇格は `select_model.py <facts> <brief> --tier sonnet [--skip ...]` で route を出し直して行う。
 
 - opencode で動いていた PBI（haiku・sonnet の段とも）: `--skip opencode` を足し、sonnet の route の先頭へ移る
+- dsh で動いていた PBI: `--skip dsh` を足し、sonnet の route の先頭へ移る
 - それ以外で haiku の段: **今使っている実行先のまま**sonnet の行のモデル・effort に替える（Codex は `medium` → `high`、Antigravity は `claude-sonnet-5-5-low` → `-high`、Agent ツールは haiku `max` → sonnet `high`）
 - それ以外で sonnet の段: 昇格はしない（同じモデル）
 
