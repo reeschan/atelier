@@ -1,4 +1,4 @@
-# 実行先ごとの渡し方（opencode / Codex / Antigravity）
+# 実行先ごとの渡し方（opencode / Codex / Antigravity / dsh）
 
 route に出た実行先を初めて使う前に、その節だけを読む。依頼文（SKILL.md 6 章）は `docs/pbi/<実行先>/<報告名>.prompt.md` に書き、末尾に「要約の書き先: `docs/pbi/<実行先>/<報告名>.last.md`」を足す。リポジトリのルートで Bash から `run_in_background` で 1 件ずつ起動する。cd はリテラルの絶対パスで行う（変数で cd すると Claude Code の権限確認で止まる）。
 
@@ -6,7 +6,7 @@ route に出た実行先を初めて使う前に、その節だけを読む。�
 
 報告は `.last.md`（4 行）だけを読む。`.jsonl`・`.log`・`.json` は丸ごと読まず、下に書いた項目を `grep -m` や `tail -n` で取り出す。
 
-差し戻しは新しく起動し直す（`<報告名>` を `PBI-<連番>.rework-<n>` にする）。前回の会話を続ける `opencode run -c`・`codex exec resume` は使わない。前回の文脈は報告ファイルと差し戻し文で渡す。
+差し戻しは新しく起動し直す（`<報告名>` を `PBI-<連番>.rework-<n>` にする）。前回の会話を続ける `opencode run -c`・`codex exec resume`・`dsh --session-id` は使わない。前回の文脈は報告ファイルと差し戻し文で渡す。
 
 ## opencode（haiku・sonnet の段の第一候補）
 
@@ -65,3 +65,22 @@ agy -p "docs/pbi/agy/<報告名>.prompt.md を読み、その指示どおりに�
 - **使えないとき**（終了コードが 0 以外、出力に利用上限・quota・rate limit・`RESOURCE_EXHAUSTED`・認証のエラー、または `.last.md` が無いか空）: 1 回だけ再実行し、だめなら `route` の次（Agent ツール）へ進む。利用上限で落ちたときは STATUS.md の上に「Antigravity: 上限到達（日時）」と書き、以後 `--skip agy`
 - agy の会話には CLAUDE.md も AGENTS.md も効くとは限らない。PBI に要る規約は PBI 本文に書く
 - トークン数は 12 章の統計に入らない。完了時の jev-log の行に「agy / モデル名」とだけ書く
+
+## dsh（DeepSeek Harness の headless。優先テンプレートから使う）
+
+DeepSeek Harness（`@deepseek-ai/dsh`）の headless で、DeepSeek 公式 API などのモデルを直接呼ぶ。route の model は `<provider>/<model>`（dsh の provider 名とモデル ID）で、例えば DeepSeek 公式の V4.1 Flash 1017 は `deepseek-official/deepseek-flash`。effort は dsh の reasoningEffort（DeepSeek 公式の Flash は `low` / `high` / `max` と、付けない。`medium` は無い）。provider と既定の設定は `DSH_HOME` の `cordis.patch.yml` に書く（DeepSeek 公式の `deepseek-official` は dsh に組み込まれている）。
+
+```bash
+mkdir -p docs/pbi/dsh
+python <このディレクトリ>/dsh_run.py <報告名> --model <route の model> [--effort <route の effort>]
+```
+
+- `dsh_run.py` が、実行ごとの上書き設定 `docs/pbi/dsh/<報告名>.patch.yml`（provider・model・reasoningEffort）を書いて `--patch` で渡し、`--json` のイベントを `<報告名>.jsonl`、診断を `<報告名>.err`、final の本文を `<報告名>.final.md`、開始・終了の時刻と終了コードを `<報告名>.run.json` に書く。effort が null なら `--effort` を付けない
+- **キー**: `dsh_run.py` が環境変数を優先し、無ければ `~/.config/deepseek/deepseek.key`（DeepSeek 公式）・`~/.config/opencode/opencode-go.key`（OpenCode Go）から読む。値は表示しない。route の provider のキーが無ければ終了コード 2 で止まる（使えないときとして次へ進み、ユーザーにキーの置き場を伝える）
+- **場所**: 既定は PATH の `dsh`（`npm i -g @deepseek-ai/dsh`）。PATH に無ければ `PBI_DSH_BIN`（`@deepseek-ai/dsh/lib/bin.js`）と `PBI_DSH_NODE`（省略時は PATH の node）で渡す。provider の設定を置いた `DSH_HOME` もここで渡す。`dsh_run: dsh が見つかりません` などで止まったら、使えないときとして次へ進み、STATUS.md に書く
+- **権限**: `DSH_PERMISSION_MODE=workspace-write`（書き込みはリポジトリの中だけ、コマンドは Windows では PowerShell のサンドボックス）。headless では昇格の確認に答える人がいないので、サンドボックスの外が要るコマンドは拒否される（`tool_result` の `status` が成功以外）。`npm run build` などが named pipe で落ちることがある。検証コマンドだけの失敗なら 8 章で自分で実行すれば足りる。作業が進んでいなければ `route` の次へ進む
+- **同時に起動するときは 30 秒ずつずらす**（dsh はセッションの記録を DSH_HOME に書く。opencode と同じ扱いにしておく）
+- **使えないとき**（終了コードが 0 以外、`.err` に `dsh: <code>:`（`MISSING_CREDENTIAL`・`TRANSPORT`・`INVALID_REQUEST`・利用上限など）が出る、または `.last.md` が無いか空）: 1 回だけ再実行し、だめなら `route` の次へ進む。利用上限・残高不足で落ちたときは STATUS.md の上に「dsh <model>: 上限到達（日時）」と書き、以後 `--skip <model>`（例 `--skip deepseek-official/deepseek-flash`）。dsh そのものが動かないときは `--skip dsh`
+- 差し戻しは新しく起動し直す（`--session-id` で前の会話は続けない）
+- dsh は AGENTS.md・CLAUDE.md を読むとは限らない。PBI に要る規約は PBI 本文に書く
+- トークン数・ステップ数・時間は `record_run.py` が `.jsonl` の `status` イベントの usage と `.run.json` から読む。cost は出ない（null）。DeepSeek 公式の料金は DeepSeek のアカウントの従量課金

@@ -62,6 +62,10 @@ class ValidateTest(unittest.TestCase):
         problems = templates.validate(template(runner='gemini'), 'deepseek-all')
         self.assertTrue(any('runner' in p for p in problems), problems)
 
+    def test_dsh_runner_is_valid(self):
+        t = template(runner='dsh', model='deepseek-official/deepseek-flash', effort='high')
+        self.assertEqual(templates.validate(t, 'deepseek-all'), [])
+
     def test_unknown_tier_key(self):
         t = template()
         t['tiers']['mini'] = [{'runner': 'agy', 'model': 'claude-sonnet-5-5-low'}]
