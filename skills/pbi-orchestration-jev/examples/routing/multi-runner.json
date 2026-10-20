@@ -1,0 +1,21 @@
+{
+  "$schema_note": "Example routing template for people who use external runners. Rewrite the model IDs to the ones you selected in agents.json.",
+  "name": "multi-runner",
+  "tiers": {
+    "haiku": [
+      {"runner": "opencode", "model": "opencode-go/deepseek-v4.1-flash", "effort": null},
+      {"runner": "codex", "model": "gpt-6-astra", "effort": "medium"},
+      {"runner": "agy", "model": "claude-sonnet-5-5-low", "effort": null},
+      {"runner": "agent", "model": "haiku", "effort": "max"}
+    ],
+    "sonnet": [
+      {"runner": "opencode", "model": "opencode-go/deepseek-v4.1-flash", "effort": null},
+      {"runner": "codex", "model": "gpt-6-astra", "effort": "high"},
+      {"runner": "agy", "model": "claude-sonnet-5-5-high", "effort": null},
+      {"runner": "agent", "model": "sonnet", "effort": "high"}
+    ],
+    "opus": [
+      {"runner": "agent", "model": "opus", "effort": null}
+    ]
+  }
+}
