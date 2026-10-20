@@ -1,6 +1,6 @@
 # 実行先ごとの渡し方（opencode / Codex / Antigravity / dsh）
 
-route に出た実行先を初めて使う前に、その節だけを読む。依頼文（SKILL.md 6 章）は `docs/pbi/<実行先>/<報告名>.prompt.md` に書き、末尾に「要約の書き先: `docs/pbi/<実行先>/<報告名>.last.md`」を足す。リポジトリのルートで Bash から `run_in_background` で 1 件ずつ起動する。cd はリテラルの絶対パスで行う（変数で cd すると Claude Code の権限確認で止まる）。
+route に出た実行先を初めて使う前に、その節だけを読む。依頼文（SKILL.md 6 章）は `docs/pbi/<実行先>/<報告名>.prompt.md` に書き、末尾に「要約の書き先: `docs/pbi/<実行先>/<報告名>.last.md`」を足す。リポジトリのルートで Bash から `run_in_background` で 1 件ずつ起動する。cd はリテラルの絶対パスで行う（変数で cd すると Claude Code の権限確認で止まる）。route に出る外部の実行先は、prepare.py が agents.json と CLI の検出で照合済み。見つからない・使わない・選んでいないモデルの手順は、承認一覧の「外した手順」に出て route に入らない。
 
 外部の実行先は shared-memory の `get` を使えないものとして扱う。PBI の「参照」欄に ref があれば、設計者がその本文を `get` して、依頼文のファイルの末尾に「## 参照（作業空間の ref）」として id ごとに書き写す。依頼文には「参照欄の ref は下に写してある。memory は使わない」と書き足す（SKILL.md 0.8）。
 
@@ -38,7 +38,9 @@ PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<このディレクトリ>/opencode.confi
 - opencode は AGENTS.md を読むが CLAUDE.md は読まない。PBI に要る規約は PBI 本文に書く
 - トークン数・cost・ステップ数・時間は、合否を決めたときの `record_run.py`（SKILL.md 8 章）が `.jsonl` の `step_finish` から読んで runs.jsonl に書く。手で足さない。無料枠（`opencode/…-free`）の cost は 0 で出る
 
-## Codex（`select_model.py` の `CODEX_UNTIL` まで。haiku・sonnet の段）
+## Codex（haiku・sonnet の段）
+
+期限を付けたいときは、振り分けテンプレートの手順に until を書く。
 
 ```bash
 mkdir -p docs/pbi/codex

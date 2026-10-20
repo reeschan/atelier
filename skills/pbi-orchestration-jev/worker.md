@@ -19,9 +19,22 @@
 
 `<報告名>` は依頼文にある（例: `PBI-003`、差し戻しなら `PBI-003.rework-1`）。
 
-1. 詳細を `docs/pbi/reports/<報告名>.md` に、次の 4 つの見出しで書く。
+報告の先頭に、状態の 1 行を書く。詳細ファイルにも、最後のメッセージにも書く。
+
+```
+状態: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
+```
+
+- DONE: 受け入れ条件をすべて自分で確かめた
+- DONE_WITH_CONCERNS: 終えたが懸念がある
+- NEEDS_CONTEXT: 情報が足りず進められない
+- BLOCKED: 環境や権限などで進められない
+
+1. 詳細を `docs/pbi/reports/<報告名>.md` に、状態の 1 行と次の 4 つの見出しで書く。
 
    ```markdown
+   状態: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
+
    ## 検証コマンド
    <番号ごとに、終了コードと出力の末尾（30 行まで）>
 
@@ -35,9 +48,10 @@
    <なし / 箇条書き>
    ```
 
-2. 最後のメッセージは次の 4 行だけにする。依頼文に要約の書き先（`.last.md`）があれば、そのファイルにも同じ 4 行を書く。
+2. 最後のメッセージは次の 5 行だけにする。依頼文に要約の書き先（`.last.md`）があれば、そのファイルにも同じ 5 行を書く。
 
    ```
+   状態: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
    結果: 受け入れ条件 pass <n>/<m>
    変更: <変更したファイルをカンマ区切り>
    未解決: <なし / 1 行で>
