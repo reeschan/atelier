@@ -19,8 +19,8 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 
 - **Models are chosen by a decision table, not by gut feeling.** `select_model.py` combines facts the orchestrator counts (files changed, modules touched, sensitivity) with Jev's reading of a short brief (novelty, coupling, ambiguity) and picks a tier: haiku, sonnet or opus.
 - **Runners are tried in order.** Each tier comes with a `route`, an ordered list of runners. If one is out of quota or fails, the next one takes over.
-- **Pass/fail comes from verification commands.** Neither the sub-agent's report nor Jev's triage is taken at face value. The orchestrator runs the commands itself and checks each acceptance criterion.
-- **At most two rounds of rework.** Jev estimates how big the fix is. The haiku tier may be promoted to sonnet once. If the design needs rethinking, or a PBI still fails after two rounds, the orchestrator stops and asks the user.
+- **Pass/fail comes from verification commands.** Neither the sub-agent's report nor Jev's answer is taken at face value. The worker starts its report with a status line (`DONE` / `DONE_WITH_CONCERNS` / `NEEDS_CONTEXT` / `BLOCKED`); the orchestrator sorts the report by that status and the verification results, and asks Jev to triage only when the two disagree. The orchestrator runs the commands itself and checks each acceptance criterion.
+- **At most two rounds of rework, and an optional tier up.** A failed PBI goes back with the review notes, twice at most. The orchestrator can raise a PBI's tier (for example haiku to sonnet) with `prepare.py --only PBI-<n> --tier <tier>`, which rewrites that PBI's route from the routing in effect at that moment. If the design needs rethinking, or a PBI still fails after two rounds, the orchestrator stops and asks the user.
 - **Only prose goes to Jev.** PBI text, briefs, excerpts from reports and rework notes. Never source code, diffs, environment variables or credentials.
 - **The orchestrator's context stays small.** Every token in the orchestrator's context is re-read on every later turn. Workers end with a 4-line report and put the details in a file, long command output goes to log files, and PBI text is written once and passed by path (`worker.md`, section 0.7 of `SKILL.md`).
 - **Hand-off when the context grows.** Between waves of PBIs the orchestrator measures its context with `agent_stats.py --ctx`. Above 250,000 tokens it writes `docs/pbi/HANDOFF.md` (plus a hand-off memory when shared memory is available) and asks you to `/clear` and resume with `/pbi-orchestration-jev resume`. From a session started without a project folder, run `/pbi-orchestration-jev resume <repository path>`; without the path, the skill finds the repository from the hand-off memory.
@@ -33,6 +33,7 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - **Override routing for a while.** Turn on a priority template and it replaces per-tier routes until its deadline, then asks whether to continue. You can also set it from a web page (an artifact); see Priority templates below.
 - **Usage stats.** `agent_stats.py` reads Claude Code transcripts and reports tokens per model and per agent, how often the prompt cache had to be rebuilt, and the current context size.
 - **A record per run.** Each time the orchestrator decides a run (pass, rework, promotion, unavailable, on hold), `record_run.py` appends one line to `docs/pbi/runs.jsonl`: runner, model, effort, tokens, cost, steps, time and verification results are read from the logs, and only the outcome and the review finding counts come from the orchestrator. Values it cannot read stay null. It also copies that run's raw logs to an archive outside the repository: `$PBI_RUNS_ARCHIVE` if set (point it at a synced folder to keep logs off the machine), otherwise `~/.claude/pbi-runs`. `model_report.py` sums the runs per model, across repositories with `--archive`, and adds a provisional A–D grade for people to adjust later; it never changes routing.
+- **Costs are estimates.** The bundled `prices.json` is a sample price list; a `prices.json` in your home overrides and extends it. `agent_stats.py --cost` reports the designer's cost in API-equivalent USD, and `model_report.py` reports how many runs have no known cost (it leaves them out of the sums).
 
 ## Flow
 
@@ -41,12 +42,14 @@ flowchart TD
   A[Design and split into PBIs] --> B[Count facts<br/>facts.json]
   B --> C[prepare.py<br/>Jev: judge the brief and PBI quality<br/>select_model.py: tier and route]
   C --> F{User approval}
-  F --> G[Run a wave along the route<br/>opencode → Codex → Antigravity → Agent]
-  G --> H[Jev: triage the report]
-  H --> I[Review<br/>verify.py runs the verification commands]
-  I -->|fail| K[Jev: size of the fix]
-  K -->|up to 2 reworks| G
-  K -->|redesign / limit reached| L[Stop and ask the user]
+  F --> G[Run a wave along the route]
+  G --> H{Worker status and verify.py results agree?}
+  H -->|no| H2[Jev: triage the report]
+  H -->|yes| I
+  H2 --> I[Review<br/>verify.py runs the verification commands]
+  I -->|fail| K{Reworks left?}
+  K -->|yes| G
+  K -->|no| L[Stop and ask the user]
   I -->|pass| M{Context ≥ 250k?}
   M -->|no, PBIs left| G
   M -->|yes| N[HANDOFF.md, hand-off memory<br/>/clear, resume]
@@ -64,16 +67,18 @@ flowchart TD
 | any score ≥ 1, or files changed ≥ 4, or modules ≥ 2 | sonnet | normal |
 | none of the above | haiku | normal |
 
-| Tier | 1. opencode | 2. Codex (until `CODEX_UNTIL`) | 3. Antigravity (`agy`) | 4. Claude Code Agent tool |
-|---|---|---|---|---|
-| haiku | `opencode-go/deepseek-v4.1-flash` | `gpt-6-astra`, effort `medium` | `claude-sonnet-5-5-low` | haiku, effort `max` |
-| sonnet | `opencode-go/deepseek-v4.1-flash` | `gpt-6-astra`, effort `high` | `claude-sonnet-5-5-high` | sonnet, effort `high` |
-| sonnet (sensitive) | (not used: stays off outside services) | (not used) | (not used) | sonnet, effort `high` |
-| opus | (not used) | (not used) | (not used) | opus, default effort |
+The bundled default routes every tier to the Agent tool: `haiku` at effort `max`, `sonnet` at effort `high`, and `opus` at its default effort. The default lives in `routing.default.json`; `select_model.py` keeps no table of its own. To use external runners, write your own routing template in `routing.json` in `docs/pbi/` of the target repository or in your home (see [Priority templates](#priority-templates)). The bundled example is `skills/pbi-orchestration-jev/examples/routing/multi-runner.json`.
 
-- A Jev score with confidence below 0.7 is lowered by one step. If Jev is unavailable, every score counts as 1.
-- Codex is used until the `CODEX_UNTIL` date in `select_model.py`, then dropped from the route. Set it to a past date to skip Codex entirely.
-- Antigravity offers no Haiku, so the haiku tier uses Sonnet at low effort there.
+After the route is built (from `routing.json` or a priority template), the skill checks each step against `agents.json` in your home and against the CLIs it can find. It drops a step whose runner is disabled there, whose CLI is missing, or whose model is not in that runner's model list, and the approval list shows each dropped step with its reason. The last Agent step is never dropped.
+
+A minimal `agents.json` in your home:
+
+```json
+{"runners": {"opencode": {"enabled": true, "models": ["opencode-go/deepseek-v4.1-flash"]}}}
+```
+
+- A Jev score with confidence below 0.7 is lowered by one step. Without Jev, the tier is decided from the facts alone: files changed, modules and sensitivity.
+- Antigravity offers no Haiku, so a route that sends the haiku tier to `agy` has to use Sonnet at low effort.
 - `--skip opencode,agy` drops runners that hit a quota or got denied in this session. `--all docs/pbi` routes every PBI at once and prints one line per PBI.
 - "deep" review means the Opus orchestrator reads the whole diff itself. A normal review over 300 lines is delegated to an Opus reviewer agent.
 
@@ -122,12 +127,14 @@ Two things a template cannot change:
 - `sensitive` PBIs never go to an external runner, whatever the template says.
 - Design reassessment and review duties stay with the decision table.
 
-Templates are personal settings: they live in `templates/` next to the skill, outside version control, together with the synced copy (`overrides.json`) and the web page URL (`web.json`). To try the bundled example, copy it into place:
+Templates are personal settings and live in your home. The default home is `~/.config/pbi-orchestration-jev` (`$XDG_CONFIG_HOME/pbi-orchestration-jev` when `XDG_CONFIG_HOME` is set), and `PBI_HOME` points it somewhere else. The home holds `routing.json` (try order), `templates/<name>.json` (priority templates), the synced copy `overrides.json`, the web page URL `web.json`, `agents.json` (runner and model choices) and `prices.json` (price overrides). None of them is required, and the skill does not create the directory. To try the bundled example, copy it into `templates/` there:
 
 ```sh
-mkdir -p skills/pbi-orchestration-jev/templates
-cp skills/pbi-orchestration-jev/examples/templates/deepseek-all.json skills/pbi-orchestration-jev/templates/
+mkdir -p ~/.config/pbi-orchestration-jev/templates
+cp skills/pbi-orchestration-jev/examples/templates/cheap-all-tiers.json ~/.config/pbi-orchestration-jev/templates/
 ```
+
+Replace `~/.config/pbi-orchestration-jev` with your home if you set `XDG_CONFIG_HOME` or `PBI_HOME`.
 
 The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `max`. A step in a priority template can also be a rotate group, `{"rotate": [step, step, ...]}`: the PBI number picks which member goes first, and the other members follow as that PBI's fallbacks, so PBIs are spread evenly across the members (for example, alternating between two free-tier models before two paid ones). For the file format, the home rules and the full walkthrough, see `skills/pbi-orchestration-jev/appendix/priority-templates.md`.
 
@@ -140,13 +147,13 @@ The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `ma
 | Jev API key | recommended | without it, Jev gates are skipped and defaults apply |
 | shared-memory MCP (`mcp__shared-memory__*`) | no | per-task refs and the hand-off memory; without it, facts go into the PBI notes |
 | [opencode](https://opencode.ai) + OpenCode Go | no | first runner for the haiku and sonnet tiers |
-| [Codex CLI](https://github.com/openai/codex) | no | next runner, until `CODEX_UNTIL` |
+| [Codex CLI](https://github.com/openai/codex) | no | external runner you enable in `routing.json` |
 | Antigravity CLI (`agy`) | no | Claude via a Google AI subscription |
 | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) | no | runner for priority templates, e.g. the official DeepSeek API through dsh headless |
 | Node.js | no | the rtk hook, and the JS Jev client (`jev.mjs`) |
 | [rtk](https://github.com/rtk-ai/rtk) | no | compressing command output |
 
-A missing runner just means the route moves on. Claude Code alone is enough to run the skill.
+Only Claude Code is required. Jev, shared-memory, the external CLIs, the web pages and rtk are optional. A missing runner just means the route moves on; Claude Code alone is enough to run the skill.
 
 ## Install
 
@@ -205,7 +212,7 @@ Without the flag file (`~/.claude/state/rtk/<session_id>.on`), or without `rtk` 
 
 ### Notes on Antigravity
 
-- As of 2026-10-13, headless runs (`agy -p`) had command execution auto-denied (`RunCommand`), so work did not progress. The skill drops `agy` for the rest of the session after the first such denial.
+- As of 2026-10, headless runs (`agy -p`) had command execution auto-denied (`RunCommand`), so work did not progress. The skill drops `agy` for the rest of the session after the first such denial.
 - `agy` **silently denies commands it has no permission for and still exits 0**. Denials only show up in `denied_actions` in the JSON result and on stderr. The skill checks `denied_actions` every time.
 - Permissions live in `permissions.allow` in `~/.gemini/antigravity-cli/settings.json`. The sandbox is off by default, so `command(node)` alone was not enough; `unsandboxed(node)` was also needed (checked with agy 1.3.3).
 
@@ -297,7 +304,7 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 ## Tuning
 
 - The decision table and thresholds are starting points. After 10–20 PBIs, look at the results per model (`model_report.py --archive`: first-try pass, reworks, promotions, tokens and cost) and adjust `select_model.py` and `jev.config.json`.
-- Runner models and effort levels come from a routing template (`routing.json`, same shape as `routing.default.json`). Put it at `docs/pbi/routing.json` in the target repo, or `routing.json` in the skill directory, and `select_model.py` uses it; without one, the built-in table applies.
+- Runner models and effort levels come from a routing template (`routing.json`, same shape as `routing.default.json`). Put it at `docs/pbi/routing.json` in the target repo, or `routing.json` in your home, and `select_model.py` uses it; without one, the bundled `routing.default.json` applies.
 - You can also build the template in a browser (see Template Studio above).
 - Review the hand-off threshold (250,000 tokens) and the opencode results on the sonnet tier at the same time.
 
