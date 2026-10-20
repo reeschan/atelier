@@ -4,15 +4,21 @@
 文脈にはテンプレートの 1 行と最後の表だけが入るようにする (SKILL.md 3〜4 章)。
 
 使い方 (リポジトリのルートで):
-  python <このディレクトリ>/prepare.py [docs/pbi] [--skip opencode,codex,agy,dsh] [--today YYYY-MM-DD] [--only PBI-003,PBI-004] [--home DIR] [--now ISO]
+  python <このディレクトリ>/prepare.py [docs/pbi] [--skip opencode,codex,agy,dsh] [--today YYYY-MM-DD] [--only PBI-003,PBI-004] [--tier haiku|sonnet|opus] [--home DIR] [--now ISO]
 
 前提: docs/pbi/PBI-<連番>.md・.facts.json・.brief.md が揃っている。
 - jev.config.json が無ければ、このディレクトリの jev.config.template.json をコピーする
 - 応答 (docs/pbi/jev/<PBI>.brief.json・.pbi_quality.json) が既にあれば呼び直さない (--only で指定した PBI は呼び直す)
+- sensitive な PBI (facts の sensitive が true) には pbi_quality を送らず、brief だけを送る (本文を外部に出さない)
 - Jev の呼び出しは並列 (同時 4 件)。失敗したゲートは飛ばし、表の「メモ」に出す (select_model.py は score を 1 として扱う)
-- 判定ごとに docs/pbi/jev-log.jsonl に 1 行ずつ追記する (brief の行に route.json の template を足す)
+- jev-log.jsonl には、PBI の判定 (段・route・template の note・補正後の値・品質の警告・dropped) が、
+  同じ PBI・ゲート brief の前回の行と変わったときだけ 1 行書く (変わらなければ書かない。ts はタイムゾーン付き)
 - 表の前に 1 行「優先テンプレート: …」を出し (写しと適用の状態。templates.load_overrides・state_of)、
   表の列「優先テンプレート」に route.json の template.note を出す (無ければ —)
+- 表の列「補正後の値」は route.json の scores、「理由」は reasons[0] から「決定: 」を除いたもの、
+  「外した手順」は route.json の dropped を `<runner> <model> (<理由>)` の `; ` つなぎにする。
+  「route の先頭」は common.step_label
+- --tier は --only と一緒のときだけ受け付け、select_model.py に --only と一緒に渡す (tier up で route.json を書き直す)
 - --home・--now はテンプレートの home (templates.resolve_home) と今の時刻 (templates.parse_time)。select_model.py にもそのまま渡す
 """
 
@@ -21,9 +27,9 @@ import json
 import shutil
 import subprocess
 import sys
+import common
 import templates
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -44,11 +50,9 @@ def call_jev(config, gate, text_file, out_file):
 
 
 def load(path):
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return None if "error" in data else data
+    """JSON を読む。読めない・JSON でない・error のキーがあるときは None。"""
+    data = common.load_json(path)
+    return None if isinstance(data, dict) and "error" in data else data
 
 
 def answers(data):
@@ -103,19 +107,66 @@ def template_note(route):
     return tpl.get("note") if isinstance(tpl, dict) else "—"
 
 
+def score_text(route):
+    """表の「補正後の値」。route.json の scores を 新規性/結合度/あいまいさ の順に並べる。"""
+    scores = route.get("scores") or {}
+    return "/".join(str(scores.get(k, "-")) for k in ("novelty", "coupling", "ambiguity"))
+
+
+def reason_text(route):
+    """表の「理由」。route.json の reasons[0] から先頭の「決定: 」を除いたもの。"""
+    reasons = route.get("reasons") or [""]
+    return str(reasons[0]).removeprefix("決定: ")
+
+
+def dropped_text(route):
+    """表の「外した手順」。route.json の dropped を `<runner> <model> (<理由>)` の `; ` つなぎにする。"""
+    dropped = route.get("dropped") or []
+    return "; ".join(f"{d.get('runner')} {d.get('model')} ({d.get('reason')})" for d in dropped) or "なし"
+
+
+def previous_decisions(path):
+    """jev-log.jsonl の中で、PBI ごとの同じ PBI・ゲート brief の最後の行。"""
+    last = {}
+    if not path.exists():
+        return last
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict) and row.get("gate") == "brief" and "pbi" in row:
+                    last[row["pbi"]] = row
+    except OSError:
+        return {}
+    return last
+
+
+def decision_key(row):
+    """判定を比べる 6 つ (ts は比べない)。template は note だけを見る。"""
+    tpl = row.get("template")
+    note = tpl.get("note") if isinstance(tpl, dict) else tpl
+    return (row.get("tier"), row.get("route"), note, row.get("scores"),
+            row.get("warnings"), row.get("dropped"))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("dir", nargs="?", default="docs/pbi")
     ap.add_argument("--skip", default="")
     ap.add_argument("--today")
     ap.add_argument("--only", default="")
+    ap.add_argument("--tier", choices=common.TIERS, help="段を指定する (--only と一緒のときだけ)")
     ap.add_argument("--home", help="テンプレートの home (省略時は templates.resolve_home の解決順)")
     ap.add_argument("--now", help="今の時刻 (タイムゾーン付き ISO 8601。省略時は現在時刻)")
     args = ap.parse_args()
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+    if args.tier and not args.only:
+        sys.exit("--tier は --only と一緒に使う")
+    common.utf8_stdout()
     try:
-        now = templates.parse_time(args.now) if args.now else datetime.now().astimezone()
+        now = templates.parse_time(args.now) if args.now else common.now()
     except ValueError as error:
         sys.exit(f"--now が不正: {error}")
     home = templates.resolve_home(args.home)
@@ -131,9 +182,13 @@ def main():
     if missing:
         sys.exit(f"brief.md か PBI 本文が無い: {', '.join(missing)}")
 
+    facts_by = {p: load(base / f"{p}.facts.json") or {} for p in pbis}
     jobs = []
     for p in pbis:
-        for gate, src in (("brief", base / f"{p}.brief.md"), ("pbi_quality", base / f"{p}.md")):
+        gates = [("brief", base / f"{p}.brief.md")]
+        if not facts_by[p].get("sensitive"):
+            gates.append(("pbi_quality", base / f"{p}.md"))
+        for gate, src in gates:
             out = base / "jev" / f"{p}.{gate}.json"
             if p in only or load(out) is None:
                 jobs.append((p, gate, src, out))
@@ -149,40 +204,46 @@ def main():
         cmd += ["--home", args.home]
     if args.now:
         cmd += ["--now", args.now]
+    if args.tier:
+        cmd += ["--only", args.only, "--tier", args.tier]
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit(f"select_model.py が失敗した: {r.stderr[-500:]}")
 
-    ts = datetime.now().isoformat(timespec="seconds")
+    ts = common.now().isoformat(timespec="seconds")
+    previous = previous_decisions(base / "jev-log.jsonl")
     lines = []
     print(template_line(home, now))
-    print("| PBI | 段 | route の先頭 | review | 優先テンプレート | 新規性/結合度/あいまいさ (確信度) | 品質の警告 | メモ |")
-    print("|---|---|---|---|---|---|---|---|")
+    print("| PBI | 段 | route の先頭 | review | 補正後の値 (新規性/結合度/あいまいさ) | 理由 | 優先テンプレート | "
+          "外した手順 | 品質の警告 | メモ |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
     for p in pbis:
         brief, quality = load(base / "jev" / f"{p}.brief.json"), load(base / "jev" / f"{p}.pbi_quality.json")
-        route = json.loads((base / f"{p}.route.json").read_text(encoding="utf-8"))
-        facts = json.loads((base / f"{p}.facts.json").read_text(encoding="utf-8"))
-        a = answers(brief)
-        sc = "/".join(str((a.get(k) or {}).get("score", "-")) for k in ("novelty", "coupling", "ambiguity"))
-        conf = min(((a.get(k) or {}).get("confidence", 1.0) for k in ("novelty", "coupling", "ambiguity")), default=1.0)
-        warns = quality_warnings(quality)
+        route = load(base / f"{p}.route.json") or {}
+        facts = facts_by[p]
+        sensitive = bool(facts.get("sensitive"))
+        warns = [] if sensitive else quality_warnings(quality)
         memo = []
         if brief is None:
             memo.append("brief の Jev 失敗 (score は 1 扱い)")
-        if quality is None:
+        if sensitive:
+            memo.append("sensitive のため pbi_quality を送らない")
+        elif quality is None:
             memo.append("pbi_quality の Jev 失敗")
-        head = route["route"][0]
-        head_label = f"{head['runner']} {head['model']}" + (f" {head['effort']}" if head.get("effort") else "")
-        print(f"| {p} | {route['tier']} | {head_label} | {route['review']} | {template_note(route)} | {sc} ({conf:.2f}) | "
+        print(f"| {p} | {route.get('tier')} | {common.step_label(route['route'][0])} | {route.get('review')} | "
+              f"{score_text(route)} | {reason_text(route)} | {template_note(route)} | {dropped_text(route)} | "
               f"{', '.join(warns) or 'なし'} | {'; '.join(memo) or '—'} |")
-        lines.append({"ts": ts, "pbi": p, "gate": "brief", "scores": {k: (a.get(k) or {}).get("score") for k in a},
-                      "confidence": {k: (a.get(k) or {}).get("confidence") for k in a}, "facts": facts,
-                      "route": route, "template": route.get("template"), "action": "担当を決定 (prepare.py)"})
-        lines.append({"ts": ts, "pbi": p, "gate": "pbi_quality", "warnings": warns,
-                      "action": "承認一覧に警告として出す" if warns else "警告なし"})
-    with open(base / "jev-log.jsonl", "a", encoding="utf-8") as f:
-        for ln in lines:
-            f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+        entry = {"ts": ts, "pbi": p, "gate": "brief", "tier": route.get("tier"),
+                 "route": route.get("route"), "template": route.get("template"),
+                 "scores": route.get("scores"), "warnings": warns, "dropped": route.get("dropped") or [],
+                 "action": "担当を決定 (prepare.py)"}
+        old = previous.get(p)
+        if old is None or decision_key(old) != decision_key(entry):
+            lines.append(entry)
+    if lines:
+        with open(base / "jev-log.jsonl", "a", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
 
 
 if __name__ == "__main__":
