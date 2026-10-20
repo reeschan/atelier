@@ -1,7 +1,6 @@
 import datetime
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,15 +13,17 @@ SCRIPT = os.path.join(HERE, 'templates.py')
 sys.path.insert(0, HERE)
 import templates  # noqa: E402
 
+HOME_KEYS = ('PBI_HOME', 'PBI_TEMPLATES_HOME', 'XDG_CONFIG_HOME')
+
 NOW = datetime.datetime.fromisoformat('2026-10-22T09:00:00+09:00')
 UNTIL = '2026-10-22T23:59:00+09:00'
 APPLICATION = {
-    'id': 'a-20261016T000000', 'template': 'deepseek-all', 'until': UNTIL, 'on_expire': 'ask',
+    'id': 'a-20261016T000000', 'template': 'cheap-all-tiers', 'until': UNTIL, 'on_expire': 'ask',
     'reason': '一時措置', 'started_at': '2026-10-16T09:00:00+09:00', 'started_via': 'chat',
 }
 
 
-def template(name='deepseek-all', **step_overrides):
+def template(name='cheap-all-tiers', **step_overrides):
     step = {'runner': 'opencode', 'model': 'opencode-go/deepseek-v4.1-flash', 'effort': 'max'}
     step.update(step_overrides)
     return {'name': name, 'description': '1 行の説明',
@@ -48,28 +49,28 @@ def write_text(path, text):
 
 
 def run(*args, env=None, script=SCRIPT):
-    e = {k: v for k, v in os.environ.items() if k != 'PBI_TEMPLATES_HOME'}
+    e = {k: v for k, v in os.environ.items() if k not in HOME_KEYS}
     e.update(env or {})
     return subprocess.run([sys.executable, script, *args], capture_output=True, text=True, encoding='utf-8', env=e)
 
 
 class ValidateTest(unittest.TestCase):
     def test_good_template_has_no_problems(self):
-        self.assertEqual(templates.validate(template(), 'deepseek-all'), [])
+        self.assertEqual(templates.validate(template(), 'cheap-all-tiers'), [])
         self.assertEqual(templates.validate(template()), [])
 
     def test_bad_runner(self):
-        problems = templates.validate(template(runner='gemini'), 'deepseek-all')
+        problems = templates.validate(template(runner='gemini'), 'cheap-all-tiers')
         self.assertTrue(any('runner' in p for p in problems), problems)
 
     def test_dsh_runner_is_valid(self):
         t = template(runner='dsh', model='deepseek-official/deepseek-flash', effort='high')
-        self.assertEqual(templates.validate(t, 'deepseek-all'), [])
+        self.assertEqual(templates.validate(t, 'cheap-all-tiers'), [])
 
     def test_unknown_tier_key(self):
         t = template()
         t['tiers']['mini'] = [{'runner': 'agy', 'model': 'claude-sonnet-5-5-low'}]
-        problems = templates.validate(t, 'deepseek-all')
+        problems = templates.validate(t, 'cheap-all-tiers')
         self.assertTrue(any('mini' in p for p in problems), problems)
 
     def test_name_and_filename_mismatch(self):
@@ -82,42 +83,42 @@ class ValidateTest(unittest.TestCase):
     def test_extra_step_key(self):
         t = template()
         t['tiers']['haiku'][0]['note'] = 'x'
-        problems = templates.validate(t, 'deepseek-all')
+        problems = templates.validate(t, 'cheap-all-tiers')
         self.assertTrue(any('余計なキー' in p for p in problems), problems)
 
     def test_routing_json_shape_is_accepted(self):
         t = template()
         t['$schema_note'] = 'routing.json と同じ形'
         t['tiers']['haiku'][0]['until'] = '2026-10-23'
-        self.assertEqual(templates.validate(t, 'deepseek-all'), [])
+        self.assertEqual(templates.validate(t, 'cheap-all-tiers'), [])
 
     def test_step_until_must_be_a_date(self):
         t = template()
         t['tiers']['haiku'][0]['until'] = 'next week'
-        problems = templates.validate(t, 'deepseek-all')
+        problems = templates.validate(t, 'cheap-all-tiers')
         self.assertTrue(any('until' in p for p in problems), problems)
 
     def test_extra_top_key(self):
         t = template()
         t['synced_at'] = '2026-10-16T09:00:00+09:00'
-        problems = templates.validate(t, 'deepseek-all')
+        problems = templates.validate(t, 'cheap-all-tiers')
         self.assertTrue(any('余計なキー' in p for p in problems), problems)
 
     def test_empty_tiers_and_empty_steps(self):
         t = template()
         t['tiers'] = {}
-        self.assertTrue(templates.validate(t, 'deepseek-all'))
+        self.assertTrue(templates.validate(t, 'cheap-all-tiers'))
         t = template()
         t['tiers']['haiku'] = []
-        self.assertTrue(templates.validate(t, 'deepseek-all'))
+        self.assertTrue(templates.validate(t, 'cheap-all-tiers'))
 
     def test_missing_effort_is_ok(self):
-        t = {'name': 'deepseek-all', 'description': '',
+        t = {'name': 'cheap-all-tiers', 'description': '',
              'tiers': {'opus': [{'runner': 'agent', 'model': 'opus'}]}}
-        self.assertEqual(templates.validate(t, 'deepseek-all'), [])
+        self.assertEqual(templates.validate(t, 'cheap-all-tiers'), [])
 
     def test_bad_effort_type(self):
-        self.assertTrue(templates.validate(template(effort=3), 'deepseek-all'))
+        self.assertTrue(templates.validate(template(effort=3), 'cheap-all-tiers'))
 
 
 FREE = {'runner': 'opencode', 'model': 'opencode/deepseek-v4.1-flash-free', 'effort': 'max'}
@@ -125,14 +126,14 @@ GLM = {'runner': 'opencode', 'model': 'opencode/glm-5.3-flash-free', 'effort': '
 
 
 def rotate_template(*steps):
-    return {'name': 'flash-rotate', 'description': '', 'tiers': {'haiku': list(steps)}}
+    return {'name': 'rotate-free-then-paid', 'description': '', 'tiers': {'haiku': list(steps)}}
 
 
 class RotateValidateTest(unittest.TestCase):
     """交互グループ {"rotate": [手順, ...]} の検査。"""
 
     def problems(self, *steps):
-        return templates.validate(rotate_template(*steps), 'flash-rotate')
+        return templates.validate(rotate_template(*steps), 'rotate-free-then-paid')
 
     def test_good_group_is_ok(self):
         self.assertEqual(self.problems({'rotate': [FREE, GLM]}, {'rotate': [FREE, {**GLM, 'until': '2026-10-23'}]}), [])
@@ -165,17 +166,17 @@ class RotateValidateTest(unittest.TestCase):
 
     def test_check_command_reports_ng(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'flash-rotate.json'), rotate_template({'rotate': [FREE]}))
+            write_json(os.path.join(d, 'templates', 'rotate-free-then-paid.json'), rotate_template({'rotate': [FREE]}))
             out = run('check', '--home', d)
         self.assertEqual(out.returncode, 1)
-        self.assertIn('ng flash-rotate', out.stdout)
+        self.assertIn('ng rotate-free-then-paid', out.stdout)
 
     def test_check_command_reports_ok(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'flash-rotate.json'), rotate_template({'rotate': [FREE, GLM]}))
+            write_json(os.path.join(d, 'templates', 'rotate-free-then-paid.json'), rotate_template({'rotate': [FREE, GLM]}))
             out = run('check', '--home', d)
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
-        self.assertIn('ok flash-rotate', out.stdout)
+        self.assertIn('ok rotate-free-then-paid', out.stdout)
 
 
 class StateOfTest(unittest.TestCase):
@@ -200,57 +201,63 @@ class StateOfTest(unittest.TestCase):
 
 
 class ResolveHomeTest(unittest.TestCase):
+    """--home → PBI_HOME → PBI_TEMPLATES_HOME → XDG_CONFIG_HOME → ~/.config。"""
+
+    def resolve(self, arg=None, **env):
+        cleared = {k: v for k, v in os.environ.items() if k not in HOME_KEYS}
+        cleared.update(env)
+        with mock.patch.dict(os.environ, cleared, clear=True):
+            return templates.resolve_home(arg)
+
     def test_arg_wins_over_env(self):
-        with mock.patch.dict(os.environ, {'PBI_TEMPLATES_HOME': 'env-home'}):
-            self.assertEqual(templates.resolve_home('arg-home'), Path('arg-home'))
+        self.assertEqual(self.resolve('arg-home', PBI_HOME='pbi-home', PBI_TEMPLATES_HOME='old-home'),
+                         Path('arg-home'))
 
-    def test_env_used_without_arg(self):
-        with mock.patch.dict(os.environ, {'PBI_TEMPLATES_HOME': 'env-home'}):
-            self.assertEqual(templates.resolve_home(None), Path('env-home'))
+    def test_pbi_home_is_used(self):
+        self.assertEqual(self.resolve(None, PBI_HOME='pbi-home'), Path('pbi-home'))
 
-    def test_versions_parent_gives_skill_root(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ):
-            os.environ.pop('PBI_TEMPLATES_HOME', None)
-            old = templates.__file__
-            templates.__file__ = os.path.join(d, 'versions', 'v1', 'templates.py')
-            try:
-                self.assertEqual(templates.resolve_home(None), Path(d))
-            finally:
-                templates.__file__ = old
+    def test_old_name_is_still_read(self):
+        self.assertEqual(self.resolve(None, PBI_TEMPLATES_HOME='old-home'), Path('old-home'))
 
-    def test_default_is_script_dir(self):
-        with mock.patch.dict(os.environ), tempfile.TemporaryDirectory() as d:
-            os.environ.pop('PBI_TEMPLATES_HOME', None)
-            old = templates.__file__
-            templates.__file__ = os.path.join(d, 'skill', 'templates.py')
-            try:
-                self.assertEqual(templates.resolve_home(None), Path(d) / 'skill')
-            finally:
-                templates.__file__ = old
+    def test_pbi_home_wins_over_old_name(self):
+        self.assertEqual(self.resolve(None, PBI_HOME='pbi-home', PBI_TEMPLATES_HOME='old-home'),
+                         Path('pbi-home'))
+
+    def test_xdg_config_home(self):
+        self.assertEqual(self.resolve(None, XDG_CONFIG_HOME='xdg'),
+                         Path('xdg') / 'pbi-orchestration-jev')
+
+    def test_default_is_config_under_home(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(Path, 'home', return_value=Path(d)):
+            self.assertEqual(self.resolve(None), Path(d) / '.config' / 'pbi-orchestration-jev')
+
+    def test_home_option_end_to_end(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            out = run('check', '--home', d)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(out.stdout.strip(), 'ok cheap-all-tiers')
 
     def test_env_home_end_to_end(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            out = run('check', env={'PBI_HOME': d})
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(out.stdout.strip(), 'ok cheap-all-tiers')
+
+    def test_old_env_name_end_to_end(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out = run('check', env={'PBI_TEMPLATES_HOME': d})
             self.assertEqual(out.returncode, 0, out.stderr)
-            self.assertEqual(out.stdout.strip(), 'ok deepseek-all')
-
-    def test_versions_script_finds_skill_root_end_to_end(self):
-        with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
-            script = os.path.join(d, 'versions', 'v1', 'templates.py')
-            os.makedirs(os.path.dirname(script))
-            shutil.copy(SCRIPT, script)
-            out = run('check', script=script)
-            self.assertEqual(out.returncode, 0, out.stderr)
-            self.assertEqual(out.stdout.strip(), 'ok deepseek-all')
+            self.assertEqual(out.stdout.strip(), 'ok cheap-all-tiers')
 
 
 class LoadTest(unittest.TestCase):
     def test_load_template(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
-            self.assertEqual(templates.load_template(Path(d), 'deepseek-all')['name'], 'deepseek-all')
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            self.assertEqual(templates.load_template(Path(d), 'cheap-all-tiers')['name'], 'cheap-all-tiers')
             self.assertIsNone(templates.load_template(Path(d), 'nope'))
             write_text(os.path.join(d, 'templates', 'broken.json'), '{oops')
             self.assertIsNone(templates.load_template(Path(d), 'broken'))
@@ -259,10 +266,10 @@ class LoadTest(unittest.TestCase):
 
     def test_load_all_keeps_only_valid(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             write_json(os.path.join(d, 'templates', 'bad.json'), template(name='bad', runner='gemini'))
             write_text(os.path.join(d, 'templates', 'broken.json'), 'not json')
-            self.assertEqual(list(templates.load_all(Path(d))), ['deepseek-all'])
+            self.assertEqual(list(templates.load_all(Path(d))), ['cheap-all-tiers'])
 
     def test_load_overrides_missing_or_broken_is_empty(self):
         with tempfile.TemporaryDirectory() as d:
@@ -275,7 +282,7 @@ class LoadTest(unittest.TestCase):
             write_json(os.path.join(d, 'overrides.json'),
                        {'synced_at': '2026-10-16T09:00:00+09:00', 'application': application()})
             overrides = templates.load_overrides(Path(d))
-            self.assertEqual(overrides['application']['template'], 'deepseek-all')
+            self.assertEqual(overrides['application']['template'], 'cheap-all-tiers')
 
 
 class SyncTest(unittest.TestCase):
@@ -291,18 +298,18 @@ class SyncTest(unittest.TestCase):
 
     def test_active_keeps_application(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out, overrides = self.sync(d, {'application': application(), 'updated_at': '2026-10-16T09:00:00+09:00'},
                                        '2026-10-22T09:00:00+09:00')
             self.assertEqual(out['status'], 'active')
             self.assertEqual(out['writes'], [])
-            self.assertEqual(out['application']['template'], 'deepseek-all')
+            self.assertEqual(out['application']['template'], 'cheap-all-tiers')
             self.assertEqual(overrides['synced_at'], '2026-10-22T09:00:00+09:00')
             self.assertEqual(overrides['application']['id'], APPLICATION['id'])
 
     def test_none_writes_empty_overrides(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out, overrides = self.sync(d, {}, '2026-10-22T09:00:00+09:00')
             self.assertEqual(out['status'], 'none')
             self.assertEqual(out['writes'], [])
@@ -312,23 +319,23 @@ class SyncTest(unittest.TestCase):
 
     def test_missing_state_file_is_no_application(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out, _ = self.sync(d, None, '2026-10-22T09:00:00+09:00')
             self.assertEqual(out['status'], 'none')
 
     def test_expired_ask_keeps_application_and_no_writes(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out, overrides = self.sync(d, {'application': application(), 'updated_at': 'x'},
                                        '2026-10-23T00:00:00+09:00')
             self.assertEqual(out['status'], 'expired_ask')
             self.assertEqual(out['writes'], [])
-            self.assertEqual(overrides['application']['template'], 'deepseek-all')
+            self.assertEqual(overrides['application']['template'], 'cheap-all-tiers')
             self.assertEqual(overrides['synced_at'], '2026-10-23T00:00:00+09:00')
 
     def test_expired_drop_moves_to_history_and_clears(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             app = application(on_expire='drop')
             out, overrides = self.sync(d, {'application': app, 'updated_at': 'x'}, '2026-10-23T00:00:00+09:00')
             self.assertEqual(out['status'], 'expired_drop')
@@ -339,7 +346,7 @@ class SyncTest(unittest.TestCase):
             self.assertEqual(history['doc_id'], app['id'])
             self.assertEqual(history['data']['ended_at'], UNTIL)
             self.assertEqual(history['data']['ended_how'], 'expired')
-            self.assertEqual(history['data']['template'], 'deepseek-all')
+            self.assertEqual(history['data']['template'], 'cheap-all-tiers')
             self.assertEqual(current['collection'], 'state')
             self.assertEqual(current['doc_id'], 'current')
             self.assertEqual(current['data'], {'application': None, 'updated_at': '2026-10-23T00:00:00+09:00'})
@@ -355,16 +362,16 @@ class SyncTest(unittest.TestCase):
 
     def test_unknown_template_when_local_file_invalid(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template(runner='gemini'))
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template(runner='gemini'))
             out, overrides = self.sync(d, {'application': application(), 'updated_at': 'x'},
                                        '2026-10-22T09:00:00+09:00')
             self.assertEqual(out['status'], 'unknown_template')
             self.assertEqual(out['writes'], [])
-            self.assertEqual(overrides['application']['template'], 'deepseek-all')
+            self.assertEqual(overrides['application']['template'], 'cheap-all-tiers')
 
     def test_invalid_state_json_is_exit_2(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             state_path = os.path.join(d, 'state.json')
             write_text(state_path, '{oops')
             out = run('sync', '--home', d, '--state', state_path)
@@ -373,7 +380,7 @@ class SyncTest(unittest.TestCase):
 
     def test_naive_now_is_exit_2(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             state_path = os.path.join(d, 'state.json')
             write_json(state_path, {})
             out = run('sync', '--home', d, '--state', state_path, '--now', '2026-10-22')
@@ -393,7 +400,7 @@ class DueTest(unittest.TestCase):
     def test_inside_window(self):
         with tempfile.TemporaryDirectory() as d:
             r = self.due(d, {'application': application()}, '2026-10-22T09:00:00+09:00')
-            self.assertEqual(r['due']['template'], 'deepseek-all')
+            self.assertEqual(r['due']['template'], 'cheap-all-tiers')
             self.assertTrue(14.9 < r['hours_left'] < 15.0, r)
 
     def test_outside_window(self):
@@ -404,7 +411,7 @@ class DueTest(unittest.TestCase):
     def test_wider_window_finds_due(self):
         with tempfile.TemporaryDirectory() as d:
             r = self.due(d, {'application': application()}, '2026-10-21T09:00:00+09:00', '--within-hours', '40')
-            self.assertEqual(r['due']['template'], 'deepseek-all')
+            self.assertEqual(r['due']['template'], 'cheap-all-tiers')
 
     def test_past_until_is_not_due(self):
         with tempfile.TemporaryDirectory() as d:
@@ -432,17 +439,17 @@ class CheckTest(unittest.TestCase):
 
     def test_all_good_is_exit_0(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out = run('check', '--home', d)
             self.assertEqual(out.returncode, 0)
-            self.assertEqual(out.stdout.splitlines(), ['ok deepseek-all'])
+            self.assertEqual(out.stdout.splitlines(), ['ok cheap-all-tiers'])
 
     def test_named_check_and_missing(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
-            out = run('check', 'deepseek-all', '--home', d)
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            out = run('check', 'cheap-all-tiers', '--home', d)
             self.assertEqual(out.returncode, 0)
-            self.assertEqual(out.stdout.splitlines(), ['ok deepseek-all'])
+            self.assertEqual(out.stdout.splitlines(), ['ok cheap-all-tiers'])
             out = run('check', 'nope', '--home', d)
             self.assertEqual(out.returncode, 1)
             self.assertTrue(out.stdout.splitlines()[0].startswith('ng nope:'), out.stdout)
@@ -456,7 +463,7 @@ class CheckTest(unittest.TestCase):
 
 
 class ApplyTest(unittest.TestCase):
-    def apply(self, d, state, template_name='deepseek-all', until='2026-11-05T23:59:00+09:00',
+    def apply(self, d, state, template_name='cheap-all-tiers', until='2026-11-05T23:59:00+09:00',
               on_expire='ask', reason='テスト', now='2026-10-22T09:00:00+09:00', via=None):
         state_path = os.path.join(d, 'state.json')
         if state is not None:
@@ -470,7 +477,7 @@ class ApplyTest(unittest.TestCase):
 
     def test_no_previous_application_writes_only_state(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out = self.apply(d, {})
             self.assertEqual(out.returncode, 0, out.stderr)
             result = json.loads(out.stdout)
@@ -483,23 +490,23 @@ class ApplyTest(unittest.TestCase):
 
     def test_new_application_fields(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out = self.apply(d, {}, reason='一時措置')
             self.assertEqual(json.loads(out.stdout)['application'], {
-                'id': 'a-20261022T000000', 'template': 'deepseek-all',
+                'id': 'a-20261022T000000', 'template': 'cheap-all-tiers',
                 'until': '2026-11-05T23:59:00+09:00', 'on_expire': 'ask', 'reason': '一時措置',
                 'started_at': '2026-10-22T09:00:00+09:00', 'started_via': 'chat'})
 
     def test_missing_state_file_is_no_previous(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out = self.apply(d, None)
             self.assertEqual(out.returncode, 0, out.stderr)
             self.assertEqual([w['collection'] for w in json.loads(out.stdout)['writes']], ['state'])
 
     def test_active_previous_moves_to_history_replaced(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             app = application()
             out = self.apply(d, {'application': app, 'updated_at': 'x'})
             self.assertEqual(out.returncode, 0, out.stderr)
@@ -508,14 +515,14 @@ class ApplyTest(unittest.TestCase):
                              ('set', 'history', app['id']))
             self.assertEqual(history['data']['ended_how'], 'replaced')
             self.assertEqual(history['data']['ended_at'], '2026-10-22T09:00:00+09:00')
-            self.assertEqual(history['data']['template'], 'deepseek-all')
+            self.assertEqual(history['data']['template'], 'cheap-all-tiers')
             self.assertEqual(history['data']['started_via'], 'chat')
             self.assertEqual(current['collection'], 'state')
-            self.assertEqual(current['data']['application']['template'], 'deepseek-all')
+            self.assertEqual(current['data']['application']['template'], 'cheap-all-tiers')
 
     def test_expired_ask_previous_moves_to_history_replaced(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out = self.apply(d, {'application': application(), 'updated_at': 'x'},
                              now='2026-10-23T00:00:00+09:00')
             history = json.loads(out.stdout)['writes'][0]
@@ -524,7 +531,7 @@ class ApplyTest(unittest.TestCase):
 
     def test_expired_drop_previous_moves_to_history_expired(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             app = application(on_expire='drop')
             out = self.apply(d, {'application': app, 'updated_at': 'x'},
                              now='2026-10-23T00:00:00+09:00')
@@ -534,14 +541,14 @@ class ApplyTest(unittest.TestCase):
 
     def test_until_none_has_no_expiry(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out = self.apply(d, {}, until='none')
             self.assertEqual(out.returncode, 0, out.stderr)
             self.assertIsNone(json.loads(out.stdout)['application']['until'])
 
     def test_via_web(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out = self.apply(d, {}, via='web')
             self.assertEqual(json.loads(out.stdout)['application']['started_via'], 'web')
 
@@ -554,14 +561,14 @@ class ApplyTest(unittest.TestCase):
 
     def test_invalid_template_is_exit_2(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template(runner='gemini'))
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template(runner='gemini'))
             out = self.apply(d, {})
             self.assertEqual(out.returncode, 2)
             self.assertTrue(out.stderr.strip())
 
     def test_past_or_equal_until_is_exit_2(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             for until in ('2026-10-22T08:59:00+09:00', '2026-10-22T09:00:00+09:00'):
                 out = self.apply(d, {}, until=until)
                 self.assertEqual(out.returncode, 2, until)
@@ -569,7 +576,7 @@ class ApplyTest(unittest.TestCase):
 
     def test_bad_on_expire_is_exit_2(self):
         with tempfile.TemporaryDirectory() as d:
-            write_json(os.path.join(d, 'templates', 'deepseek-all.json'), template())
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
             out = self.apply(d, {}, on_expire='later')
             self.assertEqual(out.returncode, 2)
             self.assertTrue(out.stderr.strip())
