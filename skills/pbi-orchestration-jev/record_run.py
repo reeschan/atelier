@@ -4,7 +4,7 @@
 使い方 (リポジトリのルートで):
   python <このディレクトリ>/record_run.py <報告名> --attempt N --outcome 合格|差し戻し|昇格|使えず|保留
       [--findings 重大,中,軽微] [--runner R --model M --effort E --tier T] [--work-key KEY] [--repo NAME]
-      [--dir docs/pbi] [--projects DIR] [--prices FILE]
+      [--dir docs/pbi] [--projects DIR] [--prices FILE] [--home DIR]
 
 報告名は PBI-007 か PBI-007.rework-1。--attempt は route の何番目か (1 始まり。使えずで次へ回したら増やす)。
 実行先・モデル・effort・段は docs/pbi/<PBI>.route.json の route[attempt-1] から取る。昇格などで route.json と
@@ -19,7 +19,8 @@
             <報告名>.run.json の開始・終了時刻 (dsh_run.py が書く)
   検証:     docs/pbi/verify/<報告名>.json (verify.py が書く)。unchanged.py check の行の終了コードを触らない範囲とする
 取れない値は 0 ではなく null にする。cost_reported は実行先が出した USD (opencode の cost)、cost_api_equiv は
-トークン × prices.json の API 換算 (agent だけ。参考値で請求額ではない)。
+トークン × 単価表の API 換算 (参考値で請求額ではない)。単価表は同梱の --prices に home の --home/prices.json を
+重ねたもの。トークン数と単価が分かる実行先ならどれでも出す。prices_checked_at は cost_api_equiv を出したときに入れる。
 
 保全先は環境変数 PBI_RUNS_ARCHIVE、無ければ ~/.claude/pbi-runs にする (クラウドで同期するフォルダなどに残したいときは
 PBI_RUNS_ARCHIVE にそのフォルダを入れる)。
@@ -37,6 +38,7 @@ import sys
 from pathlib import Path
 
 import agent_stats
+import common
 
 HERE = Path(__file__).resolve().parent
 SCHEMA = 1
@@ -46,6 +48,7 @@ REPORT_RE = re.compile(r'^(PBI-\d+)(?:\.rework-(\d+))?$')
 RUNNER_DIRS = ('opencode', 'codex', 'agy', 'dsh')
 RUNNER_SUFFIXES = ('.prompt.md', '.jsonl', '.err', '.log', '.last.md', '.json', '.patch.yml', '.run.json', '.final.md')
 TOKEN_FIELDS = ('input', 'output', 'reasoning', 'cache_read', 'cache_write', 'cache_write_5m', 'cache_write_1h')
+PRICE_KEYS = ('input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h')
 
 
 def fail(msg: str) -> None:
@@ -69,6 +72,19 @@ def span(first, last) -> dict:
         return {'start': None, 'end': None, 'seconds': None}
     return {'start': first.isoformat(timespec='seconds'), 'end': last.isoformat(timespec='seconds'),
             'seconds': round((last - first).total_seconds())}
+
+
+def tokens_cost(tokens: dict, price: dict | None) -> float | None:
+    """トークン数 × 単価 (USD / 100 万トークン) の API 換算。単価が無い・トークンの内訳が無いときは None。
+
+    tokens に無いキーと単価表に無いキーは 0 として計算する。
+    """
+    if price is None:
+        return None
+    counts = {k: tokens.get(k) for k in PRICE_KEYS}
+    if all(v is None for v in counts.values()):
+        return None
+    return sum((counts[k] or 0) * (price.get(k) or 0) for k in PRICE_KEYS) / 1_000_000
 
 
 def from_ms(ms) -> datetime.datetime:
@@ -192,18 +208,6 @@ def norm_path(s: str) -> str:
     return s.removeprefix('\\\\?\\').replace('\\', '/').rstrip('/').lower()
 
 
-def long_path(p: Path) -> Path:
-    """Windows で 260 文字を超えるパスを開けるように \\\\?\\ を付ける (会話記録のパスは超えることがある)。"""
-    if os.name != 'nt':
-        return p
-    s = str(p.resolve())
-    return p if s.startswith('\\\\?\\') else Path('\\\\?\\' + s)
-
-
-def shown(p: Path) -> str:
-    return str(p).removeprefix('\\\\?\\').replace('\\', '/')
-
-
 def work_root(transcript: Path) -> str | None:
     """依頼文 (最初の user のメッセージ) の「作業ルート: <パス>」(SKILL.md 6.1)。無ければ None。"""
     try:
@@ -232,8 +236,8 @@ def find_agent_transcript(projects: Path, cwd: Path, name: str) -> Path | None:
     セッションから絶対パスで作業したとき、会話記録は作業リポジトリとは別のプロジェクトの下にあるため。
     作業ルートの無い会話記録は、今のディレクトリのプロジェクトにあるときだけ採る。
     """
-    projects = long_path(projects)
-    here = projects / ''.join(c if c.isalnum() else '-' for c in str(cwd))
+    projects = common.long_path(projects)
+    here = projects / common.project_dir_for(cwd).name
     target = norm_path(str(cwd))
     hits = []
     for meta in projects.glob('*/*/subagents/agent-*.meta.json'):
@@ -252,36 +256,22 @@ def find_agent_transcript(projects: Path, cwd: Path, name: str) -> Path | None:
     return max(hits, key=lambda p: p.stat().st_mtime) if hits else None
 
 
-def load_prices(path: Path) -> dict:
-    try:
-        return json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return {'models': {}, 'checked_at': None}
-
-
-def price_for(prices: dict, model: str) -> dict | None:
-    for key, p in prices.get('models', {}).items():
-        if model == key or model.startswith(key):
-            return p
-    return None
-
-
 def read_agent(transcript: Path | None, prices: dict) -> dict:
     if transcript is None:
         return {'tokens': empty_tokens(), 'steps': None, 'time': span(None, None), 'cost_api': None,
                 'models_seen': [], 'transcript': None}
     reqs = agent_stats.load_requests(transcript)
     t = {'input': 0, 'output': 0, 'reasoning': None, 'cache_read': 0, 'cache_write_5m': 0, 'cache_write_1h': 0,
-         'source': shown(transcript)}
+         'source': common.shown(transcript)}
     cost, priced = 0.0, True
     for r in reqs:
         for k in ('input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h'):
             t[k] += r[k]
-        p = price_for(prices, r['model'])
+        p = common.price_for(prices, r['model'])
         if p is None:
             priced = False
         else:
-            cost += sum(r[k] * p[k] for k in ('input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h'))
+            cost += sum(r[k] * (p.get(k) or 0) for k in PRICE_KEYS)
     t['cache_write'] = t['cache_write_5m'] + t['cache_write_1h']
     first = datetime.datetime.fromtimestamp(reqs[0]['ts']).astimezone() if reqs else None
     last = datetime.datetime.fromtimestamp(reqs[-1]['ts']).astimezone() if reqs else None
@@ -392,7 +382,8 @@ def main():
         ap.add_argument(opt)
     ap.add_argument('--dir', default='docs/pbi')
     ap.add_argument('--projects', default=str(agent_stats.PROJECTS))
-    ap.add_argument('--prices', default=str(HERE / 'prices.json'))
+    ap.add_argument('--prices', default=str(HERE / 'prices.json'), help='同梱の単価表')
+    ap.add_argument('--home', help='home のディレクトリ (既定は common.resolve_home)')
     args = ap.parse_args()
 
     m = REPORT_RE.match(args.report)
@@ -424,24 +415,25 @@ def main():
     if not runner or not model:
         fail(f'{pbi}.route.json に attempt {args.attempt} の実行先が無い。--runner と --model で渡す')
 
-    prices = load_prices(Path(args.prices))
+    prices = common.load_prices(common.resolve_home(args.home), Path(args.prices))
     transcript = None
+    cost_reported = None
     if runner == 'opencode':
         got = read_opencode(base / 'opencode' / f'{args.report}.jsonl')
-        cost_reported, cost_api = got['cost'], None
+        cost_reported = got['cost']
     elif runner == 'codex':
         got = read_codex(base / 'codex' / f'{args.report}.log')
-        cost_reported, cost_api = None, None
     elif runner == 'agy':
         got = read_agy(base / 'agy' / f'{args.report}.json')
-        cost_reported, cost_api = None, None
     elif runner == 'dsh':
         got = read_dsh(base / 'dsh' / f'{args.report}.jsonl')
-        cost_reported, cost_api = None, None
     else:
         transcript = find_agent_transcript(Path(args.projects), cwd, args.report)
         got = read_agent(transcript, prices)
-        cost_reported, cost_api = None, got['cost_api']
+    if runner == 'agent':
+        cost_api = got['cost_api']
+    else:
+        cost_api = tokens_cost(got['tokens'], common.price_for(prices, model))
     verify, unchanged = read_verify(base / 'verify' / f'{args.report}.json')
 
     key = work_key(base, args.work_key)
@@ -462,7 +454,7 @@ def main():
         'models_seen': got.get('models_seen'),
         'time': got['time'], 'steps': got['steps'], 'tokens': got['tokens'],
         'cost_reported': cost_reported, 'cost_api_equiv': cost_api,
-        'prices_checked_at': prices.get('checked_at') if runner == 'agent' else None,
+        'prices_checked_at': prices.get('checked_at') if cost_api is not None else None,
         'verify': verify, 'unchanged': unchanged,
         'judged': {'outcome': args.outcome, 'findings': findings},
         'archive': archive_info,

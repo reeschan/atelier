@@ -86,6 +86,8 @@ def summarize(rows: list[dict]) -> dict:
         tokens, tokens_known = known_sum((r.get('tokens') or {}).get('total') for r in rs)
         reported, _ = known_sum(r.get('cost_reported') for r in rs)
         api, _ = known_sum(r.get('cost_api_equiv') for r in rs)
+        cost_unknown = sum(1 for r in rs
+                           if r.get('cost_reported') is None and r.get('cost_api_equiv') is None)
         secs, secs_known = known_sum((r.get('time') or {}).get('seconds') for r in rs)
         mine = graded.get(name, [])
         reworks = [n for _, n in mine if n is not None]
@@ -93,12 +95,13 @@ def summarize(rows: list[dict]) -> dict:
                     'unavailable_rate': outcomes.get(UNAVAILABLE, 0) / len(rs),
                     'tokens_total': tokens, 'tokens_known': tokens_known,
                     'tokens_avg': (tokens / tokens_known) if tokens_known else None,
-                    'cost_reported': reported, 'cost_api_equiv': api,
+                    'cost_reported': reported, 'cost_api_equiv': api, 'cost_unknown': cost_unknown,
                     'seconds_avg': (secs / secs_known) if secs_known else None,
                     'pbis_graded': len(mine),
                     'grades': {g: sum(1 for x, _ in mine if x == g) for g in GRADES},
                     'rework_avg': (sum(reworks) / len(reworks)) if reworks else None})
-    return {'rows': len(rows), 'pbis': len(by_pbi), 'models': out}
+    return {'rows': len(rows), 'pbis': len(by_pbi),
+            'cost_unknown': sum(m['cost_unknown'] for m in out), 'models': out}
 
 
 def money(v):
@@ -112,13 +115,15 @@ def num(v):
 def table(report: dict) -> str:
     lines = [f"実行 {report['rows']} 件 / PBI {report['pbis']} 件",
              '',
-             '| モデル | 実行 | 結果の内訳 | 使えず率 | トークン合計 (取得数) | 平均 | 実費 USD | API 換算 USD | 平均秒 |',
-             '|---|---|---|---|---|---|---|---|---|']
+             '| モデル | 実行 | 結果の内訳 | 使えず率 | トークン合計 (取得数) | 平均 | 実費 USD | API 換算 USD | 平均秒 | 費用不明 |',
+             '|---|---|---|---|---|---|---|---|---|---|']
     for m in report['models']:
         outcomes = ' '.join(f'{k}{v}' for k, v in m['outcomes'].items())
         lines.append(f"| {m['label']} | {m['attempts']} | {outcomes} | {m['unavailable_rate']:.0%} | "
                      f"{num(m['tokens_total'])} ({m['tokens_known']}) | {num(m['tokens_avg'])} | "
-                     f"{money(m['cost_reported'])} | {money(m['cost_api_equiv'])} | {num(m['seconds_avg'])} |")
+                     f"{money(m['cost_reported'])} | {money(m['cost_api_equiv'])} | {num(m['seconds_avg'])} | "
+                     f"{m['cost_unknown']} |")
+    lines.append(f"費用不明: {report['cost_unknown']} 件 / 全 {report['rows']} 件")
     lines += ['',
               '仮の評価 (最初に成果物を出したモデルに付ける。A 一発合格 / B 差し戻し 1 回 / C 2 回 / D 昇格・保留。'
               '後から人が見て調整する目安で、振り分けには使わない)',
