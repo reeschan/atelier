@@ -1,12 +1,16 @@
+import contextlib
+import io
 import json
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import agent_stats
+import common
 
 
 def row(rid, ts, model="claude-haiku-5-5", inp=2, out=10, read=0, w5=0, w1=0):
@@ -19,6 +23,11 @@ def row(rid, ts, model="claude-haiku-5-5", inp=2, out=10, read=0, w5=0, w1=0):
 
 def write_jsonl(path, rows):
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+
+def usd(price, **tokens):
+    """単価 (USD / 100 万トークン) とトークン数から、read_agent と同じ式で費用を出す。"""
+    return sum(tokens.get(k, 0) * (price.get(k) or 0) for k in agent_stats.TOKEN_KEYS) / 1_000_000
 
 
 class AnalyzeTest(unittest.TestCase):
@@ -96,6 +105,116 @@ class SessionTest(unittest.TestCase):
     def test_project_dir_for(self):
         p = agent_stats.project_dir_for("C:/Users/alice/dev/my-app")
         self.assertEqual(p.name, "C--Users-alice-dev-my-app")
+
+
+class CostTest(unittest.TestCase):
+    """--cost の API 換算。home は一時ディレクトリを渡し、本物の home を読まない。"""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.home = self.root / "home"
+        self.home.mkdir()
+        self.session = self.root / "projects" / "proj" / "s1.jsonl"
+        self.session.parent.mkdir(parents=True)
+        self.sub = self.session.with_suffix("") / "subagents"
+        self.sub.mkdir(parents=True)
+
+    def write_session(self, main_rows, agents=()):
+        write_jsonl(self.session, main_rows)
+        for aid, desc, rows in agents:
+            write_jsonl(self.sub / f"agent-{aid}.jsonl", rows)
+            (self.sub / f"agent-{aid}.meta.json").write_text(json.dumps({"description": desc}), encoding="utf-8")
+
+    def prices(self):
+        return common.load_prices(self.home)
+
+    def one_agent_session(self, main_model="claude-opus-5-5", sub_model="claude-haiku-5-5"):
+        self.write_session(
+            [row("m1", "2026-10-11T00:00:00Z", model=main_model,
+                 inp=1000, out=2000, read=3000, w5=4000, w1=5000)],
+            [("a1", "PBI-1 cost", [row("a1", "2026-10-11T00:01:00Z", model=sub_model,
+                                      inp=100, out=200, read=300, w5=400, w1=500)])])
+
+    def test_cost_is_split_into_orchestrator_and_subagents(self):
+        self.one_agent_session()
+        prices = self.prices()
+        s = agent_stats.session_stats(self.session, prices)
+        orch = usd(prices["models"]["claude-opus-5-5"],
+                   input=1000, output=2000, cache_read=3000, cache_write_5m=4000, cache_write_1h=5000)
+        sub = usd(prices["models"]["claude-haiku-5-5"],
+                  input=100, output=200, cache_read=300, cache_write_5m=400, cache_write_1h=500)
+        self.assertAlmostEqual(s["cost"]["orchestrator"]["usd"], orch)
+        self.assertAlmostEqual(s["cost"]["subagents"]["usd"], sub)
+        self.assertAlmostEqual(s["cost"]["total"]["usd"], orch + sub)
+        self.assertEqual(s["cost"]["orchestrator"]["requests"], 1)
+        self.assertEqual(s["cost"]["subagents"]["requests"], 1)
+        text = agent_stats.summary(s)
+        self.assertIn("設計者", text)
+        self.assertIn("サブエージェント (合計)", text)
+        self.assertIn("全体", text)
+        self.assertIn(f"{orch + sub:.4f}", text)
+
+    def test_home_prices_override_bundled_prices(self):
+        self.one_agent_session()
+        (self.home / "prices.json").write_text(json.dumps({"checked_at": "2026-10-20", "models": {
+            "claude-haiku-5-5": {"input": 10, "output": 20, "cache_read": 1,
+                                 "cache_write_5m": 2, "cache_write_1h": 3}}}), encoding="utf-8")
+        prices = self.prices()
+        s = agent_stats.session_stats(self.session, prices)
+        overridden = usd(prices["models"]["claude-haiku-5-5"],
+                         input=100, output=200, cache_read=300, cache_write_5m=400, cache_write_1h=500)
+        bundled = usd(common.load_prices(self.root / "missing-home")["models"]["claude-haiku-5-5"],
+                      input=100, output=200, cache_read=300, cache_write_5m=400, cache_write_1h=500)
+        self.assertAlmostEqual(s["cost"]["subagents"]["usd"], overridden)
+        self.assertNotAlmostEqual(s["cost"]["subagents"]["usd"], bundled)
+        self.assertEqual(prices["home_checked_at"], "2026-10-20")
+        self.assertEqual(s["cost"]["prices_checked_at"], prices["checked_at"])
+
+    def test_unknown_price_is_counted_and_not_added(self):
+        self.write_session(
+            [row("m1", "2026-10-11T00:00:00Z", model="claude-opus-5-5", inp=1000, out=2000)],
+            [("a1", "PBI-1 known", [row("a1", "2026-10-11T00:01:00Z", model="claude-haiku-5-5", inp=100, out=200)]),
+             ("a2", "PBI-1 unknown", [row("a2", "2026-10-11T00:02:00Z", model="mystery-9", inp=900000, out=900000)])])
+        prices = self.prices()
+        s = agent_stats.session_stats(self.session, prices)
+        orch = usd(prices["models"]["claude-opus-5-5"], input=1000, output=2000)
+        known_sub = usd(prices["models"]["claude-haiku-5-5"], input=100, output=200)
+        self.assertEqual(s["cost"]["subagents"]["unpriced"], 1)
+        self.assertEqual(s["cost"]["total"]["unpriced"], 1)
+        self.assertAlmostEqual(s["cost"]["subagents"]["usd"], known_sub)
+        self.assertAlmostEqual(s["cost"]["total"]["usd"], orch + known_sub)
+        self.assertIn("単価不明 1 件", agent_stats.summary(s))
+
+    def test_without_cost_output_is_unchanged(self):
+        self.one_agent_session()
+        plain = agent_stats.session_stats(self.session)
+        priced = agent_stats.session_stats(self.session, self.prices())
+        priced.pop("cost")
+        plain.pop("generated_at")
+        priced.pop("generated_at")
+        self.assertEqual(plain, priced)
+        self.assertNotIn("cost", agent_stats.session_stats(self.session))
+        self.assertNotIn("API 換算", agent_stats.summary(agent_stats.session_stats(self.session)))
+
+    def test_main_json_includes_cost_and_text_shows_breakdown(self):
+        self.one_agent_session()
+        argv = ["agent_stats.py", "--cost", "--json", "--home", str(self.home)]
+        with mock.patch.object(agent_stats, "latest_session", return_value=self.session), \
+                mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()) as out:
+            agent_stats.main()
+        data = json.loads(out.getvalue())
+        self.assertIn("cost", data)
+        self.assertEqual(data["cost"]["total"]["requests"], 2)
+
+        argv = ["agent_stats.py", "--cost", "--home", str(self.home)]
+        with mock.patch.object(agent_stats, "latest_session", return_value=self.session), \
+                mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()) as out:
+            agent_stats.main()
+        text = out.getvalue()
+        self.assertIn("API 換算の費用", text)
+        self.assertIn("| 設計者 |", text)
+        self.assertIn("| サブエージェント (合計) |", text)
+        self.assertIn("| 全体 |", text)
 
 
 @unittest.skipUnless(os.name == "nt", "260 文字の上限は Windows だけ")

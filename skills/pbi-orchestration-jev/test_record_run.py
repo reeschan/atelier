@@ -8,6 +8,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import agent_stats
+import common
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 RECORD = os.path.join(HERE, 'record_run.py')
 VERIFY = os.path.join(HERE, 'verify.py')
@@ -46,6 +49,8 @@ class RecordRunTest(unittest.TestCase):
         (self.pbi / 'jev').mkdir()
         self.archive = self.tmp / 'archive'
         self.projects = self.tmp / 'projects'
+        self.price_home = self.tmp / 'price-home'
+        self.price_home.mkdir()
         (self.pbi / 'STATUS.md').write_text('作業キー: myrepo:feature/x:W-002 / 作業空間: project:work\n',
                                             encoding='utf-8')
         (self.pbi / 'PBI-007.md').write_text('# PBI-007\n', encoding='utf-8')
@@ -90,6 +95,22 @@ class RecordRunTest(unittest.TestCase):
                 f.write(json.dumps(r) + '\n')
         (sub / f'agent-{agent_id}.meta.json').write_text(json.dumps({'description': description}), encoding='utf-8')
 
+    def write_home_prices(self, models, checked_at=None):
+        doc = {'models': models}
+        if checked_at is not None:
+            doc['checked_at'] = checked_at
+        (self.price_home / 'prices.json').write_text(json.dumps(doc), encoding='utf-8')
+
+    def write_dsh(self, name, usages, start='2026-10-18T15:00:00+09:00', end='2026-10-18T15:01:30+09:00'):
+        d = self.pbi / 'dsh'
+        d.mkdir(exist_ok=True)
+        events = [{'type': 'session', 'sessionId': 's', 'cwd': '.'}]
+        events += [{'type': 'status', 'phase': 'step', 'turn': 1, 'step': i, 'usage': u}
+                   for i, u in enumerate(usages, 1)]
+        events.append({'type': 'final', 'text': 'OK'})
+        (d / f'{name}.jsonl').write_text(''.join(json.dumps(e) + '\n' for e in events), encoding='utf-8')
+        (d / f'{name}.run.json').write_text(json.dumps({'start': start, 'end': end, 'exit': 0}), encoding='utf-8')
+
     def record(self, name, attempt, outcome, *extra, archive=True, home=None):
         env = {k: v for k, v in os.environ.items() if k != 'PBI_RUNS_ARCHIVE'}
         if home is not None:
@@ -100,6 +121,8 @@ class RecordRunTest(unittest.TestCase):
             env['PBI_RUNS_ARCHIVE'] = str(self.tmp / 'missing' / 'x')
         args = [sys.executable, RECORD, name, '--attempt', str(attempt), '--outcome', outcome,
                 '--projects', str(self.projects), *extra]
+        if '--home' not in extra:
+            args += ['--home', str(self.price_home)]
         return subprocess.run(args, cwd=self.repo, capture_output=True, text=True, encoding='utf-8', env=env)
 
     def rows(self):
@@ -172,6 +195,58 @@ class RecordRunTest(unittest.TestCase):
         base = self.archive / 'myrepo' / 'feature-x__W-002' / 'PBI-007' / 'attempt-1'
         for name in ('PBI-007.jsonl', 'PBI-007.run.json', 'PBI-007.patch.yml', 'PBI-007.final.md', 'PBI-007.last.md'):
             self.assertTrue((base / 'dsh' / name).is_file(), name)
+
+    def test_dsh_cost_api_equiv_uses_home_prices(self):
+        self.write_route('PBI-007', [{'runner': 'dsh', 'model': 'deepseek-official/deepseek-v4.1-flash',
+                                      'effort': 'high'}], tier='sonnet')
+        self.write_dsh('PBI-007', [{'inputTokens': 100, 'outputTokens': 20, 'cacheReadTokens': 1000,
+                                    'cacheWriteTokens': 0, 'totalTokens': 1120}])
+        self.write_home_prices({'deepseek-v4.1-flash': {'input': 0.5, 'output': 2, 'cache_read': 0.05}})
+        r = self.record('PBI-007', 1, '合格')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        self.assertIsNone(row['cost_reported'])
+        # 100*0.5 + 20*2 + 1000*0.05 = 140 → 0.00014 USD (単価表に無い cache_write は 0)
+        self.assertAlmostEqual(row['cost_api_equiv'], 0.00014, places=9)
+        self.assertEqual(row['prices_checked_at'], '2026-10-16')
+
+    def test_home_prices_override_bundled_model_price(self):
+        self.write_route('PBI-007', [AGENT], tier='sonnet')
+        self.write_agent('PBI-007 実装', [assistant('2026-10-16T10:00:00Z', 'r1', 'claude-sonnet-5-5',
+                                                    10, 30, 200, 0, 50)])
+        self.write_home_prices({'claude-sonnet-5-5': {'input': 100, 'output': 0, 'cache_read': 0,
+                                                      'cache_write_5m': 0, 'cache_write_1h': 0}},
+                               checked_at='2026-11-01')
+        r = self.record('PBI-007', 1, '合格')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        # 同梱の sonnet (input 2) ではなく home の input 100 で換算する: 10*100 / 1e6
+        self.assertAlmostEqual(row['cost_api_equiv'], 0.001, places=9)
+        # 行の prices_checked_at は同梱の checked_at のまま
+        self.assertEqual(row['prices_checked_at'], '2026-10-16')
+
+    def test_cost_api_equiv_is_null_without_a_price(self):
+        self.write_route('PBI-007', [{'runner': 'dsh', 'model': 'deepseek-official/unknown-model',
+                                      'effort': 'high'}], tier='sonnet')
+        self.write_dsh('PBI-007', [{'inputTokens': 100, 'outputTokens': 20, 'cacheReadTokens': 1000,
+                                    'cacheWriteTokens': 0, 'totalTokens': 1120}])
+        r = self.record('PBI-007', 1, '合格')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        self.assertIsNone(row['cost_api_equiv'])
+        self.assertIsNone(row['prices_checked_at'])
+
+    def test_opencode_keeps_reported_cost_and_adds_api_equiv(self):
+        self.write_route('PBI-007', [{'runner': 'opencode', 'model': 'opencode-go/deepseek-v4.1-flash',
+                                      'effort': 'max'}], tier='haiku')
+        self.write_opencode('PBI-007', [step_finish(1792117910000, 100, 20, 5, 1000, 50, 0.0123)])
+        self.write_home_prices({'deepseek-v4.1-flash': {'input': 0.5, 'output': 2, 'cache_read': 0.05}})
+        r = self.record('PBI-007', 1, '合格')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        self.assertAlmostEqual(row['cost_reported'], 0.0123, places=9)
+        self.assertAlmostEqual(row['cost_api_equiv'], 0.00014, places=9)
+        self.assertEqual(row['prices_checked_at'], '2026-10-16')
 
     def test_raw_logs_are_archived_by_repo_branch_and_work_number(self):
         self.write_opencode('PBI-007', [step_finish(1792117910000, 1, 1, 0, 0, 0, 0.0)])
@@ -339,6 +414,51 @@ class RecordRunTest(unittest.TestCase):
     def test_bad_outcome_is_rejected(self):
         r = self.record('PBI-007', 1, 'よかった')
         self.assertNotEqual(r.returncode, 0)
+
+
+class PriceTableTest(unittest.TestCase):
+    """common.load_prices・common.price_for (単価表の重ね方とモデルの引き方)。"""
+
+    def test_price_for_matches_after_the_last_slash(self):
+        price = {'input': 1}
+        self.assertEqual(common.price_for({'models': {'deepseek-v4.1-flash': price}},
+                                          'opencode-go/deepseek-v4.1-flash'), price)
+
+    def test_price_for_matches_the_whole_model(self):
+        price = {'input': 2}
+        self.assertEqual(common.price_for({'models': {'claude-sonnet-5-5': price}}, 'claude-sonnet-5-5'), price)
+
+    def test_price_for_prefers_the_longest_key(self):
+        prices = {'models': {'deepseek-v4.1': {'input': 1}, 'deepseek-v4.1-flash': {'input': 2}}}
+        self.assertEqual(common.price_for(prices, 'deepseek-official/deepseek-v4.1-flash'), {'input': 2})
+
+    def test_price_for_returns_none_without_a_match(self):
+        self.assertIsNone(common.price_for({'models': {'claude-sonnet-5-5': {}}}, 'gpt-6-astra'))
+        self.assertIsNone(common.price_for({'models': {}}, 'gpt-6-astra'))
+
+    def test_load_prices_overlays_home_and_keeps_both_checked_at(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d) / 'home'
+            home.mkdir()
+            bundled = Path(d) / 'prices.json'
+            bundled.write_text(json.dumps({'checked_at': '2026-10-16', 'models': {
+                'a': {'input': 1}, 'b': {'input': 2}}}), encoding='utf-8')
+            (home / 'prices.json').write_text(json.dumps({'checked_at': '2026-11-01', 'models': {
+                'b': {'input': 3}, 'c': {'input': 4}}}), encoding='utf-8')
+            prices = common.load_prices(home, bundled)
+        self.assertEqual(prices['models'], {'a': {'input': 1}, 'b': {'input': 3}, 'c': {'input': 4}})
+        self.assertEqual(prices['checked_at'], '2026-10-16')
+        self.assertEqual(prices['home_checked_at'], '2026-11-01')
+
+    def test_load_prices_reads_the_bundled_file_next_to_common(self):
+        with tempfile.TemporaryDirectory() as d:
+            prices = common.load_prices(Path(d))
+        self.assertIn('claude-sonnet-5-5', prices['models'])
+        self.assertNotIn('home_checked_at', prices)
+
+    def test_load_prices_without_any_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(common.load_prices(Path(d), Path(d) / 'missing.json'), {'models': {}})
 
 
 class VerifyJsonTest(unittest.TestCase):

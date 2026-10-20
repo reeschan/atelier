@@ -10,15 +10,20 @@
   python agent_stats.py --out docs/pbi/stats  # <out>/<session>.json に書く (同じセッションは上書き)
   python agent_stats.py --json                # 要約の代わりに JSON を標準出力へ
   python agent_stats.py --ctx                 # 今のディレクトリのセッションの、最後のリクエストの文脈の大きさを 1 行で出す
+  python agent_stats.py --cost                # 設計者・サブエージェントの費用を API 換算 (USD) で出す
+  python agent_stats.py --cost --home <dir>   # 単価表 (prices.json) を置いた home を指定する
+
+API 換算は参考値で、請求額ではない。
 """
 
 import argparse
 import json
-import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
+import common
 
 PROJECTS = Path.home() / ".claude" / "projects"
 TTL_5M = 300
@@ -28,22 +33,10 @@ REBUILD_RATIO = 0.5
 PBI_RE = re.compile(r"\bPBI-(\d+)", re.IGNORECASE)
 TOKEN_KEYS = ("input", "output", "cache_read", "cache_write_5m", "cache_write_1h")
 
-
-def long_path(p):
-    """Windows で 260 文字を超えるパスを開けるように \\\\?\\ を付ける (会話記録のパスは超えることがある)。
-
-    フォルダを選ばずに始めたセッションは、プロジェクト名が長く、サブエージェントの会話記録が 260 文字を超える。
-    glob の根に付ければ、そこから出てくるパスすべてに効く。
-    """
-    if os.name != "nt":
-        return p
-    s = str(Path(p).resolve())
-    return Path(p) if s.startswith("\\\\?\\") else Path("\\\\?\\" + s)
-
-
-def shown(p):
-    """表示用のパス (\\\\?\\ を外す)。"""
-    return str(p).removeprefix("\\\\?\\")
+# ほかのスクリプトとテストが使っている名前は、common の関数を指す別名として残す
+long_path = common.long_path
+shown = common.shown
+project_dir_for = common.project_dir_for
 
 
 def read_meta(path):
@@ -223,16 +216,23 @@ def analyze(reqs):
     }
 
 
+def cost_of(reqs, prices):
+    """リクエスト列の API 換算の費用 (USD)。単価の分からないリクエストは件数だけを数え、費用には足さない。"""
+    usd, unpriced = 0.0, 0
+    for r in reqs:
+        price = common.price_for(prices, r["model"])
+        if price is None:
+            unpriced += 1
+            continue
+        usd += sum(r[k] * (price.get(k) or 0) for k in TOKEN_KEYS)
+    return {"usd": usd / 1_000_000, "requests": len(reqs), "unpriced": unpriced}
+
+
 def find_session(session_id):
     hits = list(long_path(PROJECTS).glob(f"*/{session_id}.jsonl"))
     if not hits:
         sys.exit(f"セッション {session_id} の会話記録が見つからない")
     return hits[0]
-
-
-def project_dir_for(cwd):
-    """Claude Code が会話記録を置くディレクトリ名 (英数字以外を - にしたもの)。"""
-    return long_path(PROJECTS) / "".join(c if c.isalnum() else "-" for c in str(cwd))
 
 
 def cwd_session():
@@ -257,10 +257,11 @@ def pbi_sessions():
     return sorted(out, key=lambda p: p.stat().st_mtime)
 
 
-def session_stats(main_path):
+def session_stats(main_path, prices=None):
     main_path = long_path(main_path)
     sid = main_path.stem
     agents = []
+    sub_cost = {"usd": 0.0, "requests": 0, "unpriced": 0}
     sub = main_path.with_suffix("") / "subagents"
     for jl in sorted(sub.glob("agent-*.jsonl")):
         meta_path = jl.with_suffix(".meta.json")
@@ -270,6 +271,10 @@ def session_stats(main_path):
         reqs = load_requests(jl)
         if not reqs:
             continue
+        if prices is not None:
+            c = cost_of(reqs, prices)
+            for k in sub_cost:
+                sub_cost[k] += c[k]
         agents.append({
             "agent": jl.stem.removeprefix("agent-"),
             "pbi": f"PBI-{int(mt.group(1)):03d}" if mt else None,
@@ -279,7 +284,8 @@ def session_stats(main_path):
             **analyze(reqs),
             "advisor": advisor_summary(load_advisor(jl)),
         })
-    orch = analyze(load_requests(main_path))
+    main_reqs = load_requests(main_path)
+    orch = analyze(main_reqs)
     orch["advisor"] = advisor_summary(load_advisor(main_path))
     totals = {"by_model": {}, "rebuild": {}, "advisor": {"calls": 0, "orchestrator_calls": orch["advisor"]["calls"],
                                                          "subagent_calls": 0, "by_model": {}}}
@@ -312,7 +318,7 @@ def session_stats(main_path):
         p["rebuild_tokens"] += a["rebuild"]["tokens"]
     for p in by_pbi.values():
         p["models"] = sorted(p["models"])
-    return {
+    result = {
         "session": sid,
         "project_dir": main_path.parent.name,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -321,6 +327,15 @@ def session_stats(main_path):
         "by_pbi": dict(sorted(by_pbi.items())),
         "totals": totals,
     }
+    if prices is not None:
+        orch_cost = cost_of(main_reqs, prices)
+        result["cost"] = {
+            "prices_checked_at": prices.get("checked_at"),
+            "orchestrator": orch_cost,
+            "subagents": sub_cost,
+            "total": {k: orch_cost[k] + sub_cost[k] for k in sub_cost},
+        }
+    return result
 
 
 def fmt(n):
@@ -371,6 +386,15 @@ def summary(s):
         lines.append(f"| {pbi} | {p['agents']} | {', '.join(p['models'])} | "
                      f"{fmt(p['input'] + p['cache_write_5m'] + p['cache_write_1h'])} | {fmt(p['output'])} | "
                      f"{fmt(p['cache_read'])} | {p['rebuilds']} ({fmt(p['rebuild_tokens'])}) |")
+    cost = s.get("cost")
+    if cost:
+        lines += ["", "### API 換算の費用 (参考値で、請求額ではない)",
+                  "| 対象 | 費用 (USD) | リクエスト |", "|---|---:|---:|"]
+        for label, key in (("設計者", "orchestrator"), ("サブエージェント (合計)", "subagents"), ("全体", "total")):
+            c = cost[key]
+            lines.append(f"| {label} | {c['usd']:.4f} | {fmt(c['requests'])} |")
+        if cost["total"]["unpriced"]:
+            lines.append(f"単価不明 {cost['total']['unpriced']} 件 (費用には足していない)")
     return "\n".join(lines)
 
 
@@ -382,6 +406,8 @@ def main():
     g.add_argument("--ctx", action="store_true")
     ap.add_argument("--out")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--cost", action="store_true", help="設計者とサブエージェントの費用を API 換算で出す")
+    ap.add_argument("--home", help="単価表 (prices.json) を置いた home のディレクトリ")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -397,7 +423,8 @@ def main():
     else:
         paths = [latest_session()]
 
-    results = [session_stats(p) for p in paths]
+    prices = common.load_prices(common.resolve_home(args.home)) if args.cost else None
+    results = [session_stats(p, prices) for p in paths]
     if args.out:
         out = Path(args.out)
         out.mkdir(parents=True, exist_ok=True)
