@@ -4,34 +4,7 @@ SKILL.md 8 章のレビューで差し戻すと決めたとき、または止ま
 
 ## 9. 差し戻し（最大2回）と ゲート3
 
-### 9.1 問題を要約して修正の規模を聞く（ゲート3a）
-
-指摘の一覧から、次の要約を `docs/pbi/PBI-<連番>.rework-<n>.brief.md` に書いて Jev に送る（ソースコード・diff は送らない）。
-
-```
-fail した条件: <件数>（番号）
-指摘: 重大 <n> / 中 <n> / 軽微 <n>
-影響するファイル: <件数>
-指摘の種類: <書き漏れ / 判定の誤り / 範囲外の変更 / 前提の誤解 / 設計の不整合>
-1行要約: <何がどう違うか>
-```
-
-ゲートは `rework_scope`（`fix_scope` score: 0 指示どおりの修正で済む / 1 実装方針の一部を見直す / 2 設計から見直す）。
-
-| `fix_scope`（confidence 0.7 以上） | 次の行動 |
-|---|---|
-| 0 | 同じモデルに差し戻す |
-| 1 | まだ昇格していなければ昇格して差し戻す（昇格はPBIごとに1回まで）。昇格済みなら同じモデル |
-| 2 | 差し戻さずに10章として止める（設計の問題） |
-
-confidence が 0.7 未満なら 0 として扱う。
-
-昇格は `select_model.py <facts> <brief> --tier sonnet [--skip ...]` で route を出し直して行う。
-
-- opencode で動いていた PBI（haiku・sonnet の段とも）: `--skip opencode` を足し、sonnet の route の先頭へ移る
-- dsh で動いていた PBI: `--skip dsh` を足し、sonnet の route の先頭へ移る
-- それ以外で haiku の段: **今使っている実行先のまま**sonnet の行のモデル・effort に替える（Codex は `medium` → `high`、Antigravity は `claude-sonnet-5-5-low` → `-high`、Agent ツールは haiku `max` → sonnet `high`）
-- それ以外で sonnet の段: 昇格はしない（同じモデル）
+差し戻しは、同じ route の先頭から新しく起動する。
 
 ### 9.2 差し戻し文
 
@@ -47,17 +20,18 @@ confidence が 0.7 未満なら 0 として扱う。
 - 範囲外の変更: <あれば、ファイルと戻すべき内容>
 ```
 
-送る前に、差し戻し文をゲート `rework_quality`（names_condition / states_current_and_expected / has_repro）で点検する。0.6 未満の項目があれば書き直してから送る。送ったら STATUS.md の差し戻し回数（と昇格したら昇格回数）を増やす。
+送る前に、差し戻し文をゲート `rework_quality`（names_condition / states_current_and_expected / has_repro）で点検する。0.6 未満の項目があれば書き直してから送る。送ったら STATUS.md の差し戻し回数を増やす。
 
 ## 10. 止まるとき
 
-2回差し戻しても pass しないPBI、続行の指示が3回目になるPBI、`fix_scope` = 2 のPBIはそこで止める。9.1 の昇格以外に、モデルの昇格、PBIの書き換え、自分での実装をオーケストレーターの判断で行ってはいけない。
+2回差し戻しても pass しないPBI、続行の指示が3回目になるPBIはそこで止める。段上げ・PBIの書き換え・自分での実装は、ユーザーが選んだときだけ行う。
 
 そのPBIに依存しない他のPBIは続行する。依存するPBIは保留にする。
 
 ユーザーには次を報告して判断を待つ。
 
 - どのPBIが、どのモデルで止まったか
-- 試行ごとに何が fail だったか、`fix_scope` の値
+- 試行ごとに何が fail だったか
 - 原因の見立て（PBIの記述不足 / モデルの能力不足 / 設計の問題 のどれに近いか）
 - 選択肢（モデルを1段上げて再実行 / PBIを書き直すか分割する / 設計を見直す / ユーザーが引き取る）
+  - 段上げは `python <このディレクトリ>/prepare.py docs/pbi --only PBI-<連番> --tier <段>` で route.json を書き直し、新しい route の先頭から起動する。上げた先の route は、その時点の振り分けから引かれる
