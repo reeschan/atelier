@@ -281,6 +281,7 @@ skills/pbi-orchestration-jev/
 ├── examples/routing/           # example routing template with external runners (multi-runner.json)
 ├── examples/templates/         # example priority templates (copy to templates/ in your home)
 ├── unchanged.py                # hash snapshot to check files a PBI must not touch
+├── jev_mcp.py                  # jev-mcp: MCP server that hands PBIs to MCP clients (stdio / HTTP)
 ├── agent_stats.py              # tokens, cache rebuilds and context size from transcripts
 ├── jev.config.template.json    # template for Jev gates
 ├── opencode.config.json        # opencode permissions (no push, no reset, no outside dirs)
@@ -292,7 +293,7 @@ skills/pbi-orchestration-jev/
 │   └── test_jev.py / jev.test.mjs
 ├── test_select_model.py / test_agents.py / test_common.py
 ├── test_templates.py / test_prepare.py / test_unchanged.py
-├── test_record_run.py / test_model_report.py / test_dsh_run.py
+├── test_record_run.py / test_model_report.py / test_dsh_run.py / test_jev_mcp.py
 ├── test_references.py          # every file the skill docs name exists
 └── test_agent_stats.py
 ```
@@ -305,6 +306,26 @@ python jev/jev.py --request <request.json>           # send a raw request
 ```
 
 On success it prints the response JSON and exits 0. A Jev failure prints `{"error": ...}` and exits 1; bad arguments exit 2. 429/529 are retried up to 3 times; 5xx, connection errors and timeouts are retried once.
+
+### jev-mcp (MCP server)
+
+`jev_mcp.py` lets an MCP client, such as the Harness² harness, act as one more runner. The orchestrator writes the prompt to `docs/pbi/mcp/<report>.prompt.md` as for any external runner. The client claims it, works, and reports back in the usual shape: details in `docs/pbi/reports/<report>.md` and the 5-line summary in `docs/pbi/mcp/<report>.last.md`. Approval, verification, review and rework stay with the orchestrator.
+
+```sh
+python skills/pbi-orchestration-jev/jev_mcp.py --root /path/to/repo                      # stdio
+python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/to/repo   # http://127.0.0.1:7830/mcp
+```
+
+| Tool | What it does |
+|---|---|
+| `list_tasks` | prompts in `docs/pbi/mcp/` with their state (queued / claimed / done) |
+| `claim_task` | marks a prompt claimed (only once) and returns the prompt, the PBI and its sections, verification commands, rework text, facts, route and `worker.md` |
+| `submit_result` | writes the details file and the 5-line summary; `artifacts` (for example a Harness² summary) is kept as `<report>.artifacts.json` |
+| `fail_task` | reports NEEDS_CONTEXT / BLOCKED in the same two files |
+| `verify` | runs `verify.py` in a work tree (a worktree, for example) and returns the table and exit codes |
+| `jev_gate` | asks one Jev gate through `jev/jev.py`; the API key stays on the server |
+
+Only repositories under `--root` (or `PBI_MCP_ROOTS`) are served. HTTP listens on 127.0.0.1 only and rejects other Host headers. There is no authentication, so do not expose it to other machines. See the mcp section of `runners.md`.
 
 ## Tuning
 
