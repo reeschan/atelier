@@ -5,11 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>PBI Template Studio</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
-/* Layout: frosted panels floating over slow color fields; three steps top to bottom (models, proposals, output). */
+/* 配色と字体は今の画面から引き継ぐ。外部の読み込みはしない (字体は端末のものに落ちる)。 */
 :root {
   --ground: #e9edf5;
   --blob-a: #ffb38a;
@@ -50,6 +47,7 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+html, body { max-width: 100%; }
 body {
   margin: 0; background: var(--ground); color: var(--ink);
   font: 15px/1.65 var(--f-body);
@@ -57,6 +55,7 @@ body {
   padding-right: max(16px, env(safe-area-inset-right, 0px));
   padding-block: 28px 64px;
   min-height: 100%;
+  overflow-x: hidden;
 }
 .field { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
 .field i { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .75; animation: drift 26s ease-in-out infinite alternate; }
@@ -66,120 +65,139 @@ body {
 @keyframes drift { to { transform: translate(4vw, 3vh) scale(1.08); } }
 @media (prefers-reduced-motion: reduce) { .field i { animation: none; } }
 
-.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 28px; }
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 22px; min-width: 0; }
 .glass {
   background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 22px;
   backdrop-filter: blur(22px) saturate(1.5); -webkit-backdrop-filter: blur(22px) saturate(1.5);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow); min-width: 0;
 }
-header.top { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; justify-content: space-between; }
-h1 { font: 700 clamp(26px, 4.4vw, 40px)/1.1 var(--f-display); letter-spacing: -.01em; margin: 0; text-wrap: balance; }
+header.top { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; justify-content: space-between; }
+h1 { font: 700 clamp(24px, 4.4vw, 40px)/1.1 var(--f-display); letter-spacing: -.01em; margin: 0; text-wrap: balance; overflow-wrap: anywhere; }
 h1 small { display: block; font: 500 13px/1.4 var(--f-body); color: var(--ink-soft); letter-spacing: .02em; margin-top: 8px; }
-h2 { font: 500 18px/1.3 var(--f-display); margin: 0; text-wrap: balance; }
-.step-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; margin-bottom: 14px; }
-.step-head p { margin: 0; color: var(--ink-soft); font-size: 13.5px; max-width: 62ch; }
-.step-no { font: 600 11px/1 var(--f-mono); letter-spacing: .14em; color: var(--accent); text-transform: uppercase; display: block; margin-bottom: 6px; }
+h2 { font: 500 19px/1.3 var(--f-display); margin: 0; text-wrap: balance; overflow-wrap: anywhere; }
+h3 { font: 500 15px/1.3 var(--f-display); margin: 0; overflow-wrap: anywhere; }
+h4 { font: 500 13.5px/1.3 var(--f-body); margin: 0; overflow-wrap: anywhere; }
+p { margin: 0; }
 
 button { font: inherit; color: inherit; cursor: pointer; }
-button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn { border: 1px solid var(--glass-edge); background: var(--glass-strong); border-radius: 999px; padding: 8px 16px; font-weight: 500; font-size: 13.5px; }
-.btn:hover { border-color: var(--accent); }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: default; }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
-.meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink-soft); }
-.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--glass-strong); font-size: 12px; white-space: nowrap; }
+.btn.danger { color: var(--warn); border-color: currentColor; }
+.btn.small { padding: 5px 12px; font-size: 12.5px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--glass-strong); font-size: 12px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .pill.warn { color: var(--warn); border-color: currentColor; }
+.muted { color: var(--ink-soft); font-size: 12.5px; }
+.mono { font-family: var(--f-mono); overflow-wrap: anywhere; }
+.warn-text { color: var(--warn); font-size: 12.5px; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink-soft); }
+/* 長い home のパスで header が広がらないよう、flex の子が縮めるようにする */
+.wrap > *, header.top > *, .meta, .meta > * { min-width: 0; max-width: 100%; }
+.sep { color: var(--line); }
 
-/* step 1: providers */
-.providers { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
-.prov { padding: 18px; display: grid; gap: 14px; align-content: start; min-width: 0; }
-.prov-head { display: flex; align-items: center; gap: 12px; }
-.mark { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font: 700 17px/1 var(--f-display); color: #fff; flex: none; box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 4px 14px rgba(0,0,0,.18); }
-.prov-head b { font-size: 16px; }
-.prov-head div span { display: block; font-size: 12px; color: var(--ink-soft); }
-.model { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 8px; }
-.model-top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; flex-wrap: wrap; }
-.model-top b { font-weight: 700; }
-.model-top .price { font: 400 12px var(--f-mono); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-.qbar { height: 6px; border-radius: 6px; background: var(--line); overflow: hidden; }
-.qbar i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--cost), var(--bal), var(--perf)); background-size: 300px 100%; }
-.qline { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-.opts { display: flex; flex-wrap: wrap; gap: 6px; }
-.opt { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 10px; border: 1px solid var(--line); background: transparent; font: 400 12px var(--f-mono); color: var(--ink-soft); }
-.opt::before { content: ""; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid currentColor; }
-.opt[aria-pressed="true"] { color: var(--ink); border-color: var(--accent); background: var(--glass-strong); }
-.opt[aria-pressed="true"]::before { background: var(--accent); border-color: var(--accent); }
-.cand { padding: 16px 18px; display: grid; gap: 10px; }
-.cand ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
-.cand li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
-.cand code { font: 12px var(--f-mono); }
+.notice { padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass-strong); font-size: 13px; overflow-wrap: anywhere; }
+.notice.ok { color: var(--cost); border-color: currentColor; }
+.notice.err { color: var(--warn); border-color: currentColor; }
+.warnings { color: var(--warn); font-size: 12.5px; border: 1px solid currentColor; border-radius: 12px; padding: 10px 14px; overflow-wrap: anywhere; }
+.warnings ul { margin: 4px 0 0; padding-left: 1.2em; }
 
-/* tuning */
-.tune { padding: 16px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 22px; }
-.tune label { display: grid; gap: 4px; font-size: 13px; }
-.tune .row { display: flex; justify-content: space-between; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-.tune input[type=range] { width: 100%; accent-color: var(--accent); }
-.check { display: flex !important; grid-template-columns: none; align-items: center; gap: 8px; }
-.check input { accent-color: var(--accent); width: 16px; height: 16px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.tab { border: 1px solid var(--glass-edge); background: var(--glass); border-radius: 999px; padding: 9px 18px; font-weight: 500; font-size: 13.5px; max-width: 100%; overflow-wrap: anywhere; }
+.tab[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
 
-/* step 2: proposals */
-.proposals { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 16px; }
-.prop { padding: 18px; display: grid; gap: 14px; align-content: start; text-align: left; border: 1px solid var(--glass-edge); position: relative; min-width: 0; }
-.prop[aria-checked="true"] { outline: 2px solid var(--tone); outline-offset: -2px; }
-.prop-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.prop-head h3 { margin: 0; font: 700 17px/1.2 var(--f-display); color: var(--tone); }
-.prop-head .sel { font-size: 12px; color: var(--ink-soft); }
-.prop[aria-checked="true"] .sel { color: var(--tone); font-weight: 700; }
-.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.stat { padding: 10px 12px; border-radius: 14px; background: var(--glass-strong); border: 1px solid var(--line); }
-.stat small { display: block; font-size: 11px; color: var(--ink-soft); letter-spacing: .04em; }
-.stat b { font: 600 20px/1.2 var(--f-mono); font-variant-numeric: tabular-nums; }
-.tier { display: grid; gap: 6px; }
-.tier-name { font: 600 11px/1 var(--f-mono); text-transform: uppercase; letter-spacing: .12em; color: var(--ink-soft); display: flex; gap: 8px; align-items: center; }
-.chain { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-.chain .hop { font: 12px var(--f-mono); padding: 3px 8px; border-radius: 8px; background: var(--glass-strong); border: 1px solid var(--line); white-space: nowrap; }
-.chain .hop.first { border-color: var(--tone); }
-.chain .arrow { color: var(--ink-soft); font-size: 11px; }
-.why { margin: 0; font-size: 13px; color: var(--ink-soft); }
-.why.bad { color: var(--warn); }
+.panel { display: grid; gap: 16px; min-width: 0; }
+.panel-head { display: grid; gap: 6px; }
+.panel-head p { color: var(--ink-soft); font-size: 13.5px; max-width: 72ch; }
+.bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; min-width: 0; }
+.bar .hint { color: var(--ink-soft); font-size: 12px; overflow-wrap: anywhere; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: 16px; min-width: 0; }
+.card { padding: 18px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.card-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; min-width: 0; }
+.card-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.card-title b { font-size: 15.5px; overflow-wrap: anywhere; }
+.card-title .muted { display: block; font-size: 11px; }
+.mark { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; font: 700 16px/1 var(--f-display); color: #fff; flex: none; background: var(--accent); box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 4px 14px rgba(0,0,0,.18); }
+.mark.opencode { background: #4d6bfe; }
+.mark.codex { background: #10a37f; }
+.mark.agy { background: #d97757; }
+.mark.dsh { background: #7c5cff; }
+.mark.agent { background: #3a5bd9; }
+.switch { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.switch input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
 
-/* step 3: editor */
-.edit-bar { margin-bottom: 12px; }
-.lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
-.lane { padding: 16px; display: grid; gap: 12px; align-content: start; min-width: 0; }
-.lane-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.lane-head b { font: 500 15px/1.3 var(--f-display); }
-.lane-head code, .lane-head span { font: 11.5px var(--f-mono); color: var(--ink-soft); }
-.lane ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.row { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 8px 8px 6px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass-strong); }
-.row.off { opacity: .55; }
-.row.dragging { opacity: .35; }
-.row.over { border-color: var(--accent); box-shadow: 0 -2px 0 var(--accent); }
-.grip { cursor: grab; color: var(--ink-soft); font-size: 14px; padding: 0 2px; user-select: none; }
-.prio { font: 600 12px var(--f-mono); width: 1.6em; text-align: center; color: var(--accent); font-variant-numeric: tabular-nums; }
-.row.off .prio { color: var(--ink-soft); }
-.row input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
-.row label { min-width: 0; font-size: 13px; line-height: 1.35; cursor: pointer; }
-.row label small { display: block; font: 11px var(--f-mono); color: var(--ink-soft); overflow-wrap: anywhere; }
-.row label .below { color: var(--warn); white-space: nowrap; }
-.moves { display: flex; gap: 2px; }
-.moves button { border: 1px solid var(--line); background: transparent; border-radius: 8px; width: 26px; height: 26px; font-size: 12px; line-height: 1; color: var(--ink-soft); }
-.moves button:hover:not(:disabled) { border-color: var(--accent); color: var(--ink); }
-.moves button:disabled { opacity: .3; cursor: default; }
-.lane-last { display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-soft); border-top: 1px dashed var(--line); padding-top: 10px; }
-.lane-last select { font: 13px var(--f-body); color: var(--ink); background: var(--glass-strong); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; }
-.lane-empty { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
+.field-row { display: grid; gap: 3px; font-size: 12px; color: var(--ink-soft); min-width: 0; }
+input[type="text"], input[type="search"], input[type="date"], input[type="datetime-local"], select, textarea {
+  font: 13px var(--f-body); color: var(--ink); background: var(--glass-strong);
+  border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px;
+  min-width: 0; max-width: 100%; width: 100%;
+}
+textarea { min-height: 58px; resize: vertical; }
+input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; flex: none; }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 10px; align-items: end; min-width: 0; }
+.fields .wide { grid-column: 1 / -1; }
+.fields.two { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+.search { margin-bottom: 2px; }
 
-/* step 4: output */
-.out { padding: 18px; display: grid; gap: 12px; min-width: 0; }
-.out pre { margin: 0; padding: 14px; border-radius: 14px; background: var(--glass-strong); border: 1px solid var(--line); font: 12.5px/1.55 var(--f-mono); overflow-x: auto; max-height: 420px; }
-.out .cmd { font: 12.5px var(--f-mono); padding: 10px 12px; border-radius: 12px; background: var(--glass-strong); border: 1px solid var(--line); overflow-x: auto; white-space: nowrap; }
-.apply-note { margin: 0; font-size: 12.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
-.apply-note code { font: 12px var(--f-mono); color: var(--ink); }
-.apply-note.done { color: var(--cost); }
-.toast { font-size: 12.5px; color: var(--cost); min-height: 1em; }
-footer { font-size: 12px; color: var(--ink-soft); text-align: left; }
-footer a { color: inherit; }
-@media (max-width: 480px) { .stats { grid-template-columns: 1fr; } .glass { border-radius: 18px; } }
+.model-list { display: grid; gap: 8px; max-height: 430px; overflow-y: auto; overflow-x: hidden; padding-right: 2px; }
+.model-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; align-items: start; padding: 8px 9px; border: 1px solid var(--line); border-radius: 12px; background: var(--glass-strong); cursor: pointer; min-width: 0; }
+.model-row input { margin-top: 3px; }
+.model-body { display: grid; gap: 2px; min-width: 0; }
+.model-name { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
+.model-id { font: 11px var(--f-mono); color: var(--ink-soft); overflow-wrap: anywhere; }
+.tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.tag { font: 11px var(--f-mono); border: 1px solid var(--line); border-radius: 7px; padding: 0 6px; color: var(--ink-soft); }
+.tag.manual { border-color: var(--accent); color: var(--accent); }
+.tag.muted-tag { border-style: dashed; }
+.badge { font: 600 10.5px var(--f-mono); border: 1px solid var(--warn); color: var(--warn); border-radius: 6px; padding: 0 5px; }
+.ref { font-size: 11.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.manual-form { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+
+.tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 310px), 1fr)); gap: 16px; min-width: 0; }
+.tier-col { padding: 16px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.tier-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.tier-name { font: 500 15px/1.3 var(--f-display); overflow-wrap: anywhere; }
+.tier-head code { font: 11.5px var(--f-mono); color: var(--ink-soft); }
+.tier-head .switch { margin-left: auto; }
+.steps { display: grid; gap: 8px; min-width: 0; }
+.step { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 13px; background: var(--glass-strong); min-width: 0; }
+.step.agent { border-color: var(--accent); }
+.step-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 110px), 1fr)); gap: 8px; min-width: 0; }
+.step-actions { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.icon { border: 1px solid var(--line); background: transparent; border-radius: 8px; min-width: 28px; height: 27px; font-size: 12px; line-height: 1; color: var(--ink-soft); }
+.icon:hover:not(:disabled) { border-color: var(--accent); color: var(--ink); }
+.icon:disabled { opacity: .3; cursor: default; }
+.add-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
+.add-row select { flex: 1 1 150px; width: auto; }
+.agent-step { display: grid; gap: 6px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.agent-label { font: 600 11px/1.3 var(--f-mono); letter-spacing: .04em; color: var(--accent); text-transform: uppercase; }
+.rotate { display: grid; gap: 8px; padding: 10px; border: 1px dashed var(--accent); border-radius: 13px; min-width: 0; }
+.rotate-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.rotate-head b { font-size: 12px; color: var(--accent); overflow-wrap: anywhere; }
+
+.priority-top { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; min-width: 0; }
+.list { display: grid; gap: 6px; min-width: 0; }
+.list-item { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--glass-strong); min-width: 0; }
+.list-item.active { border-color: var(--accent); }
+.list-body { display: grid; gap: 1px; min-width: 0; flex: 1 1 140px; }
+.list-body b { overflow-wrap: anywhere; }
+.link { border: 0; background: transparent; padding: 0; font-weight: 600; text-align: left; color: var(--accent); overflow-wrap: anywhere; }
+.editor-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.sub-block { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
+.opus-warn { color: var(--warn); border: 1px solid currentColor; border-radius: 12px; padding: 10px 12px; font-size: 12.5px; }
+.app-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 10px; margin: 0; }
+.app-grid dt { font-size: 11px; color: var(--ink-soft); }
+.app-grid dd { margin: 0; overflow-wrap: anywhere; }
+.app-grid .wide { grid-column: 1 / -1; }
+
+footer { font-size: 12px; color: var(--ink-soft); }
+@media (max-width: 560px) {
+  .tab { flex: 1 1 auto; text-align: center; padding: 8px 12px; font-size: 12.5px; }
+  .card { padding: 14px; }
+  .glass { border-radius: 18px; }
+  h2 { font-size: 17px; }
+}
 </style>
 </head>
 <body>
@@ -188,75 +206,76 @@ footer a { color: inherit; }
   <header class="top">
     <h1>Template Studio<small data-i18n="tagline"></small></h1>
     <div class="meta">
-      <span class="pill" id="updated"></span>
-      <span class="pill warn" id="sampleNote" data-i18n="sample" hidden></span>
+      <span class="pill" id="homePill"></span>
       <button class="btn" id="reload" type="button" data-i18n="reload"></button>
       <button class="btn" id="lang" type="button"></button>
+      <button class="btn" id="close" type="button" data-i18n="close"></button>
     </div>
   </header>
 
-  <section aria-labelledby="s1">
-    <div class="step-head">
-      <div><span class="step-no">Step 1</span><h2 id="s1" data-i18n="s1"></h2></div>
-      <p data-i18n="s1p"></p>
-    </div>
-    <div class="providers" id="providers"></div>
-    <div class="cand glass" id="candidates" hidden style="margin-top:16px"></div>
-  </section>
+  <div id="notice" class="notice" role="status" hidden></div>
+  <div id="warnings" class="warnings" hidden></div>
 
-  <section aria-labelledby="s1b">
-    <div class="step-head">
-      <div><span class="step-no">Tuning</span><h2 id="s1b" data-i18n="s1b"></h2></div>
-      <p data-i18n="s1bp"></p>
-    </div>
-    <div class="tune glass" id="tune">
-      <label for="floor-haiku"><span class="row"><span data-i18n="haiku"></span><b id="floor-haiku-v"></b></span><input id="floor-haiku" type="range" min="30" max="95" step="1"></label>
-      <label for="floor-sonnet"><span class="row"><span data-i18n="sonnet"></span><b id="floor-sonnet-v"></b></span><input id="floor-sonnet" type="range" min="30" max="95" step="1"></label>
-      <label for="floor-opus"><span class="row"><span data-i18n="opus"></span><b id="floor-opus-v"></b></span><input id="floor-opus" type="range" min="30" max="95" step="1"></label>
-      <label for="maxSteps"><span class="row"><span data-i18n="maxSteps"></span><b id="maxSteps-v"></b></span><input id="maxSteps" type="range" min="1" max="4" step="1"></label>
-      <label class="check" for="subsCheap"><input id="subsCheap" type="checkbox"> <span data-i18n="subsCheap"></span></label>
-      <label class="check" for="extOpus"><input id="extOpus" type="checkbox"> <span data-i18n="extOpus"></span></label>
-    </div>
-  </section>
+  <nav class="tabs" role="tablist" aria-label="Studio">
+    <button class="tab" id="tab-agents" type="button" role="tab" aria-controls="panel-agents" aria-selected="true" data-i18n="tabAgents"></button>
+    <button class="tab" id="tab-routing" type="button" role="tab" aria-controls="panel-routing" aria-selected="false" data-i18n="tabRouting"></button>
+    <button class="tab" id="tab-priority" type="button" role="tab" aria-controls="panel-priority" aria-selected="false" data-i18n="tabPriority"></button>
+  </nav>
 
-  <section aria-labelledby="s2">
-    <div class="step-head">
-      <div><span class="step-no">Step 2</span><h2 id="s2" data-i18n="s2"></h2></div>
-      <p data-i18n="s2p"></p>
-    </div>
-    <div class="proposals" id="proposals" role="radiogroup"></div>
-  </section>
-
-  <section aria-labelledby="s3e">
-    <div class="step-head">
-      <div><span class="step-no">Step 3</span><h2 id="s3e" data-i18n="s3e"></h2></div>
-      <p data-i18n="s3ep"></p>
-    </div>
-    <div class="edit-bar meta"><span class="pill" id="editBase"></span><span class="pill warn" id="editedPill" data-i18n="edited" hidden></span><button class="btn" id="resetEdit" type="button" data-i18n="reset" hidden></button></div>
-    <div class="lanes" id="lanes"></div>
-  </section>
-
-  <section aria-labelledby="s3">
-    <div class="step-head">
-      <div><span class="step-no">Step 4</span><h2 id="s3" data-i18n="s3"></h2></div>
-      <p data-i18n="s3p"></p>
-    </div>
-    <div class="out glass">
-      <div class="meta">
-        <button class="btn primary" id="apply" type="button" data-i18n="apply" hidden></button>
-        <button class="btn" id="copy" type="button" data-i18n="copy"></button>
-        <span class="toast" id="toast" role="status"></span>
+  <main>
+    <section id="panel-agents" class="panel" role="tabpanel" aria-labelledby="tab-agents">
+      <div class="panel-head">
+        <h2 data-i18n="agentsTitle"></h2>
+        <p data-i18n="agentsIntro"></p>
       </div>
-      <p class="apply-note" id="applyNote" hidden></p>
-      <pre id="json" tabindex="0"></pre>
-      <div class="cmd" id="cmd">python skills/pbi-orchestration-jev/select_model.py --all docs/pbi</div>
-    </div>
-  </section>
+      <div id="agents-cards" class="cards"></div>
+    </section>
+
+    <section id="panel-routing" class="panel" role="tabpanel" aria-labelledby="tab-routing" hidden>
+      <div class="panel-head">
+        <h2 data-i18n="routingTitle"></h2>
+        <p data-i18n="routingIntro"></p>
+      </div>
+      <div class="bar">
+        <span class="pill" id="routingSource"></span>
+        <span class="hint" id="routingHint"></span>
+        <button class="btn primary" id="saveRouting" type="button" data-i18n="save"></button>
+      </div>
+      <div id="routing-tiers" class="tiers"></div>
+    </section>
+
+    <section id="panel-priority" class="panel" role="tabpanel" aria-labelledby="tab-priority" hidden>
+      <div class="panel-head">
+        <h2 data-i18n="priorityTitle"></h2>
+        <p data-i18n="priorityIntro"></p>
+      </div>
+      <div class="priority-top">
+        <section class="glass card">
+          <h3 data-i18n="templatesTitle"></h3>
+          <div id="template-list" class="list"></div>
+          <div class="bar"><button class="btn" id="newTemplate" type="button" data-i18n="newTemplate"></button></div>
+        </section>
+        <section class="glass card">
+          <h3 data-i18n="examplesTitle"></h3>
+          <div id="example-list" class="list"></div>
+          <label class="field-row"><span data-i18n="copyAs"></span><input id="copyAs" type="text" autocomplete="off"></label>
+        </section>
+      </div>
+      <section class="glass card">
+        <div id="template-editor"></div>
+      </section>
+      <section class="glass card">
+        <h3 data-i18n="applicationTitle"></h3>
+        <div id="application"></div>
+      </section>
+    </section>
+  </main>
 
   <footer data-i18n="footer"></footer>
 </div>
 
 <script type="application/json" id="studio-boot"></script>
+<!-- update_catalog.py が差し替える控え。画面は使わないが、外部の読み込みをしないためにここへ置く。 -->
 <script type="application/json" id="catalog-fallback">
 {
   "updated": "2026-10-14",
@@ -266,139 +285,52 @@ footer a { color: inherit; }
   },
   "note": "quality と価格は update_catalog.py を実行するまで仮の値 (sample: true)。quality は 0〜100 のコーディング指標 (Artificial Analysis の Coding Index を想定)、価格は API の $/100 万トークン。",
   "providers": [
-    {
-      "id": "anthropic",
-      "name": "Anthropic",
-      "color": "#d97757",
-      "mark": "A"
-    },
-    {
-      "id": "openai",
-      "name": "OpenAI",
-      "color": "#10a37f",
-      "mark": "O"
-    },
-    {
-      "id": "deepseek",
-      "name": "DeepSeek",
-      "color": "#4d6bfe",
-      "mark": "D"
-    }
+    {"id": "anthropic", "name": "Anthropic", "color": "#d97757", "mark": "A"},
+    {"id": "openai", "name": "OpenAI", "color": "#10a37f", "mark": "O"},
+    {"id": "deepseek", "name": "DeepSeek", "color": "#4d6bfe", "mark": "D"}
   ],
   "models": [
     {
-      "id": "claude-opus",
-      "provider": "anthropic",
-      "name": "Claude Opus 5.5",
-      "openrouter_id": "anthropic/claude-opus-5.5",
-      "aa_slug": "claude-opus-5-5",
-      "quality": 90,
-      "price_in": 15.0,
-      "price_out": 75.0,
-      "sample": true,
+      "id": "claude-opus", "provider": "anthropic", "name": "Claude Opus 5.5",
+      "openrouter_id": "anthropic/claude-opus-5.5", "aa_slug": "claude-opus-5-5",
+      "quality": 90, "price_in": 15.0, "price_out": 75.0, "sample": true,
       "options": [
-        {
-          "runner": "agent",
-          "model": "opus",
-          "effort": null,
-          "billing": "subscription"
-        }
+        {"runner": "agent", "model": "opus", "effort": null, "billing": "subscription"}
       ]
     },
     {
-      "id": "claude-sonnet",
-      "provider": "anthropic",
-      "name": "Claude Sonnet 5.5",
-      "openrouter_id": "anthropic/claude-sonnet-5.5",
-      "aa_slug": "claude-sonnet-5-5",
-      "quality": 80,
-      "price_in": 3.0,
-      "price_out": 15.0,
-      "sample": true,
+      "id": "claude-sonnet", "provider": "anthropic", "name": "Claude Sonnet 5.5",
+      "openrouter_id": "anthropic/claude-sonnet-5.5", "aa_slug": "claude-sonnet-5-5",
+      "quality": 80, "price_in": 3.0, "price_out": 15.0, "sample": true,
       "options": [
-        {
-          "runner": "agent",
-          "model": "sonnet",
-          "effort": "high",
-          "billing": "subscription"
-        },
-        {
-          "runner": "agy",
-          "model": "claude-sonnet-5-5-high",
-          "effort": null,
-          "billing": "subscription"
-        },
-        {
-          "runner": "agy",
-          "model": "claude-sonnet-5-5-low",
-          "effort": null,
-          "billing": "subscription",
-          "quality_delta": -8
-        }
+        {"runner": "agent", "model": "sonnet", "effort": "high", "billing": "subscription"},
+        {"runner": "agy", "model": "claude-sonnet-5-5-high", "effort": null, "billing": "subscription"},
+        {"runner": "agy", "model": "claude-sonnet-5-5-low", "effort": null, "billing": "subscription", "quality_delta": -8}
       ]
     },
     {
-      "id": "claude-haiku",
-      "provider": "anthropic",
-      "name": "Claude Haiku 5.5",
-      "openrouter_id": "anthropic/claude-haiku-5.5",
-      "aa_slug": "claude-haiku-5-5",
-      "quality": 62,
-      "price_in": 1.0,
-      "price_out": 5.0,
-      "sample": true,
+      "id": "claude-haiku", "provider": "anthropic", "name": "Claude Haiku 5.5",
+      "openrouter_id": "anthropic/claude-haiku-5.5", "aa_slug": "claude-haiku-5-5",
+      "quality": 62, "price_in": 1.0, "price_out": 5.0, "sample": true,
       "options": [
-        {
-          "runner": "agent",
-          "model": "haiku",
-          "effort": "max",
-          "billing": "subscription"
-        }
+        {"runner": "agent", "model": "haiku", "effort": "max", "billing": "subscription"}
       ]
     },
     {
-      "id": "gpt-6-astra",
-      "provider": "openai",
-      "name": "GPT-6 Astra",
-      "openrouter_id": "openai/gpt-6-astra",
-      "aa_slug": "gpt-6-astra",
-      "quality": 84,
-      "price_in": 2.5,
-      "price_out": 10.0,
-      "sample": true,
+      "id": "gpt-6-astra", "provider": "openai", "name": "GPT-6 Astra",
+      "openrouter_id": "openai/gpt-6-astra", "aa_slug": "gpt-6-astra",
+      "quality": 84, "price_in": 2.5, "price_out": 10.0, "sample": true,
       "options": [
-        {
-          "runner": "codex",
-          "model": "gpt-6-astra",
-          "effort": "high",
-          "billing": "subscription"
-        },
-        {
-          "runner": "codex",
-          "model": "gpt-6-astra",
-          "effort": "medium",
-          "billing": "subscription",
-          "quality_delta": -6
-        }
+        {"runner": "codex", "model": "gpt-6-astra", "effort": "high", "billing": "subscription"},
+        {"runner": "codex", "model": "gpt-6-astra", "effort": "medium", "billing": "subscription", "quality_delta": -6}
       ]
     },
     {
-      "id": "deepseek-v4.1-flash",
-      "provider": "deepseek",
-      "name": "DeepSeek V4.1 Flash",
-      "openrouter_id": "deepseek/deepseek-v4.1-flash",
-      "aa_slug": "deepseek-v4-1-flash",
-      "quality": 66,
-      "price_in": 0.2,
-      "price_out": 0.8,
-      "sample": true,
+      "id": "deepseek-v4.1-flash", "provider": "deepseek", "name": "DeepSeek V4.1 Flash",
+      "openrouter_id": "deepseek/deepseek-v4.1-flash", "aa_slug": "deepseek-v4-1-flash",
+      "quality": 66, "price_in": 0.2, "price_out": 0.8, "sample": true,
       "options": [
-        {
-          "runner": "opencode",
-          "model": "opencode-go/deepseek-v4.1-flash",
-          "effort": null,
-          "billing": "subscription"
-        }
+        {"runner": "opencode", "model": "opencode-go/deepseek-v4.1-flash", "effort": null, "billing": "subscription"}
       ]
     }
   ]
@@ -406,456 +338,1153 @@ footer a { color: inherit; }
 </script>
 <script>
 (() => {
+  'use strict';
+
   // 画面の言葉。日本語と英語を同じキーで持ち、ヘッダーのボタンで切り替える
   const TEXT = {
     ja: {
-      tagline: 'pbi-orchestration-jev の振り分けテンプレート (routing.json) を組み立てる',
-      updated: '一覧の日付 {0}', sample: '性能と価格は仮の値', reload: 'モデル一覧を読み直す',
-      langBtn: 'EN', langAria: 'Switch to English',
-      s1: '使うモデルを選ぶ',
-      s1p: '契約している実行先だけを残してください。チップ 1 つが「試す順番」の 1 つ (実行先・モデル・effort) になります。',
-      s1b: '作業の重さごとの性能の下限',
-      s1bp: 'PBI は 1 件ずつ、Jev の判定と変更の大きさから「軽い作業」「ふつうの作業」「設計が要る作業」のどれかに分けられます。それぞれ、これより性能の低いモデルは案に入れません。',
-      haiku: '軽い作業', sonnet: 'ふつうの作業', opus: '設計が要る作業',
-      maxSteps: '試す実行先の数 (作業 1 つあたり)', subsCheap: 'サブスクの枠内は安いとみなす', extOpus: '設計が要る作業にも Claude Code 以外を使う',
-      s2: 'テンプレート案から選ぶ',
-      s2p: '同じモデルの組み合わせから、性能・コスパ・バランスの 3 案を作りました。目安の費用は 1 PBI = 入力 30 万・出力 3 万トークンの API 換算です。',
-      proposals: 'テンプレート案', performance: '性能', cost: 'コスパ', balanced: 'バランス',
-      s3e: '試す順番を調整する',
-      s3ep: '選んだ案をもとに、作業の重さごとに上から順に試します。ドラッグか ↑ ↓ で並べ替え、チェックを外したものは使いません。使えなかったときの最後の受け皿は、Claude Code のモデルから選びます。',
-      edited: '調整済み', reset: '案に戻す',
-      s3: 'routing.json を書き出す',
-      s3p: '対象リポジトリの docs/pbi/routing.json に置くと、prepare.py がこの順番で実行先を試します。',
-      apply: 'このリポジトリに適用', copy: 'JSON をコピー',
-      footer: 'モデル一覧は studio/update_catalog.py が OpenRouter (価格・新モデル) と Artificial Analysis (コーディング指標) から作ります。',
-      noPrice: '価格不明 (案に入れない)', score: '性能 {0}', sampleMark: ' (仮)', until: '{0} まで',
-      candTitle: '新しく出たモデル', candNote: 'まだ実行先との対応が無いので、案には入りません。catalog.json の models に options を書くと選べます。',
-      selected: '選択中', choose: '選ぶ', statQ: '先頭の性能 (加重平均)', statCost: 'API 換算 / PBI', floor: '下限 {0}',
-      warnFloor: '{0}: 下限 {1} に届く Claude Code のモデルが無いので {2} にした',
-      warnAgent: 'Claude Code (Agent) のモデルを 1 つ以上残してください',
-      whyPerformance: 'どの作業も性能の高い順に試します。', whyCost: 'どの作業も安い順に試し、最後に Claude Code で受けます。', whyBalanced: '性能と費用の釣り合いが良い順に試します。',
-      whyTail: '{0} ふつうの作業は {1} ({2}) から、軽い作業は {3} ({4}) から始めます。',
-      editorEmpty: 'Claude Code のモデルを 1 つ以上選ぶと、ここで調整できます。', editBase: 'もとにした案: {0}',
-      rowNoPrice: ' · 価格不明', below: '下限未満', up: '上へ', down: '下へ',
-      laneEmpty: 'Claude Code 以外の実行先が選ばれていません。', laneLast: '最後に受ける Claude Code',
-      jsonEmpty: '// Claude Code (Agent) のモデルを 1 つ以上選んでください',
-      reloaded: 'モデル一覧を読み直しました', reloadFail: 'catalog.json を読めなかったので、ページ内の控えを使っています',
-      target: '適用先: {0}', applied: '適用しました: {0}。この画面は閉じてかまいません。', applyFail: '適用できませんでした: {0}',
-      copied: 'コピーしました', selectedText: '選択しました。Ctrl+C でコピーしてください',
+      tagline: 'エージェントとモデル・振り分け・優先テンプレートを 1 画面で整える',
+      reload: '読み直す', close: '終わる', save: '保存',
+      tabAgents: 'エージェントとモデル', tabRouting: '振り分けテンプレート', tabPriority: '優先テンプレートと適用',
+      agentsTitle: 'エージェントとモデル',
+      agentsIntro: '実行先ごとに、使うかどうか・CLI の場所・モデルの一覧と選ぶモデルを決めます。チェックしたモデルだけが振り分けとテンプレートで選べます。',
+      routingTitle: '振り分けテンプレート',
+      routingIntro: '段ごとに、上から順に試す手順を並べます。各段の最後は agent の手順 1 つで、モデルと effort だけを選べます。',
+      priorityTitle: '優先テンプレートと適用',
+      priorityIntro: 'home のテンプレートを編集し、同梱の見本をコピーし、適用を始める・答えます。',
+      templatesTitle: 'home のテンプレート', examplesTitle: '同梱の見本', newTemplate: '新しいテンプレート',
+      applicationTitle: '今の適用',
+      footer: 'モデル一覧は studio/update_catalog.py が作ります。ファイルはすべて home の下に書きます。',
+      home: 'home: {0}', langBtn: 'EN', langAria: 'Switch to English',
+      warnings: '注意', loading: '読み込み中…',
+      errBoot: 'studio-boot が読めません。serve.py から開いてください。',
+      errToken: '合言葉が違います。serve.py から開き直してください。',
+      netFail: '通信できませんでした: {0}', errHttp: 'サーバーが {0} を返しました。',
+      reloaded: 'home から読み直しました。', closeOk: '閉じてよい。', never: '—',
+      enabled: '使う', agentAlways: 'Claude Code は常に使う',
+      version: '版', checkedAt: '確認', billing: '支払い', fetchedAt: '一覧の取得日時',
+      fetchError: '一覧の取得に失敗', failedAt: '失敗',
+      noModels: '一覧が無い。`python setup_agents.py models` で取るか、手で足す',
+      searchModels: 'モデルを検索', searchPlaceholder: '名前・ID・effort で絞る', noHit: '一致するモデルがない',
+      quality: '品質', price: '$/100万トークン', sample: '仮の値', refCli: 'CLI の単価', noRef: '参考なし',
+      noEfforts: '指定なし', missing: '選んだモデルが一覧に無い: {0}', manualTag: '手入力',
+      manualTitle: '手入力でモデルを足す', modelId: 'モデル ID', effortsLabel: 'efforts (カンマ区切り)',
+      addModel: '足す', addModelHint: '足したモデルは自動では選ばれません。', added: '{0} を足しました。',
+      needModelId: 'モデル ID を入れてください。', savedAgents: '{0} を保存しました。', savedSelected: '選んだモデルを保存しました。',
+      tierHaiku: '軽い作業', tierSonnet: 'ふつうの作業', tierOpus: '設計が要る作業',
+      routingDefault: '同梱の既定 (全段 agent)', routingHome: 'home の routing.json',
+      routingDefaultHint: '保存すると home に routing.json を書きます。', routingHomeHint: '前の版は routing.prev.json に残します。',
+      addStep: '手順を足す', agentLast: '最後に受ける agent', agentModel: 'モデル',
+      modelLabel: 'モデル', runnerLabel: '実行先', effortLabel: 'effort', untilLabel: '期限 (日付・任意)',
+      up: '上へ', down: '下へ', remove: '削除',
+      noChoice: '足せるモデルが無い。エージェントとモデルのタブで選ぶ。',
+      routingSaved: 'routing.json を保存しました。', saveFail: '保存できませんでした: {0}',
+      editTemplate: '{0} を編集中', newTemplateTitle: '新しいテンプレート',
+      nameLabel: '名前', descLabel: '説明', useTier: 'この段を使う', addRotate: '交互グループを足す',
+      rotateTitle: '交互グループ (PBI 番号で先頭を回す)', addMember: 'メンバーを足す',
+      saveTemplate: 'テンプレートを保存', deleteTemplate: 'このテンプレートを消す', reset: '元に戻す',
+      confirmDelete: '{0} を消してよい?', templateSaved: '{0} を保存しました。', templateDeleted: '{0} を消しました。',
+      needName: '名前は英小文字・数字・- で 1〜63 文字。', needTier: '段を 1 つ以上使う。', tierNeedsStep: '使う段には手順が 1 つ以上要る。',
+      copy: 'home にコピー', copyAs: 'コピー先の名前 (空なら同じ名前)', copyAsPlaceholder: '新しい名前 (任意)',
+      copied: '{0} をコピーしました。', noneTemplates: 'テンプレートが無い。見本をコピーするか、新しく作る。',
+      noneExamples: '同梱の見本が無い。', editorEmpty: '一覧からテンプレートを選ぶか、新しく作る。',
+      noModelList: 'この実行先で選べるモデルが無い。',
+      applicationNone: '適用は無い。', appTemplate: 'テンプレート', appUntil: '期限', appOnExpire: '期限切れのとき',
+      appReason: '理由', appStarted: '始めた日時', appStatus: '状態', appId: 'ID',
+      forever: '期限なし', onExpireAsk: '確認する (ask)', onExpireDrop: '元に戻す (drop)',
+      startTitle: '適用を始める', apply: '適用する', answerTitle: '今の適用に答える',
+      extend: '延長する', stop: '停止する', applied: '{0} を適用しました。',
+      appliedOpus: '{0} を適用しました。opus の段の注意を確認してください。', answered: '適用を更新しました。',
+      opusWarn: 'このテンプレートには opus の段がある。設計判断が要る PBI まで安いモデルに回すおそれがある。',
+      noTemplateToApply: '適用できるテンプレートが無い。', needUntil: '日時を入れるか「期限なし」を選ぶ。',
+      statusNone: '適用なし', statusActive: '適用中', statusExpiredAsk: '期限切れ (確認待ち)',
+      statusExpiredDrop: '期限切れ (元に戻した)', statusUnknown: 'テンプレートが見つからない',
     },
     en: {
-      tagline: 'Build the routing template (routing.json) for pbi-orchestration-jev',
-      updated: 'Catalog date {0}', sample: 'Scores and prices are sample values', reload: 'Reload model list',
-      langBtn: '日本語', langAria: '日本語に切り替える',
-      s1: 'Choose the models to use',
-      s1p: 'Keep only the runners you subscribe to. Each chip becomes one entry in the try order (runner, model, effort).',
-      s1b: 'Minimum score per workload',
-      s1bp: 'Each PBI is classed as light, standard or design-heavy work from Jev’s verdict and the size of the change. Models scoring below the floor are left out of the proposals for that class.',
-      haiku: 'Light work', sonnet: 'Standard work', opus: 'Design-heavy work',
-      maxSteps: 'Runners to try per task', subsCheap: 'Treat usage within a subscription as cheap', extOpus: 'Use runners other than Claude Code for design-heavy work too',
-      s2: 'Pick a proposal',
-      s2p: 'Three proposals built from the same models: performance, cost and balanced. The estimated cost assumes 300k input and 30k output tokens per PBI at API prices.',
-      proposals: 'Template proposals', performance: 'Performance', cost: 'Cost', balanced: 'Balanced',
-      s3e: 'Adjust the try order',
-      s3ep: 'Starting from the chosen proposal, each workload tries runners from top to bottom. Drag or use ↑ ↓ to reorder; unchecked entries are not used. The final fallback is the Claude Code model you pick.',
-      edited: 'Edited', reset: 'Back to proposal',
-      s3: 'Export routing.json',
-      s3p: 'Put it at docs/pbi/routing.json in the target repository, and prepare.py tries runners in this order.',
-      apply: 'Apply to this repository', copy: 'Copy JSON',
-      footer: 'studio/update_catalog.py builds the model list from OpenRouter (prices, new models) and Artificial Analysis (coding index).',
-      noPrice: 'Price unknown (not used in proposals)', score: 'Score {0}', sampleMark: ' (sample)', until: 'until {0}',
-      candTitle: 'New models', candNote: 'They have no runner mapping yet, so proposals do not use them. Add options under models in catalog.json to make them selectable.',
-      selected: 'Selected', choose: 'Choose', statQ: 'First-choice score (weighted)', statCost: 'API cost / PBI', floor: 'floor {0}',
-      warnFloor: '{0}: no Claude Code model reaches the floor of {1}, so {2} is used',
-      warnAgent: 'Keep at least one Claude Code (Agent) model',
-      whyPerformance: 'Every workload tries the highest-scoring runner first.', whyCost: 'Every workload tries the cheapest runner first and falls back to Claude Code.', whyBalanced: 'Runners are tried in order of the best balance between score and cost.',
-      whyTail: '{0} Standard work starts with {1} ({2}); light work starts with {3} ({4}).',
-      editorEmpty: 'Select at least one Claude Code model to adjust the order here.', editBase: 'Based on: {0}',
-      rowNoPrice: ' · price unknown', below: 'below floor', up: 'Move up', down: 'Move down',
-      laneEmpty: 'No runners other than Claude Code are selected.', laneLast: 'Final fallback (Claude Code)',
-      jsonEmpty: '// Select at least one Claude Code (Agent) model',
-      reloaded: 'Reloaded the model list', reloadFail: 'Could not read catalog.json, so the copy in this page is used',
-      target: 'Target: {0}', applied: 'Applied: {0}. You can close this page.', applyFail: 'Could not apply: {0}',
-      copied: 'Copied', selectedText: 'Selected. Press Ctrl+C to copy.',
+      tagline: 'Set up runners and models, routing and priority templates on one screen',
+      reload: 'Reload', close: 'Close', save: 'Save',
+      tabAgents: 'Agents & models', tabRouting: 'Routing template', tabPriority: 'Priority templates & apply',
+      agentsTitle: 'Agents and models',
+      agentsIntro: 'For each runner, decide whether to use it, see the CLI path, and pick the models to allow. Only checked models can be used in routing and templates.',
+      routingTitle: 'Routing template',
+      routingIntro: 'Each tier is a list of steps tried in order. The last step of a tier is always one agent step; only its model and effort can be chosen.',
+      priorityTitle: 'Priority templates and application',
+      priorityIntro: 'Edit the templates in home, copy the bundled examples, and start or answer an application.',
+      templatesTitle: 'Templates in home', examplesTitle: 'Bundled examples', newTemplate: 'New template',
+      applicationTitle: 'Current application',
+      footer: 'studio/update_catalog.py builds the model list. All files are written under home.',
+      home: 'home: {0}', langBtn: '日本語', langAria: '日本語に切り替える',
+      warnings: 'Warnings', loading: 'Loading…',
+      errBoot: 'Could not read studio-boot. Open the page from serve.py.',
+      errToken: 'The studio token is wrong. Reopen the page from serve.py.',
+      netFail: 'Network error: {0}', errHttp: 'The server returned {0}.',
+      reloaded: 'Reloaded the state from home.', closeOk: 'You can close this page.', never: '—',
+      enabled: 'Use', agentAlways: 'Claude Code is always on',
+      version: 'version', checkedAt: 'checked', billing: 'billing', fetchedAt: 'List fetched',
+      fetchError: 'Could not fetch the list', failedAt: 'failed',
+      noModels: 'No model list yet. Run `python setup_agents.py models`, or add a model by hand.',
+      searchModels: 'Search models', searchPlaceholder: 'Filter by name, id or effort', noHit: 'No model matches.',
+      quality: 'quality', price: '$/M tokens', sample: 'sample', refCli: 'CLI price', noRef: 'no reference',
+      noEfforts: 'none', missing: 'Selected models not in the list: {0}', manualTag: 'manual',
+      manualTitle: 'Add a model by hand', modelId: 'Model ID', effortsLabel: 'efforts (comma separated)',
+      addModel: 'Add', addModelHint: 'Added models are not selected automatically.', added: 'Added {0}.',
+      needModelId: 'Enter a model ID.', savedAgents: 'Saved {0}.', savedSelected: 'Saved the selected models.',
+      tierHaiku: 'Light work', tierSonnet: 'Standard work', tierOpus: 'Design work',
+      routingDefault: 'Bundled default (all tiers are agent)', routingHome: 'home routing.json',
+      routingDefaultHint: 'Saving writes routing.json in home.', routingHomeHint: 'The previous file is kept as routing.prev.json.',
+      addStep: 'Add step', agentLast: 'Final agent step', agentModel: 'Model',
+      modelLabel: 'Model', runnerLabel: 'Runner', effortLabel: 'Effort', untilLabel: 'Until (date, optional)',
+      up: 'Move up', down: 'Move down', remove: 'Remove',
+      noChoice: 'No selectable models. Choose some on the Agents & models tab.',
+      routingSaved: 'Saved routing.json.', saveFail: 'Could not save: {0}',
+      editTemplate: 'Editing {0}', newTemplateTitle: 'New template',
+      nameLabel: 'Name', descLabel: 'Description', useTier: 'Use this tier', addRotate: 'Add rotate group',
+      rotateTitle: 'Rotate group (rotated by PBI number)', addMember: 'Add member',
+      saveTemplate: 'Save template', deleteTemplate: 'Delete this template', reset: 'Reset',
+      confirmDelete: 'Delete {0}?', templateSaved: 'Saved {0}.', templateDeleted: 'Deleted {0}.',
+      needName: 'The name must be 1-63 lowercase letters, digits or hyphens.', needTier: 'Use at least one tier.', tierNeedsStep: 'Each used tier needs at least one step.',
+      copy: 'Copy to home', copyAs: 'Copy as (empty keeps the name)', copyAsPlaceholder: 'optional new name',
+      copied: 'Copied {0}.', noneTemplates: 'No templates yet. Copy an example or create one.',
+      noneExamples: 'No examples are bundled.', editorEmpty: 'Choose a template from the list or create a new one.',
+      noModelList: 'No models are available for this runner.',
+      applicationNone: 'There is no application.', appTemplate: 'Template', appUntil: 'Until', appOnExpire: 'On expiry',
+      appReason: 'Reason', appStarted: 'Started', appStatus: 'Status', appId: 'ID',
+      forever: 'No expiry', onExpireAsk: 'Ask (ask)', onExpireDrop: 'Drop (drop)',
+      startTitle: 'Start an application', apply: 'Apply', answerTitle: 'Answer the current application',
+      extend: 'Extend', stop: 'Stop', applied: 'Applied {0}.',
+      appliedOpus: 'Applied {0}. Note the opus-tier warning.', answered: 'Updated the application.',
+      opusWarn: 'This template has an opus tier. PBIs that need design judgement may be sent to a cheaper model.',
+      noTemplateToApply: 'There is no valid template to apply.', needUntil: 'Enter a date or choose No expiry.',
+      statusNone: 'none', statusActive: 'active', statusExpiredAsk: 'expired (ask)',
+      statusExpiredDrop: 'expired (dropped)', statusUnknown: 'template missing',
     },
   };
-  const store = { get: (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} } };
+
+  const RUNNERS = ['opencode', 'codex', 'agy', 'dsh', 'agent'];
+  const EXTERNAL = ['opencode', 'codex', 'agy', 'dsh'];
+  const TIERS = ['haiku', 'sonnet', 'opus'];
+  const TABS = ['agents', 'routing', 'priority'];
+  const RUNNER_LABEL = { opencode: 'opencode', codex: 'Codex', agy: 'Antigravity', dsh: 'DSH', agent: 'Claude Code' };
+
+  const boot = (() => {
+    try {
+      const raw = document.getElementById('studio-boot').textContent.trim();
+      return raw ? JSON.parse(raw) : { token: '', home: '' };
+    } catch (_) { return { token: '', home: '' }; }
+  })();
+
+  const store = {
+    get: (key) => { try { return localStorage.getItem(key); } catch (_) { return null; } },
+    set: (key, value) => { try { localStorage.setItem(key, value); } catch (_) {} },
+  };
+
   const pickLang = () => {
     const q = new URLSearchParams(location.search).get('lang');
-    const v = q || store.get('studio-lang') || (navigator.language || '').slice(0, 2);
-    return v === 'ja' ? 'ja' : 'en';
+    const value = q || store.get('studio-lang') || (navigator.language || '').slice(0, 2);
+    return value === 'ja' ? 'ja' : 'en';
   };
   let lang = pickLang();
-  const t = (key, ...args) => (TEXT[lang][key] ?? TEXT.ja[key]).replace(/\{(\d)\}/g, (_, i) => args[+i]);
-  const RUNNER = { opencode: 'opencode', codex: 'Codex', agy: 'Antigravity', agent: 'Claude Code' };
-  const TIERS = ['haiku', 'sonnet', 'opus'];
-  const MIX = { haiku: 0.4, sonnet: 0.45, opus: 0.15 };  // 作業の重さの出方の目安 (重み)
-  const TOKENS = { in: 300000, out: 30000 };
-  const PROFILES = [
-    { id: 'performance', tone: 'var(--perf)' },
-    { id: 'cost', tone: 'var(--cost)' },
-    { id: 'balanced', tone: 'var(--bal)' },
-  ];
-  const state = {
-    catalog: null, applied: null, enabled: new Set(), chosen: 'balanced', built: [], custom: null, edited: false, drag: null,
-    floors: { haiku: 55, sonnet: 70, opus: 85 }, maxSteps: 4, subsCheap: true, extOpus: false,
+  const t = (key, ...args) => {
+    const source = (TEXT[lang] && TEXT[lang][key]) || TEXT.ja[key] || key;
+    return String(source).replace(/\{(\d)\}/g, (_, i) => (args[+i] === undefined ? '' : args[+i]));
   };
+
   const $ = (id) => document.getElementById(id);
-  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);  // catalog の数値は数として出す
-  // 価格が無い (null など) ものは 0 とみなさず「不明」として扱い、案には入れない
-  const measure = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
-  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const esc = (value) => String(value === null || value === undefined ? '' : value)
+    .replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
+  const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const cap = (value) => value.charAt(0).toUpperCase() + value.slice(1);
 
-  const priced = (m) => measure(m.price_in) !== null && measure(m.price_out) !== null;
-
-  function options(cat) {
-    return cat.models.flatMap((m) => m.options.map((o) => ({
-      key: `${o.runner}|${o.model}|${o.effort ?? ''}`,
-      modelName: m.name, provider: m.provider, sample: m.sample,
-      runner: o.runner, model: o.model, effort: o.effort, billing: o.billing, until: o.until ?? m.until ?? null,
-      quality: num(m.quality) + num(o.quality_delta),
-      price: priced(m) ? (3 * measure(m.price_in) + measure(m.price_out)) / 4 : null,
-      perPbi: priced(m) ? (TOKENS.in * measure(m.price_in) + TOKENS.out * measure(m.price_out)) / 1e6 : null,
-    })));
-  }
-  const label = (o) => `${RUNNER[o.runner]} ${o.model.split('/').pop()}${o.effort ? ' ' + o.effort : ''}`;
-  const effCost = (o) => (o.billing === 'subscription' && state.subsCheap ? o.price * 0.15 : o.price);
-
-  function sorter(profile, pool) {
-    const qs = pool.map((o) => o.quality), cs = pool.map((o) => Math.log10(effCost(o) + 0.05));
-    const [qMin, qMax, cMin, cMax] = [Math.min(...qs), Math.max(...qs), Math.min(...cs), Math.max(...cs)];
-    const norm = (v, a, b) => (b > a ? (v - a) / (b - a) : 0.5);
-    const score = (o) => {
-      if (profile === 'performance') return o.quality * 1000 - effCost(o);
-      if (profile === 'cost') return -effCost(o) * 1000 + o.quality;
-      return 0.4 * norm(o.quality, qMin, qMax) + 0.6 * (1 - norm(Math.log10(effCost(o) + 0.05), cMin, cMax));
-    };
-    return (a, b) => score(b) - score(a);
+  function fmtTime(iso) {
+    if (!iso) return t('never');
+    const date = new Date(iso);
+    if (isNaN(date.getTime())) return String(iso);
+    try { return date.toLocaleString(lang === 'ja' ? 'ja-JP' : 'en-US'); } catch (_) { return String(iso); }
   }
 
-  function build(profile, opts) {
-    const on = opts.filter((o) => state.enabled.has(o.key) && o.price !== null);
-    const tiers = {}, warnings = [];
-    for (const tier of TIERS) {
-      const floor = state.floors[tier];
-      const ext = on.filter((o) => o.runner !== 'agent' && o.quality >= floor && (tier !== 'opus' || state.extOpus));
-      const agents = on.filter((o) => o.runner === 'agent');
-      const extSorted = ext.sort(sorter(profile, on));
-      const seen = new Set(), chain = [];
-      for (const o of extSorted) {
-        if (seen.has(o.runner) || chain.length >= state.maxSteps - 1) continue;
-        seen.add(o.runner); chain.push(o);
-      }
-      let agent = agents.filter((o) => o.quality >= floor).sort(sorter(profile, on))[0];
-      if (!agent && agents.length) {
-        agent = agents.slice().sort((a, b) => b.quality - a.quality)[0];
-        warnings.push(t('warnFloor', t(tier), floor, agent.modelName));
-      }
-      if (!agent) { warnings.push(t('warnAgent')); return { tiers: null, warnings }; }
-      tiers[tier] = [...chain, agent];
+  function isoLocal(value) {
+    const date = new Date(value);
+    if (isNaN(date.getTime())) return null;
+    const pad = (n) => String(n).padStart(2, '0');
+    const offset = -date.getTimezoneOffset();
+    const sign = offset >= 0 ? '+' : '-';
+    const abs = Math.abs(offset);
+    return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) +
+      'T' + pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':00' +
+      sign + pad(Math.floor(abs / 60)) + ':' + pad(abs % 60);
+  }
+
+  const state = {
+    data: null,
+    tab: 'agents',
+    routing: null,
+    template: null,
+    templateOriginal: null,
+    app: { template: '', until: '', forever: true, on_expire: 'ask', reason: '' },
+    answerUntil: '',
+    search: {},
+    copyAs: '',
+  };
+
+  function initialTab() {
+    const hash = (location.hash || '').replace(/^#/, '');
+    return TABS.indexOf(hash) >= 0 ? hash : 'agents';
+  }
+
+  let noticeTimer = null;
+  function notice(message, kind) {
+    const el = $('notice');
+    if (!el) return;
+    const type = kind || 'ok';
+    el.textContent = message || '';
+    el.className = 'notice ' + type;
+    el.hidden = !message;
+    clearTimeout(noticeTimer);
+    if (message) noticeTimer = setTimeout(() => { el.hidden = true; }, type === 'err' ? 9000 : 5000);
+  }
+
+  function run(fn) {
+    Promise.resolve().then(fn).catch((error) => notice(error && error.message ? error.message : String(error), 'err'));
+  }
+
+  async function request(method, path, body) {
+    const headers = { 'X-Studio-Token': boot.token };
+    const init = { method: method, headers: headers, cache: 'no-store' };
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(body);
     }
-    return { tiers, warnings };
+    let response;
+    try {
+      response = await fetch(path, init);
+    } catch (error) {
+      throw new Error(t('netFail', error && error.message ? error.message : String(error)));
+    }
+    let payload = null;
+    try { payload = await response.json(); } catch (_) { payload = null; }
+    if (response.status === 403) throw new Error(t('errToken'));
+    if (!response.ok) throw new Error((payload && payload.error) || t('errHttp', response.status));
+    if (method !== 'GET' && (!payload || payload.ok !== true)) {
+      throw new Error((payload && payload.error) || t('errHttp', response.status));
+    }
+    return payload;
   }
 
-  function metrics(tiers) {
-    let q = 0, cost = 0;
-    for (const k of TIERS) { q += MIX[k] * tiers[k][0].quality; cost += MIX[k] * tiers[k][0].perPbi; }
-    return { q, cost };
+  function runnerState(runner) {
+    return state.data && state.data.runners ? state.data.runners[runner] : null;
   }
 
-  function reason(profile, tiers) {
-    const s = tiers.sonnet[0], h = tiers.haiku[0];
-    const base = t(profile === 'performance' ? 'whyPerformance' : profile === 'cost' ? 'whyCost' : 'whyBalanced');
-    return t('whyTail', base, s.modelName, RUNNER[s.runner], h.modelName, RUNNER[h.runner]);
-  }
-
-  function toRouting(profile, tiers) {
-    const out = { name: profile, generated_by: 'studio', catalog: state.catalog.updated, tiers: {} };
-    for (const k of TIERS) out.tiers[k] = tiers[k].map((o) => {
-      const s = { runner: o.runner, model: o.model, effort: o.effort ?? null };
-      if (o.until && o.runner !== 'agent') s.until = o.until;
-      return s;
-    });
+  function agentChoices() {
+    const runner = runnerState('agent');
+    if (!runner) return [];
+    const list = runner.models && Array.isArray(runner.models.list) ? runner.models.list : [];
+    const byId = new Map(list.map((model) => [model.id, model]));
+    const ids = runner.selected === null
+      ? list.map((model) => model.id)
+      : (Array.isArray(runner.selected) ? runner.selected.slice() : []);
+    const seen = new Set();
+    const out = [];
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const model = byId.get(id);
+      out.push({
+        id: id,
+        name: (model && model.name) || id,
+        efforts: (model && Array.isArray(model.efforts)) ? model.efforts : [],
+      });
+    }
     return out;
   }
 
-  function renderProviders() {
-    const cat = state.catalog;
-    $('updated').textContent = t('updated', cat.updated);
-    $('sampleNote').hidden = !cat.models.some((m) => m.sample);
-    $('providers').innerHTML = cat.providers.map((p) => {
-      const models = cat.models.filter((m) => m.provider === p.id);
-      if (!models.length) return '';
-      const runners = [...new Set(models.flatMap((m) => m.options.map((o) => RUNNER[o.runner])))].join(' · ');
-      return `<article class="prov glass">
-        <div class="prov-head"><span class="mark" style="background:${esc(p.color)}">${esc(p.mark)}</span>
-          <div><b>${esc(p.name)}</b><span>${esc(runners)}</span></div></div>
-        ${models.map((m) => { const q = num(m.quality); return `<div class="model">
-          <div class="model-top"><b>${esc(m.name)}</b><span class="price">${priced(m) ? `$${measure(m.price_in)} / $${measure(m.price_out)}` : esc(t('noPrice'))}</span></div>
-          <div class="qline"><span>${esc(t('score', q))}${m.sample ? esc(t('sampleMark')) : ''}</span><span>${m.until ? esc(t('until', m.until)) : ''}</span></div>
-          <div class="qbar"><i style="width:${Math.max(4, Math.min(100, q))}%; background-position:${-q * 2}px 0"></i></div>
-          <div class="opts">${m.options.map((o) => {
-            const k = `${o.runner}|${o.model}|${o.effort ?? ''}`;
-            return `<button type="button" class="opt" data-key="${esc(k)}" aria-pressed="${state.enabled.has(k)}">${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''}${o.runner === 'agy' ? ' ' + esc(o.model.split('-').pop()) : ''}</button>`;
-          }).join('')}</div>
-        </div>`; }).join('')}
-      </article>`;
-    }).join('');
-    const c = cat.candidates || [];
-    $('candidates').hidden = !c.length;
-    $('candidates').innerHTML = c.length ? `<h2>${esc(t('candTitle'))}</h2>
-      <p class="why">${esc(t('candNote'))}</p>
-      <ul>${c.slice(0, 8).map((m) => `<li><span class="pill">${esc(m.created)}</span><b>${esc(m.name)}</b><code>${esc(m.openrouter_id)}</code></li>`).join('')}</ul>` : '';
-  }
-
-  function renderProposals() {
-    const opts = options(state.catalog);
-    const built = PROFILES.map((p) => ({ p, ...build(p.id, opts) }));
-    $('proposals').innerHTML = built.map(({ p, tiers, warnings }) => {
-      if (!tiers) return `<div class="prop glass" style="--tone:${p.tone}"><div class="prop-head"><h3>${esc(t(p.id))}</h3></div><p class="why bad">${esc(warnings[0])}</p></div>`;
-      const m = metrics(tiers);
-      return `<button type="button" class="prop glass" role="radio" data-profile="${p.id}" aria-checked="${state.chosen === p.id}" style="--tone:${p.tone}">
-        <div class="prop-head"><h3>${esc(t(p.id))}</h3><span class="sel">${esc(t(state.chosen === p.id ? 'selected' : 'choose'))}</span></div>
-        <div class="stats">
-          <div class="stat"><small>${esc(t('statQ'))}</small><b>${m.q.toFixed(0)}</b></div>
-          <div class="stat"><small>${esc(t('statCost'))}</small><b>$${m.cost.toFixed(2)}</b></div>
-        </div>
-        ${TIERS.map((k) => `<div class="tier"><span class="tier-name">${esc(t(k))}<span>${esc(t('floor', state.floors[k]))}</span></span>
-          <div class="chain">${tiers[k].map((o, i) => `${i ? '<span class="arrow">→</span>' : ''}<span class="hop${i ? '' : ' first'}">${esc(label(o))}</span>`).join('')}</div></div>`).join('')}
-        <p class="why">${esc(reason(p.id, tiers))}</p>
-        ${warnings.map((w) => `<p class="why bad">${esc(w)}</p>`).join('')}
-      </button>`;
-    }).join('');
-    state.built = built;
-    const pick = built.find((b) => b.p.id === state.chosen && b.tiers) || built.find((b) => b.tiers);
-    if (!pick) { state.custom = null; renderEditor(); renderJson(); return; }
-    state.chosen = pick.p.id;
-    if (!state.custom || !state.edited) seedCustom(pick);
-    else syncCustom();
-    renderEditor(); renderJson();
-  }
-
-  // Step 3: 案をもとに、作業の重さごとの試す順番を手で調整する
-  const byKey = () => new Map(options(state.catalog).map((o) => [o.key, o]));
-
-  function seedCustom(pick) {
-    const all = options(state.catalog).filter((o) => state.enabled.has(o.key) && o.runner !== 'agent')
-      .sort((a, b) => b.quality - a.quality);
-    const tiers = {};
-    for (const k of TIERS) {
-      const chain = pick.tiers[k];
-      const used = chain.slice(0, -1).map((o) => o.key);
-      tiers[k] = {
-        list: [...used.map((key) => ({ key, on: true })), ...all.filter((o) => !used.includes(o.key)).map((o) => ({ key: o.key, on: false }))],
-        agent: chain[chain.length - 1].key,
-      };
+  function choicesFor(runner) {
+    if (runner === 'agent') return agentChoices();
+    const info = runnerState(runner);
+    if (!info || !info.enabled) return [];
+    const list = info.models && Array.isArray(info.models.list) ? info.models.list : [];
+    const byId = new Map(list.map((model) => [model.id, model]));
+    const ids = info.selected === null
+      ? list.map((model) => model.id)
+      : (Array.isArray(info.selected) ? info.selected.slice() : []);
+    const seen = new Set();
+    const out = [];
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const model = byId.get(id);
+      out.push({
+        id: id,
+        name: (model && model.name) || id,
+        efforts: (model && Array.isArray(model.efforts)) ? model.efforts : [],
+      });
     }
-    state.custom = { from: pick.p.id, tiers };
-    state.edited = false;
+    return out;
   }
 
-  function syncCustom() {
-    const opts = options(state.catalog).filter((o) => state.enabled.has(o.key));
-    const agents = opts.filter((o) => o.runner === 'agent');
-    for (const k of TIERS) {
-      const c = state.custom.tiers[k];
-      c.list = c.list.filter((x) => state.enabled.has(x.key));
-      for (const o of opts) if (o.runner !== 'agent' && !c.list.some((x) => x.key === o.key)) c.list.push({ key: o.key, on: false });
-      if (!state.enabled.has(c.agent) && agents.length) c.agent = agents.slice().sort((a, b) => b.quality - a.quality)[0].key;
+  function combos(includeAgent) {
+    const runners = includeAgent ? RUNNERS : EXTERNAL;
+    const out = [];
+    for (const runner of runners) {
+      if (runner === 'agent' && !includeAgent) continue;
+      const info = runnerState(runner);
+      if (runner !== 'agent' && (!info || !info.enabled)) continue;
+      for (const model of choicesFor(runner)) {
+        const efforts = model.efforts.length ? model.efforts : [null];
+        for (const effort of efforts) {
+          out.push({
+            runner: runner,
+            model: model.id,
+            effort: effort,
+            label: RUNNER_LABEL[runner] + ' ' + model.name + (effort ? ' · ' + effort : ''),
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  const externalCombos = () => combos(false);
+  const allCombos = () => combos(true);
+  const defaultAgentModel = () => (agentChoices()[0] || { id: '' }).id;
+
+  function normalizeRouting() {
+    if (!state.routing || !isObject(state.routing.tiers)) {
+      state.routing = { name: 'mine', tiers: {} };
+    }
+    const tiers = state.routing.tiers;
+    for (const tier of TIERS) {
+      if (!Array.isArray(tiers[tier])) tiers[tier] = [];
+      const steps = tiers[tier];
+      const agentAt = steps.findIndex((step) => isObject(step) && step.runner === 'agent');
+      if (agentAt >= 0 && agentAt !== steps.length - 1) {
+        const agent = steps.splice(agentAt, 1)[0];
+        steps.push(agent);
+      }
+      if (!steps.length || !isObject(steps[steps.length - 1]) || steps[steps.length - 1].runner !== 'agent') {
+        steps.push({ runner: 'agent', model: defaultAgentModel(), effort: null });
+      }
+      for (let i = steps.length - 2; i >= 0; i -= 1) {
+        if (isObject(steps[i]) && steps[i].runner === 'agent') steps.splice(i, 1);
+      }
     }
   }
 
-  function renderEditor() {
-    const lanes = $('lanes');
-    if (!state.custom) { lanes.innerHTML = `<p class="lane-empty">${esc(t('editorEmpty'))}</p>`; return; }
-    const map = byKey();
-    const prof = PROFILES.find((p) => p.id === state.custom.from);
-    $('editBase').textContent = t('editBase', prof ? t(prof.id) : state.custom.from);
-    $('editedPill').hidden = !state.edited;
-    $('resetEdit').hidden = !state.edited;
-    const agents = options(state.catalog).filter((o) => o.runner === 'agent' && state.enabled.has(o.key));
-    lanes.innerHTML = TIERS.map((k) => {
-      const c = state.custom.tiers[k];
-      let n = 0;
-      const rows = c.list.map((x, i) => {
-        const o = map.get(x.key);
-        const below = o.quality < state.floors[k];
-        const id = `use-${k}-${i}`;
-        return `<li class="row${x.on ? '' : ' off'}" draggable="true" data-tier="${k}" data-i="${i}">
-          <span class="grip" aria-hidden="true">⠿</span>
-          <span class="prio">${x.on ? ++n : '–'}</span>
-          <input type="checkbox" id="${id}" data-tier="${k}" data-i="${i}" ${x.on ? 'checked' : ''}>
-          <label for="${id}">${esc(o.modelName)}<small>${esc(RUNNER[o.runner])}${o.effort ? ' ' + esc(o.effort) : ''} · ${esc(t('score', num(o.quality)))}${o.price === null ? esc(t('rowNoPrice')) : ''}${below ? ` <span class="below">${esc(t('below'))}</span>` : ''}</small></label>
-          <span class="moves"><button type="button" data-move="-1" data-tier="${k}" data-i="${i}" aria-label="${esc(t('up'))}" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" data-move="1" data-tier="${k}" data-i="${i}" aria-label="${esc(t('down'))}" ${i === c.list.length - 1 ? 'disabled' : ''}>↓</button></span>
-        </li>`;
-      }).join('');
-      return `<div class="lane glass">
-        <div class="lane-head"><b>${esc(t(k))}</b><code>${k}</code><span>${esc(t('floor', state.floors[k]))}</span></div>
-        ${rows ? `<ol>${rows}</ol>` : `<p class="lane-empty">${esc(t('laneEmpty'))}</p>`}
-        <label class="lane-last" for="agent-${k}">${esc(t('laneLast'))}
-          <select id="agent-${k}" data-tier="${k}">${agents.map((o) => `<option value="${esc(o.key)}" ${o.key === c.agent ? 'selected' : ''}>${esc(o.modelName)}${o.effort ? ' (' + esc(o.effort) + ')' : ''}</option>`).join('')}</select>
-        </label>
-      </div>`;
-    }).join('');
-  }
-
-  function renderJson() {
-    if (!state.custom) { $('json').textContent = t('jsonEmpty'); return; }
-    const map = byKey();
-    const tiers = {};
-    for (const k of TIERS) {
-      const c = state.custom.tiers[k];
-      tiers[k] = [...c.list.filter((x) => x.on).map((x) => map.get(x.key)), map.get(c.agent)];
+  async function refresh() {
+    const data = await request('GET', '/api/state');
+    state.data = data;
+    if (!state.routing) {
+      state.routing = clone(data.routing.table);
+      normalizeRouting();
     }
-    $('json').textContent = JSON.stringify(toRouting(state.custom.from + (state.edited ? '-custom' : ''), tiers), null, 2);
-  }
-
-  function edited() { state.edited = true; renderEditor(); renderJson(); }
-
-  function move(tier, from, to) {
-    const list = state.custom.tiers[tier].list;
-    if (to < 0 || to >= list.length || from === to) return;
-    const [x] = list.splice(from, 1);
-    list.splice(to, 0, x);
-    edited();
+    renderAll();
   }
 
   function renderStatic() {
     document.documentElement.lang = lang;
     document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
-    $('proposals').setAttribute('aria-label', t('proposals'));
     $('lang').textContent = t('langBtn');
     $('lang').setAttribute('aria-label', t('langAria'));
-    if (!state.catalog) $('updated').textContent = t('updated', '—');
-    renderApplyNote();
+    $('copyAs').placeholder = t('copyAsPlaceholder');
   }
 
-  function render() { renderProviders(); renderProposals(); }
-
-  function setCatalog(cat) {
-    state.catalog = cat;
-    state.enabled = new Set(options(cat).map((o) => o.key));
-    render();
-  }
-
-  async function loadCatalog(user) {
-    try {
-      const r = await fetch('catalog.json', { cache: 'no-store' });
-      if (!r.ok) throw new Error(r.status);
-      setCatalog(await r.json());
-      if (user) flash(t('reloaded'));
-    } catch (e) {
-      if (!state.catalog) setCatalog(JSON.parse($('catalog-fallback').textContent));
-      if (user) flash(t('reloadFail'));
+  function renderChrome() {
+    $('homePill').textContent = t('home', boot.home || '—');
+    $('homePill').title = boot.home || '';
+    $('lang').textContent = t('langBtn');
+    $('lang').setAttribute('aria-label', t('langAria'));
+    const warnings = state.data && Array.isArray(state.data.warnings) ? state.data.warnings : [];
+    const box = $('warnings');
+    box.hidden = warnings.length === 0;
+    box.innerHTML = warnings.length
+      ? '<b>' + esc(t('warnings')) + '</b><ul>' + warnings.map((warning) => '<li>' + esc(warning) + '</li>').join('') + '</ul>'
+      : '';
+    for (const tab of TABS) {
+      const selected = state.tab === tab;
+      const button = $('tab-' + tab);
+      button.setAttribute('aria-selected', String(selected));
+      button.tabIndex = selected ? 0 : -1;
+      $('panel-' + tab).hidden = !selected;
     }
   }
 
-  function flash(msg) { $('toast').textContent = msg; clearTimeout(flash.t); flash.t = setTimeout(() => ($('toast').textContent = ''), 3200); }
-
-  document.addEventListener('click', (e) => {
-    const opt = e.target.closest('.opt');
-    if (opt) {
-      const k = opt.dataset.key;
-      state.enabled.has(k) ? state.enabled.delete(k) : state.enabled.add(k);
-      opt.setAttribute('aria-pressed', state.enabled.has(k));
-      renderProposals();
-      return;
-    }
-    const prop = e.target.closest('.prop[data-profile]');
-    if (prop) { state.chosen = prop.dataset.profile; state.edited = false; renderProposals(); return; }
-    const mv = e.target.closest('button[data-move]');
-    if (mv) {
-      const i = +mv.dataset.i, tier = mv.dataset.tier, to = i + +mv.dataset.move;
-      move(tier, i, to);
-      const again = document.querySelector(`button[data-move="${mv.dataset.move}"][data-tier="${tier}"][data-i="${to}"]`);
-      if (again && !again.disabled) again.focus();
-    }
-  });
-  $('lanes').addEventListener('change', (e) => {
-    const el = e.target;
-    if (el.matches('input[type=checkbox]')) { state.custom.tiers[el.dataset.tier].list[+el.dataset.i].on = el.checked; edited(); }
-    if (el.matches('select')) { state.custom.tiers[el.dataset.tier].agent = el.value; edited(); }
-  });
-  $('lanes').addEventListener('dragstart', (e) => {
-    const li = e.target.closest('li.row'); if (!li) return;
-    state.drag = { t: li.dataset.tier, i: +li.dataset.i };
-    li.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-    try { e.dataTransfer.setData('text/plain', li.dataset.i); } catch (_) {}
-  });
-  $('lanes').addEventListener('dragover', (e) => {
-    const li = e.target.closest('li.row');
-    if (!li || !state.drag || li.dataset.tier !== state.drag.t) return;
-    e.preventDefault();
-    document.querySelectorAll('.row.over').forEach((r) => r !== li && r.classList.remove('over'));
-    li.classList.add('over');
-  });
-  $('lanes').addEventListener('drop', (e) => {
-    const li = e.target.closest('li.row');
-    if (!li || !state.drag || li.dataset.tier !== state.drag.t) return;
-    e.preventDefault();
-    move(state.drag.t, state.drag.i, +li.dataset.i);
-    state.drag = null;
-  });
-  $('lanes').addEventListener('dragend', () => { state.drag = null; document.querySelectorAll('.row.over, .row.dragging').forEach((r) => r.classList.remove('over', 'dragging')); });
-  $('resetEdit').addEventListener('click', () => { state.edited = false; renderProposals(); });
-  $('reload').addEventListener('click', () => loadCatalog(true));
-  $('lang').addEventListener('click', () => {
-    lang = lang === 'ja' ? 'en' : 'ja';
-    store.set('studio-lang', lang);
-    renderStatic(); render();
-  });
-
-  // serve.py から開いたときだけ、適用先と合言葉が埋め込まれる
-  const applyInfo = (() => { try { const raw = $('studio-apply').textContent.trim(); return raw ? JSON.parse(raw) : null; } catch (_) { return null; } })();
-  function renderApplyNote() {
-    if (!applyInfo) return;
-    const [key, path] = state.applied ? ['applied', state.applied] : ['target', applyInfo.target];
-    const [before, after] = t(key, '\u0000').split('\u0000');
-    $('applyNote').innerHTML = `${esc(before)}<code>${esc(path)}</code>${esc(after)}`;
-    $('applyNote').classList.toggle('done', !!state.applied);
+  function renderAll() {
+    renderChrome();
+    renderPanel();
   }
-  if (applyInfo) {
-    $('apply').hidden = false;
-    $('copy').classList.remove('primary');
-    $('applyNote').hidden = false;
-    $('apply').addEventListener('click', async () => {
-      $('apply').disabled = true;
+
+  function renderPanel() {
+    if (state.tab === 'agents') renderAgents();
+    else if (state.tab === 'routing') renderRouting();
+    else renderPriority();
+  }
+
+  // --- エージェントとモデル ---
+
+  function mark(runner) {
+    return { opencode: 'O', codex: 'C', agy: 'A', dsh: 'D', agent: '★' }[runner] || '?';
+  }
+
+  function modelRow(runner, model, checked) {
+    const ref = model.ref;
+    const bits = [];
+    if (ref) {
+      if (ref.quality !== null && ref.quality !== undefined) bits.push(esc(t('quality')) + ' ' + esc(ref.quality));
+      const prices = [];
+      if (ref.price_in !== null && ref.price_in !== undefined) prices.push('$' + esc(ref.price_in));
+      if (ref.price_out !== null && ref.price_out !== undefined) prices.push('$' + esc(ref.price_out));
+      if (prices.length) bits.push(esc(t('price')) + ' ' + prices.join(' / '));
+      if (ref.sample) bits.push('<span class="badge">' + esc(t('sample')) + '</span>');
+      if (ref.source === 'cli') bits.push(esc(t('refCli')));
+    } else {
+      bits.push(esc(t('noRef')));
+    }
+    const efforts = Array.isArray(model.efforts) && model.efforts.length
+      ? model.efforts.map((effort) => '<span class="tag">' + esc(effort) + '</span>').join('')
+      : '<span class="tag muted-tag">' + esc(t('noEfforts')) + '</span>';
+    return '<label class="model-row" data-search="' +
+      esc((String(model.name || '') + ' ' + model.id + ' ' + (model.efforts || []).join(' ')).toLowerCase()) + '">' +
+      '<input type="checkbox" data-role="model" data-runner="' + esc(runner) + '" data-id="' + esc(model.id) + '"' + (checked ? ' checked' : '') + '>' +
+      '<span class="model-body">' +
+      '<span class="model-name">' + esc(model.name || model.id) + '</span>' +
+      '<span class="model-id">' + esc(model.id) + '</span>' +
+      '<span class="tags">' + efforts + (model.manual ? '<span class="tag manual">' + esc(t('manualTag')) + '</span>' : '') + '</span>' +
+      '<span class="ref">' + bits.join(' · ') + '</span>' +
+      '</span></label>';
+  }
+
+  function runnerCard(runner) {
+    const info = runnerState(runner) || {};
+    const agent = runner === 'agent';
+    const models = info.models;
+    const list = models && Array.isArray(models.list) ? models.list : [];
+    const selected = info.selected;
+    const isOn = (id) => (selected === null ? true : (Array.isArray(selected) && selected.indexOf(id) >= 0));
+    const metaBits = [];
+    if (info.path) metaBits.push('<span class="mono">' + esc(info.path) + '</span>');
+    if (info.version) metaBits.push(esc(t('version')) + ' ' + esc(info.version));
+    if (info.checked_at) metaBits.push(esc(t('checkedAt')) + ' ' + esc(fmtTime(info.checked_at)));
+    if (info.billing) metaBits.push(esc(t('billing')) + ' ' + esc(info.billing));
+    const fetchLine = !models
+      ? '<p class="muted">' + esc(t('noModels')) + '</p>'
+      : '<p class="muted">' + esc(t('fetchedAt')) + ': ' + esc(fmtTime(models.fetched_at)) + (models.method ? ' · ' + esc(models.method) : '') + '</p>' +
+        (models.error ? '<p class="warn-text">' + esc(t('fetchError')) + ': ' + esc(models.error) +
+          (models.failed_at ? ' (' + esc(t('failedAt')) + ' ' + esc(fmtTime(models.failed_at)) + ')' : '') + '</p>' : '');
+    const missing = Array.isArray(info.missing_selected) && info.missing_selected.length
+      ? '<p class="warn-text">' + esc(t('missing', info.missing_selected.join(', '))) + '</p>' : '';
+    const switchHtml = '<label class="switch"><input type="checkbox" data-role="enabled" data-runner="' + esc(runner) + '"' +
+      (info.enabled ? ' checked' : '') + (agent ? ' disabled' : '') + '><span>' + esc(agent ? t('agentAlways') : t('enabled')) + '</span></label>';
+    const rows = list.length
+      ? list.map((model) => modelRow(runner, model, isOn(model.id))).join('')
+      : '<p class="muted">' + esc(t('noModelList')) + '</p>';
+    const search = '<label class="field-row search"><span>' + esc(t('searchModels')) + '</span>' +
+      '<input type="search" data-role="search" data-runner="' + esc(runner) + '" value="' +
+      esc(state.search[runner] || '') + '" placeholder="' + esc(t('searchPlaceholder')) + '" autocomplete="off"></label>';
+    const manual = '<form class="manual-form" data-role="manual" data-runner="' + esc(runner) + '">' +
+      '<h4>' + esc(t('manualTitle')) + '</h4>' +
+      '<div class="fields">' +
+      '<label class="field-row"><span>' + esc(t('modelId')) + '</span><input type="text" data-role="new-id" autocomplete="off" spellcheck="false"></label>' +
+      '<label class="field-row"><span>' + esc(t('effortsLabel')) + '</span><input type="text" data-role="new-efforts" autocomplete="off" placeholder="low, high"></label>' +
+      '<button class="btn" type="submit">' + esc(t('addModel')) + '</button>' +
+      '</div><p class="muted">' + esc(t('addModelHint')) + '</p></form>';
+    return '<article class="card glass" data-runner="' + esc(runner) + '">' +
+      '<div class="card-head">' +
+      '<div class="card-title"><span class="mark ' + esc(runner) + '">' + esc(mark(runner)) + '</span>' +
+      '<div><b>' + esc(RUNNER_LABEL[runner]) + '</b><span class="muted">' + esc(runner) + '</span></div></div>' +
+      switchHtml + '</div>' +
+      '<div class="meta">' + metaBits.join('<span class="sep">·</span>') + '</div>' +
+      fetchLine + missing +
+      (list.length ? search : '') +
+      '<div class="model-list">' + rows + '</div>' +
+      '<p class="muted no-hit" hidden>' + esc(t('noHit')) + '</p>' +
+      manual + '</article>';
+  }
+
+  function renderAgents() {
+    const box = $('agents-cards');
+    if (!state.data) { box.innerHTML = '<p class="muted">' + esc(t('loading')) + '</p>'; return; }
+    box.innerHTML = RUNNERS.map((runner) => runnerCard(runner)).join('');
+    for (const runner of RUNNERS) {
+      if (state.search[runner]) {
+        const card = box.querySelector('[data-runner="' + runner + '"].card');
+        if (card) filterModels(card, state.search[runner]);
+      }
+    }
+  }
+
+  function filterModels(card, query) {
+    const needle = String(query || '').trim().toLowerCase();
+    let visible = 0;
+    card.querySelectorAll('.model-row').forEach((row) => {
+      const hit = !needle || (row.dataset.search || '').indexOf(needle) >= 0;
+      row.hidden = !hit;
+      if (hit) visible += 1;
+    });
+    const empty = card.querySelector('.no-hit');
+    if (empty) empty.hidden = visible > 0;
+  }
+
+  // --- 振り分けテンプレート ---
+
+  function posAttrs(opts) {
+    const member = (opts.member === null || opts.member === undefined) ? '' : ' data-member="' + opts.member + '"';
+    return ' data-tier="' + esc(opts.tier) + '" data-index="' + opts.index + '"' + member;
+  }
+
+  function renderStep(step, opts) {
+    step = step || {};
+    const force = opts.forceRunner || null;
+    const pos = posAttrs(opts);
+    let allowed = [];
+    if (force) {
+      allowed = [force];
+    } else {
+      const candidates = opts.allowAgent ? RUNNERS : EXTERNAL;
+      for (const runner of candidates) {
+        if (runner === 'agent') {
+          if (opts.allowAgent) allowed.push(runner);
+          continue;
+        }
+        const info = runnerState(runner);
+        if (info && info.enabled) allowed.push(runner);
+      }
+      if (step.runner && allowed.indexOf(step.runner) < 0) allowed.unshift(step.runner);
+    }
+    const runner = force || step.runner || allowed[0] || '';
+    const choices = runner ? choicesFor(runner) : [];
+    const modelIds = choices.map((choice) => choice.id);
+    const model = step.model || modelIds[0] || '';
+    if (model && modelIds.indexOf(model) < 0) modelIds.unshift(model);
+    const modelField = modelIds.length
+      ? '<select data-role="model"' + pos + '>' + modelIds.map((id) =>
+        '<option value="' + esc(id) + '"' + (id === model ? ' selected' : '') + '>' + esc(id) + '</option>').join('') + '</select>'
+      : '<input type="text" data-role="model"' + pos + ' value="' + esc(step.model || '') + '" autocomplete="off" spellcheck="false">';
+    const chosen = choices.find((choice) => choice.id === model);
+    const efforts = chosen ? chosen.efforts.slice() : [];
+    if (step.effort && efforts.indexOf(step.effort) < 0) efforts.unshift(step.effort);
+    const effortField = '<select data-role="effort"' + pos + '><option value="">' + esc(t('noEfforts')) + '</option>' +
+      efforts.map((effort) => '<option value="' + esc(effort) + '"' + (effort === step.effort ? ' selected' : '') + '>' + esc(effort) + '</option>').join('') +
+      '</select>';
+    const runnerField = force ? '' : (allowed.length
+      ? '<label class="field-row"><span>' + esc(t('runnerLabel')) + '</span><select data-role="runner"' + pos + '>' +
+        allowed.map((name) => '<option value="' + esc(name) + '"' + (name === runner ? ' selected' : '') + '>' + esc(RUNNER_LABEL[name] || name) + '</option>').join('') +
+        '</select></label>'
+      : '<label class="field-row"><span>' + esc(t('runnerLabel')) + '</span><input type="text" data-role="runner"' + pos + ' value="' + esc(step.runner || '') + '" autocomplete="off"></label>');
+    const untilField = opts.noUntil ? '' : '<label class="field-row"><span>' + esc(t('untilLabel')) + '</span>' +
+      '<input type="date" data-role="until"' + pos + ' value="' + esc(step.until || '') + '"></label>';
+    const actions = force ? '' : '<div class="step-actions">' +
+      '<button class="icon" type="button" data-act="up"' + pos + ' aria-label="' + esc(t('up')) + '"' + (opts.canUp ? '' : ' disabled') + '>↑</button>' +
+      '<button class="icon" type="button" data-act="down"' + pos + ' aria-label="' + esc(t('down')) + '"' + (opts.canDown ? '' : ' disabled') + '>↓</button>' +
+      '<button class="icon" type="button" data-act="del"' + pos + ' aria-label="' + esc(t('remove')) + '"' + (opts.canRemove ? '' : ' disabled') + '>×</button>' +
+      '</div>';
+    return '<div class="step' + (force ? ' agent' : '') + '"' + pos + '>' +
+      '<div class="step-fields">' + runnerField +
+      '<label class="field-row"><span>' + esc(t('modelLabel')) + '</span>' + modelField + '</label>' +
+      '<label class="field-row"><span>' + esc(t('effortLabel')) + '</span>' + effortField + '</label>' +
+      untilField + '</div>' + actions + '</div>';
+  }
+
+  function routingTier(tier) {
+    const steps = state.routing.tiers[tier] || [];
+    const external = steps.slice(0, -1);
+    const agentStep = steps[steps.length - 1] || { runner: 'agent', model: defaultAgentModel(), effort: null };
+    const options = externalCombos();
+    const addSelect = options.length
+      ? '<select data-role="add-choice" data-tier="' + esc(tier) + '">' +
+        options.map((combo, i) => '<option value="' + i + '">' + esc(combo.label) + '</option>').join('') + '</select>'
+      : '<span class="muted">' + esc(t('noChoice')) + '</span>';
+    const body = external.map((step, i) => renderStep(step, {
+      tier: tier, index: i, allowAgent: false, noUntil: false,
+      canUp: i > 0, canDown: i < external.length - 1, canRemove: true,
+    })).join('');
+    return '<section class="tier-col glass">' +
+      '<div class="tier-head"><span class="tier-name">' + esc(t('tier' + cap(tier))) + '</span><code>' + esc(tier) + '</code></div>' +
+      '<div class="steps">' + body + '</div>' +
+      '<div class="add-row">' + addSelect +
+      '<button class="btn" type="button" data-act="add-routing-step" data-tier="' + esc(tier) + '"' + (options.length ? '' : ' disabled') + '>' + esc(t('addStep')) + '</button></div>' +
+      '<div class="agent-step"><span class="agent-label">' + esc(t('agentLast')) + '</span>' +
+      renderStep(agentStep, { tier: tier, index: steps.length - 1, forceRunner: 'agent', noUntil: true }) +
+      '</div></section>';
+  }
+
+  function renderRouting() {
+    const box = $('routing-tiers');
+    if (!state.data) { box.innerHTML = '<p class="muted">' + esc(t('loading')) + '</p>'; return; }
+    if (!state.routing) { state.routing = clone(state.data.routing.table); normalizeRouting(); }
+    const source = state.data.routing.source;
+    $('routingSource').textContent = source === 'default' ? t('routingDefault') : t('routingHome');
+    $('routingSource').className = 'pill' + (source === 'default' ? ' warn' : '');
+    $('routingHint').textContent = source === 'default' ? t('routingDefaultHint') : t('routingHomeHint');
+    box.innerHTML = TIERS.map((tier) => routingTier(tier)).join('');
+  }
+
+  // --- 優先テンプレートと適用 ---
+
+  function renderTemplateList() {
+    const box = $('template-list');
+    const templates = state.data ? state.data.templates : null;
+    const names = templates ? Object.keys(templates).sort() : [];
+    box.innerHTML = names.length ? names.map((name) => {
+      const active = state.templateOriginal === name ? ' active' : '';
+      const description = templates[name].description || '';
+      return '<div class="list-item' + active + '">' +
+        '<button class="link" type="button" data-act="select-template" data-name="' + esc(name) + '">' + esc(name) + '</button>' +
+        '<span class="muted list-body">' + esc(description) + '</span></div>';
+    }).join('') : '<p class="muted">' + esc(t('noneTemplates')) + '</p>';
+  }
+
+  function renderExampleList() {
+    const box = $('example-list');
+    const examples = state.data ? state.data.examples : null;
+    const names = examples ? Object.keys(examples).sort() : [];
+    box.innerHTML = names.length ? names.map((name) => {
+      const description = examples[name].description || '';
+      return '<div class="list-item"><span class="list-body"><b>' + esc(name) + '</b>' +
+        '<span class="muted">' + esc(description) + '</span></span>' +
+        '<button class="btn small" type="button" data-act="copy-example" data-name="' + esc(name) + '">' + esc(t('copy')) + '</button></div>';
+    }).join('') : '<p class="muted">' + esc(t('noneExamples')) + '</p>';
+  }
+
+  function templateRotate(group, tier, index, count) {
+    const members = Array.isArray(group.rotate) ? group.rotate : [];
+    const body = members.map((step, member) => renderStep(step, {
+      tier: tier, index: index, member: member, allowAgent: false, noUntil: false,
+      canUp: member > 0, canDown: member < members.length - 1, canRemove: members.length > 2,
+    })).join('');
+    return '<div class="rotate" data-tier="' + esc(tier) + '" data-index="' + index + '">' +
+      '<div class="rotate-head"><b>' + esc(t('rotateTitle')) + '</b><div class="step-actions">' +
+      '<button class="icon" type="button" data-act="group-up" data-tier="' + esc(tier) + '" data-index="' + index + '" aria-label="' + esc(t('up')) + '"' + (index > 0 ? '' : ' disabled') + '>↑</button>' +
+      '<button class="icon" type="button" data-act="group-down" data-tier="' + esc(tier) + '" data-index="' + index + '" aria-label="' + esc(t('down')) + '"' + (index < count - 1 ? '' : ' disabled') + '>↓</button>' +
+      '<button class="icon" type="button" data-act="group-del" data-tier="' + esc(tier) + '" data-index="' + index + '" aria-label="' + esc(t('remove')) + '"' + (count > 1 ? '' : ' disabled') + '>×</button>' +
+      '</div></div><div class="steps">' + body + '</div>' +
+      '<button class="btn small" type="button" data-act="add-member" data-tier="' + esc(tier) + '" data-index="' + index + '">' + esc(t('addMember')) + '</button></div>';
+  }
+
+  function templateTier(tier, draft) {
+    const used = Object.prototype.hasOwnProperty.call(draft.tiers, tier);
+    const steps = used && Array.isArray(draft.tiers[tier]) ? draft.tiers[tier] : [];
+    const toggle = '<label class="switch"><input type="checkbox" data-role="tier-toggle" data-tier="' + esc(tier) + '"' +
+      (used ? ' checked' : '') + '><span>' + esc(t('useTier')) + '</span></label>';
+    const head = '<div class="tier-head"><span class="tier-name">' + esc(t('tier' + cap(tier))) + '</span><code>' + esc(tier) + '</code>' + toggle + '</div>';
+    if (!used) return '<section class="tier-col glass">' + head + '</section>';
+    const options = allCombos();
+    const external = externalCombos();
+    const body = steps.map((item, index) => {
+      if (isObject(item) && Array.isArray(item.rotate)) return templateRotate(item, tier, index, steps.length);
+      return renderStep(item, {
+        tier: tier, index: index, allowAgent: true, noUntil: false,
+        canUp: index > 0, canDown: index < steps.length - 1, canRemove: steps.length > 1,
+      });
+    }).join('');
+    const addSelect = options.length
+      ? '<select data-role="add-choice" data-tier="' + esc(tier) + '">' +
+        options.map((combo, i) => '<option value="' + i + '">' + esc(combo.label) + '</option>').join('') + '</select>'
+      : '<span class="muted">' + esc(t('noChoice')) + '</span>';
+    return '<section class="tier-col glass">' + head +
+      '<div class="steps">' + body + '</div>' +
+      '<div class="add-row">' + addSelect +
+      '<button class="btn" type="button" data-act="add-template-step" data-tier="' + esc(tier) + '"' + (options.length ? '' : ' disabled') + '>' + esc(t('addStep')) + '</button>' +
+      '<button class="btn" type="button" data-act="add-rotate" data-tier="' + esc(tier) + '"' + (external.length ? '' : ' disabled') + '>' + esc(t('addRotate')) + '</button>' +
+      '</div></section>';
+  }
+
+  function renderTemplateEditor() {
+    const box = $('template-editor');
+    const draft = state.template;
+    if (!draft) { box.innerHTML = '<p class="muted">' + esc(t('editorEmpty')) + '</p>'; return; }
+    const title = state.templateOriginal ? t('editTemplate', state.templateOriginal) : t('newTemplateTitle');
+    box.innerHTML = '<div class="editor-head"><h3>' + esc(title) + '</h3><div class="bar">' +
+      '<button class="btn primary" type="button" data-act="save-template">' + esc(t('saveTemplate')) + '</button>' +
+      (state.templateOriginal ? '<button class="btn danger" type="button" data-act="delete-template" data-name="' + esc(state.templateOriginal) + '">' + esc(t('deleteTemplate')) + '</button>' : '') +
+      '<button class="btn" type="button" data-act="reset-template">' + esc(t('reset')) + '</button></div></div>' +
+      '<div class="fields two">' +
+      '<label class="field-row"><span>' + esc(t('nameLabel')) + '</span><input type="text" data-role="tpl-name" value="' + esc(draft.name || '') + '" autocomplete="off" spellcheck="false"></label>' +
+      '<label class="field-row"><span>' + esc(t('descLabel')) + '</span><textarea data-role="tpl-desc" rows="2">' + esc(draft.description || '') + '</textarea></label>' +
+      '</div><div class="tiers">' + TIERS.map((tier) => templateTier(tier, draft)).join('') + '</div>';
+  }
+
+  function statusText(status) {
+    const keys = {
+      none: 'statusNone', active: 'statusActive', expired_ask: 'statusExpiredAsk',
+      expired_drop: 'statusExpiredDrop', unknown_template: 'statusUnknown',
+    };
+    return t(keys[status] || 'statusNone');
+  }
+
+  function renderApplication() {
+    const box = $('application');
+    if (!state.data) { box.innerHTML = '<p class="muted">' + esc(t('loading')) + '</p>'; return; }
+    const application = state.data.application;
+    const status = state.data.application_status;
+    const templates = state.data.templates || {};
+    const names = Object.keys(templates).sort();
+    if (names.indexOf(state.app.template) < 0) {
+      state.app.template = application && templates[application.template] ? application.template : (names[0] || '');
+    }
+    const statusPill = '<span class="pill' + (status === 'active' ? '' : ' warn') + '">' + esc(statusText(status)) + '</span>';
+    const details = application
+      ? '<dl class="app-grid">' +
+        '<div><dt>' + esc(t('appTemplate')) + '</dt><dd>' + esc(application.template) + '</dd></div>' +
+        '<div><dt>' + esc(t('appUntil')) + '</dt><dd>' + esc(application.until ? fmtTime(application.until) : t('forever')) + '</dd></div>' +
+        '<div><dt>' + esc(t('appOnExpire')) + '</dt><dd>' + esc(application.on_expire === 'drop' ? t('onExpireDrop') : t('onExpireAsk')) + '</dd></div>' +
+        '<div><dt>' + esc(t('appStatus')) + '</dt><dd>' + statusPill + '</dd></div>' +
+        '<div><dt>' + esc(t('appStarted')) + '</dt><dd>' + esc(fmtTime(application.started_at)) + '</dd></div>' +
+        '<div><dt>' + esc(t('appId')) + '</dt><dd class="mono">' + esc(application.id) + '</dd></div>' +
+        '<div class="wide"><dt>' + esc(t('appReason')) + '</dt><dd>' + esc(application.reason || '') + '</dd></div>' +
+        '</dl>'
+      : '<p class="muted">' + esc(t('applicationNone')) + '</p>';
+    const options = names.map((name) => '<option value="' + esc(name) + '"' + (name === state.app.template ? ' selected' : '') + '>' + esc(name) + '</option>').join('');
+    const chosen = templates[state.app.template];
+    const hasOpus = !!(chosen && chosen.tiers && Array.isArray(chosen.tiers.opus) && chosen.tiers.opus.length);
+    const applyForm = names.length
+      ? '<div class="sub-block"><h4>' + esc(t('startTitle')) + '</h4><div class="fields">' +
+        '<label class="field-row"><span>' + esc(t('appTemplate')) + '</span><select data-role="app-template">' + options + '</select></label>' +
+        '<label class="field-row"><span>' + esc(t('appUntil')) + '</span><input type="datetime-local" data-role="app-until" value="' + esc(state.app.until || '') + '"' + (state.app.forever ? ' disabled' : '') + '></label>' +
+        '<label class="switch"><input type="checkbox" data-role="app-forever"' + (state.app.forever ? ' checked' : '') + '><span>' + esc(t('forever')) + '</span></label>' +
+        '<label class="field-row"><span>' + esc(t('appOnExpire')) + '</span><select data-role="app-on-expire">' +
+        '<option value="ask"' + (state.app.on_expire === 'ask' ? ' selected' : '') + '>' + esc(t('onExpireAsk')) + '</option>' +
+        '<option value="drop"' + (state.app.on_expire === 'drop' ? ' selected' : '') + '>' + esc(t('onExpireDrop')) + '</option></select></label>' +
+        '<label class="field-row wide"><span>' + esc(t('appReason')) + '</span><input type="text" data-role="app-reason" value="' + esc(state.app.reason || '') + '" autocomplete="off"></label>' +
+        '<button class="btn primary" type="button" data-act="apply">' + esc(t('apply')) + '</button>' +
+        '</div>' + (hasOpus ? '<p class="opus-warn">' + esc(t('opusWarn')) + '</p>' : '') + '</div>'
+      : '<p class="muted">' + esc(t('noTemplateToApply')) + '</p>';
+    const answer = application
+      ? '<div class="sub-block"><h4>' + esc(t('answerTitle')) + '</h4><div class="fields">' +
+        '<label class="field-row"><span>' + esc(t('appUntil')) + '</span><input type="datetime-local" data-role="answer-until" value="' + esc(state.answerUntil || '') + '"></label>' +
+        '<button class="btn" type="button" data-act="answer-extend">' + esc(t('extend')) + '</button>' +
+        '<button class="btn" type="button" data-act="answer-forever">' + esc(t('forever')) + '</button>' +
+        '<button class="btn danger" type="button" data-act="answer-stop">' + esc(t('stop')) + '</button>' +
+        '</div></div>'
+      : '';
+    box.innerHTML = details + applyForm + answer;
+  }
+
+  function renderPriority() {
+    renderTemplateList();
+    renderExampleList();
+    renderTemplateEditor();
+    renderApplication();
+  }
+
+  // --- 編集操作 ---
+
+  function findStep(scope, tier, index, member) {
+    const table = scope === 'routing' ? state.routing : state.template;
+    if (!table || !table.tiers) return null;
+    const steps = table.tiers[tier];
+    if (!Array.isArray(steps)) return null;
+    const item = steps[index];
+    if (!item) return null;
+    if (member === null || member === undefined) return { step: item, list: steps, index: index };
+    if (!Array.isArray(item.rotate)) return null;
+    const step = item.rotate[member];
+    if (!step) return null;
+    return { step: step, list: item.rotate, index: member, group: item };
+  }
+
+  function applyStepChange(step, role, el) {
+    if (role === 'runner') {
+      step.runner = el.value;
+      const choices = choicesFor(step.runner);
+      step.model = choices.length ? choices[0].id : '';
+      step.effort = null;
+    } else if (role === 'model') {
+      step.model = el.value;
+      const choices = choicesFor(step.runner);
+      const chosen = choices.find((choice) => choice.id === el.value);
+      if (!chosen || chosen.efforts.indexOf(step.effort) < 0) step.effort = null;
+    } else if (role === 'effort') {
+      step.effort = el.value === '' ? null : el.value;
+    } else if (role === 'until') {
+      if (el.value) step.until = el.value;
+      else delete step.until;
+    }
+  }
+
+  function moveRoutingStep(tier, index, delta) {
+    const steps = state.routing.tiers[tier];
+    const bound = steps.length - 1;
+    const to = index + delta;
+    if (index < 0 || index >= bound || to < 0 || to >= bound) return;
+    const item = steps.splice(index, 1)[0];
+    steps.splice(to, 0, item);
+    renderRouting();
+  }
+
+  function addMember(tier, index) {
+    const group = state.template.tiers[tier][index];
+    if (!group || !Array.isArray(group.rotate)) return;
+    const choices = externalCombos();
+    const source = choices[0] || group.rotate[group.rotate.length - 1];
+    if (!source) return;
+    group.rotate.push({ runner: source.runner, model: source.model, effort: source.effort });
+    renderPriority();
+  }
+
+  function saveTemplate() {
+    run(async () => {
+      const draft = state.template;
+      if (!draft) return;
+      const name = String(draft.name || '').trim();
+      if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(name)) throw new Error(t('needName'));
+      const tiers = {};
+      for (const tier of TIERS) {
+        if (!Object.prototype.hasOwnProperty.call(draft.tiers, tier)) continue;
+        const steps = draft.tiers[tier];
+        if (!Array.isArray(steps) || !steps.length) throw new Error(t('tierNeedsStep'));
+        tiers[tier] = clone(steps);
+      }
+      if (!Object.keys(tiers).length) throw new Error(t('needTier'));
+      const body = { name: name, description: String(draft.description || ''), tiers: tiers };
+      if (draft.$schema_note) body.$schema_note = draft.$schema_note;
+      await request('PUT', '/api/templates/' + encodeURIComponent(name), body);
+      const old = state.templateOriginal;
+      if (old && old !== name) await request('DELETE', '/api/templates/' + encodeURIComponent(old));
+      state.templateOriginal = name;
+      await refresh();
+      state.template = clone(state.data.templates[name] || body);
+      renderPriority();
+      notice(t('templateSaved', name), 'ok');
+    });
+  }
+
+  function applyNow() {
+    run(async () => {
+      if (!state.app.template) throw new Error(t('noTemplateToApply'));
+      let until = null;
+      if (!state.app.forever) {
+        until = isoLocal(state.app.until);
+        if (!until) throw new Error(t('needUntil'));
+      }
+      const result = await request('PUT', '/api/application', {
+        template: state.app.template,
+        until: until,
+        on_expire: state.app.on_expire,
+        reason: String(state.app.reason || ''),
+      });
+      await refresh();
+      if (result.opus_override) notice(t('appliedOpus', state.app.template), 'err');
+      else notice(t('applied', state.app.template), 'ok');
+    });
+  }
+
+  function answer(choice) {
+    run(async () => {
+      const body = { choice: choice };
+      if (choice === 'extend') {
+        const until = isoLocal(state.answerUntil);
+        if (!until) throw new Error(t('needUntil'));
+        body.until = until;
+      }
+      await request('POST', '/api/application/answer', body);
+      state.answerUntil = '';
+      await refresh();
+      notice(t('answered'), 'ok');
+    });
+  }
+
+  function setTab(tab, updateHash) {
+    state.tab = TABS.indexOf(tab) >= 0 ? tab : 'agents';
+    if (updateHash !== false) {
+      try { history.replaceState(null, '', '#' + state.tab); } catch (_) {}
+    }
+    renderChrome();
+    renderPanel();
+  }
+
+  function bind() {
+    for (const tab of TABS) {
+      $('tab-' + tab).addEventListener('click', () => setTab(tab));
+    }
+    $('lang').addEventListener('click', () => {
+      lang = lang === 'ja' ? 'en' : 'ja';
+      store.set('studio-lang', lang);
+      renderStatic();
+      renderAll();
+    });
+    $('reload').addEventListener('click', () => run(async () => {
+      state.routing = null;
+      await refresh();
+      if (state.templateOriginal && state.data.templates[state.templateOriginal]) {
+        state.template = clone(state.data.templates[state.templateOriginal]);
+      }
+      renderPriority();
+      notice(t('reloaded'), 'ok');
+    }));
+    $('close').addEventListener('click', () => run(async () => {
+      await request('POST', '/api/close');
+      notice(t('closeOk'), 'ok');
+    }));
+    $('newTemplate').addEventListener('click', () => {
+      state.template = { name: '', description: '', tiers: {} };
+      state.templateOriginal = null;
+      renderPriority();
+    });
+    $('saveRouting').addEventListener('click', () => run(async () => {
+      if (!state.routing) return;
       try {
-        const r = await fetch('/apply', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Studio-Token': applyInfo.token }, body: $('json').textContent });
-        const res = await r.json();
-        if (!res.ok) throw new Error(res.error);
-        state.applied = res.path;
-        renderApplyNote();
-      } catch (e) {
-        $('apply').disabled = false;
-        flash(t('applyFail', e.message || e));
+        await request('PUT', '/api/routing', state.routing);
+      } catch (error) {
+        notice(t('saveFail', error.message || String(error)), 'err');
+        return;
+      }
+      state.routing = null;
+      await refresh();
+      notice(t('routingSaved'), 'ok');
+    }));
+    $('copyAs').addEventListener('input', (event) => { state.copyAs = event.target.value; });
+
+    $('panel-agents').addEventListener('change', (event) => {
+      const el = event.target;
+      if (!el || !el.dataset) return;
+      if (el.dataset.role === 'enabled') {
+        run(async () => {
+          const runner = el.dataset.runner;
+          await request('PUT', '/api/agents/' + encodeURIComponent(runner), { enabled: el.checked });
+          await refresh();
+          notice(t('savedAgents', RUNNER_LABEL[runner]), 'ok');
+        });
+      } else if (el.dataset.role === 'model') {
+        run(async () => {
+          const runner = el.dataset.runner;
+          const id = el.dataset.id;
+          const info = runnerState(runner);
+          const list = info.models && Array.isArray(info.models.list) ? info.models.list : [];
+          const all = list.map((model) => model.id);
+          const current = info.selected === null ? all.slice() : (Array.isArray(info.selected) ? info.selected.slice() : []);
+          const set = new Set(current);
+          if (el.checked) set.add(id);
+          else set.delete(id);
+          await request('PUT', '/api/agents/' + encodeURIComponent(runner), { selected: Array.from(set) });
+          await refresh();
+          notice(t('savedSelected'), 'ok');
+        });
       }
     });
-  }
-  $('copy').addEventListener('click', () => {
-    const text = $('json').textContent;
-    navigator.clipboard.writeText(text).then(() => flash(t('copied')), () => {
-      const range = document.createRange(); range.selectNodeContents($('json'));
-      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
-      flash(t('selectedText'));
+    $('panel-agents').addEventListener('input', (event) => {
+      const el = event.target;
+      if (!el || !el.dataset || el.dataset.role !== 'search') return;
+      state.search[el.dataset.runner] = el.value;
+      const card = el.closest('.card');
+      if (card) filterModels(card, el.value);
     });
-  });
-  for (const k of TIERS) {
-    const el = $(`floor-${k}`);
-    el.value = state.floors[k]; $(`floor-${k}-v`).textContent = el.value;
-    el.addEventListener('input', () => { state.floors[k] = +el.value; $(`floor-${k}-v`).textContent = el.value; renderProposals(); });
-  }
-  $('maxSteps').value = state.maxSteps; $('maxSteps-v').textContent = state.maxSteps;
-  $('maxSteps').addEventListener('input', (e) => { state.maxSteps = +e.target.value; $('maxSteps-v').textContent = state.maxSteps; renderProposals(); });
-  $('subsCheap').checked = state.subsCheap;
-  $('subsCheap').addEventListener('change', (e) => { state.subsCheap = e.target.checked; renderProposals(); });
-  $('extOpus').checked = state.extOpus;
-  $('extOpus').addEventListener('change', (e) => { state.extOpus = e.target.checked; renderProposals(); });
+    $('panel-agents').addEventListener('submit', (event) => {
+      const form = event.target.closest('form[data-role="manual"]');
+      if (!form) return;
+      event.preventDefault();
+      run(async () => {
+        const runner = form.dataset.runner;
+        const id = form.querySelector('[data-role="new-id"]').value.trim();
+        const efforts = form.querySelector('[data-role="new-efforts"]').value
+          .split(',').map((value) => value.trim()).filter(Boolean);
+        if (!id) throw new Error(t('needModelId'));
+        await request('POST', '/api/models/' + encodeURIComponent(runner), { id: id, efforts: efforts });
+        await refresh();
+        notice(t('added', id), 'ok');
+      });
+    });
 
-  renderStatic();
-  setCatalog(JSON.parse($('catalog-fallback').textContent));
-  loadCatalog(false);
+    $('panel-routing').addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-act]');
+      if (!button) return;
+      const act = button.dataset.act;
+      if (act === 'add-routing-step') {
+        const tier = button.dataset.tier;
+        const select = button.parentElement.querySelector('select[data-role="add-choice"]');
+        const options = externalCombos();
+        const combo = select ? options[Number(select.value)] : null;
+        if (!combo) return;
+        const steps = state.routing.tiers[tier];
+        steps.splice(steps.length - 1, 0, { runner: combo.runner, model: combo.model, effort: combo.effort });
+        renderRouting();
+      } else if (act === 'up' || act === 'down') {
+        moveRoutingStep(button.dataset.tier, Number(button.dataset.index), act === 'up' ? -1 : 1);
+      } else if (act === 'del') {
+        const steps = state.routing.tiers[button.dataset.tier];
+        const index = Number(button.dataset.index);
+        if (index >= 0 && index < steps.length - 1) {
+          steps.splice(index, 1);
+          renderRouting();
+        }
+      }
+    });
+    $('panel-routing').addEventListener('change', (event) => {
+      const el = event.target;
+      if (!el || !el.dataset) return;
+      const role = el.dataset.role;
+      if (!role || role === 'add-choice') return;
+      const found = findStep('routing', el.dataset.tier, Number(el.dataset.index), null);
+      if (!found) return;
+      applyStepChange(found.step, role, el);
+      renderRouting();
+    });
+
+    $('panel-priority').addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-act]');
+      if (!button) return;
+      const act = button.dataset.act;
+      if (act === 'select-template') {
+        const template = state.data.templates[button.dataset.name];
+        if (!template) return;
+        state.template = clone(template);
+        state.templateOriginal = button.dataset.name;
+        renderPriority();
+      } else if (act === 'copy-example') {
+        run(async () => {
+          const name = button.dataset.name;
+          const as = String(state.copyAs || '').trim();
+          const result = await request('POST', '/api/examples/' + encodeURIComponent(name) + '/copy',
+            as ? { as: as } : {});
+          state.templateOriginal = result.name;
+          await refresh();
+          state.template = clone(state.data.templates[result.name]);
+          renderPriority();
+          notice(t('copied', result.name), 'ok');
+        });
+      } else if (act === 'save-template') {
+        saveTemplate();
+      } else if (act === 'delete-template') {
+        const name = button.dataset.name;
+        if (!window.confirm(t('confirmDelete', name))) return;
+        run(async () => {
+          await request('DELETE', '/api/templates/' + encodeURIComponent(name));
+          if (state.templateOriginal === name) {
+            state.template = null;
+            state.templateOriginal = null;
+          }
+          await refresh();
+          notice(t('templateDeleted', name), 'ok');
+        });
+      } else if (act === 'reset-template') {
+        if (state.templateOriginal && state.data.templates[state.templateOriginal]) {
+          state.template = clone(state.data.templates[state.templateOriginal]);
+        } else {
+          state.template = { name: '', description: '', tiers: {} };
+        }
+        renderPriority();
+      } else if (act === 'add-template-step') {
+        const tier = button.dataset.tier;
+        const select = button.parentElement.querySelector('select[data-role="add-choice"]');
+        const options = allCombos();
+        const combo = select ? options[Number(select.value)] : null;
+        if (!combo) return;
+        const steps = state.template.tiers[tier];
+        const at = steps.length && isObject(steps[steps.length - 1]) && steps[steps.length - 1].runner === 'agent'
+          ? steps.length - 1 : steps.length;
+        steps.splice(at, 0, { runner: combo.runner, model: combo.model, effort: combo.effort });
+        renderPriority();
+      } else if (act === 'add-rotate') {
+        const tier = button.dataset.tier;
+        const options = externalCombos();
+        if (!options.length) { notice(t('noChoice'), 'err'); return; }
+        const picks = options.length === 1 ? [options[0], options[0]] : [options[0], options[1]];
+        const steps = state.template.tiers[tier];
+        const at = steps.length && isObject(steps[steps.length - 1]) && steps[steps.length - 1].runner === 'agent'
+          ? steps.length - 1 : steps.length;
+        steps.splice(at, 0, { rotate: picks.map((combo) => ({ runner: combo.runner, model: combo.model, effort: combo.effort })) });
+        renderPriority();
+      } else if (act === 'add-member') {
+        addMember(button.dataset.tier, Number(button.dataset.index));
+      } else if (act === 'group-up' || act === 'group-down') {
+        const list = state.template.tiers[button.dataset.tier];
+        const index = Number(button.dataset.index);
+        const to = index + (act === 'group-up' ? -1 : 1);
+        if (to < 0 || to >= list.length) return;
+        const item = list.splice(index, 1)[0];
+        list.splice(to, 0, item);
+        renderPriority();
+      } else if (act === 'group-del') {
+        const list = state.template.tiers[button.dataset.tier];
+        const index = Number(button.dataset.index);
+        if (list.length <= 1) return;
+        list.splice(index, 1);
+        renderPriority();
+      } else if (act === 'up' || act === 'down' || act === 'del') {
+        const tier = button.dataset.tier;
+        const index = Number(button.dataset.index);
+        const member = button.dataset.member === undefined ? null : Number(button.dataset.member);
+        const list = member === null ? state.template.tiers[tier] : state.template.tiers[tier][index].rotate;
+        if (!Array.isArray(list)) return;
+        if (act === 'del') {
+          if (member !== null && list.length <= 2) return;
+          if (member === null && list.length <= 1) return;
+          list.splice(member === null ? index : member, 1);
+          renderPriority();
+          return;
+        }
+        const from = member === null ? index : member;
+        const to = from + (act === 'up' ? -1 : 1);
+        if (to < 0 || to >= list.length) return;
+        const item = list.splice(from, 1)[0];
+        list.splice(to, 0, item);
+        renderPriority();
+      } else if (act === 'apply') {
+        applyNow();
+      } else if (act === 'answer-extend') {
+        answer('extend');
+      } else if (act === 'answer-forever') {
+        answer('forever');
+      } else if (act === 'answer-stop') {
+        answer('stop');
+      }
+    });
+    $('panel-priority').addEventListener('change', (event) => {
+      const el = event.target;
+      if (!el || !el.dataset) return;
+      const role = el.dataset.role;
+      if (role === 'tier-toggle') {
+        if (!state.template) return;
+        if (el.checked) {
+          state.template.tiers[el.dataset.tier] = [{ runner: 'agent', model: defaultAgentModel(), effort: null }];
+        } else {
+          delete state.template.tiers[el.dataset.tier];
+        }
+        renderPriority();
+        return;
+      }
+      if (role === 'app-template') { state.app.template = el.value; renderPriority(); return; }
+      if (role === 'app-forever') { state.app.forever = el.checked; renderPriority(); return; }
+      if (role === 'app-on-expire') { state.app.on_expire = el.value; return; }
+      if (role === 'app-until') { state.app.until = el.value; return; }
+      if (role === 'answer-until') { state.answerUntil = el.value; return; }
+      if (role === 'add-choice') return;
+      const member = el.dataset.member === undefined ? null : Number(el.dataset.member);
+      const found = findStep('template', el.dataset.tier, Number(el.dataset.index), member);
+      if (!found) return;
+      applyStepChange(found.step, role, el);
+      renderPriority();
+    });
+    $('panel-priority').addEventListener('input', (event) => {
+      const el = event.target;
+      if (!el || !el.dataset) return;
+      if (el.dataset.role === 'tpl-name' && state.template) state.template.name = el.value;
+      else if (el.dataset.role === 'tpl-desc' && state.template) state.template.description = el.value;
+      else if (el.dataset.role === 'app-reason') state.app.reason = el.value;
+    });
+
+    window.addEventListener('hashchange', () => {
+      const hash = (location.hash || '').replace(/^#/, '');
+      if (TABS.indexOf(hash) >= 0 && hash !== state.tab) setTab(hash, false);
+    });
+  }
+
+  async function start() {
+    bind();
+    renderStatic();
+    setTab(initialTab(), false);
+    if (!boot.token) {
+      notice(t('errBoot'), 'err');
+      renderAll();
+      return;
+    }
+    try {
+      await refresh();
+    } catch (error) {
+      notice(error.message, 'err');
+    }
+  }
+
+  start();
 })();
 </script>
 </body>
