@@ -1,6 +1,6 @@
 # Appendix: setup and the editor
 
-Read this when the argument is `setup`, `models` or `templates`. Read it also when the argument is empty and home has no `agents.json`.
+Read this when the argument is `setup`, `setup --recommended`, `models` or `templates`. Read it also when the argument is empty and home has no `agents.json`.
 
 ## First run
 
@@ -16,7 +16,7 @@ When home has no `agents.json`, ask one question with AskUserQuestion before the
 3. Run `python <skill>/setup_agents.py record --use <chosen runners, comma-separated>`. `record` keeps the existing model choices and billing settings.
 4. Follow `## models`.
 5. Follow `## templates`.
-6. Follow `## Optional integrations`.
+6. Follow `## Optional integrations`. After that, say in one line that the recommended set can be installed with `setup --recommended`. Do not ask now; only name it.
 
 Use `--home DIR` on these commands when the user keeps the settings outside the default home (`## home`).
 
@@ -90,6 +90,21 @@ These steps come last in setup. Each one is optional; the skill runs with none o
 ```
 
 The 10-second hook timeout is room for the gate's own 5-second limit. Turn the mode on for the session with `node <skill>/rtk/rtk-mode.mjs on`; without the flag file, the hook passes commands through unchanged. Restart Claude Code after the settings change so the hook and `rtk` on the PATH are picked up. When the user does not approve the block, leave `~/.claude/settings.json` as it is.
+
+## recommended
+
+The argument `setup --recommended` installs nothing by itself. It shows the one recommended set and asks once. The rules behind it are in `appendix/adapters.md` (`## Recommended set`).
+
+1. Show the name (mattpocock-skills), the phases it serves (design: grilling and domain-modeling; review: code-review), the link https://github.com/mattpocock/skills, the license (MIT, Copyright (c) 2026 Matt Pocock), and the install command.
+2. Ask once with AskUserQuestion: install now, or not.
+3. On yes, run the command yourself and wait for it to end:
+
+   ```bash
+   claude plugin install mattpocock-skills@claude-plugins-official --scope user
+   ```
+
+4. After it succeeds, tell the user to run `/reload-plugins` or restart Claude Code. Until then the skill is not used.
+5. On no, or when the `claude` command is missing, only show the command and stop.
 
 ## home
 

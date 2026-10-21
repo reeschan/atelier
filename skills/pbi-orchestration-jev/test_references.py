@@ -52,6 +52,9 @@ OUTSIDE_SKILL_NAMES = {
     'HANDOFF.md',
     'jev-log.jsonl',
     'runs.jsonl',
+    # home と作業の記録 (アダプター・通知)
+    'notices.json',
+    'adapters.json',
 }
 
 
@@ -172,6 +175,30 @@ def format_reference(ref):
     return f'{name}:{lineno}: {path}'
 
 
+ADAPTERS = HERE / 'appendix' / 'adapters.md'
+
+
+def known_callee_rows():
+    '''付録の「## Known callees」の表を (呼び出し名, Link 列) の一覧で返す。'''
+    lines = ADAPTERS.read_text(encoding='utf-8').splitlines()
+    start = lines.index('## Known callees')
+    header = None
+    rows = []
+    for line in lines[start + 1:]:
+        if line.startswith('## '):
+            break
+        if not line.startswith('|'):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
+        if header is None:
+            header = cells
+            continue
+        if set(line) <= set('|-: '):
+            continue
+        rows.append((cells[0], cells[header.index('Link')]))
+    return rows
+
+
 class ReferencesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -208,6 +235,17 @@ class ReferencesTest(unittest.TestCase):
         self.assertIn('appendix/rework.md', line)
         self.assertIn('42', line)
         self.assertIn('appendix/missing.md', line)
+
+    def test_known_callee_rows_have_link_or_built_in(self):
+        '''既知の名前の表の各行に https:// のリンクか built-in があること (ネットワークには出ない)。'''
+        rows = known_callee_rows()
+        self.assertGreaterEqual(len(rows), 1)
+        for callee, link in rows:
+            link = link.strip('`')
+            self.assertTrue(
+                link.startswith('https://') or link == 'built-in',
+                f'{callee}: {link}',
+            )
 
 
 if __name__ == '__main__':

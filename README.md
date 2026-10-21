@@ -10,7 +10,7 @@ Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator passes facts to prepare.py, which asks Jev for gate 1 (brief and PBI quality), picks a tier and a route with select_model.py, reads the routing, overrides and agents.json from your home (~/.config/pbi-orchestration-jev) and docs/pbi/routing.json, and drops steps whose runner is unusable. PBIs go to pbi-worker (the Agent tool), the default runner for every tier, or to external runners (opencode, Codex, Antigravity, DeepSeek Harness) chosen in setup and named in routing.json; they change the source code of the target repository. The orchestrator verifies each PBI with verify.py and unchanged.py, asks Jev in plain text only when a report and the verification disagree and to check rework notes, and records status and HANDOFF in docs/pbi/. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. setup_agents.py and model_fetch.py detect the runner CLIs and fetch each runner's model list into agents.json and models/ in your home. The developer uses the local editor (studio/serve.py, with tabs for agents and models, routing, and priority templates and application) to read and save those files in home only. templates.py keeps priority templates and the local overrides.json, which is the source of truth; the optional priority templates web page (a claude.ai artifact) only syncs with it.">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator passes facts to prepare.py, which asks Jev for gate 1 (brief and PBI quality), picks a tier and a route with select_model.py, reads the routing, overrides and agents.json from your home (~/.config/pbi-orchestration-jev) and docs/pbi/routing.json, and drops steps whose runner is unusable. PBIs go to pbi-worker (the Agent tool), the default runner for every tier, or to external runners (opencode, Codex, Antigravity, DeepSeek Harness) chosen in setup and named in routing.json; they change the source code of the target repository. The orchestrator verifies each PBI with verify.py and unchanged.py, asks Jev in plain text only when a report and the verification disagree and to check rework notes, and records status and HANDOFF in docs/pbi/. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. setup_agents.py and model_fetch.py detect the runner CLIs and fetch each runner's model list into agents.json and models/ in your home. The developer uses the local editor (studio/serve.py, with tabs for agents and models, routing, and priority templates and application) to read and save those files in home only. templates.py keeps priority templates and the local overrides.json, which is the source of truth; the optional priority templates web page (a claude.ai artifact) only syncs with it. Phase adapters use optional callee skills when they are installed: the orchestrator runs mattpocock-skills grilling for design, and after all PBIs adapter_gate.py reads the PBIs and the adapters setting in agents.json to decide whether the final and security reviews run; a general-purpose review wrapper then calls mattpocock-skills code-review or the built-in /code-review and /security-review, and writes the findings to docs/pbi/reviews/.">
 </picture>
 
 The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lang.com)).
@@ -126,6 +126,51 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 - The quality and price reference comes from `studio/catalog.json` (refresh it with `python studio/update_catalog.py`; prices and new models come from OpenRouter, quality from the Artificial Analysis coding index when `AA_API_KEY` is set). It is a reference only: the models you can pick come from the fetched lists.
 - Design notes (Japanese): [docs/template-studio.md](docs/template-studio.md).
 
+## Phase adapters
+
+An **adapter** calls a skill you already have at fixed phases of a run. Nothing is bundled: the skill uses only the names in the table below, and falls back to its own procedure when none of them is installed.
+
+| Phase | When | Callees, in priority order | Notes |
+|---|---|---|---|
+| design | before the split into PBIs | `mattpocock-skills:grilling`, then `mattpocock-skills:domain-modeling` | domain-modeling only when the target repository already has `GLOSSARY.md` or `CONTEXT.md`; both run in the main session, because they ask you questions |
+| final review | after the last PBI | `mattpocock-skills:code-review`, then the built-in `/code-review` | the built-in one runs at level `medium` with no flags; both get the merge-base, the head and the spec path |
+| security review | at the same time, when a PBI is sensitive or deep | the built-in `/security-review` | no arguments |
+
+A review callee only reports. It gets the merge-base, the head, the spec path and "report, do not fix, do not post", and never sees `--fix`, `--comment`, `ultra` or `--max-findings`. The orchestrator compares `git rev-parse HEAD` and `git status --porcelain` before and after the call; if anything changed, it throws the result away and goes back to its own procedure, and a callee that tries to ask you something ends the wrapper with `BLOCKED`, which means the same fallback. Findings are checked, not taken at face value: a real one becomes a rework of the PBI that owns the file and counts towards the limit of two, a finding outside every PBI goes to the "found" list of the final report, and style preferences cause no rework.
+
+With nothing installed the run still finishes. Both built-in reviews are part of Claude Code, so the final and security reviews work from the first run. Only design has no built-in callee: the orchestrator then writes the decisions it made and the assumptions it left open into `docs/specs/<slug>.md` with a short procedure of its own, and the approval list shows those assumptions so you can correct them there.
+
+Whether a phase runs:
+
+- **Design**: clearly complex (a new concept, an outside interface or a data model change, across two modules or more) runs it without asking. Clearly simple (the plan is settled, or one module and three PBIs at most) skips it quietly. Anything in between asks you once, before the split; the answer is kept in `docs/pbi/adapters.json`, so a resume does not ask again. Starting with a spec path (for example, handed over by your own design skill) counts as design done.
+- **Final review**: skipped only when the whole diff is 300 lines or less, there are two PBIs or fewer, and no PBI is deep or sensitive. Otherwise it runs. `adapter_gate.py` applies this table, so the decision does not drift between runs.
+- **Security review**: runs when at least one PBI is sensitive or deep.
+
+Each phase leaves one line in `STATUS.md` and `HANDOFF.md` — `adapter <phase>: <callee or built-in> run|skip|fallback|off (<reason>)` — so the next session can see what ran and why.
+
+To stop a phase or name a callee, add `adapters` to `agents.json` in your home. The keys are `design`, `review` and `security`; a value is `auto` (the default), `off`, or a skill name. A bad key or value is ignored with one line saying why, and `off` wins over the criteria above:
+
+```json
+{"adapters": {"design": "off", "review": "mattpocock-skills:code-review", "security": "auto"}}
+```
+
+Naming a skill here is the only way to use a callee outside the table; a name that merely looks like one of the above is never picked up on its own, and skills marked `disable-model-invocation` are never used.
+
+### Recommended: mattpocock-skills
+
+`/pbi-orchestration-jev setup --recommended` offers one set, and installs nothing without your yes:
+
+```sh
+/pbi-orchestration-jev setup --recommended
+claude plugin install mattpocock-skills@claude-plugins-official --scope user
+```
+
+- [mattpocock/skills](https://github.com/mattpocock/skills) — MIT, Copyright (c) 2026 Matt Pocock. It brings grilling and domain-modeling for design, and code-review for the final review.
+- `setup --recommended` shows the name, the phases it fills, the link, the licence and the command. After you approve once, the orchestrator runs the install command itself; the bundled scripts never install anything (package installation is exactly what package scanners flag).
+- If you answer no, or `claude` is not on the PATH, you only get the command to run yourself.
+- Run `/reload-plugins` or restart Claude Code afterwards. Until then the plugin's skills are not listed, and the adapters keep using the built-in procedures.
+- When a complex task runs without a design callee, the approval list says once that `setup --recommended` can add one; the note stays in your home and is not shown again.
+
 ## Priority templates
 
 A **priority template** overrides the routing for a while. The editor sets the usual routing (home's `routing.json`); a priority template sits on top of it. Save per-tier routes under a name (the same shape as `routing.json`), turn the template on with a deadline, and until that deadline the overridden tiers take their route from the template instead of the usual one; tiers without an override are unaffected, and the last fallback is still that tier's Claude Code agent from `routing.json`. When the deadline passes, your choice of expiry behaviour decides the rest: with `ask`, the skill asks whether to continue (extend, stop, or make it indefinite); with `drop`, it quietly stops applying the template. You create, edit and apply templates in the editor's priority tab or from the chat. The source of truth is the local `overrides.json` in your home; the bundled web page (an artifact with its own database) is an optional sync target, and when `web.json` holds its URL the skill syncs the page with the local copy at the start of a run.
@@ -154,6 +199,7 @@ The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `ma
 | Python 3.10+ | yes | scripts such as `prepare.py`, `select_model.py` and `verify.py`, and the Jev client |
 | Jev API key | recommended | without it, Jev gates are skipped and the tier is decided from the facts alone |
 | shared-memory MCP (`mcp__shared-memory__*`) | no | per-task refs and the hand-off memory; without it, facts go into the PBI notes |
+| [mattpocock-skills](https://github.com/mattpocock/skills) | no | the design and final review adapters (see [Phase adapters](#phase-adapters)) |
 | [opencode](https://opencode.ai) + OpenCode Go | no | external runner you enable in `routing.json` (see `examples/routing/multi-runner.json`) |
 | [Codex CLI](https://github.com/openai/codex) | no | external runner you enable in `routing.json` |
 | Antigravity CLI (`agy`) | no | Claude via a Google AI subscription |
@@ -271,7 +317,7 @@ skills/pbi-orchestration-jev/
 ├── dsh_run.py                  # runs one PBI on DeepSeek Harness headless
 ├── verify-commands.md          # pitfalls when writing verification commands
 ├── worker.md                   # how workers proceed and report
-├── appendix/                   # read only when needed (memory, rework, handoff, finish, jev, setup, priority-templates)
+├── appendix/                   # read only when needed (memory, rework, handoff, finish, jev, setup, adapters, priority-templates)
 ├── agents/pbi-worker.md        # worker / reviewer sub-agent (copy to ~/.claude/agents)
 ├── prepare.py                  # Jev gate 1 + decision table in one call; prints a table
 ├── verify.py                   # runs a PBI's verification commands; prints exit codes and tails
@@ -279,6 +325,7 @@ skills/pbi-orchestration-jev/
 ├── model_report.py             # results, tokens, cost and a provisional grade per model, from runs.jsonl
 ├── prices.json                 # sample API prices for the cost_api_equiv estimate (a prices.json in your home overrides it; not what you are billed)
 ├── select_model.py             # decision table: tier, route and review depth; drops steps per agents.json
+├── adapter_gate.py             # whether the final and security reviews run, and why
 ├── setup_agents.py             # setup: detect the runner CLIs, record the choice in agents.json, fetch the model lists
 ├── model_fetch.py              # one runner's model list from its CLI (or the bundled dsh catalog / built-in agent list)
 ├── dsh.models.json             # bundled model catalog for dsh, used when dsh cannot list its models
@@ -304,6 +351,7 @@ skills/pbi-orchestration-jev/
 ├── test_select_model.py / test_agents.py / test_common.py
 ├── test_setup_agents.py / test_model_fetch.py / test_templates.py / test_prepare.py / test_unchanged.py
 ├── test_record_run.py / test_model_report.py / test_dsh_run.py / test_jev_mcp.py
+├── test_adapter_gate.py        # the review gates: 299/300/301 lines, 2/3 PBIs, deep and sensitive
 ├── test_references.py          # every file the skill docs name exists
 └── test_agent_stats.py
 ```
