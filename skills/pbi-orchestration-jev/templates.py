@@ -1,24 +1,30 @@
 """テンプレートと適用を扱う。
 
   python templates.py check [NAME ...] [--home DIR] [--now ISO]
+  python templates.py status [--home DIR] [--now ISO]
   python templates.py sync --state FILE [--home DIR] [--now ISO]
   python templates.py due --state FILE [--within-hours 24] [--home DIR] [--now ISO]
-  python templates.py apply --state FILE --template NAME --until ISO|none --on-expire ask|drop --reason TEXT [--via chat|web] [--home DIR] [--now ISO]
-  python templates.py answer --state FILE --choice extend|stop|forever [--until ISO] [--home DIR] [--now ISO]
+  python templates.py apply [--state FILE] --template NAME --until ISO|none --on-expire ask|drop --reason TEXT [--via chat|web] [--home DIR] [--now ISO]
+  python templates.py answer [--state FILE] --choice extend|stop|forever [--until ISO] [--home DIR] [--now ISO]
   python templates.py push [--existing NAME,...] [--home DIR] [--now ISO]
 
-home は templates/ ディレクトリ・overrides.json・web.json を置くディレクトリ。解決順は
-(1) --home (2) 環境変数 PBI_HOME (3) 環境変数 PBI_TEMPLATES_HOME (旧名。互換のためだけに読む)
-(4) 環境変数 XDG_CONFIG_HOME があればその下の pbi-orchestration-jev、無ければ
-~/.config/pbi-orchestration-jev。
+home は templates/ ディレクトリ・overrides.json・history.jsonl・web.json を置く
+ディレクトリ。解決順は (1) --home (2) 環境変数 PBI_HOME (3) 環境変数
+PBI_TEMPLATES_HOME (旧名。互換のためだけに読む) (4) 環境変数 XDG_CONFIG_HOME が
+あればその下の pbi-orchestration-jev、無ければ ~/.config/pbi-orchestration-jev。
 
 check は 1 件 1 行で ok <name> / ng <name>: <問題> を出し、1 件でも ng なら終了コード 1。
-sync は写し overrides.json を書き、{"status", "application", "writes"} を UTF-8 の JSON で
+sync は Web の state/current とローカルの overrides.json を updated_at で比べ、新しい方を
+採って overrides.json を書き、{"status", "application", "writes"} を UTF-8 の JSON で
 出す。due は {"due", "hours_left"} か {"due": null} を出す。不正な引数・入力は終了コード
 2 と標準エラーの 1 行。
 
-apply は新しい適用 + 前の適用を history に移す writes、answer は期限への答えの writes、
-push は templates/ への set と delete の writes を出す。どれもデータベースには触れない。
+適用の正本はローカルの overrides.json (synced_at・updated_at・application) で、
+終わった適用は history.jsonl に 1 行ずつ追記する。apply・answer・status は --state を
+省くとローカルのファイルだけを読み書きし、Web に写すための writes を返す。--state を
+渡した apply・answer は今までどおりデータベースの写しから writes を出すだけで、ローカル
+には書かない。push は templates/ への set と delete の writes を出す。どれも
+データベースには触れない。
 
 時刻はすべて ISO 8601 のタイムゾーン付き文字列 (例 2026-10-22T23:59:00+09:00)。
 """
@@ -39,7 +45,7 @@ TEMPLATE_KEYS = frozenset(('name', 'description', 'tiers', '$schema_note'))
 STEP_KEYS = frozenset(('runner', 'model', 'effort', 'until'))
 # 交互グループ {"rotate": [手順, ...]}。PBI の番号で先頭を回す (select_model.expand_rotate)
 ROTATE_KEY = 'rotate'
-EMPTY_OVERRIDES = {'synced_at': None, 'application': None}
+EMPTY_OVERRIDES = {'synced_at': None, 'updated_at': None, 'application': None}
 
 
 # prepare.py・select_model.py・テストが使う名前はそのまま残す (中身は common.resolve_home)
@@ -170,14 +176,30 @@ def load_all(home: Path) -> dict[str, dict]:
 
 
 def load_overrides(home: Path) -> dict:
-    """写しを読む。無い・壊れていれば {"synced_at": None, "application": None}。"""
+    """overrides.json を読む。無い・壊れていれば空の形 (updated_at も null)。"""
+    empty = dict(EMPTY_OVERRIDES)
     try:
         data = json.loads((home / 'overrides.json').read_text(encoding='utf-8'))
     except (OSError, ValueError):
-        return dict(EMPTY_OVERRIDES)
+        return empty
     if not isinstance(data, dict):
-        return dict(EMPTY_OVERRIDES)
-    return {'synced_at': data.get('synced_at'), 'application': data.get('application')}
+        return empty
+    return {'synced_at': data.get('synced_at'), 'updated_at': data.get('updated_at'),
+            'application': data.get('application')}
+
+
+def save_overrides(home: Path, synced_at: str | None, updated_at: str | None,
+                   application: dict | None) -> None:
+    """overrides.json を書く。正本なので、書きかけで残らないよう一時ファイルから置き換える (common.write_json)。"""
+    data = {'synced_at': synced_at, 'updated_at': updated_at, 'application': application}
+    common.write_json(home / 'overrides.json', data)
+
+
+def append_history(home: Path, record: dict) -> None:
+    """history.jsonl に終わった適用を 1 行で追記する。home が無ければ作る。"""
+    home.mkdir(parents=True, exist_ok=True)
+    with (home / 'history.jsonl').open('a', encoding='utf-8') as f:
+        f.write(json.dumps(record, ensure_ascii=False) + '\n')
 
 
 def state_of(application: dict | None, now: datetime.datetime) -> str:
@@ -206,16 +228,22 @@ def new_application_id(now: datetime.datetime) -> str:
     return 'a-' + now.astimezone(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S')
 
 
-def history_set(application: dict, ended_how: str, ended_at: str) -> dict:
+def history_data(application: dict, ended_how: str, ended_at: str | None) -> dict:
+    """history に残す 1 件 (history への set の data と history.jsonl の 1 行)。"""
+    return dict(application, ended_at=ended_at, ended_how=ended_how)
+
+
+def history_set(application: dict, ended_how: str, ended_at: str | None) -> dict:
     """history への set の write。"""
-    data = dict(application, ended_at=ended_at, ended_how=ended_how)
-    return {'op': 'set', 'collection': 'history', 'doc_id': application.get('id'), 'data': data}
+    return {'op': 'set', 'collection': 'history', 'doc_id': application.get('id'),
+            'data': history_data(application, ended_how, ended_at)}
 
 
-def state_set(application: dict | None, now: datetime.datetime) -> dict:
-    """state/current への set の write。"""
+def state_set(application: dict | None, now: datetime.datetime | str) -> dict:
+    """state/current への set の write。now は datetime か ISO 文字列 (既にある updated_at を使うとき)。"""
+    updated_at = now if isinstance(now, str) else now.isoformat()
     return {'op': 'set', 'collection': 'state', 'doc_id': 'current',
-            'data': {'application': application, 'updated_at': now.isoformat()}}
+            'data': {'application': application, 'updated_at': updated_at}}
 
 
 def cmd_check(home: Path, names: list[str]) -> int:
@@ -248,8 +276,15 @@ def check_one(path: Path, name: str) -> list[str]:
 
 
 def cmd_sync(home: Path, state_path: str, now: datetime.datetime) -> dict:
-    """写しを書き、{"status", "application", "writes"} を返す。"""
-    application = read_state(state_path).get('application')
+    """Web とローカルの新しい方を採り、overrides.json を書いて writes を返す。"""
+    web = read_state(state_path)
+    overrides = load_overrides(home)
+    if web_is_newer(overrides['updated_at'], web.get('updated_at')):
+        # Web が正本だったときの今までの動き。ローカルの updated_at も Web に合わせる
+        application, updated_at, writes = web.get('application'), web.get('updated_at'), []
+    else:
+        application, updated_at = overrides['application'], overrides['updated_at']
+        writes = [] if application == web.get('application') else [state_set(application, updated_at)]
     if application is None:
         status, kept = 'none', None
     elif not isinstance(application, dict) or load_template(home, application.get('template')) is None:
@@ -257,21 +292,32 @@ def cmd_sync(home: Path, state_path: str, now: datetime.datetime) -> dict:
     else:
         status = state_of(application, now)
         kept = None if status == 'expired_drop' else application
-    writes = drop_writes(application, now) if status == 'expired_drop' else []
-    home.mkdir(parents=True, exist_ok=True)
-    overrides = {'synced_at': now.isoformat(), 'application': kept}
-    (home / 'overrides.json').write_text(json.dumps(overrides, ensure_ascii=False), encoding='utf-8')
+    if status == 'expired_drop':
+        writes.extend(drop_writes(application, now))
+    save_overrides(home, synced_at=now.isoformat(), updated_at=updated_at, application=kept)
     return {'status': status, 'application': kept, 'writes': writes}
+
+
+def web_is_newer(local_updated_at: str | None, web_updated_at: str | None) -> bool:
+    """Web の updated_at の方を採るか。ローカルの updated_at が無い・読めないときは Web を採る。"""
+    if not local_updated_at:
+        return True
+    try:
+        local_time = parse_time(local_updated_at)
+    except ValueError:
+        return True
+    if not web_updated_at:
+        return False
+    try:
+        web_time = parse_time(web_updated_at)
+    except ValueError:
+        return False
+    return web_time > local_time
 
 
 def drop_writes(application: dict, now: datetime.datetime) -> list[dict]:
     """expired_drop のときの writes (history への set と state/current への set)。"""
-    ended = dict(application, ended_at=application.get('until'), ended_how='expired')
-    return [
-        {'op': 'set', 'collection': 'history', 'doc_id': application.get('id'), 'data': ended},
-        {'op': 'set', 'collection': 'state', 'doc_id': 'current',
-         'data': {'application': None, 'updated_at': now.isoformat()}},
-    ]
+    return [history_set(application, 'expired', application.get('until')), state_set(None, now)]
 
 
 def cmd_due(state_path: str, now: datetime.datetime, within_hours: float) -> dict:
@@ -284,9 +330,9 @@ def cmd_due(state_path: str, now: datetime.datetime, within_hours: float) -> dic
     return {'due': None}
 
 
-def cmd_apply(home: Path, state_path: str, name: str, until_arg: str, on_expire: str,
-              reason: str, via: str, now: datetime.datetime) -> dict:
-    """新しい適用の writes を出す。前の適用があれば history に移す。"""
+def new_application(home: Path, name: str, until_arg: str, on_expire: str, reason: str,
+                    via: str, now: datetime.datetime) -> dict:
+    """検証して新しい適用を作る (cmd_apply と apply_local で共通)。"""
     if load_template(home, name) is None:
         raise ValueError(f'テンプレートが無い・不正: {name}')
     if until_arg == 'none':
@@ -295,22 +341,65 @@ def cmd_apply(home: Path, state_path: str, name: str, until_arg: str, on_expire:
         until = parse_time(until_arg)
         if now >= until:
             raise ValueError(f'until が now より後でない: {until_arg}')
-    application = {'id': new_application_id(now), 'template': name,
-                   'until': until.isoformat() if until is not None else None,
-                   'on_expire': on_expire, 'reason': reason,
-                   'started_at': now.isoformat(), 'started_via': via}
+    return {'id': new_application_id(now), 'template': name,
+            'until': until.isoformat() if until is not None else None,
+            'on_expire': on_expire, 'reason': reason,
+            'started_at': now.isoformat(), 'started_via': via}
+
+
+def cmd_apply(home: Path, state_path: str, name: str, until_arg: str, on_expire: str,
+              reason: str, via: str, now: datetime.datetime) -> dict:
+    """新しい適用の writes を出す。前の適用があれば history に移す。"""
+    application = new_application(home, name, until_arg, on_expire, reason, via, now)
     writes = previous_writes(read_state(state_path).get('application'), now)
     writes.append(state_set(application, now))
     return {'application': application, 'writes': writes}
+
+
+def apply_local(home: Path, name: str, until_arg: str, on_expire: str, reason: str,
+                via: str, now: datetime.datetime) -> dict:
+    """ローカルの正本に適用を書き、Web に写すための writes を返す。"""
+    application = new_application(home, name, until_arg, on_expire, reason, via, now)
+    overrides = load_overrides(home)
+    previous = overrides['application']
+    writes = previous_writes(previous, now)
+    if writes:
+        append_history(home, writes[0]['data'])
+    writes.append(state_set(application, now))
+    save_overrides(home, synced_at=overrides['synced_at'], updated_at=now.isoformat(),
+                   application=application)
+    return {'application': application, 'writes': writes}
+
+
+def history_entry(application: dict, now: datetime.datetime) -> dict:
+    """前の適用を終えた記録 (replaced、または期限切れの drop なら expired)。"""
+    if state_of(application, now) == 'expired_drop':
+        return history_data(application, 'expired', application.get('until'))
+    return history_data(application, 'replaced', now.isoformat())
 
 
 def previous_writes(application: dict | None, now: datetime.datetime) -> list[dict]:
     """前の適用を history に移す writes。適用が無ければ空。"""
     if not isinstance(application, dict):
         return []
-    if state_of(application, now) == 'expired_drop':
-        return [history_set(application, 'expired', application.get('until'))]
-    return [history_set(application, 'replaced', now.isoformat())]
+    return [{'op': 'set', 'collection': 'history', 'doc_id': application.get('id'),
+             'data': history_entry(application, now)}]
+
+
+def answered_application(application: dict, choice: str, until_arg: str | None,
+                         now: datetime.datetime) -> tuple[dict | None, str | None]:
+    """答えのあとの適用と、終わらせるときの ended_how (終わらせないときは None)。"""
+    if choice == 'stop':
+        ended_how = 'declined' if state_of(application, now) == 'expired_ask' else 'stopped'
+        return None, ended_how
+    if choice == 'forever':
+        return dict(application, until=None), None
+    if not until_arg:
+        raise ValueError('extend には --until が要る')
+    until = parse_time(until_arg)
+    if now >= until:
+        raise ValueError(f'--until が now より後でない: {until_arg}')
+    return dict(application, until=until.isoformat()), None
 
 
 def cmd_answer(state_path: str, choice: str, until_arg: str | None, now: datetime.datetime) -> dict:
@@ -318,20 +407,46 @@ def cmd_answer(state_path: str, choice: str, until_arg: str | None, now: datetim
     application = read_state(state_path).get('application')
     if not isinstance(application, dict):
         raise ValueError('適用が無い')
-    if choice == 'stop':
-        ended_how = 'declined' if state_of(application, now) == 'expired_ask' else 'stopped'
-        writes = [history_set(application, ended_how, now.isoformat()), state_set(None, now)]
-        return {'application': None, 'writes': writes}
-    if choice == 'forever':
-        answered = dict(application, until=None)
+    answered, ended_how = answered_application(application, choice, until_arg, now)
+    if ended_how is None:
+        return {'application': answered, 'writes': [state_set(answered, now)]}
+    writes = [history_set(application, ended_how, now.isoformat()), state_set(None, now)]
+    return {'application': None, 'writes': writes}
+
+
+def answer_local(home: Path, choice: str, until_arg: str | None, now: datetime.datetime) -> dict:
+    """ローカルの正本に答えを書き、Web に写すための writes を返す。"""
+    overrides = load_overrides(home)
+    application = overrides['application']
+    if not isinstance(application, dict):
+        raise ValueError('適用が無い')
+    answered, ended_how = answered_application(application, choice, until_arg, now)
+    if ended_how is None:
+        writes = [state_set(answered, now)]
     else:
-        if not until_arg:
-            raise ValueError('extend には --until が要る')
-        until = parse_time(until_arg)
-        if now >= until:
-            raise ValueError(f'--until が now より後でない: {until_arg}')
-        answered = dict(application, until=until.isoformat())
-    return {'application': answered, 'writes': [state_set(answered, now)]}
+        writes = [history_set(application, ended_how, now.isoformat()), state_set(None, now)]
+        append_history(home, history_data(application, ended_how, now.isoformat()))
+    save_overrides(home, synced_at=overrides['synced_at'], updated_at=now.isoformat(),
+                   application=answered)
+    return {'application': answered, 'writes': writes}
+
+
+def status_local(home: Path, now: datetime.datetime) -> dict:
+    """ローカルの正本の適用の状態を返す。expired_drop なら後始末をする。"""
+    overrides = load_overrides(home)
+    application = overrides['application']
+    if application is None:
+        status, kept = 'none', None
+    elif not isinstance(application, dict) or load_template(home, application.get('template')) is None:
+        status, kept = 'unknown_template', application
+    else:
+        status, kept = state_of(application, now), application
+    if status != 'expired_drop':
+        return {'status': status, 'application': kept, 'writes': []}
+    append_history(home, history_data(application, 'expired', application.get('until')))
+    save_overrides(home, synced_at=overrides['synced_at'], updated_at=now.isoformat(),
+                   application=None)
+    return {'status': status, 'application': None, 'writes': drop_writes(application, now)}
 
 
 def cmd_push(home: Path, now: datetime.datetime, existing: str | None) -> dict:
@@ -375,23 +490,25 @@ def build_parser() -> argparse.ArgumentParser:
     check = sub.add_parser('check', parents=[common], help='home のテンプレートを検査する')
     check.add_argument('names', nargs='*', metavar='NAME', help='検査するテンプレート (省略時は全部)')
 
-    sync = sub.add_parser('sync', parents=[common], help='state/current から写しを書き、writes を出す')
+    sub.add_parser('status', parents=[common], help='ローカルの適用の状態を返す')
+
+    sync = sub.add_parser('sync', parents=[common], help='state/current とローカルの新しい方を採り、writes を出す')
     sync.add_argument('--state', required=True, metavar='FILE', help='state/current のドキュメントの data のファイル')
 
     due = sub.add_parser('due', parents=[common], help='期限が近い適用を返す')
     due.add_argument('--state', required=True, metavar='FILE', help='state/current のドキュメントの data のファイル')
     due.add_argument('--within-hours', type=float, default=24, metavar='HOURS', help='窓の幅 (時間、既定 24)')
 
-    apply = sub.add_parser('apply', parents=[common], help='新しい適用を始める writes を出す')
-    apply.add_argument('--state', required=True, metavar='FILE', help='state/current のドキュメントの data のファイル')
+    apply = sub.add_parser('apply', parents=[common], help='新しい適用を始める (--state 省略時はローカルに書く)')
+    apply.add_argument('--state', metavar='FILE', help='state/current のドキュメントの data のファイル (省略時はローカルだけを書き換える)')
     apply.add_argument('--template', required=True, metavar='NAME', help='始めるテンプレート')
     apply.add_argument('--until', required=True, metavar='ISO|none', help='期限 (none は期限なし)')
     apply.add_argument('--on-expire', required=True, choices=('ask', 'drop'), metavar='ask|drop', help='期限切れのときの扱い')
     apply.add_argument('--reason', required=True, metavar='TEXT', help='始める理由')
     apply.add_argument('--via', choices=('chat', 'web'), default='chat', metavar='chat|web', help='始めた場所 (既定 chat)')
 
-    answer = sub.add_parser('answer', parents=[common], help='期限切れへの答えの writes を出す')
-    answer.add_argument('--state', required=True, metavar='FILE', help='state/current のドキュメントの data のファイル')
+    answer = sub.add_parser('answer', parents=[common], help='期限切れへの答え (--state 省略時はローカルに書く)')
+    answer.add_argument('--state', metavar='FILE', help='state/current のドキュメントの data のファイル (省略時はローカルだけを書き換える)')
     answer.add_argument('--choice', required=True, choices=('extend', 'stop', 'forever'), metavar='extend|stop|forever', help='答えの種類')
     answer.add_argument('--until', metavar='ISO', help='extend の新しい期限')
 
@@ -411,13 +528,22 @@ def main():
             sys.exit(cmd_check(home, args.names))
         if args.sub == 'sync':
             result = cmd_sync(home, args.state, now)
+        elif args.sub == 'status':
+            result = status_local(home, now)
         elif args.sub == 'due':
             result = cmd_due(args.state, now, args.within_hours)
         elif args.sub == 'apply':
-            result = cmd_apply(home, args.state, args.template, args.until, args.on_expire,
-                               args.reason, args.via, now)
+            if args.state is None:
+                result = apply_local(home, args.template, args.until, args.on_expire,
+                                     args.reason, args.via, now)
+            else:
+                result = cmd_apply(home, args.state, args.template, args.until, args.on_expire,
+                                   args.reason, args.via, now)
         elif args.sub == 'answer':
-            result = cmd_answer(args.state, args.choice, args.until, now)
+            if args.state is None:
+                result = answer_local(home, args.choice, args.until, now)
+            else:
+                result = cmd_answer(args.state, args.choice, args.until, now)
         else:
             result = cmd_push(home, now, args.existing)
     except (OSError, ValueError) as error:
