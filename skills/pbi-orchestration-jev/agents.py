@@ -5,10 +5,18 @@ CLI の場所 (find_cli) と、手順を外す理由 (drop_reason) を求める�
 手順の絞り込み (filter_steps) は route の組み立てから使う。
 """
 import os
+import re
 import shutil
 from pathlib import Path
 
 from common import AGENT, RUNNERS, load_json
+
+# agents.json の adapters が取るフェーズと、設定値として扱う文字列
+ADAPTER_PHASES = ('design', 'review', 'security')
+ADAPTER_SETTINGS = ('auto', 'off')
+
+# フェーズの値として受け付けるスキル名の形
+SKILL_NAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9:_./-]{0,127}$')
 
 # 手順を外す理由 (route.json の dropped の reason に書く)
 REASON_DISABLED = '未使用 (agents.json)'
@@ -37,6 +45,30 @@ def load_agents(home) -> dict | None:
     if not isinstance(data, dict) or not isinstance(data.get('runners'), dict):
         return None
     return data
+
+
+def load_adapters(home) -> tuple[dict, list[str]]:
+    """<home>/agents.json の adapters を読む。(フェーズごとの設定, 警告) を返す。
+
+    1 つ目は常に design・review・security の 3 つのキーを持つ辞書で、既定は "auto"。
+    2 つ目は英語の警告を 1 件 1 行にしたリスト。runners の有無・中身は見ない。
+    """
+    settings = {phase: 'auto' for phase in ADAPTER_PHASES}
+    warnings = []
+    data = load_json(Path(home) / 'agents.json')
+    if not isinstance(data, dict) or 'adapters' not in data:
+        return settings, warnings
+    adapters = data['adapters']
+    if not isinstance(adapters, dict):
+        return settings, ['adapters: not an object, using auto for every phase']
+    for key, value in adapters.items():
+        if key not in settings:
+            warnings.append(f'adapters.{key}: unknown phase, ignored')
+        elif not _valid_adapter_value(value):
+            warnings.append(f'adapters.{key}: invalid value, using auto')
+        else:
+            settings[key] = value
+    return settings, warnings
 
 
 def find_cli(runner, agents, env=None) -> str | None:
@@ -109,6 +141,12 @@ def _runner_config(runner, agents) -> dict:
     runners = agents.get('runners') if isinstance(agents, dict) else None
     config = runners.get(runner) if isinstance(runners, dict) else None
     return config if isinstance(config, dict) else {}
+
+
+def _valid_adapter_value(value) -> bool:
+    """adapters の値として受け付けるか。設定値 (auto・off) か、スキル名の形の文字列。"""
+    return (isinstance(value, str)
+            and (value in ADAPTER_SETTINGS or SKILL_NAME_PATTERN.fullmatch(value) is not None))
 
 
 def _configured_path(runner, agents) -> str | None:

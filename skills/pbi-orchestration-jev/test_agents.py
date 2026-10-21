@@ -13,6 +13,7 @@ import agents
 OPENCODE = {'runner': 'opencode', 'model': 'opencode-go/deepseek-v4.1-flash', 'effort': None}
 CODEX = {'runner': 'codex', 'model': 'gpt-6-astra', 'effort': 'high'}
 AGENT_STEP = {'runner': 'agent', 'model': 'sonnet', 'effort': 'high'}
+ADAPTERS_AUTO = {'design': 'auto', 'review': 'auto', 'security': 'auto'}
 
 
 def make_cli(directory, name):
@@ -109,6 +110,85 @@ class LoadAgentsTest(Base):
         data = {'runners': {'opencode': {'enabled': True}, 'codex': {'enabled': False}}}
         self.write(json.dumps(data))
         self.assertEqual(agents.load_agents(self.root), data)
+
+
+class LoadAdaptersTest(Base):
+    def write(self, data):
+        text = data if isinstance(data, str) else json.dumps(data)
+        (self.root / 'agents.json').write_text(text, encoding='utf-8')
+
+    def test_missing_file_is_all_auto(self):
+        self.assertEqual(agents.load_adapters(self.root), (ADAPTERS_AUTO, []))
+
+    def test_broken_json_and_top_level_not_an_object_are_all_auto(self):
+        for text in ('{oops', '[]', '1', 'null'):
+            with self.subTest(text=text):
+                self.write(text)
+                self.assertEqual(agents.load_adapters(self.root), (ADAPTERS_AUTO, []))
+
+    def test_adapters_absent_is_all_auto(self):
+        for data in ({}, {'runners': {'opencode': {'enabled': True}}}, {'runners': []}):
+            with self.subTest(data=data):
+                self.write(data)
+                self.assertEqual(agents.load_adapters(self.root), (ADAPTERS_AUTO, []))
+
+    def test_adapters_is_read_without_runners(self):
+        self.write({'adapters': {'design': 'off'}})
+        expected = {**ADAPTERS_AUTO, 'design': 'off'}
+        self.assertEqual(agents.load_adapters(self.root), (expected, []))
+
+    def test_broken_runners_does_not_matter(self):
+        self.write({'runners': [], 'adapters': {'review': 'off'}})
+        expected = {**ADAPTERS_AUTO, 'review': 'off'}
+        self.assertEqual(agents.load_adapters(self.root), (expected, []))
+
+    def test_all_three_keys_accept_auto_off_and_skill_names(self):
+        self.write({'adapters': {'design': 'auto', 'review': 'off',
+                                 'security': 'mattpocock-skills:code-review'}})
+        expected = {'design': 'auto', 'review': 'off', 'security': 'mattpocock-skills:code-review'}
+        self.assertEqual(agents.load_adapters(self.root), (expected, []))
+
+    def test_skill_name_characters_and_length_boundaries(self):
+        valid = 'a' + 'A0:_./-' * 18 + 'a' * 1  # 128 文字
+        self.assertEqual(len(valid), 128)
+        self.write({'adapters': {'design': valid, 'review': 'a' * 128, 'security': 'a' * 129}})
+        expected = {**ADAPTERS_AUTO, 'design': valid, 'review': 'a' * 128}
+        self.assertEqual(agents.load_adapters(self.root),
+                         (expected, ['adapters.security: invalid value, using auto']))
+
+    def test_adapters_not_an_object_warns_once_and_uses_auto(self):
+        for adapters in ([], 'off', 1, None, True):
+            with self.subTest(adapters=adapters):
+                self.write({'adapters': adapters})
+                self.assertEqual(agents.load_adapters(self.root),
+                                 (ADAPTERS_AUTO, ['adapters: not an object, using auto for every phase']))
+
+    def test_unknown_key_is_ignored_with_a_warning(self):
+        self.write({'adapters': {'other': 'off', 'review': 'off'}})
+        expected = {**ADAPTERS_AUTO, 'review': 'off'}
+        self.assertEqual(agents.load_adapters(self.root),
+                         (expected, ['adapters.other: unknown phase, ignored']))
+
+    def test_values_that_are_not_strings_use_auto_with_a_warning(self):
+        for value in (True, 1, None, [], {}):
+            with self.subTest(value=value):
+                self.write({'adapters': {'review': value}})
+                self.assertEqual(agents.load_adapters(self.root),
+                                 (ADAPTERS_AUTO, ['adapters.review: invalid value, using auto']))
+
+    def test_values_not_matching_the_skill_name_form_use_auto_with_a_warning(self):
+        for value in ('', ' has space', '-lead', 'a' * 129, 'auto\n', 'off '):
+            with self.subTest(value=value):
+                self.write({'adapters': {'security': value}})
+                self.assertEqual(agents.load_adapters(self.root),
+                                 (ADAPTERS_AUTO, ['adapters.security: invalid value, using auto']))
+
+    def test_warnings_follow_the_order_in_the_file(self):
+        self.write({'adapters': {'review': 1, 'zzz': 'off', 'design': []}})
+        self.assertEqual(agents.load_adapters(self.root)[1],
+                         ['adapters.review: invalid value, using auto',
+                          'adapters.zzz: unknown phase, ignored',
+                          'adapters.design: invalid value, using auto'])
 
 
 class FindCliTest(Base):

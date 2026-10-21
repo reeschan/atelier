@@ -8,7 +8,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎのあとに再開する。オーケストレーターは facts を prepare.py に渡し、prepare.py は Jev にゲート 1 (brief と PBI の品質) を聞き、select_model.py で段と route を決める。そのとき home (~/.config/pbi-orchestration-jev) の振り分け・適用・agents.json と docs/pbi/routing.json を読み、使えない実行先の手順を外す。PBI は、全段の既定の実行先である pbi-worker (Agent ツール) か、setup で選び routing.json に書いた外部の実行先 (opencode・Codex・Antigravity・DeepSeek Harness) に渡り、対象リポジトリのソースコードを変える。オーケストレーターは verify.py と unchanged.py で検証し、Jev には文章だけで、報告と検証が食い違うときの仕分けと差し戻し文の点検を聞き、状態と HANDOFF を docs/pbi/ に記録する。任意の shared-memory の MCP が作業ごとの ref と引き継ぎのメモリを持ち、pbi-worker は ref を get するだけ。setup_agents.py と model_fetch.py が実行先の CLI を検出し、実行先ごとのモデルの一覧を home の agents.json と models/ に控える。開発者は手元の編集画面 (studio/serve.py。エージェントとモデル・振り分け・優先テンプレートと適用の 3 タブ) で、それらを home の中だけで読み書きする。templates.py は優先テンプレートと、正本であるローカルの overrides.json を持ち、任意の優先テンプレートの Web ページ (claude.ai の Artifact) はそれと同期するだけ。">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎのあとに再開する。オーケストレーターは facts を prepare.py に渡し、prepare.py は Jev にゲート 1 (brief と PBI の品質) を聞き、select_model.py で段と route を決める。そのとき home (~/.config/pbi-orchestration-jev) の振り分け・適用・agents.json と docs/pbi/routing.json を読み、使えない実行先の手順を外す。PBI は、全段の既定の実行先である pbi-worker (Agent ツール) か、setup で選び routing.json に書いた外部の実行先 (opencode・Codex・Antigravity・DeepSeek Harness) に渡り、対象リポジトリのソースコードを変える。オーケストレーターは verify.py と unchanged.py で検証し、Jev には文章だけで、報告と検証が食い違うときの仕分けと差し戻し文の点検を聞き、状態と HANDOFF を docs/pbi/ に記録する。任意の shared-memory の MCP が作業ごとの ref と引き継ぎのメモリを持ち、pbi-worker は ref を get するだけ。setup_agents.py と model_fetch.py が実行先の CLI を検出し、実行先ごとのモデルの一覧を home の agents.json と models/ に控える。開発者は手元の編集画面 (studio/serve.py。エージェントとモデル・振り分け・優先テンプレートと適用の 3 タブ) で、それらを home の中だけで読み書きする。templates.py は優先テンプレートと、正本であるローカルの overrides.json を持ち、任意の優先テンプレートの Web ページ (claude.ai の Artifact) はそれと同期するだけ。フェーズ・アダプターは、任意の呼び出し先のスキルが入っていれば使う。設計では、オーケストレーターが mattpocock-skills の grilling を呼ぶ。全 PBI のあとは adapter_gate.py が PBI と agents.json の adapters の設定を読んで、最終レビューとセキュリティレビューを使うかを決め、general-purpose のレビュー用のサブエージェントが mattpocock-skills の code-review か built-in の /code-review・/security-review を呼んで、指摘を docs/pbi/reviews/ に書く。">
 </picture>
 
 図のソースは `assets/architecture.d2` です ([D2](https://d2lang.com) で描いています)。
@@ -124,6 +124,51 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 - 品質・価格の参考は `studio/catalog.json` から出します (`python studio/update_catalog.py` で更新。価格と新しいモデルは OpenRouter、品質は `AA_API_KEY` があるとき Artificial Analysis のコーディング指標)。参考情報だけで、選べるモデルは home の `models/<実行先>.json` の一覧で決まります。
 - 設計の詳細は [docs/template-studio.md](docs/template-studio.md) にあります。
 
+## フェーズ・アダプター
+
+**アダプター**は、作業の決まった場面で、すでに入っているスキルを呼ぶための取り決めです。スキルは何も同梱しません。下の表にある名前だけを使い、どれも入っていなければ自分の手順で進みます。
+
+| フェーズ | いつ | 呼び出し先 (優先順) | 補足 |
+|---|---|---|---|
+| 設計 | PBI に分解する前 | `mattpocock-skills:grilling`、続いて `mattpocock-skills:domain-modeling` | domain-modeling は、対象のリポジトリにもう `GLOSSARY.md` か `CONTEXT.md` があるときだけ。どちらも質問をするのでメインのセッションで呼びます |
+| 最終レビュー | 最後の PBI のあと | `mattpocock-skills:code-review`、続いて built-in の `/code-review` | built-in はレベル `medium`・フラグなし。どちらにも merge-base・head・仕様のパスを渡します |
+| セキュリティレビュー | 同じ時点で、sensitive か deep な PBI があるとき | built-in の `/security-review` | 引数なし |
+
+レビューの呼び出し先には、報告だけをさせます。渡すのは merge-base・head・仕様のパスと「直さない・投稿しない」で、`--fix`・`--comment`・`ultra`・`--max-findings` は渡しません。呼ぶ前と後で `git rev-parse HEAD` と `git status --porcelain` を比べ、何か変わっていたら結果を捨てて自分の手順に戻ります。呼び出し先がユーザーに質問しようとしたときも `BLOCKED` で戻ります。指摘はそのまま信じず、設計者が確かめます。本物の指摘はそのファイルを担当した PBI の差し戻し (上限 2 回に数えます) にし、どの PBI のものでもない指摘は完了報告の「発見」に書き、好みや書き方だけの指摘では差し戻しません。
+
+何も入れていなくても、作業は最後まで進みます。built-in の `/code-review` と `/security-review` は Claude Code に最初から入っているので、最終レビューとセキュリティレビューはそのまま動きます。組み込みの手順が無いのは設計だけで、そのときは設計者が、決めたことと置いた前提を短い手順で `docs/specs/<slug>.md` に書き、承認の一覧にも「未決の前提」として出して、承認のときに直せるようにします。
+
+そのフェーズを使うかどうか:
+
+- **設計**: 明らかに複雑 (新しい概念・外部とのインターフェース・データモデルの変更のどれかがあり、2 つ以上のモジュールにまたがる見込み) なら、聞かずに使います。明らかに単純 (方針が決まっている、または 1 モジュールで PBI が 3 件以下の見込み) なら黙って飛ばします。どちらとも言えないときだけ、分解の前に 1 回聞きます。答えは `docs/pbi/adapters.json` に残るので、resume で聞き直しません。仕様のパスを渡して起動したとき (自分の設計用のスキルから渡されたときなど) は、設計は済んだものとして扱います。
+- **最終レビュー**: 全体の diff が 300 行以下、PBI が 2 件以下、deep も sensitive も無い、のすべてを満たすときだけ飛ばします。それ以外は使います。判定は `adapter_gate.py` が同じ表で行うので、回ごとにぶれません。
+- **セキュリティレビュー**: sensitive か deep な PBI が 1 件でもあれば使います。
+
+使ったか・飛ばしたかは、STATUS.md と HANDOFF.md にフェーズごとに 1 行 (`adapter <フェーズ>: <呼び出し先 または built-in> run|skip|fallback|off (<理由>)`) で残ります。
+
+止めたいフェーズや、呼び出し先を指定したいときは、home の `agents.json` に `adapters` を足します。キーは `design`・`review`・`security` で、値は `auto` (既定)・`off`・スキル名のどれかです。おかしなキーや値はその行だけ無視して理由を 1 行出し、`off` にしたフェーズは上の基準にかかわらず動きません。
+
+```json
+{"adapters": {"design": "off", "review": "mattpocock-skills:code-review", "security": "auto"}}
+```
+
+表に無い呼び出し先を使えるのは、ここに名前を書いたときだけです。名前が似ているだけのスキルが勝手に使われることはなく、モデルから呼べないスキル (`disable-model-invocation`) も使いません。
+
+### おすすめ: mattpocock-skills
+
+`/pbi-orchestration-jev setup --recommended` が、推奨のセットを 1 つだけ案内します。はいと答えるまで何も入れません。
+
+```sh
+/pbi-orchestration-jev setup --recommended
+claude plugin install mattpocock-skills@claude-plugins-official --scope user
+```
+
+- [mattpocock/skills](https://github.com/mattpocock/skills) — MIT (Copyright (c) 2026 Matt Pocock)。設計に grilling と domain-modeling、最終レビューに code-review が加わります。
+- `setup --recommended` は、名前・使うフェーズ・リンク・ライセンス・入れるコマンドを見せます。1 回承認すると、設計者が install のコマンドを実行します。同梱のスクリプトは何もインストールしません (パッケージのインストールは、パッケージのスキャンで危険なコマンドとして検出されるためです)。
+- 「いいえ」と答えたときや、`claude` コマンドが PATH に無いときは、コマンドを表示するだけです。
+- 入れたあとに `/reload-plugins` か Claude Code の再起動が要ります。それまではプラグインのスキルが一覧に出ず、アダプターは組み込みの手順のまま動きます。
+- 設計の呼び出し先が無いまま複雑な作業を進めたときは、承認の一覧に「`setup --recommended` で mattpocock-skills を入れられます」と 1 回だけ出ます。出したことは home に残り、以後は出しません。
+
 ## 優先テンプレート
 
 **優先テンプレート**は、振り分けを期限付きで上書きする仕組みです。いつもの振り分けは編集画面で決める home の `routing.json` で、優先テンプレートはその上に重なります。段ごとの route に名前を付けて保存し (形は `routing.json` と同じ)、期限を決めてオンにすると、その間は上書きした段の route がテンプレートのものになります (上書きの無い段はそのまま。最後に受ける Claude Code は `routing.json` のその段のもの)。期限を過ぎたときの扱いは、`ask` なら続けるかを聞き (「延長 / やめる / 期限なし」に答えます)、`drop` なら黙って外れます。テンプレートの作成・編集・適用は、編集画面の「優先テンプレートと適用」タブからも、チャットからもできます。正本は home の `overrides.json` で、同梱の Web ページ (専用のデータベースを持つ Artifact) は任意の同期先です。`web.json` に URL があるときだけ、開始時にページとローカルの写しを同期します。
@@ -152,6 +197,7 @@ cp skills/pbi-orchestration-jev/examples/templates/cheap-all-tiers.json ~/.confi
 | Python 3.10 以上 | 必須 | `prepare.py`・`select_model.py`・`verify.py` などのスクリプトと Jev クライアント |
 | Jev の API キー | 推奨 | 無ければ Jev のゲートを飛ばし、facts だけで段を決める |
 | shared-memory の MCP (`mcp__shared-memory__*`) | 任意 | 作業ごとの ref と引き継ぎのメモリ。無ければ PBI の補足に書く |
+| [mattpocock-skills](https://github.com/mattpocock/skills) | 任意 | 設計と最終レビューのアダプター (下の「フェーズ・アダプター」) |
 | [opencode](https://opencode.ai) + OpenCode Go | 任意 | `routing.json` で有効にしたときの外部の実行先 (見本は `examples/routing/multi-runner.json`) |
 | [Codex CLI](https://github.com/openai/codex) | 任意 | `routing.json` で有効にしたときの外部の実行先 |
 | Antigravity CLI (`agy`) | 任意 | Google AI のサブスクの Claude |
@@ -269,11 +315,12 @@ skills/pbi-orchestration-jev/
 ├── dsh_run.py                  # DeepSeek Harness の headless で PBI を 1 件動かす
 ├── verify-commands.md          # 検証コマンドを書くときの注意
 ├── worker.md                   # 実装担当の進め方と報告の形
-├── appendix/                   # 場面ごとに読む付録 (memory・rework・handoff・finish・jev・setup・priority-templates)
+├── appendix/                   # 場面ごとに読む付録 (memory・rework・handoff・finish・jev・setup・adapters・priority-templates)
 ├── agents/pbi-worker.md        # 実装担当・レビュー用のサブエージェントの定義 (~/.claude/agents に置く)
 ├── prepare.py                  # Jev のゲート 1 と決定表を 1 回で実行し、表だけを出す
 ├── verify.py                   # PBI の検証コマンドを実行し、終了コードと末尾だけを表で出す
 ├── select_model.py             # 決定表: 段・route・レビューの深さ。agents.json で手順を外す
+├── adapter_gate.py             # 最終レビューとセキュリティレビューを使うかどうかと理由を決める
 ├── setup_agents.py             # セットアップ: 実行先の CLI を検出し、選択を agents.json に書き、モデルを取得する
 ├── model_fetch.py              # 実行先 1 つのモデル一覧を CLI (または同梱の dsh カタログ・agent の組み込み一覧) から取る
 ├── dsh.models.json             # dsh のモデルのカタログ。dsh が一覧を出せないときに使う
@@ -302,6 +349,7 @@ skills/pbi-orchestration-jev/
 ├── test_select_model.py / test_agents.py / test_common.py
 ├── test_setup_agents.py / test_model_fetch.py / test_templates.py / test_prepare.py / test_unchanged.py
 ├── test_record_run.py / test_model_report.py / test_dsh_run.py / test_jev_mcp.py
+├── test_adapter_gate.py        # レビューの判定 (299/300/301 行・PBI 2/3 件・deep・sensitive)
 ├── test_references.py          # スキルの文書が名前を挙げるファイルの実在
 └── test_agent_stats.py
 ```
