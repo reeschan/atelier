@@ -1,6 +1,6 @@
 {
-  "name": "deepseek-all",
-  "description": "Route every tier to opencode-go/deepseek-v4.1-flash at effort max.",
+  "name": "cheap-all-tiers",
+  "description": "Example that routes every tier to one cheap model. Rewrite the model ID to one available in your environment.",
   "tiers": {
     "haiku": [{"runner": "opencode", "model": "opencode-go/deepseek-v4.1-flash", "effort": "max"}],
     "sonnet": [{"runner": "opencode", "model": "opencode-go/deepseek-v4.1-flash", "effort": "max"}],

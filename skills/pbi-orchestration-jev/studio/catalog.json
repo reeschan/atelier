@@ -40,7 +40,7 @@
     {
       "id": "gpt-6-astra", "provider": "openai", "name": "GPT-6 Astra",
       "openrouter_id": "openai/gpt-6-astra", "aa_slug": "gpt-6-astra",
-      "quality": 84, "price_in": 2.5, "price_out": 10.0, "sample": true, "until": "2026-10-23",
+      "quality": 84, "price_in": 2.5, "price_out": 10.0, "sample": true,
       "options": [
         {"runner": "codex", "model": "gpt-6-astra", "effort": "high", "billing": "subscription"},
         {"runner": "codex", "model": "gpt-6-astra", "effort": "medium", "billing": "subscription", "quality_delta": -6}

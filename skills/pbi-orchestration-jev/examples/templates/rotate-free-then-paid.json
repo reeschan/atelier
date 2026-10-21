@@ -1,0 +1,26 @@
+{
+  "name": "rotate-free-then-paid",
+  "description": "Example that rotates each tier through free-quota steps first, then paid steps. Rewrite the model IDs for your environment.",
+  "tiers": {
+    "haiku": [
+      {"rotate": [
+        {"runner": "opencode", "model": "opencode/free-model-a", "effort": null},
+        {"runner": "opencode", "model": "opencode/free-model-b", "effort": null}
+      ]},
+      {"rotate": [
+        {"runner": "codex", "model": "openai/paid-model-a", "effort": null},
+        {"runner": "agy", "model": "anthropic/paid-model-b", "effort": null}
+      ]}
+    ],
+    "sonnet": [
+      {"rotate": [
+        {"runner": "opencode", "model": "opencode/free-model-a", "effort": null},
+        {"runner": "opencode", "model": "opencode/free-model-b", "effort": null}
+      ]},
+      {"rotate": [
+        {"runner": "codex", "model": "openai/paid-model-a", "effort": null},
+        {"runner": "agy", "model": "anthropic/paid-model-b", "effort": null}
+      ]}
+    ]
+  }
+}

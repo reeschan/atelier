@@ -8,7 +8,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎ後に再開する。オーケストレーターは prepare.py (Jev のゲート 1 と select_model.py) で段と実行先の順番を決め、opencode・Codex・Antigravity・DeepSeek Harness (dsh)・pbi-worker (Agent ツール) に PBI を渡し、verify.py と unchanged.py で検証し、Jev には文章だけで報告の仕分けと修正の規模を聞き、対象リポジトリの docs/pbi/ に状態と HANDOFF を記録する。任意の shared-memory には作業ごとの ref と引き継ぎのメモリを書き、pbi-worker は ref を get するだけ。任意で rtk がコマンド出力を圧縮する。Template Studio は OpenRouter と Artificial Analysis から作ったモデル一覧を画面に出し、選んだ試す順番を docs/pbi/routing.json に書く。優先テンプレートの Web ページ (claude.ai の Artifact) は templates.py と同期し、overrides.json で振り分けを期限付きで上書きする。">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎのあとに再開する。オーケストレーターは facts を prepare.py に渡し、prepare.py は Jev にゲート 1 (brief と PBI の品質) を聞き、select_model.py で段と route を決める。そのとき home (~/.config/pbi-orchestration-jev) の振り分け・適用・agents.json と docs/pbi/routing.json を読み、使えない実行先の手順を外す。PBI は、全段の既定の実行先である pbi-worker (Agent ツール) か、routing.json で有効にした外部の実行先 (opencode・Codex・Antigravity・DeepSeek Harness) に渡り、対象リポジトリのソースコードを変える。オーケストレーターは verify.py と unchanged.py で検証し、Jev には文章だけで、報告と検証が食い違うときの仕分けと差し戻し文の点検を聞き、状態と HANDOFF を docs/pbi/ に記録する。任意の shared-memory の MCP が作業ごとの ref と引き継ぎのメモリを持ち、pbi-worker は ref を get するだけ。Template Studio は OpenRouter と Artificial Analysis のモデル一覧から試す順番を docs/pbi/routing.json に書き、優先テンプレートの Web ページ (claude.ai の Artifact) は templates.py と同期する。templates.py はテンプレートと適用を home に置く。">
 </picture>
 
 図のソースは `assets/architecture.d2` です ([D2](https://d2lang.com) で描いています)。
@@ -17,10 +17,10 @@
 
 - **モデルは決定表で決める**: オーケストレーターが数えた事実 (変更ファイル数・モジュール数・機密性) と、Jev による要約の判定 (新規性・結合度・あいまいさ) から、`select_model.py` が段 (haiku / sonnet / opus) を決めます。勘では決めません。
 - **実行先を順に試す**: 段ごとに「上から試す実行先の並び (`route`)」を出します。利用上限やエラーで使えなければ、次の実行先へ移ります。
-- **合否は検証コマンドで決める**: サブエージェントの報告も Jev の仕分けも、そのまま信じません。オーケストレーターが検証コマンドを自分で実行し、受け入れ条件を 1 つずつ判定します。
-- **差し戻しは 2 回まで**: 修正の規模を Jev に聞き、haiku の段は 1 回だけ sonnet の段に上げられます。設計から見直す必要があるときや、2 回差し戻しても通らないときは止めて、ユーザーの判断を待ちます。
+- **合否は検証コマンドで決める**: サブエージェントの報告も Jev の答えも、そのまま信じません。実装担当は報告の先頭に状態の 1 行 (`DONE` / `DONE_WITH_CONCERNS` / `NEEDS_CONTEXT` / `BLOCKED`) を書き、オーケストレーターはその状態と検証の結果で仕分けます。食い違うときだけ Jev に仕分けを聞きます。オーケストレーターが検証コマンドを自分で実行し、受け入れ条件を 1 つずつ判定します。
+- **差し戻しは 2 回まで、段上げは任意**: 差し戻しはレビューの指摘を付けて 2 回まで行います。段を上げるときは `prepare.py --only PBI-<n> --tier <tier>` でその PBI の route を書き直します (上げた先の route はその時点の振り分けから引きます)。設計から見直す必要があるときや、2 回差し戻しても通らないときは止めて、ユーザーの判断を待ちます。
 - **Jev に送るのは文章だけ**: PBI 本文、要約、報告の抜粋、差し戻し文だけを送ります。ソースコード、diff、環境変数、認証情報は送りません。
-- **オーケストレーターの文脈を細く保つ**: オーケストレーターの文脈に入ったものは、以後の全ターンで読み直されます。実装担当は最後に 4 行の報告だけを返して詳細はファイルに書き、長いコマンドの出力はログファイルに書き、PBI 本文は 1 回だけ書いてパスで渡します (`worker.md`、`SKILL.md` の 0.7)。
+- **オーケストレーターの文脈を細く保つ**: オーケストレーターの文脈に入ったものは、以後の全ターンで読み直されます。実装担当は最後に状態の行から始まる 5 行の報告だけを返して詳細はファイルに書き、長いコマンドの出力はログファイルに書き、PBI 本文は 1 回だけ書いてパスで渡します (`worker.md`、`SKILL.md` の 0.7)。
 - **文脈が大きくなったら引き継ぐ**: PBI の波の区切りで `agent_stats.py --ctx` で文脈の大きさを測り、250,000 トークン以上なら `docs/pbi/HANDOFF.md` (と、共有メモリがあれば引き継ぎのメモリ) を書いて止まります。`/clear` のあと `/pbi-orchestration-jev resume` で続きから再開します。フォルダを選ばずに始めたセッションからは `/pbi-orchestration-jev resume <リポジトリのパス>` で再開でき、パスを省くと引き継ぎのメモリから作業リポジトリを探します。
 - **Opus は設計とレビュー、実装は安いモデル**: Opus で実装するのは設計判断が要る PBI だけです。機密に触れる PBI や結合度の高い PBI は Sonnet で実装し、Opus のオーケストレーターが重点的にレビューします。
 - **[rtk](https://github.com/rtk-ai/rtk) でコマンド出力を圧縮 (任意)**: 同梱のフックが、スキルが有効にしたセッションだけ Bash / PowerShell のコマンドを `rtk <cmd>` に書き換えます。
@@ -31,6 +31,7 @@
 - **期限付きで振り分けを上書きする**: 優先テンプレートをオンにすると、期限までのあいだ段ごとの route を差し替えます。期限が来たら続けるかを聞きます。設定は Web ページ (Artifact) からもできます (下の「優先テンプレート」)。
 - **統計を取る**: `agent_stats.py` が、Claude Code の会話記録からモデル別・エージェント別のトークン数、プロンプトキャッシュの作り直しの回数、今の文脈の大きさを集計します。
 - **実行ごとに記録する**: 実行の合否 (合格・差し戻し・昇格・使えず・保留) を決めるたびに、`record_run.py` が `docs/pbi/runs.jsonl` に 1 行を足します。実行先・モデル・effort・トークン・コスト・ステップ数・時間・検証の結果はログから読み、オーケストレーターが渡すのは結果とレビュー指摘の件数だけです。読めない値は null のままにします。その実行の生ログはリポジトリの外の保全先にコピーします。保全先は環境変数 `PBI_RUNS_ARCHIVE` (同期するフォルダを指せば、ほかの場所にも残せます)、無ければ `~/.claude/pbi-runs` です。`model_report.py` はモデル別に集計し (`--archive` でリポジトリをまたいで)、後から人が調整する目安として仮の評価 A〜D を付けます。振り分けは変えません。
+- **費用は参考値**: 同梱の `prices.json` は見本の単価表で、home の `prices.json` で上書き・追加できます。`agent_stats.py --cost` は設計者の費用を API 換算の USD で出し、`model_report.py` は費用の分からない実行の件数を出します (合計には足しません)。
 
 ## 流れ
 
@@ -39,12 +40,15 @@ flowchart TD
   A[設計と PBI への分解] --> B[事実を数える<br/>facts.json]
   B --> C[prepare.py<br/>Jev: 要約の判定と PBI の品質<br/>select_model.py: 段と route]
   C --> F{ユーザーの承認}
-  F --> G[波を route の順に実行<br/>opencode → Codex → Antigravity → Agent]
-  G --> H[Jev: 報告の仕分け]
-  H --> I[レビュー<br/>verify.py で検証コマンドを実行]
-  I -->|fail| K[Jev: 修正の規模]
-  K -->|差し戻し 2 回まで| G
-  K -->|設計の見直し / 上限| L[止めてユーザー判断]
+  F --> G[波を route の順に実行]
+  G --> V[verify.py で検証コマンドを実行]
+  V --> H{実装担当の状態と verify.py の結果が一致?}
+  H -->|いいえ| H2[Jev: 報告の仕分け]
+  H -->|はい| I
+  H2 --> I[レビュー<br/>受け入れ条件と diff]
+  I -->|fail| K{差し戻しは残っている?}
+  K -->|はい| G
+  K -->|いいえ| L[止めてユーザー判断]
   I -->|pass| M{文脈 ≥ 25 万?}
   M -->|いいえ・PBI が残る| G
   M -->|はい| N[HANDOFF.md・引き継ぎのメモリ<br/>/clear・resume]
@@ -62,22 +66,24 @@ flowchart TD
 | どれかの score が 1 以上、または変更ファイル ≥ 4、またはモジュール ≥ 2 | sonnet | normal |
 | 上のどれでもない | haiku | normal |
 
-| 段 | 1. opencode | 2. Codex (`CODEX_UNTIL` まで) | 3. Antigravity (`agy`) | 4. Claude Code の Agent ツール |
-|---|---|---|---|---|
-| haiku | `opencode-go/deepseek-v4.1-flash` | `gpt-6-astra` effort `medium` | `claude-sonnet-5-5-low` | haiku、effort `max` |
-| sonnet | `opencode-go/deepseek-v4.1-flash` | `gpt-6-astra` effort `high` | `claude-sonnet-5-5-high` | sonnet、effort `high` |
-| sonnet (sensitive) | (使わない。外のサービスに出さない) | (使わない) | (使わない) | sonnet、effort `high` |
-| opus | (使わない) | (使わない) | (使わない) | opus、effort 既定 |
+同梱の既定は、全段を Agent ツールで実行します (haiku は effort `max`、sonnet は effort `high`、opus は effort の指定なし)。既定は `routing.default.json` にあり、`select_model.py` の中に表は持ちません。外部の実行先を使うときは、対象リポジトリの `docs/pbi/` か home の `routing.json` に自分の振り分けテンプレートを書きます (下の[優先テンプレート](#優先テンプレート))。見本は `skills/pbi-orchestration-jev/examples/routing/multi-runner.json` です。
 
-- Jev の confidence が 0.7 未満の score は 1 段下げて扱います。Jev が使えないときは score をすべて 1 として扱います。
-- Codex は `select_model.py` の `CODEX_UNTIL` の日まで使います。過ぎると route から外れます。使わないなら、この日付を過去にしてください。
-- Antigravity には haiku が無いので、haiku の段は Sonnet の low にしています。
+route を組んだあと (`routing.json` からでも優先テンプレートからでも)、スキルは各手順を home の `agents.json` と見つかった CLI に照合します。その実行先が無効になっている手順、CLI が見つからない手順、モデルがその実行先の一覧に無い手順は外し、承認一覧に理由とともに出します。最後の Agent の手順は外しません。
+
+home に置く `agents.json` の最小の例:
+
+```json
+{"runners": {"opencode": {"enabled": true, "models": ["opencode-go/deepseek-v4.1-flash"]}}}
+```
+
+- Jev の confidence が 0.7 未満の score は 1 段下げて扱います。Jev が無いときは facts (変更ファイル数・モジュール数・sensitive) だけで段を決めます。
+- Antigravity には haiku が無いので、haiku の段を `agy` に送る route では Sonnet の low を使います。
 - `--skip opencode,agy` で、このセッションで上限や拒否が出た実行先を外せます。`--all docs/pbi` は全 PBI を 1 回で判定し、1 PBI 1 行の表だけを出します。
 - レビューが deep の PBI は、Opus のオーケストレーターが diff を全部自分で読みます。normal で 300 行を超える diff は、Opus のレビュー担当のエージェントに読ませます。
 
 ## Template Studio (振り分けテンプレートを画面で組む)
 
-上の表の「どの実行先・モデルを、どの順に試すか」は、画面で選んで差し替えられます。段の決め方 (決定表) は変わりません。
+振り分け (同梱の全段 agent の既定や、`examples/routing/multi-runner.json` のような自分の `routing.json`) の「どの実行先・モデルを、どの順に試すか」は、画面で選んで差し替えられます。段の決め方 (決定表) は変わりません。
 
 ```
 /pbi-orchestration-jev templates
@@ -120,12 +126,14 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py --target <対象�
 - `sensitive` な PBI は、テンプレートが何を言っても外部の実行先に出ません。
 - 設計判断の見直しとレビューの担当は、決定表のままです。
 
-テンプレートは個人の設定です。`templates/` (スキルの隣、版管理の外) に、写し (`overrides.json`)・Web ページの URL (`web.json`) とともに置き、リポジトリにはコミットしません。同梱の例を試すには、コピーして置きます。
+テンプレートは個人の設定で、home に置きます。home の既定は `~/.config/pbi-orchestration-jev` (`XDG_CONFIG_HOME` があれば `$XDG_CONFIG_HOME/pbi-orchestration-jev`)、`PBI_HOME` で変えられます。home には `routing.json` (振り分けテンプレート)・`templates/<name>.json` (優先テンプレート)・写し (`overrides.json`)・Web ページの URL (`web.json`)・`agents.json` (実行先とモデルの選択)・`prices.json` (単価の上書き) を置けます。どれも任意で、ディレクトリはスキルが作りません。同梱の例を試すには、home の `templates/` にコピーします。
 
 ```sh
-mkdir -p skills/pbi-orchestration-jev/templates
-cp skills/pbi-orchestration-jev/examples/templates/deepseek-all.json skills/pbi-orchestration-jev/templates/
+mkdir -p ~/.config/pbi-orchestration-jev/templates
+cp skills/pbi-orchestration-jev/examples/templates/cheap-all-tiers.json ~/.config/pbi-orchestration-jev/templates/
 ```
+
+`XDG_CONFIG_HOME` か `PBI_HOME` を設定したときは、`~/.config/pbi-orchestration-jev` を自分の home に読み替えてください。
 
 この例は全段の route を `opencode-go/deepseek-v4.1-flash` の effort `max` にします。優先テンプレートの手順には交互グループ `{"rotate": [手順, 手順, ...]}` も書けます。PBI の番号で先頭のメンバーが決まり、残りのメンバーはその PBI の控えとして後ろに続くので、PBI がメンバーに等分に配られます (例: 2 つの無料枠のモデルを交互に使い、だめなら 2 つの有料のモデルを交互に使う)。ファイルの形・置き場所の決め方・手順の全部は `skills/pbi-orchestration-jev/appendix/priority-templates.md` にあります。
 
@@ -135,16 +143,16 @@ cp skills/pbi-orchestration-jev/examples/templates/deepseek-all.json skills/pbi-
 |---|---|---|
 | [Claude Code](https://claude.com/claude-code) | 必須 | オーケストレーターと Agent ツール |
 | Python 3.10 以上 | 必須 | `prepare.py`・`select_model.py`・`verify.py` などのスクリプトと Jev クライアント |
-| Jev の API キー | 推奨 | 無ければ Jev のゲートを飛ばし、既定値で進む |
+| Jev の API キー | 推奨 | 無ければ Jev のゲートを飛ばし、facts だけで段を決める |
 | shared-memory の MCP (`mcp__shared-memory__*`) | 任意 | 作業ごとの ref と引き継ぎのメモリ。無ければ PBI の補足に書く |
-| [opencode](https://opencode.ai) + OpenCode Go | 任意 | haiku・sonnet の段の第一候補 |
-| [Codex CLI](https://github.com/openai/codex) | 任意 | 次の候補 (`CODEX_UNTIL` まで) |
+| [opencode](https://opencode.ai) + OpenCode Go | 任意 | `routing.json` で有効にしたときの外部の実行先 (見本は `examples/routing/multi-runner.json`) |
+| [Codex CLI](https://github.com/openai/codex) | 任意 | `routing.json` で有効にしたときの外部の実行先 |
 | Antigravity CLI (`agy`) | 任意 | Google AI のサブスクの Claude |
-| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) | 任意 | 優先テンプレートで使う実行先 (dsh の headless 経由の DeepSeek 公式 API など) |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) | 任意 | `routing.json` か優先テンプレートで使う外部の実行先 (dsh の headless 経由の DeepSeek 公式 API など) |
 | Node.js | 任意 | rtk のフックと、JS 版の Jev クライアント (`jev.mjs`) |
 | [rtk](https://github.com/rtk-ai/rtk) | 任意 | コマンド出力の圧縮 |
 
-使えない実行先は、route の次へ移るだけです。Claude Code だけでも動きます。
+必須は Claude Code だけです。Jev・shared-memory・外部の CLI・Web ページ・rtk は任意です。使えない実行先は route の次へ移るだけなので、Claude Code だけでも動きます。
 
 ## 導入
 
@@ -195,7 +203,7 @@ Jev の API キーは、次のどちらかに置きます (クライアントは
 
 ### DeepSeek Harness (`dsh`) を使うとき
 
-- `dsh` は既定の振り分けには入っていません。優先テンプレートに書きます。手順は `{"runner": "dsh", "model": "deepseek-official/deepseek-flash", "effort": "high"}` のように書き、model は `<dsh の provider>/<モデル>`、effort は dsh の `reasoningEffort` です (DeepSeek 公式の Flash は `low`・`high`・`max` と指定なしだけで、`medium` はありません)。
+- `dsh` は既定の振り分けには入っていません。自分の `routing.json` か優先テンプレートに書きます。手順は `{"runner": "dsh", "model": "deepseek-official/deepseek-flash", "effort": "high"}` のように書き、model は `<dsh の provider>/<モデル>`、effort は dsh に `reasoningEffort` として渡します。使える値は provider と入れた dsh の版で変わります。`effort` を省くと `reasoningEffort` も付けず、dsh がその provider の既定を使うことがあります。
 - `dsh_run.py` が PBI を 1 件動かします。実行ごとの上書き設定 (`--patch`) に provider・モデル・effort を書き、`dsh --profile headless --json` を実行して、イベント・最後の回答・開始と終了の時刻を `docs/pbi/dsh/` に残します。`record_run.py` は `status` イベントのトークン数を合計します (料金は出ません)。
 - API キーは環境変数 (`DEEPSEEK_API_KEY`・`OPENCODE_GO_API_KEY`) か、キーだけを書いたファイル (`~/.config/deepseek/deepseek.key`・`~/.config/opencode/opencode-go.key`) から読みます。値は表示しません。
 - PATH の `dsh` (`npm i -g @deepseek-ai/dsh`) を使います。PATH に無ければ `PBI_DSH_BIN`・`PBI_DSH_NODE` で渡します。独自の provider は `DSH_HOME` の `cordis.patch.yml` に書きます。
@@ -203,7 +211,7 @@ Jev の API キーは、次のどちらかに置きます (クライアントは
 
 ### Antigravity を使うとき
 
-- 2026-10-13 時点では、ヘッドレス (`agy -p`) でコマンドの実行が自動で拒否され (`RunCommand`)、作業が進みませんでした。スキルは、最初にこの拒否が出たら、そのセッションの残りでは `agy` を外します。
+- 2026-10 時点では、ヘッドレス (`agy -p`) でコマンドの実行が自動で拒否され (`RunCommand`)、作業が進みませんでした。スキルは、最初にこの拒否が出たら、そのセッションの残りでは `agy` を外します。
 - `agy` は、許可の無いコマンドを**黙って拒否し、終了コード 0 で返します**。拒否は結果の JSON の `denied_actions` と標準エラーにしか出ません。スキルは毎回 `denied_actions` を確かめます。
 - 許可ルールは `~/.gemini/antigravity-cli/settings.json` の `permissions.allow` に書きます。サンドボックスが既定でオフなので、`command(node)` だけでは足りず、`unsandboxed(node)` も要りました (agy 1.3.3 で確認)。
 
@@ -227,11 +235,11 @@ Claude Code で、複数ファイルにまたがる実装を頼むときに呼�
 | `docs/pbi/PBI-<n>.facts.json` / `.brief.md` / `.route.json` | 振り分けの材料と結果 |
 | `docs/pbi/worker.md` | 実装担当の進め方と報告の形 (スキルからコピー) |
 | `docs/pbi/tools/unchanged.py` | 触らない範囲の検証 (スキルからコピー) |
-| `docs/pbi/routing.json` | 試す順番 (Template Studio が書く。無ければ既定) |
+| `docs/pbi/routing.json` | 試す順番 (Template Studio が書く。無ければ home の `routing.json`、それも無ければ同梱の既定) |
 | `docs/pbi/reports/`、`docs/pbi/notes/` | 実装担当の詳細な報告と、調べ物の結論 |
 | `docs/pbi/verify/`、`docs/pbi/reviews/` | 検証コマンドのログと、任せたレビューの結果 |
-| `docs/pbi/jev-log.jsonl` | Jev の判定と採った行動 |
-| `docs/pbi/jev.config.json` | Jev のゲートとしきい値 (初回にテンプレートから作る) |
+| `docs/pbi/jev-log.jsonl` | 判定が変わったときの担当の判定、決定表の上書き、引き継ぎ、Jev に聞いた報告の仕分け |
+| `docs/pbi/jev.config.json` | Jev のゲート (初回にテンプレートから作る) |
 | `docs/pbi/opencode/`、`docs/pbi/codex/`、`docs/pbi/agy/`、`docs/pbi/dsh/` | 各実行先に渡した文章と出力 |
 | `docs/pbi/stats/` | トークンとキャッシュの統計 |
 
@@ -258,18 +266,21 @@ skills/pbi-orchestration-jev/
 ├── agents/pbi-worker.md        # 実装担当・レビュー用のサブエージェントの定義 (~/.claude/agents に置く)
 ├── prepare.py                  # Jev のゲート 1 と決定表を 1 回で実行し、表だけを出す
 ├── verify.py                   # PBI の検証コマンドを実行し、終了コードと末尾だけを表で出す
-├── select_model.py             # 決定表: 段・route・レビューの深さ
-├── routing.default.json        # 振り分けテンプレートの既定 (docs/pbi/routing.json で差し替え)
+├── select_model.py             # 決定表: 段・route・レビューの深さ。agents.json で手順を外す
+├── agents.py                   # agents.json を読み、実行先の CLI を探す (PATH・fnm・nvm)
+├── common.py                   # 共通の処理: home の解決・単価・パス・表記
+├── routing.default.json        # 振り分けの既定: 全段 Agent ツール (docs/pbi/ か home の routing.json で差し替え)
 ├── studio/                     # テンプレートを画面で組む (index.html・serve.py・update_catalog.py・catalog.json)
 ├── templates.py                # 優先テンプレート: 検査、Web ページからの同期、適用・回答・写しの書き込み
 ├── web/priority-templates.html # 優先テンプレートを見て設定する Web ページ (Artifact)
-├── examples/templates/         # 優先テンプレートの例 (templates/ にコピーして使う)
+├── examples/routing/           # 外部の実行先を使う振り分けの見本 (multi-runner.json)
+├── examples/templates/         # 優先テンプレートの例 (home の templates/ にコピーして使う)
 ├── unchanged.py                # PBI が触ってはいけないファイルをハッシュで確かめる
 ├── agent_stats.py              # 会話記録からトークン・キャッシュ・文脈の大きさを集計
 ├── record_run.py               # 1 回の実行を runs.jsonl に 1 行で記録し、生ログを保全先にコピー
 ├── model_report.py             # runs.jsonl からモデル別の結果・トークン・コスト・仮の評価を集計
-├── prices.json                 # API 換算コスト (cost_api_equiv) の料金表 (請求額ではない)
-├── jev.config.template.json    # Jev のゲートとしきい値の雛形
+├── prices.json                 # API 換算コスト (cost_api_equiv) の見本の料金表 (home の prices.json で上書き。請求額ではない)
+├── jev.config.template.json    # Jev のゲートの雛形
 ├── opencode.config.json        # opencode の権限 (push・reset・リポジトリ外を拒否)
 ├── rtk/
 │   ├── rtk-gate.mjs            # rtk 用の PreToolUse フック (任意)
@@ -277,9 +288,10 @@ skills/pbi-orchestration-jev/
 ├── jev/
 │   ├── jev.py / jev.mjs        # Jev クライアント (Python / JS)
 │   └── test_jev.py / jev.test.mjs
-├── test_select_model.py
+├── test_select_model.py / test_agents.py / test_common.py
 ├── test_templates.py / test_prepare.py / test_unchanged.py
-├── test_record_run.py / test_model_report.py
+├── test_record_run.py / test_model_report.py / test_dsh_run.py
+├── test_references.py          # スキルの文書が名前を挙げるファイルの実在
 └── test_agent_stats.py
 ```
 
@@ -294,10 +306,10 @@ python jev/jev.py --request <request.json>                 # リクエストを�
 
 ## 調整
 
-- 決定表としきい値は仮の値です。PBI が 10〜20 件たまったら、モデル別の結果 (`model_report.py --archive` の一発合格・差し戻し・昇格・トークン・コスト) を見て、`select_model.py` と `jev.config.json` を見直してください。
-- 実行先のモデルと effort は、テンプレート `routing.json` で変えられます (形は `routing.default.json`)。対象リポジトリの `docs/pbi/routing.json`、またはスキルのディレクトリの `routing.json` に置くと、`select_model.py` がそちらを使います。無ければ今までの表のままです。
+- 決定表としきい値は仮の値です。PBI が 10〜20 件たまったら、モデル別の結果 (`model_report.py --archive` の一発合格・差し戻し・昇格・トークン・コスト) を見て、`select_model.py` と `prepare.py` の定数を見直してください。
+- 実行先のモデルと effort は、テンプレート `routing.json` で変えられます (形は `routing.default.json`)。対象リポジトリの `docs/pbi/routing.json`、または home の `routing.json` に置くと、`select_model.py` がそちらを使います。無ければ同梱の `routing.default.json` のままです。
 - テンプレートは画面でも組めます (上の「Template Studio」)。
-- 引き継ぎのしきい値 (250,000 トークン) と、sonnet の段の opencode の結果も同じ時期に見直してください。
+- 引き継ぎのしきい値 (250,000 トークン) と、外部の実行先の結果も同じ時期に見直してください。
 
 ## テスト
 

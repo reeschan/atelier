@@ -2,13 +2,6 @@
   "version": "v3",
   "endpoint": "https://api.typesafe.ai/v1/systemone",
   "model": "jev-1.13.0",
-  "thresholds": {
-    "quality_warn_below": 0.6,
-    "outside_context_warn_above": 0.4,
-    "report_confidence": 0.9,
-    "low_confidence": 0.7,
-    "rework_quality_rewrite_below": 0.6
-  },
   "gates": {
     "brief": {
       "novelty": {
