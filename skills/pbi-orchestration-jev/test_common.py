@@ -44,6 +44,13 @@ class ResolveHomeTest(unittest.TestCase):
         with env_of(PBI_HOME='pbi-home', PBI_TEMPLATES_HOME='old-home'):
             self.assertEqual(common.resolve_home(None), Path('pbi-home'))
 
+    def test_tilde_is_expanded_in_the_argument_and_the_environment(self):
+        with env_of(PBI_HOME='~/pbi-home'):
+            self.assertEqual(common.resolve_home(None), Path.home() / 'pbi-home')
+            self.assertEqual(common.resolve_home('~/arg-home'), Path.home() / 'arg-home')
+        with env_of(XDG_CONFIG_HOME='~/xdg'):
+            self.assertEqual(common.resolve_home(None), Path.home() / 'xdg' / 'pbi-orchestration-jev')
+
     def test_empty_value_falls_through(self):
         with env_of(PBI_HOME='', PBI_TEMPLATES_HOME='old-home'):
             self.assertEqual(common.resolve_home(None), Path('old-home'))
