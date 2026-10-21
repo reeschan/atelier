@@ -1,0 +1,38 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: skills/pbi-orchestration-jev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Python tests (skill)
+        run: python -m unittest discover -p 'test_*.py'
+      - name: Python tests (studio)
+        run: python -m unittest discover -s studio -p 'test_*.py'
+      - name: Python tests (jev)
+        working-directory: skills/pbi-orchestration-jev/jev
+        run: python -m unittest test_jev
+      - name: Node tests (jev)
+        working-directory: skills/pbi-orchestration-jev/jev
+        run: node --test jev.test.mjs
