@@ -84,7 +84,7 @@ A minimal `agents.json` in your home:
 
 ## Template Studio
 
-The "which runner and model, in what order" part of the tables above can be picked in a browser. The decision table that sets the tier does not change.
+The "which runner and model, in what order" part of routing (the bundled all-agent default, or your own `routing.json` such as `examples/routing/multi-runner.json`) can be picked in a browser. The decision table that sets the tier does not change.
 
 ```
 /pbi-orchestration-jev templates
