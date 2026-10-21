@@ -7,7 +7,7 @@
   （agent-default-model の provider・model・reasoningEffort）。DSH_HOME の共通の設定より後に当たる。
 - 出力: <報告名>.jsonl（`--json` のイベント）・<報告名>.err（dsh の診断）・<報告名>.final.md（final イベントの本文）・
   <報告名>.run.json（開始・終了の時刻と終了コード。record_run.py が読む）。
-  4 行の報告 <報告名>.last.md は実装担当が書く（依頼文の末尾の「要約の書き先」）。
+  5 行の報告 <報告名>.last.md は実装担当が書く（依頼文の末尾の「要約の書き先」）。
 - API キーは環境変数を優先し、無ければ下の KEY_FILES のファイルから読む。値は表示もファイルへの書き出しもしない。
 - 権限は DSH_PERMISSION_MODE=workspace-write（書き込みは作業ルートの中だけ。headless では昇格の確認に答える人がいないので拒否される）。
 - 終了コードは dsh のもの（0 = 完了、1 = 中断・エラー）。引数・環境の不備は 2。
