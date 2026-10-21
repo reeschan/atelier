@@ -269,6 +269,20 @@ class PrepareTest(unittest.TestCase):
         self.assertEqual(self.route('PBI-001')['tier'], 'haiku')
         self.assertEqual([cells(r)[1] for r in rows(out) if cells(r)[0] == 'PBI-002'], ['sonnet'])
 
+    def test_tier_up_keeps_existing_jev_answers(self):
+        self.use_home(app=None)
+        self.add_pbi('PBI-001')
+        brief_path = os.path.join(self.base, 'jev', 'PBI-001.brief.json')
+        with open(brief_path, encoding='utf-8') as f:
+            before = f.read()
+        # Jev のキーが無いので、呼び直せば失敗して {"error": ...} で上書きされる。--tier では呼び直さない
+        out = self.run_prepare('--now', NOW, '--only', 'PBI-001', '--tier', 'sonnet')
+        self.assertEqual(out.returncode, 0, out.stderr)
+        with open(brief_path, encoding='utf-8') as f:
+            self.assertEqual(f.read(), before)
+        self.assertEqual(self.route('PBI-001')['tier'], 'sonnet')
+        self.assertNotIn('Jev 失敗', rows(out)[0])
+
     def test_tier_without_only_exits_nonzero(self):
         self.use_home(app=None)
         self.add_pbi()

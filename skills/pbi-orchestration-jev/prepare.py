@@ -8,7 +8,7 @@
 
 前提: docs/pbi/PBI-<連番>.md・.facts.json・.brief.md が揃っている。
 - jev.config.json が無ければ、このディレクトリの jev.config.template.json をコピーする
-- 応答 (docs/pbi/jev/<PBI>.brief.json・.pbi_quality.json) が既にあれば呼び直さない (--only で指定した PBI は呼び直す)
+- 応答 (docs/pbi/jev/<PBI>.brief.json・.pbi_quality.json) が既にあれば呼び直さない (--only で指定した PBI は呼び直す。--tier と一緒のときは呼び直さない)
 - sensitive な PBI (facts の sensitive が true) には pbi_quality を送らず、brief だけを送る (本文を外部に出さない)
 - Jev の呼び出しは並列 (同時 4 件)。失敗したゲートは飛ばし、表の「メモ」に出す (select_model.py は score を 1 として扱う)
 - jev-log.jsonl には、PBI の判定 (段・route・template の note・補正後の値・品質の警告・dropped) が、
@@ -190,7 +190,9 @@ def main():
             gates.append(("pbi_quality", base / f"{p}.md"))
         for gate, src in gates:
             out = base / "jev" / f"{p}.{gate}.json"
-            if p in only or load(out) is None:
+            # --only は呼び直す。ただし --tier (段上げ) は段を指定するだけで答えを使わないので、無い答えだけを取る
+            recall = p in only and not args.tier
+            if recall or load(out) is None:
                 jobs.append((p, gate, src, out))
     with ThreadPoolExecutor(max_workers=4) as ex:
         list(ex.map(lambda j: call_jev(config, j[1], j[2], j[3]), jobs))
