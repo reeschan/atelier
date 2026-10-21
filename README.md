@@ -43,10 +43,11 @@ flowchart TD
   B --> C[prepare.py<br/>Jev: judge the brief and PBI quality<br/>select_model.py: tier and route]
   C --> F{User approval}
   F --> G[Run a wave along the route]
-  G --> H{Worker status and verify.py results agree?}
+  G --> V[verify.py runs the verification commands]
+  V --> H{Worker status and verify.py results agree?}
   H -->|no| H2[Jev: triage the report]
   H -->|yes| I
-  H2 --> I[Review<br/>verify.py runs the verification commands]
+  H2 --> I[Review<br/>acceptance criteria and the diff]
   I -->|fail| K{Reworks left?}
   K -->|yes| G
   K -->|no| L[Stop and ask the user]
@@ -204,7 +205,7 @@ Without the flag file (`~/.claude/state/rtk/<session_id>.on`), or without `rtk` 
 
 ### Notes on DeepSeek Harness (`dsh`)
 
-- `dsh` is not in the default routing; add it to your `routing.json` or a priority template. A step looks like `{"runner": "dsh", "model": "deepseek-official/deepseek-flash", "effort": "high"}`: the model is `<dsh provider>/<model>`, and the effort is dsh's `reasoningEffort` (the official DeepSeek Flash takes `low`, `high`, `max` or none; there is no `medium`).
+- `dsh` is not in the default routing; add it to your `routing.json` or a priority template. A step looks like `{"runner": "dsh", "model": "deepseek-official/deepseek-flash", "effort": "high"}`: the model is `<dsh provider>/<model>`, and the effort is passed to dsh as `reasoningEffort`. Supported values depend on the provider and the installed dsh version. Omit `effort` to omit `reasoningEffort`; dsh may then apply its provider default.
 - `dsh_run.py` runs one PBI: it writes a per-run `--patch` overlay with the provider, model and effort, runs `dsh --profile headless --json`, and keeps the events, the final answer and the start/end time under `docs/pbi/dsh/`. `record_run.py` sums the token usage from the `status` events (no cost is reported).
 - API keys come from the environment (`DEEPSEEK_API_KEY`, `OPENCODE_GO_API_KEY`) or from key-only files (`~/.config/deepseek/deepseek.key`, `~/.config/opencode/opencode-go.key`). Values are never printed.
 - It uses `dsh` on the `PATH` (`npm i -g @deepseek-ai/dsh`), or `PBI_DSH_BIN` / `PBI_DSH_NODE`. Custom providers go in the `cordis.patch.yml` of `DSH_HOME`.

@@ -41,10 +41,11 @@ flowchart TD
   B --> C[prepare.py<br/>Jev: 要約の判定と PBI の品質<br/>select_model.py: 段と route]
   C --> F{ユーザーの承認}
   F --> G[波を route の順に実行]
-  G --> H{実装担当の状態と verify.py の結果が一致?}
+  G --> V[verify.py で検証コマンドを実行]
+  V --> H{実装担当の状態と verify.py の結果が一致?}
   H -->|いいえ| H2[Jev: 報告の仕分け]
   H -->|はい| I
-  H2 --> I[レビュー<br/>verify.py で検証コマンドを実行]
+  H2 --> I[レビュー<br/>受け入れ条件と diff]
   I -->|fail| K{差し戻しは残っている?}
   K -->|はい| G
   K -->|いいえ| L[止めてユーザー判断]
@@ -202,7 +203,7 @@ Jev の API キーは、次のどちらかに置きます (クライアントは
 
 ### DeepSeek Harness (`dsh`) を使うとき
 
-- `dsh` は既定の振り分けには入っていません。自分の `routing.json` か優先テンプレートに書きます。手順は `{"runner": "dsh", "model": "deepseek-official/deepseek-flash", "effort": "high"}` のように書き、model は `<dsh の provider>/<モデル>`、effort は dsh の `reasoningEffort` です (DeepSeek 公式の Flash は `low`・`high`・`max` と指定なしだけで、`medium` はありません)。
+- `dsh` は既定の振り分けには入っていません。自分の `routing.json` か優先テンプレートに書きます。手順は `{"runner": "dsh", "model": "deepseek-official/deepseek-flash", "effort": "high"}` のように書き、model は `<dsh の provider>/<モデル>`、effort は dsh に `reasoningEffort` として渡します。使える値は provider と入れた dsh の版で変わります。`effort` を省くと `reasoningEffort` も付けず、dsh がその provider の既定を使うことがあります。
 - `dsh_run.py` が PBI を 1 件動かします。実行ごとの上書き設定 (`--patch`) に provider・モデル・effort を書き、`dsh --profile headless --json` を実行して、イベント・最後の回答・開始と終了の時刻を `docs/pbi/dsh/` に残します。`record_run.py` は `status` イベントのトークン数を合計します (料金は出ません)。
 - API キーは環境変数 (`DEEPSEEK_API_KEY`・`OPENCODE_GO_API_KEY`) か、キーだけを書いたファイル (`~/.config/deepseek/deepseek.key`・`~/.config/opencode/opencode-go.key`) から読みます。値は表示しません。
 - PATH の `dsh` (`npm i -g @deepseek-ai/dsh`) を使います。PATH に無ければ `PBI_DSH_BIN`・`PBI_DSH_NODE` で渡します。独自の provider は `DSH_HOME` の `cordis.patch.yml` に書きます。
