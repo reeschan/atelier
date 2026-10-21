@@ -10,7 +10,8 @@ description: 複数ファイルにまたがる実装を、PBI起票・モデル�
 | 場面 | 読むもの |
 |---|---|
 | 引数が `resume`（`resume <リポジトリのパス>` を含む） / 6.3 で文脈が 150,000 以上 | `appendix/handoff.md` |
-| 引数が `templates`（振り分けテンプレートを画面で決める） | `appendix/templates.md` |
+| 引数が `setup` / `models` / `templates`（セットアップ・モデルの取り直し・編集画面） | `appendix/setup.md` |
+| 引数なしで home に `agents.json` が無い | `appendix/setup.md` |
 | 作業キーを決める・ref を書く・引き継ぐ・終わる | `appendix/memory.md` |
 | 差し戻す・止まる条件に当たった | `appendix/rework.md` |
 | Jev を直接呼ぶ（報告の仕分け・差し戻しのゲート） | `appendix/jev.md` |
