@@ -1,0 +1,16 @@
+{
+ "checked_at": "2026-10-21",
+ "dsh_version": "0.2.0-rc.2",
+ "note": "dsh has no model-list command; this catalog lists models verified to work, and setup adds the default model from dsh --dump-config",
+ "models": [
+  {
+   "id": "deepseek-official/deepseek-flash",
+   "name": "DeepSeek V4.1 Flash (official API)",
+   "efforts": [
+    "low",
+    "high",
+    "max"
+   ]
+  }
+ ]
+}

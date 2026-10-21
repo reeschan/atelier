@@ -1,0 +1,6 @@
+opencode-go/beam-free
+opencode-go/claude-haiku-5-5
+opencode-go/deepseek-v4-pro
+opencode-go/deepseek-v4.1-flash
+opencode-go/gemini-4-argon-contributor
+opencode-go/glm-5.2
