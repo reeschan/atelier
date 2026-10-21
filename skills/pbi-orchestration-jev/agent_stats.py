@@ -10,7 +10,7 @@
   python agent_stats.py --out docs/pbi/stats  # <out>/<session>.json に書く (同じセッションは上書き)
   python agent_stats.py --json                # 要約の代わりに JSON を標準出力へ
   python agent_stats.py --ctx                 # 今のディレクトリのセッションの、最後のリクエストの文脈の大きさを 1 行で出す
-  python agent_stats.py --cost                # 設計者・サブエージェントの費用を API 換算 (USD) で出す
+  python agent_stats.py --cost                # 設計者・サブエージェント・advisor の費用を API 換算 (USD) で出す
   python agent_stats.py --cost --home <dir>   # 単価表 (prices.json) を置いた home を指定する
 
 API 換算は参考値で、請求額ではない。
@@ -262,6 +262,7 @@ def session_stats(main_path, prices=None):
     sid = main_path.stem
     agents = []
     sub_cost = {"usd": 0.0, "requests": 0, "unpriced": 0}
+    advisor_calls = []
     sub = main_path.with_suffix("") / "subagents"
     for jl in sorted(sub.glob("agent-*.jsonl")):
         meta_path = jl.with_suffix(".meta.json")
@@ -275,6 +276,8 @@ def session_stats(main_path, prices=None):
             c = cost_of(reqs, prices)
             for k in sub_cost:
                 sub_cost[k] += c[k]
+        sub_advisor = load_advisor(jl)
+        advisor_calls += sub_advisor
         agents.append({
             "agent": jl.stem.removeprefix("agent-"),
             "pbi": f"PBI-{int(mt.group(1)):03d}" if mt else None,
@@ -282,11 +285,13 @@ def session_stats(main_path, prices=None):
             "agent_type": meta.get("agentType"),
             "models": sorted({r["model"] for r in reqs}),
             **analyze(reqs),
-            "advisor": advisor_summary(load_advisor(jl)),
+            "advisor": advisor_summary(sub_advisor),
         })
     main_reqs = load_requests(main_path)
     orch = analyze(main_reqs)
-    orch["advisor"] = advisor_summary(load_advisor(main_path))
+    main_advisor = load_advisor(main_path)
+    advisor_calls += main_advisor
+    orch["advisor"] = advisor_summary(main_advisor)
     totals = {"by_model": {}, "rebuild": {}, "advisor": {"calls": 0, "orchestrator_calls": orch["advisor"]["calls"],
                                                          "subagent_calls": 0, "by_model": {}}}
     for part in [orch] + agents:
@@ -329,11 +334,15 @@ def session_stats(main_path, prices=None):
     }
     if prices is not None:
         orch_cost = cost_of(main_reqs, prices)
+        # advisor の使用量はメインのモデルの usage に含まれないので、別に換算して全体に足す
+        advisor_cost = cost_of(advisor_calls, prices)
         result["cost"] = {
             "prices_checked_at": prices.get("checked_at"),
+            "home_prices_checked_at": prices.get("home_checked_at"),
             "orchestrator": orch_cost,
             "subagents": sub_cost,
-            "total": {k: orch_cost[k] + sub_cost[k] for k in sub_cost},
+            "advisor": advisor_cost,
+            "total": {k: orch_cost[k] + sub_cost[k] + advisor_cost[k] for k in sub_cost},
         }
     return result
 
@@ -390,7 +399,8 @@ def summary(s):
     if cost:
         lines += ["", "### API 換算の費用 (参考値で、請求額ではない)",
                   "| 対象 | 費用 (USD) | リクエスト |", "|---|---:|---:|"]
-        for label, key in (("設計者", "orchestrator"), ("サブエージェント (合計)", "subagents"), ("全体", "total")):
+        for label, key in (("設計者", "orchestrator"), ("サブエージェント (合計)", "subagents"), ("advisor", "advisor"),
+                           ("全体", "total")):
             c = cost[key]
             lines.append(f"| {label} | {c['usd']:.4f} | {fmt(c['requests'])} |")
         if cost["total"]["unpriced"]:
