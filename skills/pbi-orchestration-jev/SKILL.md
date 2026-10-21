@@ -16,6 +16,7 @@ description: 複数ファイルにまたがる実装を、PBI起票・モデル�
 | 差し戻す・止まる条件に当たった | `appendix/rework.md` |
 | Jev を直接呼ぶ（報告の仕分け・差し戻しのゲート） | `appendix/jev.md` |
 | すべての PBI が終わった | `appendix/finish.md` |
+| 分解の前・承認・すべての PBI が終わった (設計・最終レビュー・セキュリティのアダプター) / 引数が `setup --recommended` | `appendix/adapters.md` |
 | 優先テンプレート・適用を扱う (開始時の同期、チャットでの適用・作成、期限切れの確認、Web ページ) | `appendix/priority-templates.md` |
 | 実行先が opencode・codex・agy・dsh | `runners.md` |
 | PBI を起票する前 | `verify-commands.md` |
@@ -81,17 +82,19 @@ shared-memory（`search`・`get`・`write` を持つ共有メモリの MCP。ツ
 スキルの版: <版 (v21 など) と公開版のコミット>
 作業キー: <repo>:<branch>:W-001 / 作業空間: project:work.<repo>.<branch>.W-001
 外した実行先: <--skip の値と理由 / なし>
+adapter review: built-in code-review run (diff 412 lines > 300) findings 0,2,1
 
 | PBI | モデル | 状態 | 差し戻し | 昇格 | 続行指示 | メモ |
 |---|---|---|---|---|---|---|
 | PBI-001 | agent sonnet high（sonnet / normal） | 実行中 | 1/2 | 0/1 | 0/2 | 条件2がfail |
 ```
 
-「スキルの版」の行は、版をまたいで resume したことに気づけるように書く。状態は「未着手 / 実行中 / レビュー中 / 完了 / 保留 / 上限到達」のいずれか。作業中に見つけた追加作業は新しいPBIとして行を足す。
+「スキルの版」の行は、版をまたいで resume したことに気づけるように書く。`adapter ...` の行はフェーズごとに書き、書式は `appendix/adapters.md` の「Records」に従う。状態は「未着手 / 実行中 / レビュー中 / 完了 / 保留 / 上限到達」のいずれか。作業中に見つけた追加作業は新しいPBIとして行を足す。
 
 ## 2. 分解と起票
 
 - 開始時に Web と同期する (`appendix/priority-templates.md` の「開始時の同期」)
+- 分解の前に `appendix/adapters.md` の「Design phase」で設計のアダプターを決める（仕様のパス付きで起動したときは設計を飛ばす）
 
 既存コードと 0.8 の範囲のメモリを調べて設計を決め、PBIに分解する。起票の前に `verify-commands.md` を読む。最初に、このディレクトリの `worker.md` を `docs/pbi/worker.md` に、`unchanged.py`（触らない範囲の検証。`verify-commands.md`）を `docs/pbi/tools/unchanged.py` にコピーする（opencode はリポジトリ外を読めないため）。1 PBI は小さく（変更ファイル 3 以下を目安に）切り、`docs/pbi/PBI-<連番>.md` に1件1ファイルで書く。実装担当は設計時の文脈を持たないので、PBIと参照欄の ref だけで作業できるように書く。
 
@@ -163,6 +166,7 @@ python <このディレクトリ>/prepare.py docs/pbi [--skip opencode,codex,agy
 
 PBIの一覧をユーザーに見せ、承認を得てから実行に入る。一覧には、ID、タイトル、担当（段・route の先頭・review）とその理由、外した手順、依存、品質の警告を載せる。
 - 承認一覧に優先テンプレートの行を載せる。優先テンプレートが opus の段を上書きしているときは、設計判断が要る PBI まで安いモデルに回しているおそれがある、と注意を添える。期限切れの ask があれば、承認と一緒に「延長 / やめる / 期限なし」を聞き (`appendix/priority-templates.md` の「期限切れの確認」)、答えを反映してから prepare.py を `--only` なしでもう一度実行する。同期できなかったときは「Web と同期できず、<synced_at> 時点の写しを使用」と書く
+- 承認一覧に、使う予定のアダプター（フェーズ・呼び出し先・判定の理由）、組み込みの設計のときの未決の前提、一度だけの案内を載せる（`appendix/adapters.md` の「Records」「Design phase」）
 
 ## 6. 実行
 
@@ -219,4 +223,4 @@ python <このディレクトリ>/record_run.py <報告名> --attempt <route の
 
 検証コマンドが PBI の書き方の不備（設計者の誤り）で fail したら、差し戻さずに検証コマンドを直して記録する。好みや書き方の違いでは差し戻さない。受け入れ条件の fail、触らない範囲の侵害、再現できる不具合のいずれかがあるときだけ差し戻す（`appendix/rework.md`）。
 
-すべての PBI が終わったら `appendix/finish.md` を読み、全体の確認・昇格・統計・完了報告を行う。
+すべての PBI が終わったら `appendix/finish.md` を読み、最終レビューとセキュリティレビューのアダプターを行い、全体の確認・昇格・統計・完了報告を行う。

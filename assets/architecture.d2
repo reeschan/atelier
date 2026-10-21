@@ -5,6 +5,8 @@
 # 利用者の home (routing.json・templates・overrides・agents.json・prices.json)、agents.py による手順の照合、Jev は食い違うときの報告と差し戻し文の点検
 # 2026-10-21 に段 2 に合わせて描き直した: setup_agents.py が CLI を検出してモデル一覧を home に控え、編集画面 (3 タブ) は home だけに書く。
 # 優先テンプレートの正本はローカルの overrides.json で、Web ページは任意の同期先
+# 2026-10-21 にフェーズ・アダプターに合わせて描き直した: adapter_gate.py が最終・セキュリティレビューを使うかを決め、
+# 包むサブエージェント (general-purpose) が任意の呼び出し先 (mattpocock-skills・built-in のレビュー) を呼ぶ。設計の grilling はメインのセッションから
 direction: right
 
 vars: {
@@ -72,6 +74,27 @@ cc: Claude Code {
     class: svc
     icon: https://cdn.simpleicons.org/python
   }
+  gate: "adapter_gate.py\nrun or skip the final and security reviews" {
+    class: svc
+    icon: https://cdn.simpleicons.org/python
+  }
+  final: "Review wrapper (general-purpose)\nFINAL.review / FINAL.security, report only" {
+    class: svc
+    icon: https://cdn.simpleicons.org/claude
+  }
+}
+
+callees: "Callee skills (optional, used when installed)" {
+  class: saas
+  direction: down
+
+  mp: "mattpocock-skills\ngrilling, domain-modeling, code-review" {
+    shape: hexagon
+  }
+  builtin: "Built-in /code-review, /security-review\nship with Claude Code" {
+    class: svc
+    icon: https://cdn.simpleicons.org/claude
+  }
 }
 
 home: "Your home (~/.config/pbi-orchestration-jev)" {
@@ -82,7 +105,7 @@ home: "Your home (~/.config/pbi-orchestration-jev)" {
     class: svc
     shape: page
   }
-  agents: "agents.json · models/ · prices.json\nrunners, model lists, your picks, prices" {
+  agents: "agents.json · models/ · prices.json\nrunners, model lists, picks, adapters, prices" {
     class: svc
     icon: https://icons.terrastruct.com/essentials%2F204-settings.svg
   }
@@ -165,3 +188,9 @@ cc.setup -> runners: "--version, list models" {style.stroke-dash: 4}
 cc.setup -> home.agents: agents.json, models/
 dev -> studio: pick models, build routing, apply
 studio <-> home: read / save
+cc.orch -> callees.mp: "design: grilling" {style.stroke-dash: 4}
+cc.orch -> cc.gate: after all PBIs
+cc.gate -> home.agents: adapters
+cc.orch -> cc.final: when the gate says run
+cc.final -> callees: "code-review, security-review" {style.stroke-dash: 4}
+cc.final -> repo.pbi: reviews/final.*.md
