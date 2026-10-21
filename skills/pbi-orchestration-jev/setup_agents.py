@@ -170,8 +170,10 @@ def set_runner(home, runner, enabled=None, models=None, billing=None) -> dict:
     if models is REMOVE:
         config.pop('models', None)
     elif models is not None:
-        if not isinstance(models, (list, tuple)):
-            raise ValueError('models must be a list.')
+        # 文字列以外が入ると、読む側 (missing_selected の集合の照合) が壊れるので書かない
+        if not isinstance(models, (list, tuple)) or not all(
+                isinstance(model_id, str) and model_id.strip() for model_id in models):
+            raise ValueError('models must be a list of non-empty model id strings.')
         config['models'] = list(models)
     if billing is not None:
         config['billing'] = billing
