@@ -262,7 +262,7 @@ def read_agent(transcript: Path | None, prices: dict) -> dict:
                 'models_seen': [], 'transcript': None}
     reqs = agent_stats.load_requests(transcript)
     t = {'input': 0, 'output': 0, 'reasoning': None, 'cache_read': 0, 'cache_write_5m': 0, 'cache_write_1h': 0,
-         'source': common.shown(transcript)}
+         'source': common.shown(transcript).replace('\\', '/')}
     cost, priced = 0.0, True
     for r in reqs:
         for k in ('input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h'):

@@ -308,6 +308,17 @@ class RecordRunTest(unittest.TestCase):
         self.assertFalse((arch / 'claude' / 'agent-a0.jsonl').exists())
         self.assertTrue((arch / 'PBI-007.rework-1.md').is_file())
 
+    def test_agent_tokens_source_uses_forward_slashes(self):
+        self.write_route('PBI-007', [AGENT], tier='sonnet')
+        self.write_agent('PBI-007 実装', [assistant('2026-10-16T10:00:00Z', 'r0', 'claude-sonnet-5-5',
+                                                    10, 20, 100, 0, 0)], agent_id='a0')
+        r = self.record('PBI-007', 1, '合格')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        source = row['tokens']['source']
+        self.assertNotIn('\\', source)
+        self.assertTrue(source.endswith('/agent-a0.jsonl'), source)
+
     def test_review_and_design_agents_are_not_the_attempt(self):
         self.write_route('PBI-007', [AGENT], tier='sonnet')
         self.write_agent('PBI-007 実装', [assistant('2026-10-16T10:00:00Z', 'r1', 'claude-sonnet-5-5',
