@@ -3,6 +3,8 @@
 # 生成: python ~/.claude/skills/arch-diagram/versions/v1.1/scripts/render.py assets/architecture.d2
 # 2026-10-21 に汎用化の段 1 に合わせて描き直した: 既定は全段 pbi-worker、外部の実行先は routing.json で有効にしたときだけ、
 # 利用者の home (routing.json・templates・overrides・agents.json・prices.json)、agents.py による手順の照合、Jev は食い違うときの報告と差し戻し文の点検
+# 2026-10-21 に段 2 に合わせて描き直した: setup_agents.py が CLI を検出してモデル一覧を home に控え、編集画面 (3 タブ) は home だけに書く。
+# 優先テンプレートの正本はローカルの overrides.json で、Web ページは任意の同期先
 direction: right
 
 vars: {
@@ -58,13 +60,17 @@ cc: Claude Code {
     class: svc
     icon: https://cdn.simpleicons.org/python
   }
-  templates: "templates.py\npriority templates → overrides.json" {
+  templates: "templates.py\npriority templates, local overrides.json" {
     class: svc
     icon: https://cdn.simpleicons.org/python
   }
   worker: "pbi-worker (Agent tool)\ndefault runner for every tier, memory get only" {
     class: svc
     icon: https://cdn.simpleicons.org/claude
+  }
+  setup: "setup_agents.py + model_fetch.py\ndetect CLIs, fetch each runner's models" {
+    class: svc
+    icon: https://cdn.simpleicons.org/python
   }
 }
 
@@ -76,13 +82,13 @@ home: "Your home (~/.config/pbi-orchestration-jev)" {
     class: svc
     shape: page
   }
-  agents: "agents.json · prices.json\nrunners and models you use, price overrides" {
+  agents: "agents.json · models/ · prices.json\nrunners, model lists, your picks, prices" {
     class: svc
     icon: https://icons.terrastruct.com/essentials%2F204-settings.svg
   }
 }
 
-runners: "External runners (optional, enabled in routing.json)" {
+runners: "External runners (optional, chosen in setup)" {
   class: saas
   direction: down
 
@@ -111,12 +117,12 @@ memory: "shared-memory MCP (optional)\nrefs per work, handoff memory" {
   style.stroke-dash: 3
 }
 
-web: "Priority templates page\nclaude.ai Artifact with its own DB" {
+web: "Priority templates page (optional)\nclaude.ai Artifact, sync target" {
   class: svc
   icon: https://cdn.simpleicons.org/claude
 }
 
-studio: "Template Studio\nstudio/serve.py on 127.0.0.1\nmodels from OpenRouter / Artificial Analysis" {
+studio: "Editor (studio/serve.py, 127.0.0.1)\ntabs: agents & models, routing,\npriority templates & application" {
   class: svc
   icon: https://icons.terrastruct.com/tech%2Fbrowser-2.svg
 }
@@ -155,5 +161,7 @@ cc.prepare -> home: reads routing, overrides, agents.json
 cc.templates <-> home.routing: templates, overrides {style.stroke-dash: 4}
 web <-> cc.templates: sync / answer {style.stroke-dash: 4}
 dev -> web: apply, extend, stop {style.stroke-dash: 4}
-dev -> studio: pick & apply
-studio -> repo.routing: write
+cc.setup -> runners: "--version, list models" {style.stroke-dash: 4}
+cc.setup -> home.agents: agents.json, models/
+dev -> studio: pick models, build routing, apply
+studio <-> home: read / save
