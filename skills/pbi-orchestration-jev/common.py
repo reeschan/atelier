@@ -1,13 +1,14 @@
 """スクリプトが共通に使う小さな関数と定数。
 
 パスの長さの扱い (long_path・shown)、プロジェクトのディレクトリ名 (project_dir_for)、
-JSON の読み込み (load_json)、単価表 (load_prices・price_for)、home の解決 (resolve_home)、
-表示の補助 (utf8_stdout・now・step_label) をここに集める。
+JSON の読み込み (load_json) と書き込み (write_json)、単価表 (load_prices・price_for)、
+home の解決 (resolve_home)、表示の補助 (utf8_stdout・now・step_label) をここに集める。
 """
 import datetime
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 TIERS = ('haiku', 'sonnet', 'opus')
@@ -62,6 +63,28 @@ def load_json(path, default=None):
         return json.loads(Path(path).read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return default
+
+
+def write_json(path, data) -> None:
+    """JSON を UTF-8 で書く。親ディレクトリを作り、一時ファイル + os.replace で置き換える。
+
+    ensure_ascii=False・indent 2・末尾の改行。書きかけのファイルを読ませないための置き換え。
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(data, ensure_ascii=False, indent=2) + '\n'
+    handle, temporary = tempfile.mkstemp(prefix=f'.{target.name}.', suffix='.tmp', dir=str(target.parent))
+    try:
+        with os.fdopen(handle, 'w', encoding='utf-8', newline='\n') as stream:
+            stream.write(text)
+        os.replace(temporary, target)
+    except BaseException:
+        # 失敗した一時ファイルを残さない (os.replace の後はもう無い)
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
 
 
 def load_prices(home, bundled=None) -> dict:

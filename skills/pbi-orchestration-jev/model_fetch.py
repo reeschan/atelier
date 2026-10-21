@@ -41,7 +41,7 @@ def fetch(runner: str, cli: str | None, env: dict | None = None, timeout: float 
         # dsh は一覧のコマンドが無いので、cli が無くてもカタログで返す
         return _dsh(cli, env, timeout)
     if cli is None:
-        raise FetchError(f'{runner}: no CLI was given.')
+        raise FetchError(f'{runner}: the CLI was not found.')
     if runner == 'opencode':
         return _opencode(cli, env, timeout)
     if runner == 'codex':
