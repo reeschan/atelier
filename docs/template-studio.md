@@ -1,25 +1,40 @@
-# Template Studio (振り分けテンプレートを画面で組む)
+# Template Studio (セットアップと編集画面)
 
 ## ねらい
 
-今の振り分けは `select_model.py` の中の表 (段ごとの route) に書き込まれていて、契約している実行先やモデルが変わるたびにコードを直す必要がある。これを **テンプレート (routing.json)** として外に出し、画面でモデルを選ぶと **性能・コスパ・バランス** の 3 案が出て、選んだ案をそのまま置ける形にする。
+実行先の検出・モデルの取得・使うモデルの選択・振り分け (段ごとの route)・優先テンプレートと適用を、1 つの画面で扱えるようにする。以前はテンプレートの案を作る画面と、優先テンプレートの Web ページが別々で、保存先も対象リポジトリと home に分かれていた。今は保存先をすべて home にそろえ、画面も 1 つにした。
 
-段の決め方 (Jev の score と facts から haiku / sonnet / opus を決める決定表) は変えない。テンプレートが決めるのは「その段で、どの実行先・モデル・effort を、どの順に試すか」だけ。
+段の決め方 (Jev の score と facts から haiku / sonnet / opus を決める決定表) は変えない。画面が決めるのは、使う実行先とモデルの一覧、その段でどの実行先・モデル・effort をどの順に試すか、優先テンプレートとその適用だけ。
 
 ## 全体
 
 ```mermaid
 flowchart LR
-  OR[OpenRouter /api/v1/models<br/>価格・新しいモデル] --> U[update_catalog.py]
-  AA[Artificial Analysis API<br/>性能指標] --> U
-  U --> C[studio/catalog.json<br/>+ index.html の控え]
-  C --> S[studio/index.html<br/>モデルを選ぶ → 3 案 → 並べ替え]
-  K[/pbi-orchestration-jev templates/] --> V[studio/serve.py<br/>127.0.0.1 で画面を出す]
-  V --> S
-  S -->|適用 POST /apply| V
-  V --> R[docs/pbi/routing.json]
-  R --> P[prepare.py → select_model.py --all]
+  CLI[opencode / codex / agy / dsh / agent] --> SA[setup_agents.py]
+  SA --> A[home の agents.json<br/>使う実行先・CLI の場所と版・選んだモデル]
+  SA --> M[home の models/*.json<br/>取得した一覧の控え]
+  A --> SV[studio/serve.py<br/>127.0.0.1 の HTTP API]
+  M --> SV
+  SV --> IDX[studio/index.html<br/>3 つのタブ]
+  IDX -->|保存| SV
+  SV --> R[home の routing.json]
+  SV --> T[home の templates/*.json]
+  SV --> O[home の overrides.json]
+  R --> P[prepare.py → select_model.py]
+  O --> P
+  U[update_catalog.py] --> CAT[studio/catalog.json<br/>品質・価格の参考]
+  CAT --> SV
 ```
+
+画面は 3 つのタブに分かれ、どのタブも home のファイルだけを読み書きする。
+
+| タブ | 読み書きする home のファイル |
+|---|---|
+| エージェントとモデル | `agents.json`・`models/<実行先>.json` |
+| 振り分けテンプレート | `routing.json` (前の版は `routing.prev.json`) |
+| 優先テンプレートと適用 | `templates/<name>.json`・`overrides.json`・`history.jsonl` |
+
+保存のたびに、サーバーは標準出力に `SAVED <kind> <path>` を出す (kind は agents / models / routing / template / application)。対象リポジトリには書かない。
 
 ## 画面の言葉
 
@@ -31,87 +46,65 @@ flowchart LR
 | route | 試す順番 | try order |
 | route の最後の agent | 最後に受ける Claude Code | Final fallback (Claude Code) |
 
-画面の文言は `index.html` の `TEXT` に日本語 (`ja`) と英語 (`en`) を同じキーで持つ。言語は URL の `?lang=`、前回選んだ言語 (localStorage)、ブラウザの言語の順に決め、ヘッダーのボタンで切り替える。切り替えても選んだモデル・案・並び替えはそのまま残る。
+画面の文言は `index.html` の `TEXT` に日本語 (`ja`) と英語 (`en`) を同じキーで持つ。言語は URL の `?lang=`、前回選んだ言語 (localStorage)、ブラウザの言語の順に決め、ヘッダーのボタンで切り替える。切り替えても選んだモデル・並びはそのまま残る。
 
-## 1. モデル一覧 (catalog.json) とその更新
+## モデル一覧の取り方
 
-| 項目 | 中身 |
+`setup_agents.py` が `model_fetch.py` を通して実行先ごとに取る。取れた一覧は `models/<実行先>.json` に、取得日時・取得方法・エラーとともに残す。
+
+| 実行先 | 取り方 | effort の取り方 |
+|---|---|---|
+| opencode | `opencode models --standalone` の標準出力 (1 行に 1 つの `<provider>/<model>`、空行は捨てる) | opencode のキャッシュ (`<XDG_CACHE_HOME か ~/.cache>/opencode/models.json`) の `reasoning_options` のうち `type == "effort"` の `values`。無ければ `[]` |
+| codex | `codex debug models` の JSON (`models[].slug`・`display_name`・`visibility`・`supported_reasoning_levels[]`)。`visibility == "hide"` は除く | 同じ JSON の `supported_reasoning_levels[].effort` |
+| agy | `agy models` の標準出力 (1 行が `<id>\t<表示名>`)。タブの無い行は捨てる | ID の末尾。`-low` / `-medium` / `-high` ならその語を `level` に入れ、`efforts` は `[]` |
+| dsh | 一覧のコマンドは無い。同梱の `dsh.models.json` と `dsh headless --dump-config` の `agent-default-model` | カタログの `efforts`。ダンプにしか無いモデルは `[]` |
+| agent | CLI を呼ばない。Agent ツールの定義 (haiku・sonnet・opus・fable) | `low` / `medium` / `high` / `xhigh` / `max` |
+
+- 取れなかった実行先は `FetchError` にして、その実行先だけ失敗として扱う。ほかの実行先には波及させない。
+- 失敗したときは前の一覧をそのまま残し、`error` と `failed_at` を書く。前のファイルが無ければ、モデル `[]`・方法 `manual` で作り、手入力で足せる状態にする。
+- 取り直しに成功すると一覧を取得結果で置き換える。手入力したモデル (`manual: true`) のうち、取得結果に同じ id が無いものは末尾に残す。
+- 一覧から消えたモデルが `agents.json` で選ばれていれば、その id を `missing_selected` として返して画面に警告する。選択は消さない。
+- 取り方は実行先の版で変わりうる。確認した版と日付は `appendix/setup.md` の「既知の問題」に置く。
+
+取れなかった実行先にモデルを足すときは、画面の「エージェントとモデル」タブの手入力、または `python setup_agents.py add-model --runner <実行先> --id <モデル> [--effort <段> ...]` を使う。
+
+## 品質・価格の参考
+
+`studio/catalog.json` は、モデルの一覧に添える品質と価格の参考で、必須ではない。画面で選べるモデルは `models/<実行先>.json` の一覧で決まり、カタログは選べる範囲を変えない。
+
+- `catalog.json` の `models[].options[]` に (実行先, モデル) が一致すれば、そのモデルの `quality`・`price_in`・`price_out`・`sample` を使う (source は `catalog`)。
+- 無ければ、id の provider 部分 (`/` より前) と末尾の `-low` / `-medium` / `-high` / `-free` を落として `.` を `-` にした文字列を、`aa_slug` と照合する (source は `catalog`)。
+- それも無く、`models/<実行先>.json` の項目に `price_in` / `price_out` があればそれを使う (`quality` は null、`sample` は false、source は `cli`)。
+- どれも無ければ null で、画面には参考が無いものとして出る。
+
+カタログの更新は `python skills/pbi-orchestration-jev/studio/update_catalog.py` で行う。価格と新しいモデルは OpenRouter の `GET /api/v1/models` から、品質は Artificial Analysis のコーディング指標から取る (`AA_API_KEY` があるときだけ)。取れなかった値は `sample: true` のままで、画面に仮の値と出る。
+
+## HTTP API
+
+`studio/serve.py` は home のファイルを読み書きする小さなサーバーで、画面はこの API だけを使う。応答は JSON で、失敗は `{"ok": false, "error": "<英語の 1 文>"}`。
+
+| エンドポイント | 用途 |
 |---|---|
-| `providers` | 会社ごとの名前・色・アイコンの文字 |
-| `models[]` | モデル名、`quality` (0〜100)、`price_in` / `price_out` ($/100 万トークン)、`until` (使える最終日)、`openrouter_id` / `aa_slug` (更新の突き合わせ用) |
-| `models[].options[]` | そのモデルを呼べる実行先。`runner` (opencode / codex / agy / agent)・`model`・`effort`・`billing` (subscription / api)・`quality_delta` (effort を下げたときの差) |
-| `candidates[]` | 更新で見つかった新しいモデル (実行先との対応がまだ無いもの) |
+| `GET /` | `index.html` に起動ごとの合言葉と home を埋め込んで返す |
+| `GET /api/state` | home の今の中身 (runners・routing・templates・examples・application・status・warnings) を返す |
+| `PUT /api/agents/<runner>` | その実行先の enabled・選んだモデル・課金の種類を変える (`selected: null` はモデルの指定を消す) |
+| `POST /api/models/<runner>` | 手入力のモデルを `models/<runner>.json` に足す |
+| `PUT /api/routing` | 振り分けテンプレートを検査して `routing.json` に書く (前の版は `routing.prev.json`) |
+| `PUT /api/templates/<name>` | 優先テンプレートを検査して `templates/<name>.json` に書く |
+| `DELETE /api/templates/<name>` | 優先テンプレートを消す (今の適用が使っていれば 409) |
+| `POST /api/examples/<name>/copy` | 同梱の例を home の `templates/` に名前を変えてコピーする |
+| `PUT /api/application` | 優先テンプレートの適用を始める (期限と期限切れの扱いを付ける) |
+| `POST /api/application/answer` | 期限切れへの答え (延長 / やめる / 期限なし) |
+| `POST /api/close` | 応答を返してからサーバーを終える |
 
-更新は `python skills/pbi-orchestration-jev/studio/update_catalog.py` 1 回で行う (以下、`studio/` はスキルのディレクトリの中)。
+- 起動は `python studio/serve.py [--home DIR] [--port 0] [--no-open] [--timeout 1800] [--tab agents|routing|priority]`。起動すると `OPEN <url>` を出し (`--tab` は URL の `#<tab>`)、保存のたびに `SAVED <kind> <path>`、`POST /api/close` で `CLOSED`、`--timeout` 秒何も保存されなければ `TIMEOUT` を出して終わる。保存のたびに数え直し、0 以下は無制限。
+- `PUT /api/routing` の検査は、形 (`select_model.routing_error`) に加えて `agents.json` との照合も行う。agent 以外の手順は実行先が enabled で、`agents.json` のその実行先に選んだモデル (`models`) があれば、モデルがその中にあること。取得した一覧 (`models/<runner>.json`) にあっても、選んでいなければ通さない。
+- `PUT /api/application` の応答には `opus_override` が入る。テンプレートが opus の段を上書きしていれば true で、画面は設計判断が要る PBI まで安いモデルに回しているおそれがあると注意を出す。
 
-- **価格**: OpenRouter の `GET /api/v1/models` (キー不要)。1 トークンあたりの USD を 100 万トークンあたりに直す。
-- **性能**: Artificial Analysis の `GET /api/v2/data/llms/models` の `artificial_analysis_coding_index` (PBI の実装に近いため。無いモデルは `artificial_analysis_intelligence_index` で代える)。無料のキーを `AA_API_KEY` に置いたときだけ取り、無ければ前の値のまま。
-- **新しいモデル**: catalog に載っている会社の、60 日以内 (`--new-days`) に出たモデルを `candidates` に出す。どの CLI のどのモデル名で呼ぶかは人が決めることなので、`models` には自動で足さない。画面では「新しく出たモデル」として出し、`options` を書けば選べるようになる。
-- 取れなかった値は `sample: true` のまま残り、画面に「仮の値」と出る。今のコミットの値はすべて仮の値。
-- 定期的に回すなら、Claude Code のルーティン (週 1 回 `update_catalog.py` を実行して PR を出す) か GitHub Actions の cron を使う。どちらにするかは後で決める。
+## セキュリティ
 
-「AI が特定サイトを見て判断する」部分は、まず **数字は API から決まった方法で取り、案の組み立ても決まった式で行う** ことにした。同じ一覧からは毎回同じ案が出るので、案の差が「モデルの差」だと読める。AI (オーケストレーター) の出番は、一覧の更新後に `candidates` を見て `options` の下書きを作ることと、案の説明を書くこと (次の段階)。
-
-## 2. 3 案の作り方 (index.html の `build()`)
-
-チップ 1 つ = route の 1 段 (実行先 × モデル × effort)。ユーザーが残したチップだけを使う。
-
-1. 段ごとに性能の下限を置く (既定 haiku 55 / sonnet 70 / opus 85、画面で変えられる)。下限より低いものはその段に入れない。
-2. Claude Code の Agent 以外 (opencode / codex / agy) を案ごとの順に並べ、同じ実行先は 1 つだけ、`1 段あたりの実行先の数 − 1` 個まで取る。opus の段は、既定では外部の実行先を使わない (今の方針と同じ)。
-3. 最後に Agent のモデルを 1 つ置く (route は必ず agent で終わる)。下限に届く Agent が無ければ、いちばん性能の高い Agent を置いて警告を出す。
-
-| 案 | 並べ方 |
-|---|---|
-| 性能 | 性能の高い順 |
-| コスパ | 実質の費用の安い順 |
-| バランス | 0.4 × 性能 (正規化) + 0.6 × (1 − log 費用 (正規化)) の高い順 |
-
-実質の費用は API 価格の 3:1 加重平均。「サブスクの枠内は安いとみなす」をオンにすると、`billing: subscription` の実行先は 0.15 倍で数える (枠を使い切るまでは追加の支払いが無いため)。カードの「API 換算 / PBI」は 1 PBI = 入力 30 万・出力 3 万トークン、段の出方 haiku 40% / sonnet 45% / opus 15% の目安で、各段の先頭の実行先の API 価格から出す。
-
-## 3. 試す順番の調整 (Step 3)
-
-選んだ案を出発点にして、作業の重さごとに手で直せる。
-
-- 各列には、選んだモデルのうち Claude Code 以外がすべて並ぶ。案に入っていたものはチェック済みで上に、残りはチェックなしで下に並ぶ。
-- ドラッグ、または ↑ ↓ ボタンで並べ替える (スマホとキーボードはボタン)。上から順に試す。チェックを外したものは使わない。下限より性能が低いものには「下限未満」と出るが、入れることはできる。
-- 最後の受け皿 (Claude Code のモデル) は列の下で選ぶ。route は必ず agent で終わるので、ここは外せない。
-- 直すと「調整済み」と出て、書き出す JSON の name が `<案>-custom` になる。「案に戻す」か、別の案を選ぶと、調整は消える。Step 1 でモデルを外すと、その行だけ消え、増やすとチェックなしで末尾に足される。
-- 同じ実行先を 2 回入れてもよい (例: Codex high のあとに Codex medium)。
-
-## 4. テンプレート (routing.json) と select_model.py
-
-```json
-{
-  "name": "balanced",
-  "tiers": {
-    "haiku":  [{"runner": "opencode", "model": "opencode-go/deepseek-v4.1-flash", "effort": null},
-               {"runner": "codex", "model": "gpt-6-astra", "effort": "high", "until": "2026-10-23"},
-               {"runner": "agent", "model": "sonnet", "effort": "high"}],
-    "sonnet": [...],
-    "opus":   [{"runner": "agent", "model": "opus", "effort": null}]
-  }
-}
-```
-
-- どの段も、最後の 1 つだけが `agent`。途中は opencode / codex / agy のどれか。形が違えば select_model.py はエラーで止まる。
-- `until` を過ぎた実行先は route から外れる (今の `CODEX_UNTIL` を段ごとに書けるようにしたもの)。
-- `sensitive` の PBI は、テンプレートに関係なくその段の `agent` だけになる。`--skip` も今までどおり効く。
-- 読む順: `--routing <file>` → (`--all` のとき) `<dir>/routing.json` → home の `routing.json` → 組み込みの表 (`routing.default.json` と同じ中身)。prepare.py は `select_model.py --all docs/pbi` を呼ぶので、`docs/pbi/routing.json` を置くだけで効く。
-- home は優先テンプレートの置き場と同じ (`templates.resolve_home`): `--home` → 環境変数 `PBI_TEMPLATES_HOME` → スクリプトのディレクトリの親が `versions` ならスキルのルート → スクリプトのディレクトリ。版のある配置 (`versions/<版>/`) でも全リポジトリ共通の表が版の切り替えで引き継がれる。版の無い配置ではスキルのディレクトリで、以前と同じ。
-
-## 5. 画面から直接適用する (serve.py)
-
-ログインの画面が手元のアドレスに結果を返すのと同じ形で、スキルが手元に小さなサーバーを立て、画面の「このリポジトリに適用」がそこへ JSON を送る。
-
-1. `/pbi-orchestration-jev templates` で、スキルが `studio/serve.py --target <リポジトリ>` をバックグラウンドで起動する (`appendix/templates.md`)。ブラウザが開く。
-2. サーバーは 127.0.0.1 の空いているポートだけで待ち受け、起動ごとに作る合言葉 (token) を画面に埋め込んで返す。
-3. 「適用」を押すと、画面が `POST /apply` に合言葉付きで JSON を送る。サーバーは `select_model.routing_error` で形を確かめ、`docs/pbi/routing.json` に書く。前のものは `routing.prev.json` に残す。
-4. サーバーは `APPLIED <パス>` を出して終わる。スキルはそれを受けて、PBI があれば新しい表で担当を出し直して伝える。
-
-守り: 書くのは `<target>/docs/pbi/routing.json` だけ。合言葉が違う、Host が 127.0.0.1 / localhost でない (DNS rebinding よけ)、64 KB を超える、形が違う、のどれかなら書かない。30 分で適用されなければ `TIMEOUT` で終わる。ファイルで開いたときや claude.ai の Artifact では適用ボタンは出ず、JSON のコピーだけになる。
-
-## 次の段階 (この PR には入れない)
-
-- `update_catalog.py` を実データで一度回して、仮の値を置き換える (このコンテナからは外部 API に出られなかったので、取り込みは手元のテスト用 JSON でしか確かめていない)。
-- `templates` で、オーケストレーターが `candidates` の `options` を下書きし、3 案に一言ずつ説明を付ける。
-- `agent_stats.py` と jev-log の実績 (段ごとの差し戻し率・実際の費用) を一覧に戻して、性能の数字を「公開ベンチマーク」から「このリポジトリでの実績」に寄せる。
+- サーバーは 127.0.0.1 だけで待ち受ける。ほかの機械からは届かない。
+- Host が `127.0.0.1:<port>` か `localhost:<port>` でなければ 403 (DNS rebinding よけ)。
+- `/api/*` は、起動ごとに作る合言葉と `X-Studio-Token` ヘッダーが一致しなければ 403 (`hmac.compare_digest`)。合言葉は `GET /` で画面に埋め込むだけで、ファイルには書かない。
+- 書き込みは `Content-Type: application/json`・本文 64 KB 以下に限る。応答も JSON。
+- 読む先も書く先も home だけで、対象リポジトリのファイルには触れない。home の外のパスは受け取らない。

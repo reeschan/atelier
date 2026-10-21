@@ -10,7 +10,7 @@ Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator passes facts to prepare.py, which asks Jev for gate 1 (brief and PBI quality), picks a tier and a route with select_model.py, reads the routing, overrides and agents.json from your home (~/.config/pbi-orchestration-jev) and docs/pbi/routing.json, and drops steps whose runner is unusable. PBIs go to pbi-worker (the Agent tool), the default runner for every tier, or to external runners (opencode, Codex, Antigravity, DeepSeek Harness) enabled in routing.json; they change the source code of the target repository. The orchestrator verifies each PBI with verify.py and unchanged.py, asks Jev in plain text only when a report and the verification disagree and to check rework notes, and records status and HANDOFF in docs/pbi/. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. Template Studio, with models from OpenRouter and Artificial Analysis, writes the try order to docs/pbi/routing.json, and the priority templates web page (a claude.ai artifact) syncs with templates.py, which keeps templates and overrides in your home.">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator passes facts to prepare.py, which asks Jev for gate 1 (brief and PBI quality), picks a tier and a route with select_model.py, reads the routing, overrides and agents.json from your home (~/.config/pbi-orchestration-jev) and docs/pbi/routing.json, and drops steps whose runner is unusable. PBIs go to pbi-worker (the Agent tool), the default runner for every tier, or to external runners (opencode, Codex, Antigravity, DeepSeek Harness) chosen in setup and named in routing.json; they change the source code of the target repository. The orchestrator verifies each PBI with verify.py and unchanged.py, asks Jev in plain text only when a report and the verification disagree and to check rework notes, and records status and HANDOFF in docs/pbi/. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. setup_agents.py and model_fetch.py detect the runner CLIs and fetch each runner's model list into agents.json and models/ in your home. The developer uses the local editor (studio/serve.py, with tabs for agents and models, routing, and priority templates and application) to read and save those files in home only. templates.py keeps priority templates and the local overrides.json, which is the source of truth; the optional priority templates web page (a claude.ai artifact) only syncs with it.">
 </picture>
 
 The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lang.com)).
@@ -29,7 +29,7 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - **Mechanical steps run as scripts.** `prepare.py` runs Jev gate 1 (brief and PBI quality) plus the decision table in one call, and `verify.py` runs a PBI's verification commands; both return only a table to the orchestrator. Files a PBI must not touch are checked by `unchanged.py`, which hashes them before the worker starts. The skill body is split into a core and `appendix/` files that are read only when needed. In the author's measurements (2026-10, 6 tasks) these two changes cut cost by 15%.
 - **Workers get just what they need (optional).** With a shared-memory MCP (`mcp__shared-memory__*`), only the orchestrator writes per-task "refs" (one fact each) and lists their ids in the PBI. The `pbi-worker` sub-agent can only `get` memories, never search or write.
 - **CLAUDE.md first.** Stable repository knowledge (conventions, commands, pitfalls) is expected to live in layered CLAUDE.md files; the orchestrator searches memory only as a supplement.
-- **Pick the try order in a browser.** Template Studio turns the models you have into performance, cost and balanced proposals; reorder and press Apply to write `docs/pbi/routing.json` (see Template Studio below).
+- **Set up once, then build the routing in one editor.** Setup finds the runner CLIs on your machine, records which ones you use and fetches each runner's model list. The editor then has three tabs — agents and models, routing, priority templates and application — and saves everything to your home (see Setup and the editor below).
 - **Override routing for a while.** Turn on a priority template and it replaces per-tier routes until its deadline, then asks whether to continue. You can also set it from a web page (an artifact); see Priority templates below.
 - **Usage stats.** `agent_stats.py` reads Claude Code transcripts and reports tokens per model and per agent, how often the prompt cache had to be rebuilt, and the current context size.
 - **A record per run.** Each time the orchestrator decides a run (pass, rework, promotion, unavailable, on hold), `record_run.py` appends one line to `docs/pbi/runs.jsonl`: runner, model, effort, tokens, cost, steps, time and verification results are read from the logs, and only the outcome and the review finding counts come from the orchestrator. Values it cannot read stay null. It also copies that run's raw logs to an archive outside the repository: `$PBI_RUNS_ARCHIVE` if set (point it at a synced folder to keep logs off the machine), otherwise `~/.claude/pbi-runs`. `model_report.py` sums the runs per model, across repositories with `--archive`, and adds a provisional A–D grade for people to adjust later; it never changes routing.
@@ -83,52 +83,59 @@ A minimal `agents.json` in your home:
 - `--skip opencode,agy` drops runners that hit a quota or got denied in this session. `--all docs/pbi` routes every PBI at once and prints one line per PBI.
 - "deep" review means the Opus orchestrator reads the whole diff itself. A normal review over 300 lines is delegated to an Opus reviewer agent.
 
-## Template Studio
+## Setup and the editor
 
-The "which runner and model, in what order" part of routing (the bundled all-agent default, or your own `routing.json` such as `examples/routing/multi-runner.json`) can be picked in a browser. The decision table that sets the tier does not change.
+The setup and the editor have three entry points:
 
 ```
-/pbi-orchestration-jev templates
+/pbi-orchestration-jev setup      # detect, fetch the model lists, open the editor, optional integrations
+/pbi-orchestration-jev models     # fetch the model lists again
+/pbi-orchestration-jev templates  # open the editor
 ```
 
-Run this in Claude Code and the skill starts a small server on 127.0.0.1 and opens the page. To open it without the skill:
+When you run it without an argument and home has no `agents.json`, it asks one question first: **set up now** or **start with agent only**. The answer is written to `agents.json`, so later runs ask nothing.
+
+Setup looks for the `opencode`, `codex`, `agy` and `dsh` CLIs on the `PATH`, in the global installs of fnm and nvm, and, for `dsh`, at `PBI_DSH_BIN`. `agent` (the Agent tool) is always available. One multiple-choice question picks the runners you use; the choice, each CLI path and version, and the check time go to `agents.json` in your home.
+
+The model lists come from each runner:
+
+| Runner | How the list is obtained | Effort levels |
+|---|---|---|
+| opencode | `opencode models --standalone` (one id per line) | the model cache opencode keeps |
+| codex | `codex debug models` (JSON) | the reasoning levels in the same JSON |
+| agy | `agy models` (tab-separated) | the level at the end of the model id |
+| dsh | the bundled `dsh.models.json` catalog and `dsh headless --dump-config` | the thinking level in the catalog |
+| agent | the Agent tool's built-in definitions (haiku, sonnet, opus, fable) | low through max |
+
+A runner whose list could not be fetched keeps its previous list (or starts empty) and shows the error. Add a model by hand in the editor's agents tab or with `python setup_agents.py add-model --runner <runner> --id <model>`; the other runners are not affected.
+
+The editor is one local page with three tabs:
+
+1. **Agents and models**: tick the runners and the models to use, add a model by hand, and read the quality and price references beside the list.
+2. **Routing template**: build the try order for each tier from the models chosen in the first tab.
+3. **Priority templates and application**: create and edit priority templates (rotate groups included), then apply one with a deadline and an expiry rule.
+
+Every save goes to your home: `agents.json`, `models/<runner>.json`, `routing.json`, `templates/<name>.json` and `overrides.json`. No target repository is involved. To open the editor without the skill:
 
 ```sh
-python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py --target <target repo root>
+python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 ```
 
-1. **Pick models**: keep only the runner chips you have on each provider card.
-2. **Pick a proposal**: the page builds performance, cost and balanced proposals from those models. You can set a quality floor per workload (light / standard / design-heavy).
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/studio-proposals-en-dark.png">
-  <img src="assets/studio-proposals-en-light.png" alt="Template Studio: pick models on provider cards, then choose one of three proposals." width="800">
-</picture>
-
-3. **Adjust the order**: for each work class, drag or use the arrow buttons to reorder, and untick what you do not want. Pick the Claude Code model that catches the rest.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/studio-order-en-dark.png">
-  <img src="assets/studio-order-en-light.png" alt="Adjusting the try order per work class by reordering and unticking models." width="800">
-</picture>
-
-4. **Apply**: the Apply button writes `docs/pbi/routing.json` and the server stops. The previous file is kept as `routing.prev.json`. From then on `prepare.py` tries runners in that order.
-
 - The page is in English or Japanese. It follows your browser language, and the 日本語 / EN button in the header switches it (the choice is remembered). `?lang=en` or `?lang=ja` in the URL also works.
-- Refresh the model list (`studio/catalog.json`) with `python studio/update_catalog.py`. Prices and new models come from OpenRouter; quality is the Artificial Analysis coding index (when `AA_API_KEY` is set). Until then the values are placeholders, and the page says so.
-- The server only writes `docs/pbi/routing.json`, and only when the per-run token, the Host header and the template shape all check out.
+- The server listens on 127.0.0.1 only. `/api/*` needs the per-run token embedded in the page and a Host header of `127.0.0.1` or `localhost`, and it accepts at most 64 KB of JSON per write. It prints `SAVED <kind> <path>` for every save and `CLOSED` or `TIMEOUT` when it ends. `--tab agents|routing|priority` starts on a tab, `--home DIR` uses another home, and `--timeout 0` waits without a limit.
+- The quality and price reference comes from `studio/catalog.json` (refresh it with `python studio/update_catalog.py`; prices and new models come from OpenRouter, quality from the Artificial Analysis coding index when `AA_API_KEY` is set). It is a reference only: the models you can pick come from the fetched lists.
 - Design notes (Japanese): [docs/template-studio.md](docs/template-studio.md).
 
 ## Priority templates
 
-A **priority template** overrides the routing for a while. Template Studio sets the usual routing (`routing.json`); a priority template sits on top of it. Save per-tier routes under a name (the same shape as `routing.json`), turn the template on with a deadline, and until that deadline the overridden tiers take their route from the template instead of the usual one; tiers without an override are unaffected, and the last fallback is still that tier's Claude Code agent from `routing.json`. When the deadline passes, your choice of expiry behaviour decides the rest: with `ask`, the skill asks whether to continue (extend, stop, or make it indefinite); with `drop`, it quietly stops applying the template. The bundled web page (an artifact with its own database) shows the current application, the templates and the history, and starts, extends and stops applications from anywhere, phone included.
+A **priority template** overrides the routing for a while. The editor sets the usual routing (home's `routing.json`); a priority template sits on top of it. Save per-tier routes under a name (the same shape as `routing.json`), turn the template on with a deadline, and until that deadline the overridden tiers take their route from the template instead of the usual one; tiers without an override are unaffected, and the last fallback is still that tier's Claude Code agent from `routing.json`. When the deadline passes, your choice of expiry behaviour decides the rest: with `ask`, the skill asks whether to continue (extend, stop, or make it indefinite); with `drop`, it quietly stops applying the template. You create, edit and apply templates in the editor's priority tab or from the chat. The source of truth is the local `overrides.json` in your home; the bundled web page (an artifact with its own database) is an optional sync target, and when `web.json` holds its URL the skill syncs the page with the local copy at the start of a run.
 
 Two things a template cannot change:
 
 - `sensitive` PBIs never go to an external runner, whatever the template says.
 - Design reassessment and review duties stay with the decision table.
 
-Templates are personal settings and live in your home. The default home is `~/.config/pbi-orchestration-jev` (`$XDG_CONFIG_HOME/pbi-orchestration-jev` when `XDG_CONFIG_HOME` is set), and `PBI_HOME` points it somewhere else. The home holds `routing.json` (try order), `templates/<name>.json` (priority templates), the synced copy `overrides.json`, the web page URL `web.json`, `agents.json` (runner and model choices) and `prices.json` (price overrides). None of them is required, and the skill does not create the directory. To try the bundled example, copy it into `templates/` there:
+Templates are personal settings and live in your home. The default home is `~/.config/pbi-orchestration-jev` (`$XDG_CONFIG_HOME/pbi-orchestration-jev` when `XDG_CONFIG_HOME` is set), and `PBI_HOME` points it somewhere else. The home holds `agents.json` (the runners, their CLI path and version, the selected models, the billing kind), `models/<runner>.json` (the last model list fetched for each runner), `routing.json` (try order), `templates/<name>.json` (priority templates), `overrides.json` (the current application; the source of truth), `history.jsonl` (one line per finished application), the web page URL `web.json` and `prices.json` (price overrides). None of them is required; setup and the editor create the directory and a file only when a save needs it. To try the bundled example, copy it into `templates/` there:
 
 ```sh
 mkdir -p ~/.config/pbi-orchestration-jev/templates
@@ -154,7 +161,7 @@ The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `ma
 | Node.js | no | the rtk hook, and the JS Jev client (`jev.mjs`) |
 | [rtk](https://github.com/rtk-ai/rtk) | no | compressing command output |
 
-Only Claude Code is required. Jev, shared-memory, the external CLIs, the web pages and rtk are optional. A missing runner just means the route moves on; Claude Code alone is enough to run the skill.
+Only Claude Code is required. Jev, shared-memory, the external CLIs, the web pages and rtk are optional. Setup looks for the optional CLIs (opencode, codex, agy, dsh) on the `PATH`, in the fnm and nvm globals, and at `PBI_DSH_BIN`, and records only the ones you choose. A missing runner just means the route moves on; Claude Code alone is enough to run the skill.
 
 ## Install
 
@@ -225,7 +232,7 @@ In Claude Code, invoke it for work that spans several files:
 /pbi-orchestration-jev <what you want built>
 ```
 
-To pick the routing template in a browser, run `/pbi-orchestration-jev templates` (see Template Studio above).
+To set up the runners and the model lists, run `/pbi-orchestration-jev setup`. `/pbi-orchestration-jev models` fetches the lists again, and `/pbi-orchestration-jev templates` opens the editor (see Setup and the editor above).
 
 Everything is recorded under `docs/pbi/` in the target repository.
 
@@ -237,7 +244,7 @@ Everything is recorded under `docs/pbi/` in the target repository.
 | `docs/pbi/PBI-<n>.facts.json` / `.brief.md` / `.route.json` | routing inputs and result |
 | `docs/pbi/worker.md` | how workers proceed and report (copied from the skill) |
 | `docs/pbi/tools/unchanged.py` | checks files a PBI must not touch (copied from the skill) |
-| `docs/pbi/routing.json` | try order (written by Template Studio; without it, the `routing.json` in your home or the bundled default applies) |
+| `docs/pbi/routing.json` | try order read for this repository (without it, the `routing.json` in your home, written by the editor, or the bundled default applies) |
 | `docs/pbi/reports/`, `docs/pbi/notes/` | workers' detailed reports and research notes |
 | `docs/pbi/verify/`, `docs/pbi/reviews/` | verification logs and delegated reviews |
 | `docs/pbi/jev-log.jsonl` | routing decisions when they change, decision-table overrides, hand-offs, and report triage by Jev |
@@ -264,7 +271,7 @@ skills/pbi-orchestration-jev/
 ├── dsh_run.py                  # runs one PBI on DeepSeek Harness headless
 ├── verify-commands.md          # pitfalls when writing verification commands
 ├── worker.md                   # how workers proceed and report
-├── appendix/                   # read only when needed (memory, rework, handoff, finish, jev, templates, priority-templates)
+├── appendix/                   # read only when needed (memory, rework, handoff, finish, jev, setup, priority-templates)
 ├── agents/pbi-worker.md        # worker / reviewer sub-agent (copy to ~/.claude/agents)
 ├── prepare.py                  # Jev gate 1 + decision table in one call; prints a table
 ├── verify.py                   # runs a PBI's verification commands; prints exit codes and tails
@@ -272,10 +279,13 @@ skills/pbi-orchestration-jev/
 ├── model_report.py             # results, tokens, cost and a provisional grade per model, from runs.jsonl
 ├── prices.json                 # sample API prices for the cost_api_equiv estimate (a prices.json in your home overrides it; not what you are billed)
 ├── select_model.py             # decision table: tier, route and review depth; drops steps per agents.json
+├── setup_agents.py             # setup: detect the runner CLIs, record the choice in agents.json, fetch the model lists
+├── model_fetch.py              # one runner's model list from its CLI (or the bundled dsh catalog / built-in agent list)
+├── dsh.models.json             # bundled model catalog for dsh, used when dsh cannot list its models
 ├── agents.py                   # reads agents.json and finds runner CLIs (PATH, fnm, nvm)
 ├── common.py                   # shared helpers: home resolution, prices, paths, labels
 ├── routing.default.json        # default routing: every tier on the Agent tool (override with routing.json in docs/pbi/ or your home)
-├── studio/                     # build templates in a browser (index.html, serve.py, update_catalog.py, catalog.json)
+├── studio/                     # the editor: three tabs over home (index.html, serve.py, catalog.json, update_catalog.py)
 ├── templates.py                # priority templates: validate, sync from the web page, apply / answer / push writes
 ├── web/priority-templates.html # web page (artifact) to view and set priority templates
 ├── examples/routing/           # example routing template with external runners (multi-runner.json)
@@ -292,7 +302,7 @@ skills/pbi-orchestration-jev/
 │   ├── jev.py / jev.mjs        # Jev client (Python / JS)
 │   └── test_jev.py / jev.test.mjs
 ├── test_select_model.py / test_agents.py / test_common.py
-├── test_templates.py / test_prepare.py / test_unchanged.py
+├── test_setup_agents.py / test_model_fetch.py / test_templates.py / test_prepare.py / test_unchanged.py
 ├── test_record_run.py / test_model_report.py / test_dsh_run.py / test_jev_mcp.py
 ├── test_references.py          # every file the skill docs name exists
 └── test_agent_stats.py
@@ -331,7 +341,7 @@ Only repositories under `--root` (or `PBI_MCP_ROOTS`) are served. HTTP listens o
 
 - The decision table and thresholds are starting points. After 10–20 PBIs, look at the results per model (`model_report.py --archive`: first-try pass, reworks, promotions, tokens and cost) and adjust the constants in `select_model.py` and `prepare.py`.
 - Runner models and effort levels come from a routing template (`routing.json`, same shape as `routing.default.json`). Put it at `docs/pbi/routing.json` in the target repo, or `routing.json` in your home, and `select_model.py` uses it; without one, the bundled `routing.default.json` applies.
-- You can also build the template in a browser (see Template Studio above).
+- You can also build the template in the editor (see Setup and the editor above).
 - Review the hand-off threshold (250,000 tokens) and the results of the external runners at the same time.
 
 ## Tests

@@ -54,6 +54,19 @@ def run(*args, env=None, script=SCRIPT):
     return subprocess.run([sys.executable, script, *args], capture_output=True, text=True, encoding='utf-8', env=e)
 
 
+def read_json(path):
+    with open(path, encoding='utf-8') as f:
+        return json.load(f)
+
+
+def read_history(home):
+    path = os.path.join(home, 'history.jsonl')
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding='utf-8') as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
 class ValidateTest(unittest.TestCase):
     def test_good_template_has_no_problems(self):
         self.assertEqual(templates.validate(template(), 'cheap-all-tiers'), [])
@@ -273,9 +286,10 @@ class LoadTest(unittest.TestCase):
 
     def test_load_overrides_missing_or_broken_is_empty(self):
         with tempfile.TemporaryDirectory() as d:
-            self.assertEqual(templates.load_overrides(Path(d)), {'synced_at': None, 'application': None})
+            empty = {'synced_at': None, 'updated_at': None, 'application': None}
+            self.assertEqual(templates.load_overrides(Path(d)), empty)
             write_text(os.path.join(d, 'overrides.json'), '{oops')
-            self.assertEqual(templates.load_overrides(Path(d)), {'synced_at': None, 'application': None})
+            self.assertEqual(templates.load_overrides(Path(d)), empty)
 
     def test_load_overrides_reads_application(self):
         with tempfile.TemporaryDirectory() as d:
@@ -283,6 +297,19 @@ class LoadTest(unittest.TestCase):
                        {'synced_at': '2026-10-16T09:00:00+09:00', 'application': application()})
             overrides = templates.load_overrides(Path(d))
             self.assertEqual(overrides['application']['template'], 'cheap-all-tiers')
+
+    def test_load_overrides_reads_updated_at(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'overrides.json'),
+                       {'synced_at': '2026-10-16T09:00:00+09:00',
+                        'updated_at': '2026-10-20T09:00:00+09:00', 'application': application()})
+            self.assertEqual(templates.load_overrides(Path(d))['updated_at'], '2026-10-20T09:00:00+09:00')
+
+    def test_load_overrides_old_form_has_no_updated_at(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'overrides.json'),
+                       {'synced_at': '2026-10-16T09:00:00+09:00', 'application': application()})
+            self.assertIsNone(templates.load_overrides(Path(d))['updated_at'])
 
 
 class SyncTest(unittest.TestCase):
@@ -386,6 +413,91 @@ class SyncTest(unittest.TestCase):
             out = run('sync', '--home', d, '--state', state_path, '--now', '2026-10-22')
             self.assertEqual(out.returncode, 2)
             self.assertTrue(out.stderr.strip())
+
+    def test_local_newer_wins_and_pushes_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            local = application(id='a-20261021T000000')
+            write_json(os.path.join(d, 'overrides.json'),
+                       {'synced_at': '2026-10-21T09:00:00+09:00',
+                        'updated_at': '2026-10-21T09:00:00+09:00', 'application': local})
+            out, overrides = self.sync(d, {'application': application(),
+                                           'updated_at': '2026-10-20T09:00:00+09:00'},
+                                       '2026-10-22T09:00:00+09:00')
+            self.assertEqual(out['status'], 'active')
+            self.assertEqual(len(out['writes']), 1)
+            write = out['writes'][0]
+            self.assertEqual((write['op'], write['collection'], write['doc_id']), ('set', 'state', 'current'))
+            self.assertEqual(write['data'],
+                             {'application': local, 'updated_at': '2026-10-21T09:00:00+09:00'})
+            self.assertEqual(overrides['application']['id'], 'a-20261021T000000')
+            self.assertEqual(overrides['updated_at'], '2026-10-21T09:00:00+09:00')
+            self.assertEqual(overrides['synced_at'], '2026-10-22T09:00:00+09:00')
+
+    def test_local_newer_with_same_application_has_no_writes(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            write_json(os.path.join(d, 'overrides.json'),
+                       {'synced_at': '2026-10-21T09:00:00+09:00',
+                        'updated_at': '2026-10-21T09:00:00+09:00', 'application': application()})
+            out, overrides = self.sync(d, {'application': application(),
+                                           'updated_at': '2026-10-20T09:00:00+09:00'},
+                                       '2026-10-22T09:00:00+09:00')
+            self.assertEqual(out['writes'], [])
+            self.assertEqual(overrides['updated_at'], '2026-10-21T09:00:00+09:00')
+
+    def test_same_updated_at_takes_local(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            local = application(id='a-20261021T000000')
+            write_json(os.path.join(d, 'overrides.json'),
+                       {'synced_at': '2026-10-21T09:00:00+09:00',
+                        'updated_at': '2026-10-21T09:00:00+09:00', 'application': local})
+            out, overrides = self.sync(d, {'application': application(),
+                                           'updated_at': '2026-10-21T09:00:00+09:00'},
+                                       '2026-10-22T09:00:00+09:00')
+            self.assertEqual(out['writes'][0]['data']['application'], local)
+            self.assertEqual(overrides['application']['id'], 'a-20261021T000000')
+
+    def test_web_newer_wins_and_copies_updated_at(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            write_json(os.path.join(d, 'overrides.json'),
+                       {'synced_at': '2026-10-20T09:00:00+09:00',
+                        'updated_at': '2026-10-20T09:00:00+09:00', 'application': application(id='a-local')})
+            out, overrides = self.sync(d, {'application': application(),
+                                           'updated_at': '2026-10-21T09:00:00+09:00'},
+                                       '2026-10-22T09:00:00+09:00')
+            self.assertEqual(out['writes'], [])
+            self.assertEqual(overrides['application']['id'], APPLICATION['id'])
+            self.assertEqual(overrides['updated_at'], '2026-10-21T09:00:00+09:00')
+
+    def test_local_without_updated_at_takes_web(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            write_json(os.path.join(d, 'overrides.json'),
+                       {'synced_at': '2026-10-20T09:00:00+09:00', 'application': application(id='a-local')})
+            out, overrides = self.sync(d, {'application': application(),
+                                           'updated_at': '2026-10-21T09:00:00+09:00'},
+                                       '2026-10-22T09:00:00+09:00')
+            self.assertEqual(out['application']['id'], APPLICATION['id'])
+            self.assertEqual(overrides['application']['id'], APPLICATION['id'])
+            self.assertEqual(overrides['updated_at'], '2026-10-21T09:00:00+09:00')
+
+    def test_local_none_pushes_empty_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            write_json(os.path.join(d, 'overrides.json'),
+                       {'synced_at': '2026-10-21T09:00:00+09:00',
+                        'updated_at': '2026-10-21T09:00:00+09:00', 'application': None})
+            out, overrides = self.sync(d, {'application': application(),
+                                           'updated_at': '2026-10-20T09:00:00+09:00'},
+                                       '2026-10-22T09:00:00+09:00')
+            self.assertEqual(out['status'], 'none')
+            self.assertEqual(out['writes'],
+                             [{'op': 'set', 'collection': 'state', 'doc_id': 'current',
+                               'data': {'application': None, 'updated_at': '2026-10-21T09:00:00+09:00'}}])
+            self.assertIsNone(overrides['application'])
 
 
 class DueTest(unittest.TestCase):
@@ -665,6 +777,255 @@ class AnswerTest(unittest.TestCase):
             out = self.answer(d, {'application': application()}, 'later')
             self.assertEqual(out.returncode, 2)
             self.assertTrue(out.stderr.strip())
+
+
+class LocalApplyTest(unittest.TestCase):
+    """--state を省いた apply はローカルの overrides.json と history.jsonl を書き換える。"""
+
+    def apply(self, d, template_name='cheap-all-tiers', until='2026-11-05T23:59:00+09:00',
+              on_expire='ask', reason='テスト', now='2026-10-22T09:00:00+09:00', via=None):
+        args = ['apply', '--home', d, '--now', now, '--template', template_name,
+                '--until', until, '--on-expire', on_expire, '--reason', reason]
+        if via:
+            args += ['--via', via]
+        return run(*args)
+
+    def put_overrides(self, d, app, synced_at='2026-10-16T09:00:00+09:00',
+                      updated_at='2026-10-20T09:00:00+09:00'):
+        write_json(os.path.join(d, 'overrides.json'),
+                   {'synced_at': synced_at, 'updated_at': updated_at, 'application': app})
+
+    def test_writes_application_and_replaces_history(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            self.put_overrides(d, application())
+            out = self.apply(d)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            result = json.loads(out.stdout)
+            overrides = read_json(os.path.join(d, 'overrides.json'))
+            self.assertEqual(overrides['synced_at'], '2026-10-16T09:00:00+09:00')
+            self.assertEqual(overrides['updated_at'], '2026-10-22T09:00:00+09:00')
+            self.assertEqual(overrides['application'], result['application'])
+            history = read_history(d)
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]['id'], APPLICATION['id'])
+            self.assertEqual(history[0]['ended_how'], 'replaced')
+            self.assertEqual(history[0]['ended_at'], '2026-10-22T09:00:00+09:00')
+            self.assertEqual([w['collection'] for w in result['writes']], ['history', 'state'])
+            self.assertEqual(result['writes'][1]['data'],
+                             {'application': result['application'],
+                              'updated_at': '2026-10-22T09:00:00+09:00'})
+
+    def test_without_previous_writes_only_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            out = self.apply(d)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            result = json.loads(out.stdout)
+            self.assertEqual([w['collection'] for w in result['writes']], ['state'])
+            overrides = read_json(os.path.join(d, 'overrides.json'))
+            self.assertIsNone(overrides['synced_at'])
+            self.assertEqual(overrides['updated_at'], '2026-10-22T09:00:00+09:00')
+            self.assertEqual(read_history(d), [])
+
+    def test_expired_drop_previous_is_expired(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            self.put_overrides(d, application(on_expire='drop'))
+            out = self.apply(d, now='2026-10-23T00:00:00+09:00')
+            self.assertEqual(out.returncode, 0, out.stderr)
+            history = read_history(d)
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]['ended_how'], 'expired')
+            self.assertEqual(history[0]['ended_at'], UNTIL)
+            self.assertEqual(json.loads(out.stdout)['writes'][0]['data']['ended_how'], 'expired')
+
+    def test_missing_template_is_exit_2_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.put_overrides(d, application())
+            out = self.apply(d, template_name='ghost')
+            self.assertEqual(out.returncode, 2)
+            self.assertTrue(out.stderr.strip())
+            self.assertEqual(out.stdout, '')
+            self.assertEqual(read_json(os.path.join(d, 'overrides.json'))['application'], application())
+            self.assertEqual(read_history(d), [])
+
+    def test_invalid_template_is_exit_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template(runner='gemini'))
+            out = self.apply(d)
+            self.assertEqual(out.returncode, 2)
+            self.assertTrue(out.stderr.strip())
+
+    def test_past_until_is_exit_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            out = self.apply(d, until='2026-10-22T08:59:00+09:00')
+            self.assertEqual(out.returncode, 2)
+            self.assertTrue(out.stderr.strip())
+            self.assertFalse(os.path.exists(os.path.join(d, 'overrides.json')))
+
+
+class LocalAnswerTest(unittest.TestCase):
+    """--state を省いた answer はローカルの overrides.json を読み書きする。"""
+
+    def answer(self, d, choice, until=None, now='2026-10-22T09:00:00+09:00'):
+        args = ['answer', '--home', d, '--now', now, '--choice', choice]
+        if until is not None:
+            args += ['--until', until]
+        return run(*args)
+
+    def put_overrides(self, d, app, synced_at='2026-10-16T09:00:00+09:00',
+                      updated_at='2026-10-20T09:00:00+09:00'):
+        write_json(os.path.join(d, 'overrides.json'),
+                   {'synced_at': synced_at, 'updated_at': updated_at, 'application': app})
+
+    def test_extend_rewrites_local_until(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.put_overrides(d, application())
+            out = self.answer(d, 'extend', until='2026-10-25T23:59:00+09:00')
+            self.assertEqual(out.returncode, 0, out.stderr)
+            result = json.loads(out.stdout)
+            overrides = read_json(os.path.join(d, 'overrides.json'))
+            self.assertEqual(overrides['application']['id'], APPLICATION['id'])
+            self.assertEqual(overrides['application']['until'], '2026-10-25T23:59:00+09:00')
+            self.assertEqual(overrides['updated_at'], '2026-10-22T09:00:00+09:00')
+            self.assertEqual(overrides['synced_at'], '2026-10-16T09:00:00+09:00')
+            self.assertEqual(read_history(d), [])
+            self.assertEqual(result['application'], overrides['application'])
+            self.assertEqual(result['writes'],
+                             [{'op': 'set', 'collection': 'state', 'doc_id': 'current',
+                               'data': {'application': result['application'],
+                                        'updated_at': '2026-10-22T09:00:00+09:00'}}])
+
+    def test_forever_clears_local_until(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.put_overrides(d, application())
+            out = self.answer(d, 'forever')
+            self.assertEqual(out.returncode, 0, out.stderr)
+            overrides = read_json(os.path.join(d, 'overrides.json'))
+            self.assertIsNone(overrides['application']['until'])
+            self.assertEqual(overrides['updated_at'], '2026-10-22T09:00:00+09:00')
+            self.assertEqual(read_history(d), [])
+
+    def test_stop_clears_local_and_appends_stopped(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.put_overrides(d, application())
+            out = self.answer(d, 'stop')
+            self.assertEqual(out.returncode, 0, out.stderr)
+            result = json.loads(out.stdout)
+            self.assertIsNone(result['application'])
+            overrides = read_json(os.path.join(d, 'overrides.json'))
+            self.assertIsNone(overrides['application'])
+            self.assertEqual(overrides['updated_at'], '2026-10-22T09:00:00+09:00')
+            self.assertEqual(overrides['synced_at'], '2026-10-16T09:00:00+09:00')
+            history = read_history(d)
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]['id'], APPLICATION['id'])
+            self.assertEqual(history[0]['ended_how'], 'stopped')
+            self.assertEqual(history[0]['ended_at'], '2026-10-22T09:00:00+09:00')
+            self.assertEqual([w['collection'] for w in result['writes']], ['history', 'state'])
+            self.assertEqual(result['writes'][1]['data'],
+                             {'application': None, 'updated_at': '2026-10-22T09:00:00+09:00'})
+
+    def test_stop_expired_ask_is_declined(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.put_overrides(d, application())
+            out = self.answer(d, 'stop', now='2026-10-23T00:00:00+09:00')
+            self.assertEqual(out.returncode, 0, out.stderr)
+            history = read_history(d)
+            self.assertEqual(history[0]['ended_how'], 'declined')
+            self.assertEqual(history[0]['ended_at'], '2026-10-23T00:00:00+09:00')
+
+    def test_no_application_is_exit_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self.answer(d, 'stop')
+            self.assertEqual(out.returncode, 2)
+            self.assertTrue(out.stderr.strip())
+            self.assertEqual(out.stdout, '')
+            self.put_overrides(d, None)
+            out = self.answer(d, 'forever')
+            self.assertEqual(out.returncode, 2)
+            self.assertTrue(out.stderr.strip())
+
+    def test_extend_without_until_is_exit_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.put_overrides(d, application())
+            out = self.answer(d, 'extend')
+            self.assertEqual(out.returncode, 2)
+            self.assertTrue(out.stderr.strip())
+
+    def test_extend_past_until_keeps_local_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.put_overrides(d, application())
+            before = read_json(os.path.join(d, 'overrides.json'))
+            out = self.answer(d, 'extend', until='2026-10-22T08:59:00+09:00')
+            self.assertEqual(out.returncode, 2)
+            self.assertTrue(out.stderr.strip())
+            self.assertEqual(read_json(os.path.join(d, 'overrides.json')), before)
+            self.assertEqual(read_history(d), [])
+
+
+class LocalStatusTest(unittest.TestCase):
+    def status(self, d, now='2026-10-22T09:00:00+09:00'):
+        out = run('status', '--home', d, '--now', now)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def put_overrides(self, d, app, synced_at='2026-10-16T09:00:00+09:00',
+                      updated_at='2026-10-20T09:00:00+09:00'):
+        write_json(os.path.join(d, 'overrides.json'),
+                   {'synced_at': synced_at, 'updated_at': updated_at, 'application': app})
+
+    def test_none_without_overrides(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self.status(d), {'status': 'none', 'application': None, 'writes': []})
+
+    def test_active(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            self.put_overrides(d, application())
+            result = self.status(d)
+            self.assertEqual(result['status'], 'active')
+            self.assertEqual(result['application']['id'], APPLICATION['id'])
+            self.assertEqual(result['writes'], [])
+
+    def test_expired_ask(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            self.put_overrides(d, application())
+            result = self.status(d, now='2026-10-23T00:00:00+09:00')
+            self.assertEqual(result['status'], 'expired_ask')
+            self.assertEqual(result['application']['id'], APPLICATION['id'])
+            self.assertEqual(result['writes'], [])
+            self.assertEqual(read_history(d), [])
+
+    def test_expired_drop_clears_local_and_appends_expired(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_json(os.path.join(d, 'templates', 'cheap-all-tiers.json'), template())
+            self.put_overrides(d, application(on_expire='drop'))
+            result = self.status(d, now='2026-10-23T00:00:00+09:00')
+            self.assertEqual(result['status'], 'expired_drop')
+            self.assertIsNone(result['application'])
+            overrides = read_json(os.path.join(d, 'overrides.json'))
+            self.assertIsNone(overrides['application'])
+            self.assertEqual(overrides['updated_at'], '2026-10-23T00:00:00+09:00')
+            self.assertEqual(overrides['synced_at'], '2026-10-16T09:00:00+09:00')
+            history = read_history(d)
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]['ended_how'], 'expired')
+            self.assertEqual(history[0]['ended_at'], UNTIL)
+            self.assertEqual([w['collection'] for w in result['writes']], ['history', 'state'])
+            self.assertEqual(result['writes'][1]['data'],
+                             {'application': None, 'updated_at': '2026-10-23T00:00:00+09:00'})
+
+    def test_unknown_template_keeps_application(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.put_overrides(d, application(template='ghost'))
+            result = self.status(d)
+            self.assertEqual(result['status'], 'unknown_template')
+            self.assertEqual(result['application']['template'], 'ghost')
+            self.assertEqual(result['writes'], [])
 
 
 class PushTest(unittest.TestCase):

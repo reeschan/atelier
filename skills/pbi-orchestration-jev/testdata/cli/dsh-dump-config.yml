@@ -1,0 +1,17 @@
+# == @deepseek-ai/dsh-base
+- id: tool-plugin-manager
+  name: '@deepseek-ai/dsh-plugin-manager/tools'
+- id: user-questions
+  name: '@deepseek-ai/dsh-user-questions'
+- id: agent
+  name: '@deepseek-ai/dsh-agent'
+- id: plugin-package-inventory-deepseek
+  name: '@deepseek-ai/dsh-plugin-package-inventory-deepseek'
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
+- id: jobs
+  name: '@deepseek-ai/dsh-jobs-local'
+- id: llm-retry
