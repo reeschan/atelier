@@ -1,4 +1,4 @@
-# 実行先ごとの渡し方（opencode / Codex / Antigravity / dsh）
+# 実行先ごとの渡し方（opencode / Codex / Antigravity / dsh / mcp）
 
 route に出た実行先を初めて使う前に、その節だけを読む。依頼文（SKILL.md 6 章）は `docs/pbi/<実行先>/<報告名>.prompt.md` に書き、末尾に「要約の書き先: `docs/pbi/<実行先>/<報告名>.last.md`」を足す。リポジトリのルートで Bash から `run_in_background` で 1 件ずつ起動する。cd はリテラルの絶対パスで行う（変数で cd すると Claude Code の権限確認で止まる）。route に出る外部の実行先は、prepare.py が agents.json と CLI の検出で照合済み。見つからない・使わない・選んでいないモデルの手順は、承認一覧の「外した手順」に出て route に入らない。
 
@@ -86,3 +86,18 @@ python <このディレクトリ>/dsh_run.py <報告名> --model <route の mode
 - 差し戻しは新しく起動し直す（`--session-id` で前の会話は続けない）
 - dsh は AGENTS.md・CLAUDE.md を読むとは限らない。PBI に要る規約は PBI 本文に書く
 - トークン数・ステップ数・時間は `record_run.py` が `.jsonl` の `status` イベントの usage と `.run.json` から読む。cost は出ない（null）。DeepSeek 公式の料金は DeepSeek のアカウントの従量課金
+
+## mcp（MCP クライアントの実行先。jev-mcp で受け渡す）
+
+Harness² などの外部の実装担当が、MCP サーバー jev-mcp（`jev_mcp.py`）から PBI を受け取る。設計者は起動しない。依頼文を `docs/pbi/mcp/<報告名>.prompt.md` に書き（要約の書き先は `docs/pbi/mcp/<報告名>.last.md`）、`.last.md` ができるのを待つ。2026-10 時点では route には出ない（routing.json の実行先に mcp は無い）。ユーザーが mcp に渡すと決めた PBI だけをこの形で置く。
+
+```bash
+python <このディレクトリ>/jev_mcp.py --root <作業リポジトリの絶対パス>                  # stdio
+python <このディレクトリ>/jev_mcp.py --http --port 7830 --root <作業リポジトリの絶対パス>  # http://127.0.0.1:7830/mcp
+```
+
+- ツールは `list_tasks`・`claim_task`・`submit_result`・`fail_task`・`verify`・`jev_gate`。`claim_task` は `docs/pbi/mcp/<報告名>.claim.json` を排他的に作り、同じ報告名を 2 回は渡さない
+- `submit_result` / `fail_task` は `docs/pbi/reports/<報告名>.md`（詳細）と `.last.md`（worker.md の 5 行）を書く。`.last.md` は最後に書く。実行先の出力（Harness² の summary など）は `<報告名>.artifacts.json` に残る。設計者は他の実行先と同じく `.last.md` だけを読み、8 章の検証は自分で行う（`verify` ツールの結果は実行先の自己申告として扱う）
+- `jev_gate` は jev-mcp の側で `jev/jev.py` を呼ぶ。API キーはサーバーの環境変数だけが持ち、クライアントには渡らない。送るのは文章だけ
+- HTTP は 127.0.0.1 だけで待ち受け、Host が 127.0.0.1・localhost・[::1] でない要求は 403 で断る。認証は無いので、ほかの機械には公開しない
+- **使えないとき**（`.last.md` が来ない、状態が NEEDS_CONTEXT / BLOCKED）: 他の実行先と同じく `route` の次へ進むか、差し戻しの手順に従う。取得済みのまま止まった `.claim.json` は、実行先が止まったことを確かめてから消す
