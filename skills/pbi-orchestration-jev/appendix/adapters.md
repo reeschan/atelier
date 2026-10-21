@@ -56,6 +56,12 @@ Entry rule:
 
 1. If this run starts with a spec path (a `docs/specs/*.md` file in the request, or a handoff from a design skill that passes one), the design is done. Skip this phase and record `built-in skip (spec given)`.
 
+Read the setting next: run `python <skill>/adapter_gate.py docs/pbi` (no PBIs are needed yet) and take the `design` row's setting.
+
+- `off`: skip this phase without asking, and record `built-in off (turned off in agents.json)`.
+- A skill name: in step 5, use that skill instead of the table's callees when it is in the skill list. When it is not, use the table's order and record the fallback with its reason.
+- `auto`: use the table's order.
+
 Decide before the decomposition, from the request and a short look at the repository:
 
 2. **Clearly complex** (run without asking): the request adds a new concept, an external interface, or a data-model change, and the work likely spans 2 or more modules.
@@ -64,9 +70,9 @@ Decide before the decomposition, from the request and a short look at the reposi
 
 When the decision is run:
 
-5. If `mattpocock-skills:grilling` is in the skill list, run it in the main session. Run `mattpocock-skills:domain-modeling` after it only when GLOSSARY.md or CONTEXT.md exists in the target repository.
+5. When the setting names a skill that is in the skill list, run that skill in the main session, and skip the table's callees. Otherwise, if `mattpocock-skills:grilling` is in the skill list, run it in the main session, and run `mattpocock-skills:domain-modeling` after it only when GLOSSARY.md or CONTEXT.md exists in the target repository.
 6. Then write `docs/specs/<slug>.md` yourself, where `<slug>` is a short lowercase name for the work. Use these headings in this order: Problem Statement, Solution, User Stories, Implementation Decisions, Testing Decisions, Out of Scope, Further Notes. The callees do not write the spec.
-7. When grilling is not in the skill list, write the design yourself in the same file: the decisions you made and the assumptions you put in. Record `built-in fallback (grilling not in the skill list)`. List the assumptions in the approval list under "Open assumptions", a few lines each, so the user can correct them there.
+7. When step 5 ran no callee (neither the named skill nor grilling is in the skill list), write the design yourself in the same file: the decisions you made and the assumptions you put in. Record `built-in fallback (grilling not in the skill list)`. List the assumptions in the approval list under "Open assumptions", a few lines each, so the user can correct them there.
 8. When step 7 applies and the work is clearly complex, add one line to the approval list, in the user's language: "To deepen the design, run `setup --recommended` to install mattpocock-skills." Then write `<home>/notices.json` as `{"recommended_hint_shown": "<ISO datetime>"}`. If that key is already there, do not show the line again.
 
 ## Final review and security review
