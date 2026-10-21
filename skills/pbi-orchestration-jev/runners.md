@@ -1,10 +1,10 @@
 # 実行先ごとの渡し方（opencode / Codex / Antigravity / dsh）
 
-route に出た実行先を初めて使う前に、その節だけを読む。依頼文（SKILL.md 6 章）は `docs/pbi/<実行先>/<報告名>.prompt.md` に書き、末尾に「要約の書き先: `docs/pbi/<実行先>/<報告名>.last.md`」を足す。リポジトリのルートで Bash から `run_in_background` で 1 件ずつ起動する。cd はリテラルの絶対パスで行う（変数で cd すると Claude Code の権限確認で止まる）。
+route に出た実行先を初めて使う前に、その節だけを読む。依頼文（SKILL.md 6 章）は `docs/pbi/<実行先>/<報告名>.prompt.md` に書き、末尾に「要約の書き先: `docs/pbi/<実行先>/<報告名>.last.md`」を足す。リポジトリのルートで Bash から `run_in_background` で 1 件ずつ起動する。cd はリテラルの絶対パスで行う（変数で cd すると Claude Code の権限確認で止まる）。route に出る外部の実行先は、prepare.py が agents.json と CLI の検出で照合済み。見つからない・使わない・選んでいないモデルの手順は、承認一覧の「外した手順」に出て route に入らない。
 
 外部の実行先は shared-memory の `get` を使えないものとして扱う。PBI の「参照」欄に ref があれば、設計者がその本文を `get` して、依頼文のファイルの末尾に「## 参照（作業空間の ref）」として id ごとに書き写す。依頼文には「参照欄の ref は下に写してある。memory は使わない」と書き足す（SKILL.md 0.8）。
 
-報告は `.last.md`（4 行）だけを読む。`.jsonl`・`.log`・`.json` は丸ごと読まず、下に書いた項目を `grep -m` や `tail -n` で取り出す。
+報告は `.last.md`（5 行）だけを読む。`.jsonl`・`.log`・`.json` は丸ごと読まず、下に書いた項目を `grep -m` や `tail -n` で取り出す。
 
 差し戻しは新しく起動し直す（`<報告名>` を `PBI-<連番>.rework-<n>` にする）。前回の会話を続ける `opencode run -c`・`codex exec resume`・`dsh --session-id` は使わない。前回の文脈は報告ファイルと差し戻し文で渡す。
 
@@ -38,14 +38,16 @@ PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<このディレクトリ>/opencode.confi
 - opencode は AGENTS.md を読むが CLAUDE.md は読まない。PBI に要る規約は PBI 本文に書く
 - トークン数・cost・ステップ数・時間は、合否を決めたときの `record_run.py`（SKILL.md 8 章）が `.jsonl` の `step_finish` から読んで runs.jsonl に書く。手で足さない。無料枠（`opencode/…-free`）の cost は 0 で出る
 
-## Codex（`select_model.py` の `CODEX_UNTIL` まで。haiku・sonnet の段）
+## Codex（haiku・sonnet の段）
+
+期限を付けたいときは、振り分けテンプレートの手順に until を書く。
 
 ```bash
 mkdir -p docs/pbi/codex
-codex exec -m gpt-6-astra -c model_reasoning_effort='"<route の effort>"' -s workspace-write   -o docs/pbi/codex/<報告名>.last.md - < docs/pbi/codex/<報告名>.prompt.md   > docs/pbi/codex/<報告名>.log 2>&1
+codex exec -m <route の model> -c model_reasoning_effort='"<route の effort>"' -s workspace-write   -o docs/pbi/codex/<報告名>.last.md - < docs/pbi/codex/<報告名>.prompt.md   > docs/pbi/codex/<報告名>.log 2>&1
 ```
 
-- `-o` の `.last.md` には最後のメッセージ（worker.md の 4 行）が入る。トークン数は `record_run.py` が `<報告名>.log` の `tokens used` の合計から読む（内訳は取れないので null になる。12 章の統計は Codex を数えない）
+- `-o` の `.last.md` には最後のメッセージ（worker.md の 5 行）が入る。トークン数は `record_run.py` が `<報告名>.log` の `tokens used` の合計から読む（内訳は取れないので null になる。12 章の統計は Codex を数えない）
 - effort は route の値（haiku 相当 `medium`、sonnet 相当 `high`）。high より上（xhigh / max）は使わない
 - **使えないとき**（終了コードが 0 以外で、利用上限・認証・接続のエラー、または `.last.md` が空）: 1 回だけ再実行し、だめなら `route` の次へ進む
 - Codex は CLAUDE.md を読まず、リポジトリの AGENTS.md を読む。PBI に要る規約は PBI 本文に書く
@@ -68,7 +70,7 @@ agy -p "docs/pbi/agy/<報告名>.prompt.md を読み、その指示どおりに�
 
 ## dsh（DeepSeek Harness の headless。優先テンプレートから使う）
 
-DeepSeek Harness（`@deepseek-ai/dsh`）の headless で、DeepSeek 公式 API などのモデルを直接呼ぶ。route の model は `<provider>/<model>`（dsh の provider 名とモデル ID）で、例えば DeepSeek 公式の V4.1 Flash 1017 は `deepseek-official/deepseek-flash`。effort は dsh の reasoningEffort（DeepSeek 公式の Flash は `low` / `high` / `max` と、付けない。`medium` は無い）。provider と既定の設定は `DSH_HOME` の `cordis.patch.yml` に書く（DeepSeek 公式の `deepseek-official` は dsh に組み込まれている）。
+DeepSeek Harness（`@deepseek-ai/dsh`）の headless で、DeepSeek 公式 API などのモデルを直接呼ぶ。route の model は `<provider>/<model>`（dsh の provider 名とモデル ID）で、例えば DeepSeek 公式の V4.1 Flash 1017 は `deepseek-official/deepseek-flash`。effort は dsh の reasoningEffort として渡す。使える値は provider と入れた dsh の版で変わる（2026-10 の手元では DeepSeek 公式の Flash で `high` が通った）。null なら reasoningEffort を付けず、dsh がその provider の既定を使うことがある。provider と既定の設定は `DSH_HOME` の `cordis.patch.yml` に書く（DeepSeek 公式の `deepseek-official` は dsh に組み込まれている）。
 
 ```bash
 mkdir -p docs/pbi/dsh

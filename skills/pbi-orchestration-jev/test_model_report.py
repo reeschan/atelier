@@ -107,6 +107,40 @@ class ModelReportTest(unittest.TestCase):
         self.assertIn(GLM, r.stdout)
         self.assertIn('仮の評価', r.stdout)
 
+    def test_cost_unknown_counts_rows_with_neither_cost(self):
+        rows = [row('PBI-010', 'PBI-010', 1, 0, GLM, '合格', cost=0.02, api=None),
+                row('PBI-010', 'PBI-010.rework-1', 1, 1, GLM, '合格', cost=None, api=0.5),
+                row('PBI-010', 'PBI-010.rework-2', 1, 2, GLM, '合格', cost=None, api=None),
+                row('PBI-010', 'PBI-010.rework-3', 1, 3, GLM, '合格', cost=None, api=None)]
+        path = self.dir / 'costs.jsonl'
+        path.write_text(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in rows), encoding='utf-8')
+        r = run([path], '--json')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        report = json.loads(r.stdout)
+        m = {x['label']: x for x in report['models']}[f'opencode {GLM} max']
+        self.assertEqual(m['attempts'], 4)
+        self.assertEqual(m['cost_unknown'], 2)
+        self.assertEqual(m['cost_reported'], 0.02)
+        self.assertEqual(m['cost_api_equiv'], 0.5)
+        self.assertEqual(report['cost_unknown'], 2)
+
+    def test_markdown_table_shows_cost_unknown_column_and_total(self):
+        rows = [row('PBI-011', 'PBI-011', 1, 0, GLM, '合格', cost=0.02, api=None),
+                row('PBI-011', 'PBI-011.rework-1', 1, 1, GLM, '合格', cost=None, api=0.5),
+                row('PBI-011', 'PBI-011.rework-2', 1, 2, GLM, '合格', cost=None, api=None),
+                row('PBI-011', 'PBI-011.rework-3', 1, 3, GLM, '合格', cost=None, api=None)]
+        path = self.dir / 'costs.jsonl'
+        path.write_text(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in rows), encoding='utf-8')
+        r = run([path])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        header = [c.strip() for c in next(l for l in r.stdout.splitlines()
+                                          if l.startswith('| モデル |')).split('|')]
+        self.assertIn('費用不明', header)
+        line = next(l for l in r.stdout.splitlines() if l.startswith(f'| opencode {GLM} max |'))
+        cells = [c.strip() for c in line.split('|')]
+        self.assertEqual(cells[header.index('費用不明')], '2')
+        self.assertIn('費用不明: 2 件 / 全 4 件', r.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

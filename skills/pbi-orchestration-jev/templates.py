@@ -8,8 +8,9 @@
   python templates.py push [--existing NAME,...] [--home DIR] [--now ISO]
 
 home は templates/ ディレクトリ・overrides.json・web.json を置くディレクトリ。解決順は
-(1) --home (2) 環境変数 PBI_TEMPLATES_HOME (3) スクリプトのディレクトリの親の名前が
-versions ならその親 (版管理のローカル配置。スキルのルート) (4) スクリプトのディレクトリ。
+(1) --home (2) 環境変数 PBI_HOME (3) 環境変数 PBI_TEMPLATES_HOME (旧名。互換のためだけに読む)
+(4) 環境変数 XDG_CONFIG_HOME があればその下の pbi-orchestration-jev、無ければ
+~/.config/pbi-orchestration-jev。
 
 check は 1 件 1 行で ok <name> / ng <name>: <問題> を出し、1 件でも ng なら終了コード 1。
 sync は写し overrides.json を書き、{"status", "application", "writes"} を UTF-8 の JSON で
@@ -24,14 +25,15 @@ push は templates/ への set と delete の writes を出す。どれもデー
 import argparse
 import datetime
 import json
-import os
 import re
 import sys
 from pathlib import Path
 
+import common
+
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,62}$')
-RUNNERS = ('opencode', 'codex', 'agy', 'dsh', 'agent')
-TIERS = ('haiku', 'sonnet', 'opus')
+RUNNERS = common.RUNNERS
+TIERS = common.TIERS
 # 形は振り分けテンプレート (routing.json) に揃える。$schema_note と手順の until (日付) も書ける
 TEMPLATE_KEYS = frozenset(('name', 'description', 'tiers', '$schema_note'))
 STEP_KEYS = frozenset(('runner', 'model', 'effort', 'until'))
@@ -40,17 +42,8 @@ ROTATE_KEY = 'rotate'
 EMPTY_OVERRIDES = {'synced_at': None, 'application': None}
 
 
-def resolve_home(arg: str | None) -> Path:
-    """--home → 環境変数 → 親が versions ならスキルのルート → スクリプトのディレクトリ。"""
-    if arg:
-        return Path(arg)
-    env = os.environ.get('PBI_TEMPLATES_HOME')
-    if env:
-        return Path(env)
-    here = Path(__file__).parent
-    if here.parent.name == 'versions':
-        return here.parent.parent
-    return here
+# prepare.py・select_model.py・テストが使う名前はそのまま残す (中身は common.resolve_home)
+resolve_home = common.resolve_home
 
 
 def parse_time(s: str) -> datetime.datetime:
