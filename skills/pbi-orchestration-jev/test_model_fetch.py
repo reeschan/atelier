@@ -4,6 +4,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -298,18 +299,32 @@ class FailureTest(Base):
         self.assertNotIn('\n', message)
         self.assertTrue(message.isascii())
 
-    def test_timeout(self):
+    def slow_cli(self):
+        """子プロセスが出力のパイプを握ったまま 30 秒眠る CLI (シェルが exec しないので子が残る)。"""
         script = self.root / 'slow.py'
-        script.write_text('import time\ntime.sleep(5)\n', encoding='utf-8')
+        script.write_text('import time\ntime.sleep(30)\n', encoding='utf-8')
         if os.name == 'nt':
             cli = self.root / 'slow.cmd'
             cli.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding='utf-8')
         else:
             cli = self.root / 'slow'
-            cli.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding='utf-8')
+            cli.write_text(f'#!/bin/sh\n"{sys.executable}" "{script}" "$@"\n', encoding='utf-8')
             cli.chmod(0o755)
+        return cli
+
+    def test_timeout(self):
+        cli = self.slow_cli()
+        started = time.monotonic()
         with self.assertRaises(model_fetch.FetchError):
-            model_fetch.fetch('opencode', str(cli), timeout=0.3)
+            model_fetch.fetch('opencode', str(cli), timeout=0.5)
+        # 子孫ごと止めるので、子の 30 秒を待たずに戻る
+        self.assertLess(time.monotonic() - started, 20)
+
+    def test_version_timeout_returns_none_without_waiting_for_the_child(self):
+        cli = self.slow_cli()
+        started = time.monotonic()
+        self.assertIsNone(model_fetch.version('codex', str(cli), timeout=0.5))
+        self.assertLess(time.monotonic() - started, 20)
 
 
 class VersionTest(Base):

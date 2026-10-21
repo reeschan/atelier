@@ -7,6 +7,7 @@ agent は組み込みの定義から取る。取得の失敗は FetchError に�
 import json
 import os
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 
@@ -57,7 +58,7 @@ def version(runner: str, cli: str | None, env: dict | None = None, timeout: floa
     if runner == 'dsh' and _is_js(cli):
         arguments = _node_argv(env) + arguments
     try:
-        result = subprocess.run(arguments, capture_output=True, timeout=timeout, env=env)
+        result = _run_process(arguments, env, timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
@@ -292,7 +293,7 @@ def _load_catalog() -> list:
 def _run(runner: str, arguments: list, env: dict | None, timeout: float):
     """CLI を起動する。起動できない・時間切れは FetchError。"""
     try:
-        return subprocess.run(arguments, capture_output=True, timeout=timeout, env=env)
+        return _run_process(arguments, env, timeout)
     except subprocess.TimeoutExpired:
         raise FetchError(f'{runner}: the CLI timed out after {timeout} seconds.')
     except OSError as error:
@@ -302,6 +303,44 @@ def _run(runner: str, arguments: list, env: dict | None, timeout: float):
         if isinstance(error, PermissionError):
             raise FetchError(f'{runner}: permission denied when running the CLI.')
         raise FetchError(f'{runner}: cannot run the CLI.')
+
+
+def _run_process(arguments: list, env: dict | None, timeout: float) -> subprocess.CompletedProcess:
+    """CLI を起動して出力を集める。時間切れなら子孫のプロセスごと止めて TimeoutExpired を投げる。
+
+    Windows の .cmd は cmd.exe の下で本体が動くので、subprocess.run の kill では本体が残り、
+    本体が握ったパイプのせいで後の communicate が戻らないことがある。そのため木ごと止める。
+    """
+    process = subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                               start_new_session=os.name != 'nt')
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(process)
+        try:
+            # 止めたあとの出力の回収。待ちすぎないよう短く区切る (5 秒は taskkill が終わるのに足りる幅)
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            for stream in (process.stdout, process.stderr):
+                stream.close()
+        raise subprocess.TimeoutExpired(arguments, timeout) from None
+    return subprocess.CompletedProcess(arguments, process.returncode, stdout, stderr)
+
+
+def _kill_tree(process: subprocess.Popen) -> None:
+    """プロセスと子孫を止める。Windows は taskkill /T、ほかはプロセスグループに SIGKILL。"""
+    try:
+        if os.name == 'nt':
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        process.kill()
+    except OSError:
+        pass
 
 
 def _checked(runner: str, result) -> str:
