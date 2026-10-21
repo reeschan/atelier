@@ -10,6 +10,7 @@ import threading
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -20,6 +21,20 @@ import serve  # noqa: E402
 SKILL = Path(HERE).parent
 DEFAULT = json.loads((SKILL / 'routing.default.json').read_text(encoding='utf-8'))
 CHEAP = json.loads((SKILL / 'examples' / 'templates' / 'cheap-all-tiers.json').read_text(encoding='utf-8'))
+# options の一致 (opencode の deepseek・agent の opus) と aa_slug の一致 (codex/claude-sonnet-5-5-low) を確かめる表
+CATALOG_FIXTURE = {
+    'models': [
+        {'id': 'deepseek-flash', 'aa_slug': 'deepseek-v4-1-flash', 'quality': 66,
+         'price_in': 0.15, 'price_out': 0.6, 'sample': True,
+         'options': [{'runner': 'opencode', 'model': 'opencode-go/deepseek-v4.1-flash'}]},
+        {'id': 'claude-sonnet', 'aa_slug': 'claude-sonnet-5-5', 'quality': 80,
+         'price_in': 3.0, 'price_out': 15.0, 'sample': True,
+         'options': [{'runner': 'agent', 'model': 'sonnet'}]},
+        {'id': 'claude-opus', 'aa_slug': 'claude-opus-5-5', 'quality': 90,
+         'price_in': 15.0, 'price_out': 75.0, 'sample': True,
+         'options': [{'runner': 'agent', 'model': 'opus'}]},
+    ],
+}
 
 
 class ServeTest(unittest.TestCase):
@@ -68,6 +83,13 @@ class ServeTest(unittest.TestCase):
             'models': [{'id': model, 'name': None, 'efforts': ['low', 'high']}
                        for model in ('opus', 'sonnet', 'haiku')],
         })
+        # 品質・価格の参考は、同梱の catalog.json の値が更新で変わってもテストが揺れないよう、決まった表で確かめる
+        catalog = self.home.parent / f'{self.home.name}-catalog.json'
+        catalog.write_text(json.dumps(CATALOG_FIXTURE), encoding='utf-8')
+        self.addCleanup(catalog.unlink, missing_ok=True)
+        patcher = mock.patch.object(serve, 'CATALOG', catalog)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.saved = []
         self.closed = []
         self.server = serve.make_server(
@@ -206,6 +228,14 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertIsNone(json.loads(body)['runner']['selected'])
         self.assertNotIn('models', self.read_json('agents.json')['runners']['opencode'])
+
+    def test_put_agents_refuses_selected_items_that_are_not_strings(self):
+        before = self.read_json('agents.json')
+        for selected in ([{}], [['a']], [''], 'opencode-go/other'):
+            code, _ = self.request('PUT', '/api/agents/opencode', {'selected': selected})
+            self.assertEqual(code, 400, selected)
+        self.assertEqual(self.read_json('agents.json'), before)
+        self.assertEqual(self.get_state()['runners']['opencode']['missing_selected'], ['gone-model'])
 
     def test_agent_cannot_be_disabled(self):
         code, body = self.request('PUT', '/api/agents/agent', {'enabled': False})

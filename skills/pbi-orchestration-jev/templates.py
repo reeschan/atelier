@@ -190,10 +190,9 @@ def load_overrides(home: Path) -> dict:
 
 def save_overrides(home: Path, synced_at: str | None, updated_at: str | None,
                    application: dict | None) -> None:
-    """overrides.json を UTF-8 で書く。home が無ければ作る。"""
-    home.mkdir(parents=True, exist_ok=True)
+    """overrides.json を書く。正本なので、書きかけで残らないよう一時ファイルから置き換える (common.write_json)。"""
     data = {'synced_at': synced_at, 'updated_at': updated_at, 'application': application}
-    (home / 'overrides.json').write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+    common.write_json(home / 'overrides.json', data)
 
 
 def append_history(home: Path, record: dict) -> None:
