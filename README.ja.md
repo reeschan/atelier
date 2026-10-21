@@ -276,6 +276,7 @@ skills/pbi-orchestration-jev/
 ├── examples/routing/           # 外部の実行先を使う振り分けの見本 (multi-runner.json)
 ├── examples/templates/         # 優先テンプレートの例 (home の templates/ にコピーして使う)
 ├── unchanged.py                # PBI が触ってはいけないファイルをハッシュで確かめる
+├── jev_mcp.py                  # jev-mcp: PBI を MCP クライアントに渡す MCP サーバー (stdio / HTTP)
 ├── agent_stats.py              # 会話記録からトークン・キャッシュ・文脈の大きさを集計
 ├── record_run.py               # 1 回の実行を runs.jsonl に 1 行で記録し、生ログを保全先にコピー
 ├── model_report.py             # runs.jsonl からモデル別の結果・トークン・コスト・仮の評価を集計
@@ -290,7 +291,7 @@ skills/pbi-orchestration-jev/
 │   └── test_jev.py / jev.test.mjs
 ├── test_select_model.py / test_agents.py / test_common.py
 ├── test_templates.py / test_prepare.py / test_unchanged.py
-├── test_record_run.py / test_model_report.py / test_dsh_run.py
+├── test_record_run.py / test_model_report.py / test_dsh_run.py / test_jev_mcp.py
 ├── test_references.py          # スキルの文書が名前を挙げるファイルの実在
 └── test_agent_stats.py
 ```
@@ -303,6 +304,26 @@ python jev/jev.py --request <request.json>                 # リクエストを�
 ```
 
 成功時は応答の JSON を標準出力に出し、終了コード 0 で終わります。Jev の失敗時は `{"error": ...}` を出して 1、引数の誤りは 2 です。429 / 529 は最大 3 回、5xx・接続エラー・タイムアウトは 1 回だけ再試行します。
+
+### jev-mcp (MCP サーバー)
+
+`jev_mcp.py` を使うと、Harness² などの MCP クライアントを実行先の 1 つとして使えます。設計者は他の外部の実行先と同じく `docs/pbi/mcp/<報告名>.prompt.md` に依頼文を書きます。クライアントはそれを取得して作業し、いつもの形で報告します (詳細は `docs/pbi/reports/<報告名>.md`、5 行の要約は `docs/pbi/mcp/<報告名>.last.md`)。承認・検証・レビュー・差し戻しは設計者のままです。
+
+```sh
+python skills/pbi-orchestration-jev/jev_mcp.py --root /path/to/repo                      # stdio
+python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/to/repo   # http://127.0.0.1:7830/mcp
+```
+
+| ツール | すること |
+|---|---|
+| `list_tasks` | `docs/pbi/mcp/` の依頼文と状態 (queued / claimed / done) |
+| `claim_task` | 依頼文を取得済みにし (1 回だけ)、依頼文・PBI と見出しごとの節・検証コマンド・差し戻し文・facts・route・`worker.md` を返す |
+| `submit_result` | 詳細ファイルと 5 行の要約を書く。`artifacts` (Harness² の summary など) は `<報告名>.artifacts.json` に残る |
+| `fail_task` | NEEDS_CONTEXT / BLOCKED を同じ 2 つのファイルで報告する |
+| `verify` | 作業ツリー (worktree など) で `verify.py` を実行し、表と終了コードを返す |
+| `jev_gate` | `jev/jev.py` で Jev のゲートを 1 回聞く。API キーはサーバーの側だけが持つ |
+
+扱うのは `--root` (または `PBI_MCP_ROOTS`) の下のリポジトリだけです。HTTP は 127.0.0.1 だけで待ち受け、ほかの Host は断ります。認証は無いので、ほかの機械には公開しないでください。詳しくは `runners.md` の mcp の節を見てください。
 
 ## 調整
 
