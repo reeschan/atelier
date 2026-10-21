@@ -70,7 +70,7 @@ agy -p "docs/pbi/agy/<報告名>.prompt.md を読み、その指示どおりに�
 
 ## dsh（DeepSeek Harness の headless。優先テンプレートから使う）
 
-DeepSeek Harness（`@deepseek-ai/dsh`）の headless で、DeepSeek 公式 API などのモデルを直接呼ぶ。route の model は `<provider>/<model>`（dsh の provider 名とモデル ID）で、例えば DeepSeek 公式の V4.1 Flash 1017 は `deepseek-official/deepseek-flash`。effort は dsh の reasoningEffort（DeepSeek 公式の Flash は `low` / `high` / `max` と、付けない。`medium` は無い）。provider と既定の設定は `DSH_HOME` の `cordis.patch.yml` に書く（DeepSeek 公式の `deepseek-official` は dsh に組み込まれている）。
+DeepSeek Harness（`@deepseek-ai/dsh`）の headless で、DeepSeek 公式 API などのモデルを直接呼ぶ。route の model は `<provider>/<model>`（dsh の provider 名とモデル ID）で、例えば DeepSeek 公式の V4.1 Flash 1017 は `deepseek-official/deepseek-flash`。effort は dsh の reasoningEffort として渡す。使える値は provider と入れた dsh の版で変わる（2026-10 の手元では DeepSeek 公式の Flash で `high` が通った）。null なら reasoningEffort を付けず、dsh がその provider の既定を使うことがある。provider と既定の設定は `DSH_HOME` の `cordis.patch.yml` に書く（DeepSeek 公式の `deepseek-official` は dsh に組み込まれている）。
 
 ```bash
 mkdir -p docs/pbi/dsh
