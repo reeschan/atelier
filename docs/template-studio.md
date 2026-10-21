@@ -98,7 +98,7 @@ flowchart LR
 | `POST /api/close` | 応答を返してからサーバーを終える |
 
 - 起動は `python studio/serve.py [--home DIR] [--port 0] [--no-open] [--timeout 1800] [--tab agents|routing|priority]`。起動すると `OPEN <url>` を出し (`--tab` は URL の `#<tab>`)、保存のたびに `SAVED <kind> <path>`、`POST /api/close` で `CLOSED`、`--timeout` 秒何も保存されなければ `TIMEOUT` を出して終わる。保存のたびに数え直し、0 以下は無制限。
-- `PUT /api/routing` の検査は、形 (`select_model.routing_error`) に加えて `agents.json` との照合も行う。agent 以外の手順は実行先が enabled で、その実行先にモデルの一覧があれば、モデルがその中にあること。
+- `PUT /api/routing` の検査は、形 (`select_model.routing_error`) に加えて `agents.json` との照合も行う。agent 以外の手順は実行先が enabled で、`agents.json` のその実行先に選んだモデル (`models`) があれば、モデルがその中にあること。取得した一覧 (`models/<runner>.json`) にあっても、選んでいなければ通さない。
 - `PUT /api/application` の応答には `opus_override` が入る。テンプレートが opus の段を上書きしていれば true で、画面は設計判断が要る PBI まで安いモデルに回しているおそれがあると注意を出す。
 
 ## セキュリティ
