@@ -4,7 +4,7 @@ route に出た実行先を初めて使う前に、その節だけを読む。�
 
 外部の実行先は shared-memory の `get` を使えないものとして扱う。PBI の「参照」欄に ref があれば、設計者がその本文を `get` して、依頼文のファイルの末尾に「## 参照（作業空間の ref）」として id ごとに書き写す。依頼文には「参照欄の ref は下に写してある。memory は使わない」と書き足す（SKILL.md 0.8）。
 
-報告は `.last.md`（4 行）だけを読む。`.jsonl`・`.log`・`.json` は丸ごと読まず、下に書いた項目を `grep -m` や `tail -n` で取り出す。
+報告は `.last.md`（5 行）だけを読む。`.jsonl`・`.log`・`.json` は丸ごと読まず、下に書いた項目を `grep -m` や `tail -n` で取り出す。
 
 差し戻しは新しく起動し直す（`<報告名>` を `PBI-<連番>.rework-<n>` にする）。前回の会話を続ける `opencode run -c`・`codex exec resume`・`dsh --session-id` は使わない。前回の文脈は報告ファイルと差し戻し文で渡す。
 
@@ -44,10 +44,10 @@ PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<このディレクトリ>/opencode.confi
 
 ```bash
 mkdir -p docs/pbi/codex
-codex exec -m gpt-6-astra -c model_reasoning_effort='"<route の effort>"' -s workspace-write   -o docs/pbi/codex/<報告名>.last.md - < docs/pbi/codex/<報告名>.prompt.md   > docs/pbi/codex/<報告名>.log 2>&1
+codex exec -m <route の model> -c model_reasoning_effort='"<route の effort>"' -s workspace-write   -o docs/pbi/codex/<報告名>.last.md - < docs/pbi/codex/<報告名>.prompt.md   > docs/pbi/codex/<報告名>.log 2>&1
 ```
 
-- `-o` の `.last.md` には最後のメッセージ（worker.md の 4 行）が入る。トークン数は `record_run.py` が `<報告名>.log` の `tokens used` の合計から読む（内訳は取れないので null になる。12 章の統計は Codex を数えない）
+- `-o` の `.last.md` には最後のメッセージ（worker.md の 5 行）が入る。トークン数は `record_run.py` が `<報告名>.log` の `tokens used` の合計から読む（内訳は取れないので null になる。12 章の統計は Codex を数えない）
 - effort は route の値（haiku 相当 `medium`、sonnet 相当 `high`）。high より上（xhigh / max）は使わない
 - **使えないとき**（終了コードが 0 以外で、利用上限・認証・接続のエラー、または `.last.md` が空）: 1 回だけ再実行し、だめなら `route` の次へ進む
 - Codex は CLAUDE.md を読まず、リポジトリの AGENTS.md を読む。PBI に要る規約は PBI 本文に書く
