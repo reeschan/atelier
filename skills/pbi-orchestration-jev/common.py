@@ -19,16 +19,19 @@ PROJECTS = Path.home() / '.claude' / 'projects'
 
 
 def resolve_home(arg: str | None) -> Path:
-    """home のディレクトリ。引数 → PBI_HOME → PBI_TEMPLATES_HOME → XDG_CONFIG_HOME → ~/.config。"""
+    """home のディレクトリ。引数 → PBI_HOME → PBI_TEMPLATES_HOME → XDG_CONFIG_HOME → ~/.config。
+
+    先頭の ~ は展開する (引用符の中や settings.json の env ではシェルが展開しないため)。
+    """
     if arg:
-        return Path(arg)
+        return Path(arg).expanduser()
     for name in ('PBI_HOME', 'PBI_TEMPLATES_HOME'):  # PBI_TEMPLATES_HOME は旧名 (互換のためだけに読む)
         value = os.environ.get(name)
         if value:
-            return Path(value)
+            return Path(value).expanduser()
     base = os.environ.get('XDG_CONFIG_HOME')
     if base:
-        return Path(base) / 'pbi-orchestration-jev'
+        return Path(base).expanduser() / 'pbi-orchestration-jev'
     return Path.home() / '.config' / 'pbi-orchestration-jev'
 
 
