@@ -15,6 +15,11 @@ REASON_DISABLED = '未使用 (agents.json)'
 REASON_NOT_FOUND = '見つからない'
 REASON_MODEL_NOT_SELECTED = '未選択のモデル'
 
+# PATH にも Node のグローバルにも無いときに見る、Windows のインストーラの既定の場所 (環境変数, その下のパス)
+WINDOWS_DEFAULT_LOCATIONS = {
+    'agy': ('LOCALAPPDATA', ('agy', 'bin', 'agy.exe')),
+}
+
 # Node の版ごとのディレクトリの下で CLI を探すときの拡張子。
 # Windows は実行できる .cmd・.exe を先にし、Windows 以外は拡張子なしだけを見る。
 CLI_SUFFIXES_WINDOWS = ('.cmd', '.exe', '')
@@ -53,7 +58,19 @@ def find_cli(runner, agents, env=None) -> str | None:
         bin_js = env.get('PBI_DSH_BIN')
         if bin_js and Path(bin_js).is_file():
             return bin_js
-    return None
+    return default_location(runner, env, os.name)
+
+
+def default_location(runner, env, os_name) -> str | None:
+    """WINDOWS_DEFAULT_LOCATIONS にある実行先の、インストーラの既定の場所。Windows 以外・無ければ None。"""
+    if os_name != 'nt' or runner not in WINDOWS_DEFAULT_LOCATIONS:
+        return None
+    variable, parts = WINDOWS_DEFAULT_LOCATIONS[runner]
+    base = env.get(variable)
+    if not base:
+        return None
+    candidate = Path(base).joinpath(*parts)
+    return str(candidate) if candidate.is_file() else None
 
 
 def drop_reason(step, agents, found) -> str | None:

@@ -233,6 +233,20 @@ class FindCliTest(Base):
         cli = make_file(self.root / 'dsh', 'bin.js')
         self.assertIsNone(agents.find_cli('opencode', None, self.env(PBI_DSH_BIN=str(cli))))
 
+    def test_agy_default_location_on_windows(self):
+        exe = make_file(self.root / 'local' / 'agy' / 'bin', 'agy.exe')
+        env = self.env(LOCALAPPDATA=str(self.root / 'local'))
+        self.assertFound(agents.default_location('agy', env, 'nt'), exe)
+        # Windows 以外・ほかの実行先・ファイルが無いときは見ない
+        self.assertIsNone(agents.default_location('agy', env, 'posix'))
+        self.assertIsNone(agents.default_location('codex', env, 'nt'))
+        self.assertIsNone(agents.default_location('agy', self.env(LOCALAPPDATA=str(self.empty)), 'nt'))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows の agy の既定の場所')
+    def test_find_cli_falls_back_to_agy_default_location(self):
+        exe = make_file(self.root / 'local' / 'agy' / 'bin', 'agy.exe')
+        self.assertFound(agents.find_cli('agy', None, self.env(LOCALAPPDATA=str(self.root / 'local'))), exe)
+
 
 class DropReasonTest(Base):
     def test_agent_is_never_dropped(self):
