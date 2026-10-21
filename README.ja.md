@@ -82,7 +82,7 @@ home に置く `agents.json` の最小の例:
 
 ## Template Studio (振り分けテンプレートを画面で組む)
 
-上の表の「どの実行先・モデルを、どの順に試すか」は、画面で選んで差し替えられます。段の決め方 (決定表) は変わりません。
+振り分け (同梱の全段 agent の既定や、`examples/routing/multi-runner.json` のような自分の `routing.json`) の「どの実行先・モデルを、どの順に試すか」は、画面で選んで差し替えられます。段の決め方 (決定表) は変わりません。
 
 ```
 /pbi-orchestration-jev templates
