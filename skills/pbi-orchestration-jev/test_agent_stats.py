@@ -185,6 +185,29 @@ class CostTest(unittest.TestCase):
         self.assertAlmostEqual(s["cost"]["total"]["usd"], orch + known_sub)
         self.assertIn("単価不明 1 件", agent_stats.summary(s))
 
+    def test_advisor_calls_are_priced_and_added_to_the_total(self):
+        main = row("m1", "2026-10-11T00:00:00Z", model="claude-sonnet-5-5", inp=1000, out=2000)
+        main["message"]["usage"]["iterations"] = [
+            {"type": "advisor_message", "model": "claude-opus-5-5", "input_tokens": 300, "output_tokens": 400}]
+        sub = row("a1", "2026-10-11T00:01:00Z", inp=100, out=200)
+        sub["message"]["content"] = [{"type": "advisor_tool_result", "tool_use_id": "t1"}]
+        self.write_session([main], [("a1", "PBI-1 advisor", [sub])])
+        (self.home / "prices.json").write_text(json.dumps({"checked_at": "2026-10-20", "models": {}}),
+                                               encoding="utf-8")
+        prices = self.prices()
+        s = agent_stats.session_stats(self.session, prices)
+        advisor = usd(prices["models"]["claude-opus-5-5"], input=300, output=400)
+        orch = usd(prices["models"]["claude-sonnet-5-5"], input=1000, output=2000)
+        sub_usd = usd(prices["models"]["claude-haiku-5-5"], input=100, output=200)
+        # 使用量つきの 1 件は opus の単価で換算し、使用量の記録が無いサブエージェントの 1 件は単価不明に数える
+        self.assertAlmostEqual(s["cost"]["advisor"]["usd"], advisor)
+        self.assertEqual(s["cost"]["advisor"]["requests"], 2)
+        self.assertEqual(s["cost"]["advisor"]["unpriced"], 1)
+        self.assertAlmostEqual(s["cost"]["total"]["usd"], orch + sub_usd + advisor)
+        self.assertEqual(s["cost"]["total"]["unpriced"], 1)
+        self.assertEqual(s["cost"]["home_prices_checked_at"], "2026-10-20")
+        self.assertIn("advisor", agent_stats.summary(s).split("API 換算")[1])
+
     def test_without_cost_output_is_unchanged(self):
         self.one_agent_session()
         plain = agent_stats.session_stats(self.session)

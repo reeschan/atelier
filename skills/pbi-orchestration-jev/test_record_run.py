@@ -206,7 +206,7 @@ class RecordRunTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         [row] = self.rows()
         self.assertIsNone(row['cost_reported'])
-        # 100*0.5 + 20*2 + 1000*0.05 = 140 → 0.00014 USD (単価表に無い cache_write は 0)
+        # 100*0.5 + 20*2 + 1000*0.05 = 140 → 0.00014 USD (cache_write は 0 トークン)
         self.assertAlmostEqual(row['cost_api_equiv'], 0.00014, places=9)
         self.assertEqual(row['prices_checked_at'], '2026-10-16')
 
@@ -222,8 +222,9 @@ class RecordRunTest(unittest.TestCase):
         [row] = self.rows()
         # 同梱の sonnet (input 2) ではなく home の input 100 で換算する: 10*100 / 1e6
         self.assertAlmostEqual(row['cost_api_equiv'], 0.001, places=9)
-        # 行の prices_checked_at は同梱の checked_at のまま
+        # 行の prices_checked_at は同梱の checked_at のまま。home の日付は prices_home_checked_at に入る
         self.assertEqual(row['prices_checked_at'], '2026-10-16')
+        self.assertEqual(row['prices_home_checked_at'], '2026-11-01')
 
     def test_cost_api_equiv_is_null_without_a_price(self):
         self.write_route('PBI-007', [{'runner': 'dsh', 'model': 'deepseek-official/unknown-model',
@@ -235,8 +236,23 @@ class RecordRunTest(unittest.TestCase):
         [row] = self.rows()
         self.assertIsNone(row['cost_api_equiv'])
         self.assertIsNone(row['prices_checked_at'])
+        self.assertIsNone(row['prices_home_checked_at'])
 
     def test_opencode_keeps_reported_cost_and_adds_api_equiv(self):
+        self.write_route('PBI-007', [{'runner': 'opencode', 'model': 'opencode-go/deepseek-v4.1-flash',
+                                      'effort': 'max'}], tier='haiku')
+        self.write_opencode('PBI-007', [step_finish(1792117910000, 100, 20, 5, 1000, 50, 0.0123)])
+        self.write_home_prices({'deepseek-v4.1-flash': {'input': 0.5, 'output': 2, 'cache_read': 0.05,
+                                                        'cache_write': 0.5}})
+        r = self.record('PBI-007', 1, '合格')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        self.assertAlmostEqual(row['cost_reported'], 0.0123, places=9)
+        # 100*0.5 + 20*2 + 1000*0.05 + 書き込み 50*0.5 = 165 → 0.000165 USD
+        self.assertAlmostEqual(row['cost_api_equiv'], 0.000165, places=9)
+        self.assertEqual(row['prices_checked_at'], '2026-10-16')
+
+    def test_cache_writes_without_a_write_price_make_the_cost_unknown(self):
         self.write_route('PBI-007', [{'runner': 'opencode', 'model': 'opencode-go/deepseek-v4.1-flash',
                                       'effort': 'max'}], tier='haiku')
         self.write_opencode('PBI-007', [step_finish(1792117910000, 100, 20, 5, 1000, 50, 0.0123)])
@@ -244,9 +260,10 @@ class RecordRunTest(unittest.TestCase):
         r = self.record('PBI-007', 1, '合格')
         self.assertEqual(r.returncode, 0, r.stderr)
         [row] = self.rows()
+        # 書き込みの合計 50 の単価が無いので、足りない費用を出さずに null にする
+        self.assertIsNone(row['cost_api_equiv'])
+        self.assertIsNone(row['prices_checked_at'])
         self.assertAlmostEqual(row['cost_reported'], 0.0123, places=9)
-        self.assertAlmostEqual(row['cost_api_equiv'], 0.00014, places=9)
-        self.assertEqual(row['prices_checked_at'], '2026-10-16')
 
     def test_raw_logs_are_archived_by_repo_branch_and_work_number(self):
         self.write_opencode('PBI-007', [step_finish(1792117910000, 1, 1, 0, 0, 0, 0.0)])

@@ -20,7 +20,8 @@
   検証:     docs/pbi/verify/<報告名>.json (verify.py が書く)。unchanged.py check の行の終了コードを触らない範囲とする
 取れない値は 0 ではなく null にする。cost_reported は実行先が出した USD (opencode の cost)、cost_api_equiv は
 トークン × 単価表の API 換算 (参考値で請求額ではない)。単価表は同梱の --prices に home の --home/prices.json を
-重ねたもの。トークン数と単価が分かる実行先ならどれでも出す。prices_checked_at は cost_api_equiv を出したときに入れる。
+重ねたもの。トークン数と単価が分かる実行先ならどれでも出す。prices_checked_at (同梱の単価表の日付) と
+prices_home_checked_at (home の単価表の日付) は cost_api_equiv を出したときに入れる。
 
 保全先は環境変数 PBI_RUNS_ARCHIVE、無ければ ~/.claude/pbi-runs にする (クラウドで同期するフォルダなどに残したいときは
 PBI_RUNS_ARCHIVE にそのフォルダを入れる)。
@@ -49,6 +50,8 @@ RUNNER_DIRS = ('opencode', 'codex', 'agy', 'dsh')
 RUNNER_SUFFIXES = ('.prompt.md', '.jsonl', '.err', '.log', '.last.md', '.json', '.patch.yml', '.run.json', '.final.md')
 TOKEN_FIELDS = ('input', 'output', 'reasoning', 'cache_read', 'cache_write', 'cache_write_5m', 'cache_write_1h')
 PRICE_KEYS = ('input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h')
+# キャッシュ書き込みの合計 (5m・1h の内訳が無い実行先) に当てる単価のキー。先にあるものを使う
+WRITE_TOTAL_PRICE_KEYS = ('cache_write', 'cache_write_5m')
 
 
 def fail(msg: str) -> None:
@@ -77,14 +80,23 @@ def span(first, last) -> dict:
 def tokens_cost(tokens: dict, price: dict | None) -> float | None:
     """トークン数 × 単価 (USD / 100 万トークン) の API 換算。単価が無い・トークンの内訳が無いときは None。
 
-    tokens に無いキーと単価表に無いキーは 0 として計算する。
+    tokens に無いキーと単価表に無いキーは 0 として計算する。キャッシュ書き込みが 5m・1h に分かれず合計
+    (cache_write) だけのときは、WRITE_TOTAL_PRICE_KEYS の順に単価を探す。単価が無ければ、書き込みを
+    抜いた費用を出さずに None を返す。
     """
     if price is None:
         return None
     counts = {k: tokens.get(k) for k in PRICE_KEYS}
     if all(v is None for v in counts.values()):
         return None
-    return sum((counts[k] or 0) * (price.get(k) or 0) for k in PRICE_KEYS) / 1_000_000
+    usd = sum((counts[k] or 0) * (price.get(k) or 0) for k in PRICE_KEYS)
+    written = tokens.get('cache_write') or 0
+    if written and counts['cache_write_5m'] is None and counts['cache_write_1h'] is None:
+        rate = next((price[k] for k in WRITE_TOTAL_PRICE_KEYS if price.get(k) is not None), None)
+        if rate is None:
+            return None
+        usd += written * rate
+    return usd / 1_000_000
 
 
 def from_ms(ms) -> datetime.datetime:
@@ -455,6 +467,7 @@ def main():
         'time': got['time'], 'steps': got['steps'], 'tokens': got['tokens'],
         'cost_reported': cost_reported, 'cost_api_equiv': cost_api,
         'prices_checked_at': prices.get('checked_at') if cost_api is not None else None,
+        'prices_home_checked_at': prices.get('home_checked_at') if cost_api is not None else None,
         'verify': verify, 'unchanged': unchanged,
         'judged': {'outcome': args.outcome, 'findings': findings},
         'archive': archive_info,
