@@ -119,6 +119,29 @@ class LoadJsonTest(unittest.TestCase):
             self.assertEqual(common.load_json(path, []), [])
 
 
+class WriteJsonTest(unittest.TestCase):
+    def test_writes_utf8_indent_two_and_a_trailing_newline(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'x.json'
+            common.write_json(path, {'name': '日本語', 'n': 1})
+            text = path.read_text(encoding='utf-8')
+            self.assertEqual(text, '{\n  "name": "日本語",\n  "n": 1\n}\n')
+
+    def test_creates_the_parent_directory(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'a' / 'b' / 'x.json'
+            common.write_json(path, [])
+            self.assertEqual(path.read_text(encoding='utf-8'), '[]\n')
+
+    def test_replaces_the_old_file_and_leaves_no_temporary(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'x.json'
+            path.write_text('old', encoding='utf-8')
+            common.write_json(path, {'a': 1})
+            self.assertEqual(json.loads(path.read_text(encoding='utf-8')), {'a': 1})
+            self.assertEqual([p.name for p in Path(d).iterdir()], ['x.json'])
+
+
 class PathTest(unittest.TestCase):
     """long_path・shown・project_dir_for は agent_stats.py と同じ結果にする。"""
 
