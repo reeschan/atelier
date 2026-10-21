@@ -27,7 +27,7 @@
 - **機械的な手順はスクリプトで**: Jev のゲート 1 (要約の判定・PBI の品質) と決定表の判定は `prepare.py`、検証コマンドの実行は `verify.py` が 1 回で行い、オーケストレーターには表だけを返します。PBI が触ってはいけないファイルは、`unchanged.py` が起動前にハッシュを取って確かめます。スキル本文も、毎回要る中核と、場面ごとに読む `appendix/` に分けてあります。作者の実測 (2026-10、6 タスク) では、この 2 つで費用が 15% 下がりました。
 - **実装担当には必要十分な情報だけ (任意)**: 共有メモリの MCP (`mcp__shared-memory__*`) があるとき、オーケストレーターだけが作業ごとの空間に「ref」(1 件 1 事実) を書き、PBI の参照欄に id を並べます。実装担当用の `pbi-worker` はメモリの `get` だけを持ち、search と write はできません。
 - **CLAUDE.md を前提にする**: リポジトリの安定した知識 (規約・コマンド・落とし穴) は、階層化した CLAUDE.md にあるものとして扱い、オーケストレーターの検索は補助にとどめます。
-- **試す順番を画面で決める**: Template Studio で、使うモデルを選ぶと性能・コスパ・バランスの 3 案が出ます。並べ替えて「適用」を押すと、`docs/pbi/routing.json` に書かれます (下の「Template Studio」)。
+- **最初に 1 回セットアップし、あとは 1 つの編集画面で組む**: セットアップが実行先の CLI を見つけて使うものを記録し、実行先ごとのモデル一覧を取ります。編集画面には「エージェントとモデル」「振り分け」「優先テンプレートと適用」の 3 つのタブがあり、保存先はすべて home です (下の「セットアップと編集画面」)。
 - **期限付きで振り分けを上書きする**: 優先テンプレートをオンにすると、期限までのあいだ段ごとの route を差し替えます。期限が来たら続けるかを聞きます。設定は Web ページ (Artifact) からもできます (下の「優先テンプレート」)。
 - **統計を取る**: `agent_stats.py` が、Claude Code の会話記録からモデル別・エージェント別のトークン数、プロンプトキャッシュの作り直しの回数、今の文脈の大きさを集計します。
 - **実行ごとに記録する**: 実行の合否 (合格・差し戻し・昇格・使えず・保留) を決めるたびに、`record_run.py` が `docs/pbi/runs.jsonl` に 1 行を足します。実行先・モデル・effort・トークン・コスト・ステップ数・時間・検証の結果はログから読み、オーケストレーターが渡すのは結果とレビュー指摘の件数だけです。読めない値は null のままにします。その実行の生ログはリポジトリの外の保全先にコピーします。保全先は環境変数 `PBI_RUNS_ARCHIVE` (同期するフォルダを指せば、ほかの場所にも残せます)、無ければ `~/.claude/pbi-runs` です。`model_report.py` はモデル別に集計し (`--archive` でリポジトリをまたいで)、後から人が調整する目安として仮の評価 A〜D を付けます。振り分けは変えません。
@@ -81,52 +81,59 @@ home に置く `agents.json` の最小の例:
 - `--skip opencode,agy` で、このセッションで上限や拒否が出た実行先を外せます。`--all docs/pbi` は全 PBI を 1 回で判定し、1 PBI 1 行の表だけを出します。
 - レビューが deep の PBI は、Opus のオーケストレーターが diff を全部自分で読みます。normal で 300 行を超える diff は、Opus のレビュー担当のエージェントに読ませます。
 
-## Template Studio (振り分けテンプレートを画面で組む)
+## セットアップと編集画面
 
-振り分け (同梱の全段 agent の既定や、`examples/routing/multi-runner.json` のような自分の `routing.json`) の「どの実行先・モデルを、どの順に試すか」は、画面で選んで差し替えられます。段の決め方 (決定表) は変わりません。
+セットアップと編集画面には 3 つの入口があります。
 
 ```
-/pbi-orchestration-jev templates
+/pbi-orchestration-jev setup      # 検出 → モデルの取得 → 編集画面 → 任意の連携の案内
+/pbi-orchestration-jev models     # モデルの一覧だけを取り直す
+/pbi-orchestration-jev templates  # 編集画面を開く
 ```
 
-Claude Code でこう呼ぶと、スキルが手元 (127.0.0.1) に小さなサーバーを立て、ブラウザで画面を開きます。スキルを通さずに開くときは次を実行します。
+引数なしで、home に `agents.json` が無いときは、最初に「今セットアップ」か「agent だけで始める」を 1 問だけ聞きます。答えは `agents.json` に残るので、次の回からは聞きません。
+
+セットアップは `opencode`・`codex`・`agy`・`dsh` の CLI を、`PATH`、fnm・nvm のグローバル、`dsh` は `PBI_DSH_BIN` から探します。`agent` (Agent ツール) は常に使えます。見つかった実行先のうち使うものを 1 問の複数選択で選ぶと、選んだ実行先・CLI の場所と版・確認した時刻を home の `agents.json` に書きます。
+
+モデルの一覧は実行先ごとに次の方法で取ります。
+
+| 実行先 | 取り方 | effort の取り方 |
+|---|---|---|
+| opencode | `opencode models --standalone` (1 行に 1 つ) | opencode のキャッシュにあるモデル情報 |
+| codex | `codex debug models` (JSON) | 同じ JSON の reasoning levels |
+| agy | `agy models` (タブ区切り) | ID の末尾 |
+| dsh | 同梱の `dsh.models.json` と `dsh headless --dump-config` | カタログの thinking level |
+| agent | Agent ツールの定義 (haiku・sonnet・opus・fable) | low〜max |
+
+取れなかった実行先は前の一覧のまま (無ければ空) でエラーを残し、編集画面の「エージェントとモデル」タブか `python setup_agents.py add-model --runner <実行先> --id <モデル>` で手で足せます。ほかの実行先には波及しません。
+
+編集画面は手元の 1 ページで、タブは 3 つです。
+
+1. **エージェントとモデル**: 実行先と使うモデルにチェックを付け、手入力でモデルを足し、品質・価格の参考を横に読みます。
+2. **振り分けテンプレート**: 1 で選んだモデルだけから、段ごとの手順を組みます。
+3. **優先テンプレートと適用**: 優先テンプレートを作って直し (交互グループを含む)、期限と期限切れの扱いを付けて適用します。
+
+保存先はすべて home (`agents.json`・`models/<実行先>.json`・`routing.json`・`templates/<名前>.json`・`overrides.json`) で、対象リポジトリには書きません。スキルを通さずに開くときは次を実行します。
 
 ```sh
-python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py --target <対象リポジトリのルート>
+python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 ```
 
-1. **使うモデルを選ぶ**: 会社ごとのカードで、契約している実行先のチップだけを残します。
-2. **案を選ぶ**: 選んだモデルから、性能・コスパ・バランスの 3 案が出ます。作業の重さ (軽い作業 / ふつうの作業 / 設計が要る作業) ごとの性能の下限も変えられます。
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/studio-proposals-ja-dark.png">
-  <img src="assets/studio-proposals-ja-light.png" alt="Template Studio の画面。会社ごとのカードでモデルを選び、性能・コスパ・バランスの 3 案から選ぶ。" width="800">
-</picture>
-
-3. **試す順番を整える**: 作業の重さごとに、ドラッグか ↑ ↓ で並べ替え、チェックで使う・使わないを切り替えます。最後に受ける Claude Code のモデルも選べます。
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/studio-order-ja-dark.png">
-  <img src="assets/studio-order-ja-light.png" alt="試す順番を調整する画面。作業の重さごとの列で、モデルを並べ替えたりチェックを外したりする。" width="800">
-</picture>
-
-4. **適用する**: 「このリポジトリに適用」を押すと `docs/pbi/routing.json` に書かれ、サーバーは閉じます。前のものは `routing.prev.json` に残ります。以後 `prepare.py` はこの順番で実行先を試します。
-
 - 画面は日本語と英語に対応しています。ブラウザの言語に合わせて開き、右上の「EN / 日本語」ボタンで切り替えられます (選んだ言語は次回も使います)。URL に `?lang=ja` か `?lang=en` を付けても切り替えられます。
-- モデル一覧 (`studio/catalog.json`) は `python studio/update_catalog.py` で更新します。価格と新しいモデルは OpenRouter、性能は Artificial Analysis のコーディング指標 (環境変数 `AA_API_KEY` があるとき) から取ります。取るまでの値は仮の値で、画面にそう出ます。
-- サーバーが書くのは `docs/pbi/routing.json` だけです。起動ごとの合言葉、Host の確認、形の確認のどれかが合わなければ書きません。
+- サーバーは 127.0.0.1 だけで待ち受けます。`/api/*` は画面に埋め込んだ起動ごとの合言葉と、`127.0.0.1` か `localhost` の Host が合わなければ断り、書き込みは 1 回 64 KB までの JSON です。保存のたびに `SAVED <種類> <パス>`、終わるときに `CLOSED` か `TIMEOUT` を出します。`--tab agents|routing|priority` で開くタブ、`--home DIR` で別の home、`--timeout 0` で時間切れなしにできます。
+- 品質・価格の参考は `studio/catalog.json` から出します (`python studio/update_catalog.py` で更新。価格と新しいモデルは OpenRouter、品質は `AA_API_KEY` があるとき Artificial Analysis のコーディング指標)。参考情報だけで、選べるモデルは home の `models/<実行先>.json` の一覧で決まります。
 - 設計の詳細は [docs/template-studio.md](docs/template-studio.md) にあります。
 
 ## 優先テンプレート
 
-**優先テンプレート**は、振り分けを期限付きで上書きする仕組みです。いつもの振り分けは Template Studio で決める `routing.json` で、優先テンプレートはその上に重なります。段ごとの route に名前を付けて保存し (形は `routing.json` と同じ)、期限を決めてオンにすると、その間は上書きした段の route がテンプレートのものになります (上書きの無い段はそのまま。最後に受ける Claude Code は `routing.json` のその段のもの)。期限を過ぎたときの扱いは、`ask` なら続けるかを聞き (「延長 / やめる / 期限なし」に答えます)、`drop` なら黙って外れます。同梱の Web ページ (専用のデータベースを持つ Artifact) では、今の適用・テンプレートの一覧・履歴を見られ、適用の開始・延長・停止ができます (スマホからも使えます)。
+**優先テンプレート**は、振り分けを期限付きで上書きする仕組みです。いつもの振り分けは編集画面で決める home の `routing.json` で、優先テンプレートはその上に重なります。段ごとの route に名前を付けて保存し (形は `routing.json` と同じ)、期限を決めてオンにすると、その間は上書きした段の route がテンプレートのものになります (上書きの無い段はそのまま。最後に受ける Claude Code は `routing.json` のその段のもの)。期限を過ぎたときの扱いは、`ask` なら続けるかを聞き (「延長 / やめる / 期限なし」に答えます)、`drop` なら黙って外れます。テンプレートの作成・編集・適用は、編集画面の「優先テンプレートと適用」タブからも、チャットからもできます。正本は home の `overrides.json` で、同梱の Web ページ (専用のデータベースを持つ Artifact) は任意の同期先です。`web.json` に URL があるときだけ、開始時にページとローカルの写しを同期します。
 
 テンプレートで変えられないことが 2 つあります。
 
 - `sensitive` な PBI は、テンプレートが何を言っても外部の実行先に出ません。
 - 設計判断の見直しとレビューの担当は、決定表のままです。
 
-テンプレートは個人の設定で、home に置きます。home の既定は `~/.config/pbi-orchestration-jev` (`XDG_CONFIG_HOME` があれば `$XDG_CONFIG_HOME/pbi-orchestration-jev`)、`PBI_HOME` で変えられます。home には `routing.json` (振り分けテンプレート)・`templates/<name>.json` (優先テンプレート)・写し (`overrides.json`)・Web ページの URL (`web.json`)・`agents.json` (実行先とモデルの選択)・`prices.json` (単価の上書き) を置けます。どれも任意で、ディレクトリはスキルが作りません。同梱の例を試すには、home の `templates/` にコピーします。
+テンプレートは個人の設定で、home に置きます。home の既定は `~/.config/pbi-orchestration-jev` (`XDG_CONFIG_HOME` があれば `$XDG_CONFIG_HOME/pbi-orchestration-jev`)、`PBI_HOME` で変えられます。home には `agents.json` (実行先・CLI の場所と版・確認した時刻・選んだモデル・課金の種類)・`models/<実行先>.json` (実行先ごとに最後に取ったモデルの一覧)・`routing.json` (振り分けテンプレート)・`templates/<name>.json` (優先テンプレート)・`overrides.json` (今の適用。正本)・`history.jsonl` (終わった適用を 1 行ずつ)・Web ページの URL (`web.json`)・`prices.json` (単価の上書き) を置けます。どれも任意で、ディレクトリはスキルが作りません。同梱の例を試すには、home の `templates/` にコピーします。
 
 ```sh
 mkdir -p ~/.config/pbi-orchestration-jev/templates
@@ -152,7 +159,7 @@ cp skills/pbi-orchestration-jev/examples/templates/cheap-all-tiers.json ~/.confi
 | Node.js | 任意 | rtk のフックと、JS 版の Jev クライアント (`jev.mjs`) |
 | [rtk](https://github.com/rtk-ai/rtk) | 任意 | コマンド出力の圧縮 |
 
-必須は Claude Code だけです。Jev・shared-memory・外部の CLI・Web ページ・rtk は任意です。使えない実行先は route の次へ移るだけなので、Claude Code だけでも動きます。
+必須は Claude Code だけです。Jev・shared-memory・外部の CLI・Web ページ・rtk は任意です。セットアップは任意の CLI (opencode・codex・agy・dsh) を `PATH`・fnm・nvm のグローバル・`PBI_DSH_BIN` から探し、選んだものだけを記録します。使えない実行先は route の次へ移るだけなので、Claude Code だけでも動きます。
 
 ## 導入
 
@@ -223,7 +230,7 @@ Claude Code で、複数ファイルにまたがる実装を頼むときに呼�
 /pbi-orchestration-jev <やりたいこと>
 ```
 
-振り分けテンプレートを画面で決めるときは `/pbi-orchestration-jev templates` と呼びます (上の「Template Studio」)。
+実行先のセットアップとモデルの一覧は `/pbi-orchestration-jev setup` で行います。モデルの一覧だけを取り直すときは `/pbi-orchestration-jev models`、編集画面を開くときは `/pbi-orchestration-jev templates` です (上の「セットアップと編集画面」)。
 
 作業の記録は、対象リポジトリの `docs/pbi/` に残ります。
 
@@ -235,7 +242,7 @@ Claude Code で、複数ファイルにまたがる実装を頼むときに呼�
 | `docs/pbi/PBI-<n>.facts.json` / `.brief.md` / `.route.json` | 振り分けの材料と結果 |
 | `docs/pbi/worker.md` | 実装担当の進め方と報告の形 (スキルからコピー) |
 | `docs/pbi/tools/unchanged.py` | 触らない範囲の検証 (スキルからコピー) |
-| `docs/pbi/routing.json` | 試す順番 (Template Studio が書く。無ければ home の `routing.json`、それも無ければ同梱の既定) |
+| `docs/pbi/routing.json` | このリポジトリで読む試す順番 (無ければ home の `routing.json` (編集画面が書く)、それも無ければ同梱の既定) |
 | `docs/pbi/reports/`、`docs/pbi/notes/` | 実装担当の詳細な報告と、調べ物の結論 |
 | `docs/pbi/verify/`、`docs/pbi/reviews/` | 検証コマンドのログと、任せたレビューの結果 |
 | `docs/pbi/jev-log.jsonl` | 判定が変わったときの担当の判定、決定表の上書き、引き継ぎ、Jev に聞いた報告の仕分け |
@@ -262,15 +269,18 @@ skills/pbi-orchestration-jev/
 ├── dsh_run.py                  # DeepSeek Harness の headless で PBI を 1 件動かす
 ├── verify-commands.md          # 検証コマンドを書くときの注意
 ├── worker.md                   # 実装担当の進め方と報告の形
-├── appendix/                   # 場面ごとに読む付録 (memory・rework・handoff・finish・jev・templates・priority-templates)
+├── appendix/                   # 場面ごとに読む付録 (memory・rework・handoff・finish・jev・setup・priority-templates)
 ├── agents/pbi-worker.md        # 実装担当・レビュー用のサブエージェントの定義 (~/.claude/agents に置く)
 ├── prepare.py                  # Jev のゲート 1 と決定表を 1 回で実行し、表だけを出す
 ├── verify.py                   # PBI の検証コマンドを実行し、終了コードと末尾だけを表で出す
 ├── select_model.py             # 決定表: 段・route・レビューの深さ。agents.json で手順を外す
+├── setup_agents.py             # セットアップ: 実行先の CLI を検出し、選択を agents.json に書き、モデルを取得する
+├── model_fetch.py              # 実行先 1 つのモデル一覧を CLI (または同梱の dsh カタログ・agent の組み込み一覧) から取る
+├── dsh.models.json             # dsh のモデルのカタログ。dsh が一覧を出せないときに使う
 ├── agents.py                   # agents.json を読み、実行先の CLI を探す (PATH・fnm・nvm)
 ├── common.py                   # 共通の処理: home の解決・単価・パス・表記
 ├── routing.default.json        # 振り分けの既定: 全段 Agent ツール (docs/pbi/ か home の routing.json で差し替え)
-├── studio/                     # テンプレートを画面で組む (index.html・serve.py・update_catalog.py・catalog.json)
+├── studio/                     # 編集画面: home を 3 つのタブで読み書きする (index.html・serve.py・catalog.json・update_catalog.py)
 ├── templates.py                # 優先テンプレート: 検査、Web ページからの同期、適用・回答・写しの書き込み
 ├── web/priority-templates.html # 優先テンプレートを見て設定する Web ページ (Artifact)
 ├── examples/routing/           # 外部の実行先を使う振り分けの見本 (multi-runner.json)
@@ -290,7 +300,7 @@ skills/pbi-orchestration-jev/
 │   ├── jev.py / jev.mjs        # Jev クライアント (Python / JS)
 │   └── test_jev.py / jev.test.mjs
 ├── test_select_model.py / test_agents.py / test_common.py
-├── test_templates.py / test_prepare.py / test_unchanged.py
+├── test_setup_agents.py / test_model_fetch.py / test_templates.py / test_prepare.py / test_unchanged.py
 ├── test_record_run.py / test_model_report.py / test_dsh_run.py / test_jev_mcp.py
 ├── test_references.py          # スキルの文書が名前を挙げるファイルの実在
 └── test_agent_stats.py
@@ -329,7 +339,7 @@ python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/t
 
 - 決定表としきい値は仮の値です。PBI が 10〜20 件たまったら、モデル別の結果 (`model_report.py --archive` の一発合格・差し戻し・昇格・トークン・コスト) を見て、`select_model.py` と `prepare.py` の定数を見直してください。
 - 実行先のモデルと effort は、テンプレート `routing.json` で変えられます (形は `routing.default.json`)。対象リポジトリの `docs/pbi/routing.json`、または home の `routing.json` に置くと、`select_model.py` がそちらを使います。無ければ同梱の `routing.default.json` のままです。
-- テンプレートは画面でも組めます (上の「Template Studio」)。
+- テンプレートは編集画面でも組めます (上の「セットアップと編集画面」)。
 - 引き継ぎのしきい値 (250,000 トークン) と、外部の実行先の結果も同じ時期に見直してください。
 
 ## テスト
