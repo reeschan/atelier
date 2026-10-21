@@ -10,7 +10,7 @@ Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator uses prepare.py (Jev gate 1 plus select_model.py) to pick a tier and a route, hands PBIs to opencode, Codex, Antigravity, DeepSeek Harness (dsh) or pbi-worker (the Agent tool), verifies them with verify.py and unchanged.py, asks Jev in plain text to triage reports and size fixes, and records status and HANDOFF in docs/pbi/ of the target repository. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. rtk optionally compresses command output. Template Studio shows a model list built from OpenRouter and Artificial Analysis and writes the chosen try order to docs/pbi/routing.json. The priority templates web page (a claude.ai artifact) syncs with templates.py, which overrides routing for a limited time through overrides.json.">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator passes facts to prepare.py, which asks Jev for gate 1 (brief and PBI quality), picks a tier and a route with select_model.py, reads the routing, overrides and agents.json from your home (~/.config/pbi-orchestration-jev) and docs/pbi/routing.json, and drops steps whose runner is unusable. PBIs go to pbi-worker (the Agent tool), the default runner for every tier, or to external runners (opencode, Codex, Antigravity, DeepSeek Harness) enabled in routing.json; they change the source code of the target repository. The orchestrator verifies each PBI with verify.py and unchanged.py, asks Jev in plain text only when a report and the verification disagree and to check rework notes, and records status and HANDOFF in docs/pbi/. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. Template Studio, with models from OpenRouter and Artificial Analysis, writes the try order to docs/pbi/routing.json, and the priority templates web page (a claude.ai artifact) syncs with templates.py, which keeps templates and overrides in your home.">
 </picture>
 
 The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lang.com)).
@@ -22,7 +22,7 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - **Pass/fail comes from verification commands.** Neither the sub-agent's report nor Jev's answer is taken at face value. The worker starts its report with a status line (`DONE` / `DONE_WITH_CONCERNS` / `NEEDS_CONTEXT` / `BLOCKED`); the orchestrator sorts the report by that status and the verification results, and asks Jev to triage only when the two disagree. The orchestrator runs the commands itself and checks each acceptance criterion.
 - **At most two rounds of rework, and an optional tier up.** A failed PBI goes back with the review notes, twice at most. The orchestrator can raise a PBI's tier (for example haiku to sonnet) with `prepare.py --only PBI-<n> --tier <tier>`, which rewrites that PBI's route from the routing in effect at that moment. If the design needs rethinking, or a PBI still fails after two rounds, the orchestrator stops and asks the user.
 - **Only prose goes to Jev.** PBI text, briefs, excerpts from reports and rework notes. Never source code, diffs, environment variables or credentials.
-- **The orchestrator's context stays small.** Every token in the orchestrator's context is re-read on every later turn. Workers end with a 4-line report and put the details in a file, long command output goes to log files, and PBI text is written once and passed by path (`worker.md`, section 0.7 of `SKILL.md`).
+- **The orchestrator's context stays small.** Every token in the orchestrator's context is re-read on every later turn. Workers end with a 5-line report that starts with a status line and put the details in a file, long command output goes to log files, and PBI text is written once and passed by path (`worker.md`, section 0.7 of `SKILL.md`).
 - **Hand-off when the context grows.** Between waves of PBIs the orchestrator measures its context with `agent_stats.py --ctx`. Above 250,000 tokens it writes `docs/pbi/HANDOFF.md` (plus a hand-off memory when shared memory is available) and asks you to `/clear` and resume with `/pbi-orchestration-jev resume`. From a session started without a project folder, run `/pbi-orchestration-jev resume <repository path>`; without the path, the skill finds the repository from the hand-off memory.
 - **Opus designs and reviews; cheaper models implement.** Only PBIs that need design decisions are implemented by Opus. Sensitive or tightly coupled PBIs are implemented by Sonnet and get a deep review from the Opus orchestrator.
 - **Optional output compression with [rtk](https://github.com/rtk-ai/rtk).** A bundled hook rewrites Bash / PowerShell commands to `rtk <cmd>` only in sessions where the skill switched it on.
@@ -144,12 +144,12 @@ The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `ma
 |---|---|---|
 | [Claude Code](https://claude.com/claude-code) | yes | the orchestrator and the Agent tool |
 | Python 3.10+ | yes | scripts such as `prepare.py`, `select_model.py` and `verify.py`, and the Jev client |
-| Jev API key | recommended | without it, Jev gates are skipped and defaults apply |
+| Jev API key | recommended | without it, Jev gates are skipped and the tier is decided from the facts alone |
 | shared-memory MCP (`mcp__shared-memory__*`) | no | per-task refs and the hand-off memory; without it, facts go into the PBI notes |
-| [opencode](https://opencode.ai) + OpenCode Go | no | first runner for the haiku and sonnet tiers |
+| [opencode](https://opencode.ai) + OpenCode Go | no | external runner you enable in `routing.json` (see `examples/routing/multi-runner.json`) |
 | [Codex CLI](https://github.com/openai/codex) | no | external runner you enable in `routing.json` |
 | Antigravity CLI (`agy`) | no | Claude via a Google AI subscription |
-| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) | no | runner for priority templates, e.g. the official DeepSeek API through dsh headless |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) | no | external runner for `routing.json` or a priority template, e.g. the official DeepSeek API through dsh headless |
 | Node.js | no | the rtk hook, and the JS Jev client (`jev.mjs`) |
 | [rtk](https://github.com/rtk-ai/rtk) | no | compressing command output |
 
@@ -204,7 +204,7 @@ Without the flag file (`~/.claude/state/rtk/<session_id>.on`), or without `rtk` 
 
 ### Notes on DeepSeek Harness (`dsh`)
 
-- `dsh` is not in the default routing; put it in a priority template. A step looks like `{"runner": "dsh", "model": "deepseek-official/deepseek-flash", "effort": "high"}`: the model is `<dsh provider>/<model>`, and the effort is dsh's `reasoningEffort` (the official DeepSeek Flash takes `low`, `high`, `max` or none; there is no `medium`).
+- `dsh` is not in the default routing; add it to your `routing.json` or a priority template. A step looks like `{"runner": "dsh", "model": "deepseek-official/deepseek-flash", "effort": "high"}`: the model is `<dsh provider>/<model>`, and the effort is dsh's `reasoningEffort` (the official DeepSeek Flash takes `low`, `high`, `max` or none; there is no `medium`).
 - `dsh_run.py` runs one PBI: it writes a per-run `--patch` overlay with the provider, model and effort, runs `dsh --profile headless --json`, and keeps the events, the final answer and the start/end time under `docs/pbi/dsh/`. `record_run.py` sums the token usage from the `status` events (no cost is reported).
 - API keys come from the environment (`DEEPSEEK_API_KEY`, `OPENCODE_GO_API_KEY`) or from key-only files (`~/.config/deepseek/deepseek.key`, `~/.config/opencode/opencode-go.key`). Values are never printed.
 - It uses `dsh` on the `PATH` (`npm i -g @deepseek-ai/dsh`), or `PBI_DSH_BIN` / `PBI_DSH_NODE`. Custom providers go in the `cordis.patch.yml` of `DSH_HOME`.
@@ -236,11 +236,11 @@ Everything is recorded under `docs/pbi/` in the target repository.
 | `docs/pbi/PBI-<n>.facts.json` / `.brief.md` / `.route.json` | routing inputs and result |
 | `docs/pbi/worker.md` | how workers proceed and report (copied from the skill) |
 | `docs/pbi/tools/unchanged.py` | checks files a PBI must not touch (copied from the skill) |
-| `docs/pbi/routing.json` | try order (written by Template Studio; defaults apply without it) |
+| `docs/pbi/routing.json` | try order (written by Template Studio; without it, the `routing.json` in your home or the bundled default applies) |
 | `docs/pbi/reports/`, `docs/pbi/notes/` | workers' detailed reports and research notes |
 | `docs/pbi/verify/`, `docs/pbi/reviews/` | verification logs and delegated reviews |
-| `docs/pbi/jev-log.jsonl` | every Jev answer and the action taken |
-| `docs/pbi/jev.config.json` | Jev gates and thresholds (created from the template) |
+| `docs/pbi/jev-log.jsonl` | routing decisions when they change, decision-table overrides, hand-offs, and report triage by Jev |
+| `docs/pbi/jev.config.json` | Jev gates (created from the template) |
 | `docs/pbi/opencode/`, `docs/pbi/codex/`, `docs/pbi/agy/`, `docs/pbi/dsh/` | prompts and outputs for each runner |
 | `docs/pbi/stats/` | token and cache stats |
 
@@ -269,16 +269,19 @@ skills/pbi-orchestration-jev/
 ├── verify.py                   # runs a PBI's verification commands; prints exit codes and tails
 ├── record_run.py               # one line per run in runs.jsonl, and a copy of its raw logs in the archive
 ├── model_report.py             # results, tokens, cost and a provisional grade per model, from runs.jsonl
-├── prices.json                 # API prices for the cost_api_equiv estimate (not what you are billed)
-├── select_model.py             # decision table: tier, route and review depth
-├── routing.default.json        # default routing template (override with docs/pbi/routing.json)
+├── prices.json                 # sample API prices for the cost_api_equiv estimate (a prices.json in your home overrides it; not what you are billed)
+├── select_model.py             # decision table: tier, route and review depth; drops steps per agents.json
+├── agents.py                   # reads agents.json and finds runner CLIs (PATH, fnm, nvm)
+├── common.py                   # shared helpers: home resolution, prices, paths, labels
+├── routing.default.json        # default routing: every tier on the Agent tool (override with routing.json in docs/pbi/ or your home)
 ├── studio/                     # build templates in a browser (index.html, serve.py, update_catalog.py, catalog.json)
 ├── templates.py                # priority templates: validate, sync from the web page, apply / answer / push writes
 ├── web/priority-templates.html # web page (artifact) to view and set priority templates
-├── examples/templates/         # example priority template (copy to templates/)
+├── examples/routing/           # example routing template with external runners (multi-runner.json)
+├── examples/templates/         # example priority templates (copy to templates/ in your home)
 ├── unchanged.py                # hash snapshot to check files a PBI must not touch
 ├── agent_stats.py              # tokens, cache rebuilds and context size from transcripts
-├── jev.config.template.json    # template for Jev gates and thresholds
+├── jev.config.template.json    # template for Jev gates
 ├── opencode.config.json        # opencode permissions (no push, no reset, no outside dirs)
 ├── rtk/
 │   ├── rtk-gate.mjs            # optional PreToolUse hook for rtk
@@ -286,9 +289,10 @@ skills/pbi-orchestration-jev/
 ├── jev/
 │   ├── jev.py / jev.mjs        # Jev client (Python / JS)
 │   └── test_jev.py / jev.test.mjs
-├── test_select_model.py
+├── test_select_model.py / test_agents.py / test_common.py
 ├── test_templates.py / test_prepare.py / test_unchanged.py
-├── test_record_run.py / test_model_report.py
+├── test_record_run.py / test_model_report.py / test_dsh_run.py
+├── test_references.py          # every file the skill docs name exists
 └── test_agent_stats.py
 ```
 
@@ -303,10 +307,10 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 
 ## Tuning
 
-- The decision table and thresholds are starting points. After 10–20 PBIs, look at the results per model (`model_report.py --archive`: first-try pass, reworks, promotions, tokens and cost) and adjust `select_model.py` and `jev.config.json`.
+- The decision table and thresholds are starting points. After 10–20 PBIs, look at the results per model (`model_report.py --archive`: first-try pass, reworks, promotions, tokens and cost) and adjust the constants in `select_model.py` and `prepare.py`.
 - Runner models and effort levels come from a routing template (`routing.json`, same shape as `routing.default.json`). Put it at `docs/pbi/routing.json` in the target repo, or `routing.json` in your home, and `select_model.py` uses it; without one, the bundled `routing.default.json` applies.
 - You can also build the template in a browser (see Template Studio above).
-- Review the hand-off threshold (250,000 tokens) and the opencode results on the sonnet tier at the same time.
+- Review the hand-off threshold (250,000 tokens) and the results of the external runners at the same time.
 
 ## Tests
 
