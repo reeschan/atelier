@@ -1,7 +1,8 @@
 # pbi-orchestration-jev のアーキテクチャ図
 # __MONO__ は単色ロゴの色。render.py がライト用 (000000) とダーク用 (ffffff) に置き換えて 2 枚描く
 # 生成: python ~/.claude/skills/arch-diagram/versions/v1.1/scripts/render.py assets/architecture.d2
-# 2026-10-16 に prepare.py / verify.py・pbi-worker・shared-memory・優先テンプレートを足して描き直した (d2 v0.7.1、elk、ライト theme 0 / ダーク theme 200)
+# 2026-10-21 に汎用化の段 1 に合わせて描き直した: 既定は全段 pbi-worker、外部の実行先は routing.json で有効にしたときだけ、
+# 利用者の home (routing.json・templates・overrides・agents.json・prices.json)、agents.py による手順の照合、Jev は食い違うときの報告と差し戻し文の点検
 direction: right
 
 vars: {
@@ -49,7 +50,7 @@ cc: Claude Code {
     class: svc
     icon: https://cdn.simpleicons.org/claude
   }
-  prepare: "prepare.py → select_model.py\nJev gate 1, tier + route (table only)" {
+  prepare: "prepare.py → select_model.py + agents.py\nJev gate 1, tier + route, drop unusable steps" {
     class: svc
     icon: https://cdn.simpleicons.org/python
   }
@@ -61,31 +62,41 @@ cc: Claude Code {
     class: svc
     icon: https://cdn.simpleicons.org/python
   }
-  worker: "4. pbi-worker (Agent tool)\nhaiku / sonnet / opus, memory get only" {
+  worker: "pbi-worker (Agent tool)\ndefault runner for every tier, memory get only" {
     class: svc
     icon: https://cdn.simpleicons.org/claude
   }
-  rtk: "rtk-gate.mjs (optional)\ncompresses command output" {
+}
+
+home: "Your home (~/.config/pbi-orchestration-jev)" {
+  class: zone
+  icon: https://icons.terrastruct.com/essentials%2F245-folder.svg
+
+  routing: "routing.json · templates/ · overrides.json\ntry order, priority templates" {
     class: svc
-    style.stroke-dash: 3
+    shape: page
+  }
+  agents: "agents.json · prices.json\nrunners and models you use, price overrides" {
+    class: svc
+    icon: https://icons.terrastruct.com/essentials%2F204-settings.svg
   }
 }
 
-runners: Other runners {
+runners: "External runners (optional, enabled in routing.json)" {
   class: saas
   direction: down
 
-  opencode: "1. opencode CLI\nDeepSeek V4.1 Flash (OpenCode Go)" {
+  opencode: "opencode CLI\ne.g. DeepSeek V4.1 Flash (OpenCode Go)" {
     shape: hexagon
   }
-  codex: "2. Codex CLI\ngpt-6-astra (until CODEX_UNTIL)" {
+  codex: "Codex CLI" {
     shape: hexagon
   }
-  agy: "3. Antigravity CLI\nClaude Sonnet 5.5" {
+  agy: "Antigravity CLI\nClaude Sonnet 5.5" {
     class: svc
     icon: https://cdn.simpleicons.org/google
   }
-  dsh: "DeepSeek Harness (dsh)\npriority templates only\ne.g. DeepSeek API V4.1 Flash" {
+  dsh: "DeepSeek Harness (dsh)\ne.g. DeepSeek API V4.1 Flash" {
     shape: hexagon
   }
 }
@@ -105,28 +116,23 @@ web: "Priority templates page\nclaude.ai Artifact with its own DB" {
   icon: https://cdn.simpleicons.org/claude
 }
 
-studio: "Template Studio\nstudio/serve.py on 127.0.0.1\npick models, 3 proposals, reorder" {
+studio: "Template Studio\nstudio/serve.py on 127.0.0.1\nmodels from OpenRouter / Artificial Analysis" {
   class: svc
   icon: https://icons.terrastruct.com/tech%2Fbrowser-2.svg
-}
-
-bench: "OpenRouter / Artificial Analysis\nprices, new models, coding index" {
-  class: svc
-  icon: https://cdn.simpleicons.org/openrouter/__MONO__
 }
 
 repo: Target repository {
   class: zone
   icon: https://cdn.simpleicons.org/git
 
-  code: "Source code\nchanged by runners" {
+  code: "Source code\nchanged by the runner" {
     class: svc
   }
-  pbi: "docs/pbi/\nPBIs, STATUS, HANDOFF, reports, logs" {
+  pbi: "docs/pbi/\nPBIs, STATUS, HANDOFF, reports, runs" {
     class: svc
     shape: page
   }
-  routing: "docs/pbi/routing.json\ntry order, read by select_model.py\n(default: routing.default.json)" {
+  routing: "docs/pbi/routing.json\ntry order for this repository" {
     class: svc
     shape: page
   }
@@ -135,25 +141,19 @@ repo: Target repository {
 dev <-> cc.orch: task / approval / resume
 cc.orch -> cc.prepare: facts
 cc.prepare -> jev: brief, PBI quality
-cc.orch <-> jev: report, rework size
+cc.orch <-> jev: report on mismatch, rework note
 cc.orch -> cc.verify: checks
-cc.orch -> runners.opencode: PBI path
-cc.orch -> runners.codex: "" {style.stroke-dash: 4}
-cc.orch -> runners.agy: "" {style.stroke-dash: 4}
-cc.orch -> runners.dsh: "" {style.stroke-dash: 4}
-cc.orch -> cc.worker: "" {style.stroke-dash: 4}
-cc.orch -> cc.rtk: Bash / PowerShell {style.stroke-dash: 4}
-runners.opencode -> repo.code
-runners.codex -> repo.code
-runners.agy -> repo.code
-runners.dsh -> repo.code
+cc.orch -> cc.worker: PBI path
+cc.orch -> runners: "" {style.stroke-dash: 4}
 cc.worker -> repo.code
+runners -> repo.code {style.stroke-dash: 4}
 cc.orch -> repo.pbi: status, HANDOFF
 cc.orch <-> memory: write refs, handoff {style.stroke-dash: 4}
 cc.worker -> memory: get refs {style.stroke-dash: 4}
-cc.templates -> cc.prepare: overrides {style.stroke-dash: 4}
+cc.prepare -> repo.routing: reads
+cc.prepare -> home: reads routing, overrides, agents.json
+cc.templates <-> home.routing: templates, overrides {style.stroke-dash: 4}
 web <-> cc.templates: sync / answer {style.stroke-dash: 4}
 dev -> web: apply, extend, stop {style.stroke-dash: 4}
 dev -> studio: pick & apply
-bench -> studio: models
 studio -> repo.routing: write
