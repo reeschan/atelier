@@ -53,6 +53,12 @@ class PureFunctionsTest(unittest.TestCase):
         for tool in claude_run.SETTINGS['default']:
             self.assertFalse(tool.startswith('mcp__'), tool)
 
+    def test_default_tools_have_powershell_only_on_windows(self):
+        self.assertEqual(claude_run.default_tools('nt'),
+                         ('Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'PowerShell'))
+        self.assertEqual(claude_run.default_tools('posix'), ('Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash'))
+        self.assertEqual(claude_run.SETTINGS['default'], claude_run.default_tools(os.name))
+
     def test_build_args_default_and_edit_only(self):
         args = claude_run.build_args('sonnet', 'high', 'default')
         self.assertEqual(args[:5], ['-p', '--output-format', 'json', '--model', 'sonnet'])
@@ -102,9 +108,7 @@ class CliTest(unittest.TestCase):
         args = log['args']
         self.assertEqual(args[:5], ['-p', '--output-format', 'json', '--model', 'sonnet'])
         self.assertEqual(args[args.index('--effort') + 1], 'high')
-        # PowerShell is a tool only on Windows.
-        expected = 'Read,Write,Edit,Glob,Grep,Bash' + (',PowerShell' if os.name == 'nt' else '')
-        self.assertEqual(args[args.index('--tools') + 1], expected)
+        self.assertEqual(args[args.index('--tools') + 1], ','.join(claude_run.default_tools(os.name)))
         self.assertEqual(args[args.index('--permission-mode') + 1], 'acceptEdits')
         self.assertEqual(args[args.index('--permission-prompts') + 1], 'none')
         self.assertIn('--strict-mcp-config', args)
