@@ -372,6 +372,7 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 ```sh
 python skills/pbi-orchestration-jev/jev_mcp.py --root /path/to/repo                      # stdio
 python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/to/repo   # http://127.0.0.1:7830/mcp
+python skills/pbi-orchestration-jev/jev_mcp.py --root /path/to/repo --session-root /path/to/work  # stdio, run_session allowed
 ```
 
 | Tool | What it does |
@@ -382,6 +383,11 @@ python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/t
 | `fail_task` | reports NEEDS_CONTEXT / BLOCKED in the same two files |
 | `verify` | runs `verify.py` in a work tree (a worktree, for example) and returns the table and exit codes |
 | `jev_gate` | asks one Jev gate through `jev/jev.py`; the API key stays on the server |
+| `route` | the try order for a role (`executor` / `improver`) at a tier, cut down to the substrate or to `runners`, with the dropped steps |
+| `run_session` | one improvement session on Claude Code under a fence, with the cwd under `--session-root` and the local Claude Code login |
+| `record` | one line per Harness² attempt in `docs/pbi/runs.jsonl` (`source: "harness2"`, the columns of `record_run.py`) |
+
+The model connector in Harness² uses these three: `route` to choose the model to try, `run_session` to do the work, and `record` to keep the result. `run_session` works only in a working directory under `--session-root`, and starts Claude Code under the same fence as Harness²'s `claude_cli`: read and edit tools only, no prompts, no MCP, and the Anthropic environment variables dropped. Authentication stays with the Claude Code settings of the user running jev-mcp, so run jev-mcp on the same machine as Harness².
 
 Only repositories under `--root` (or `PBI_MCP_ROOTS`) are served. HTTP listens on 127.0.0.1 only and rejects other Host headers. There is no authentication, so do not expose it to other machines. See the mcp section of `runners.md`.
 
