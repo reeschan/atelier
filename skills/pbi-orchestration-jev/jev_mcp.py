@@ -1,8 +1,9 @@
 """PBI を MCP で受け渡す実行先のための MCP サーバー (jev-mcp)。
 
-設計者が docs/pbi/mcp/<報告名>.prompt.md に書いた依頼文を、MCP クライアント (Harness² などの外部の
-実装担当) が受け取り、結果を同じ形 (詳細ファイルと 5 行の要約) で返すための口。ファイルの形と設計者の
-流れ (承認・verify.py・レビュー・差し戻し) は変えない。依存は標準ライブラリだけ。
+外の MCP クライアントが、Jev の振り分け・実行・記録をそのまま使うための口。設計者が
+docs/pbi/mcp/<報告名>.prompt.md に書いた依頼文を、MCP クライアント (外の実装担当) が受け取り、
+結果を同じ形 (詳細ファイルと 5 行の要約) で返す。ファイルの形と設計者の流れ (承認・verify.py・
+レビュー・差し戻し) は変えない。依存は標準ライブラリだけ。
 
 使い方:
   python <このディレクトリ>/jev_mcp.py --root <作業リポジトリ> [--root ...]            # stdio
@@ -18,6 +19,13 @@ HTTP は 127.0.0.1 だけで待ち受け、Host が 127.0.0.1・localhost・[::1
   fail_task      NEEDS_CONTEXT / BLOCKED として同じ 2 つを書く
   verify         verify.py を作業ディレクトリで実行し、表と番号ごとの終了コードを返す
   jev_gate       jev/jev.py でゲートを 1 回聞く (API キーはこのサーバーの側だけが読む)
+  route          select_model.py の 1 件の判定 (段・route・外した手順・review・scores) をそのまま返す
+  run            依頼文を docs/pbi/<実行先>/<報告名>.prompt.md に書き、実行先 (dsh / opencode) を 1 回動かして、
+                 終了コード・.last.md・ログと、使えないときの判定 (runners.md の条件) を返す
+  record         record_run.py で 1 回の実行の結果を docs/pbi/runs.jsonl に 1 行足す
+
+外の MCP クライアントは route で手順を受け取り、run でその 1 つを動かし、record で結果を残す。
+jev-mcp は、それらの実行先が動く機械で動かす。
 """
 import argparse
 import datetime
@@ -25,28 +33,57 @@ import http.server
 import json
 import os
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 VERIFY = HERE / 'verify.py'
 JEV = HERE / 'jev' / 'jev.py'
 
+sys.path.insert(0, str(HERE))
+try:
+    import select_model
+    import templates
+finally:
+    sys.path.pop(0)
+
 SERVER_NAME = 'jev-mcp'
 SERVER_VERSION = '0.1.0'
 PROTOCOL_VERSIONS = ('2025-06-18', '2025-03-26', '2024-11-05')
 DEFAULT_PORT = 7830
 ALLOWED_HOSTS = ('127.0.0.1', 'localhost', '[::1]')
+# record_run.py の 1 回の呼び出しの上限 (秒)。lock の中で動くので、止まったまま次の record を塞がない
+RECORD_TIMEOUT = 300
 
 REPORT_RE = re.compile(r'^(PBI-\d+)(?:\.rework-(\d+))?$')
 NAME_RE = re.compile(r'^[A-Za-z0-9._-]+$')
 STATUSES = ('DONE', 'DONE_WITH_CONCERNS', 'NEEDS_CONTEXT', 'BLOCKED')
 FAIL_STATUSES = ('NEEDS_CONTEXT', 'BLOCKED')
+# record の outcome (record_run.py の --outcome と同じ値)
+OUTCOMES = ('合格', '差し戻し', '昇格', '使えず', '保留')
 # claim_task が sections に入れる PBI の見出し (SKILL.md 2 章のテンプレート)
 SECTIONS = ('目的', '対象', '触らない範囲', '受け入れ条件', '検証コマンド', '参照', '補足')
 QUEUE = 'mcp'
+# run の実行先ごとの渡し方 (runners.md の「実行先ごとの渡し方」)。あとで実行先を足せる形にする。
+# logs: 作業ルートの docs/pbi/<実行先>/<報告名><接尾辞> のうち、あれば返すログ。
+DSH_RUN = HERE / 'dsh_run.py'
+RECORD_RUN = HERE / 'record_run.py'
+OPENCODE_CONFIG = HERE / 'opencode.config.json'
+DSH_ERR_RE = re.compile(r'^dsh: [A-Z][A-Z_]*:', re.M)
+RUN_RUNNERS = {
+    'dsh': {'logs': ('.jsonl', '.err', '.final.md', '.run.json')},
+    'opencode': {'logs': ('.jsonl', '.err')},
+}
+RUN_TIMEOUT_DEFAULT = 3600
+MODEL_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/:@+-]*$')
+EFFORT_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
+# record の attempt の数え上げと追記を 1 つにするための lock (HTTP の要求は並列に来る)
+RECORD_LOCK = threading.Lock()
 
 
 class ToolError(Exception):
@@ -82,6 +119,38 @@ def roots_from(args_roots, env=None) -> list[Path]:
 
 def within(path: Path, roots) -> bool:
     return any(path == r or r in path.parents for r in roots)
+
+
+def unusable_reason(runner: str, code, last: str | None, jsonl: str, err: str) -> str | None:
+    """runners.md のその実行先の「使えないとき」の条件。当たれば理由、使えれば None。"""
+    reasons = []
+    if code != 0:
+        reasons.append(f'終了コードが 0 以外 ({code})')
+    if runner == 'opencode':
+        if '"type":"error"' in jsonl:
+            reasons.append('.jsonl に "type":"error" がある')
+        if 'database is locked' in err:
+            reasons.append('.err に database is locked がある')
+    elif runner == 'dsh' and DSH_ERR_RE.search(err):
+        reasons.append('.err に dsh: <code>: がある')
+    if last is None or not last.strip():
+        reasons.append('.last.md が無いか空')
+    return ', '.join(reasons) or None
+
+
+def kill_tree(proc: subprocess.Popen):
+    """プロセスグループごと止める。"""
+    try:
+        if os.name == 'nt':
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True, timeout=15)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
 
 
 def sections_of(pbi_text: str) -> dict:
@@ -310,6 +379,172 @@ class Tasks:
         return {'code': r.returncode, 'answer': answer, 'stdout': None if answer is not None else r.stdout,
                 'stderr': r.stderr[-2000:]}
 
+    def route(self, repo: str, report: str, tier: str | None = None, skip: list | None = None) -> dict:
+        """select_model の 1 件の判定を、そのまま返す。
+
+        facts は報告名の PBI の docs/pbi/<PBI>.facts.json (差し戻しの報告名なら元の PBI)。無ければ判定できない。
+        answers は docs/pbi/jev/<PBI>.brief.json があればその answers。tier は --tier、skip は --skip と同じ値。
+        route.json は書かない (select_model.py を 1 件で動かしたときと同じ)。
+        """
+        root = self.repo(repo)
+        m = self.report(report)
+        if tier is not None and tier not in select_model.TIERS:
+            raise ToolError(f'tier は {" / ".join(select_model.TIERS)} のどれか: {tier}')
+        if skip is None:
+            skip = []
+        if not isinstance(skip, list) or not all(isinstance(s, str) for s in skip):
+            raise ToolError('skip は runner 名かモデル ID (/ を含む値) の配列')
+        skipped = frozenset(s for s in skip if s)
+        invalid = {s for s in skipped if '/' not in s} - set(select_model.RUNNERS)
+        if invalid:
+            raise ToolError(f'skip は {" / ".join(select_model.RUNNERS)} のどれかかモデル ID (/ を含む値): '
+                            f'{", ".join(sorted(invalid))}')
+        base = root / 'docs' / 'pbi'
+        pbi = m.group(1)
+        facts = read_json(base / f'{pbi}.facts.json')
+        if not isinstance(facts, dict):
+            raise ToolError(f'facts が無い (判定できない): docs/pbi/{pbi}.facts.json')
+        brief = base / 'jev' / f'{pbi}.brief.json'
+        answers = select_model.load_answers(brief if brief.is_file() else None)
+        home = templates.resolve_home(None)
+        try:
+            routing, _ = select_model.find_routing(None, str(base), home)
+        except SystemExit as error:
+            raise ToolError(f'振り分けテンプレートを読めない: {error.code}') from None
+        return select_model.decide(facts, answers, datetime.date.today(), forced=tier, skip=skipped,
+                                   routing=routing, home=home, pbi=select_model.pbi_number(report))
+
+    def run(self, repo: str, report: str, runner: str, model: str, prompt: str, effort: str | None = None,
+            workdir: str | None = None, timeout: int = RUN_TIMEOUT_DEFAULT) -> dict:
+        """1 件の報告名を、runners.md の渡し方で実行先に 1 回動かす (dsh と opencode だけ)。
+
+        依頼文を docs/pbi/<runner>/<報告名>.prompt.md に書き (末尾に要約の書き先を足す)、workdir
+        (省略時は repo。--root の下だけ) を作業ルートとして起動する。パスは作業ルートからの相対で返す。
+        """
+        root = self.repo(repo)
+        self.report(report)
+        if runner not in RUN_RUNNERS:
+            raise ToolError(f'run で扱うのは {" と ".join(RUN_RUNNERS)} だけ: {runner}')
+        if not isinstance(model, str) or not MODEL_RE.match(model):
+            raise ToolError(f'model は英数字と ._/:@+- だけ: {model}')
+        if effort is not None and (not isinstance(effort, str) or (effort and not EFFORT_RE.match(effort))):
+            raise ToolError(f'effort は英数字と ._- だけ: {effort}')
+        effort = effort or None
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ToolError('prompt を書く')
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+            raise ToolError('timeout は正の整数 (秒)')
+        cwd = self.workdir(workdir, root)
+        rel = f'docs/pbi/{runner}'
+        base = cwd / rel
+        binary = None
+        if runner == 'opencode':
+            binary = shutil.which('opencode')
+            if binary is None:
+                raise ToolError('opencode が見つからない (PATH に opencode を足す。runners.md の opencode の節)')
+        base.mkdir(parents=True, exist_ok=True)
+        prompt_path = base / f'{report}.prompt.md'
+        last_path = base / f'{report}.last.md'
+        prompt_path.write_text(f'{prompt.rstrip()}\n\n要約の書き先: `{rel}/{report}.last.md`\n', encoding='utf-8')
+        # 前の実行の .last.md を、今回の結果と取り違えない
+        last_path.unlink(missing_ok=True)
+        flags = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' \
+            else {'start_new_session': True}
+        env = None
+        files = []
+        if runner == 'dsh':
+            argv = [sys.executable, str(DSH_RUN), report, '--model', model]
+            if effort:
+                argv += ['--effort', effort]
+            streams = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE}
+        else:
+            argv = [binary, 'run', '-m', f'{model}#{effort}' if effort else model, '--format', 'json',
+                    f'{rel}/{report}.prompt.md を読み、その指示どおりに作業してください。']
+            env = {**os.environ, 'OPENCODE_CONFIG': str(OPENCODE_CONFIG)}
+            files = [open(base / f'{report}.jsonl', 'wb'), open(base / f'{report}.err', 'wb')]
+            streams = {'stdin': subprocess.DEVNULL, 'stdout': files[0], 'stderr': files[1]}
+        timed_out = False
+        errb = None
+        try:
+            try:
+                proc = subprocess.Popen(argv, cwd=cwd, env=env, **streams, **flags)
+            except OSError as e:
+                raise ToolError(f'起動できない: {e}') from None
+            try:
+                _, errb = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                kill_tree(proc)
+                timed_out = True
+                try:
+                    _, errb = proc.communicate(timeout=10)
+                except (subprocess.TimeoutExpired, OSError, ValueError):
+                    errb = None
+        finally:
+            for f in files:
+                f.close()
+        stderr = (errb or b'').decode('utf-8', errors='replace')
+        code = None if timed_out else proc.returncode
+        last = read_text(last_path)
+        jsonl = read_text(base / f'{report}.jsonl') or ''
+        err = read_text(base / f'{report}.err') or ''
+        reason = unusable_reason(runner, code, last, jsonl, err)
+        if timed_out:
+            reason = f'timeout ({timeout}s) で打ち切った' + (f', {reason}' if reason else '')
+        elif reason and stderr.strip():
+            reason += f' / 起動スクリプトの stderr: {stderr.strip()[-300:]}'
+        report_file = cwd / 'docs' / 'pbi' / 'reports' / f'{report}.md'
+        return {
+            'runner': runner,
+            'model': model,
+            'effort': effort,
+            'code': code,
+            'last': last,
+            'report_path': f'docs/pbi/reports/{report}.md' if report_file.is_file() else None,
+            'logs': [f'{rel}/{report}{suffix}' for suffix in RUN_RUNNERS[runner]['logs']
+                     if (base / f'{report}{suffix}').is_file()],
+            'unusable': reason is not None,
+            'unusable_reason': reason,
+        }
+
+    def record(self, repo: str, report: str, attempt: int, outcome: str, findings: list | None = None,
+               runner: str | None = None, model: str | None = None, effort: str | None = None,
+               tier: str | None = None) -> dict:
+        """record_run.py を 1 回呼び、1 回の実行 (PBI × attempt) を docs/pbi/runs.jsonl に 1 行足す。
+
+        record_run.py <報告名> --attempt N --outcome O [...] を、repo をカレントにして動かす。引数は
+        record_run.py の --findings・--runner・--model・--effort・--tier と同じ。同じ (報告名, attempt) が
+        既にあれば record_run.py が終了コード 2 を返すので、そのまま返す。行は jev-mcp では組み立てない。
+        """
+        root = self.repo(repo)
+        self.report(report)
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+            raise ToolError('attempt は 1 以上の整数')
+        if not isinstance(outcome, str):
+            raise ToolError('outcome は record_run.py の --outcome と同じ値の文字列')
+        argv = [sys.executable, str(RECORD_RUN), report, '--attempt', str(attempt), '--outcome', outcome]
+        if findings is not None:
+            if not isinstance(findings, list) or len(findings) != 3 \
+                    or not all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in findings):
+                raise ToolError('findings は 重大,中,軽微 の 3 つの整数 (例 [0, 1, 2])')
+            argv += ['--findings', ','.join(str(n) for n in findings)]
+        for option, value in (('--runner', runner), ('--model', model), ('--effort', effort), ('--tier', tier)):
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise ToolError(f'{option[2:]} は文字列')
+            argv += [option, value]
+        # 並列の要求で runs.jsonl の行が混ざらないよう、record_run.py の呼び出しを 1 つにする
+        with RECORD_LOCK:
+            try:
+                r = subprocess.run(argv, cwd=root, capture_output=True, text=True, encoding='utf-8',
+                                   errors='replace', env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
+                                   timeout=RECORD_TIMEOUT)
+            except OSError as error:
+                raise ToolError(f'record_run.py を起動できない: {error}') from None
+            except subprocess.TimeoutExpired:
+                raise ToolError(f'record_run.py が {RECORD_TIMEOUT} 秒で終わらない') from None
+        return {'code': r.returncode, 'stdout': r.stdout, 'stderr': r.stderr[-2000:]}
+
 
 REPO = {'type': 'string', 'description': '作業リポジトリの絶対パス (サーバーの --root の下)'}
 REPORT = {'type': 'string', 'description': '報告名 (PBI-007 / PBI-007.rework-1)'}
@@ -325,10 +560,10 @@ TOOLS = [
                     'worker.md を返す。同じ報告名を 2 回は取得できない。',
      'inputSchema': {'type': 'object', 'required': ['repo', 'report'], 'properties': {
          'repo': REPO, 'report': REPORT,
-         'runner': {'type': 'string', 'default': 'mcp', 'description': '取得した実行先の名前 (例 harness2)'}}}},
+         'runner': {'type': 'string', 'default': 'mcp', 'description': '取得した実行先の名前 (例 my-client)'}}}},
     {'name': 'submit_result',
      'description': '結果を docs/pbi/reports/<報告名>.md と docs/pbi/mcp/<報告名>.last.md (worker.md の 5 行) に書く。'
-                    'artifacts は実行先の出力 (Harness² の summary など) をそのまま JSON で残す。',
+                    'artifacts は実行先の出力 (クライアントの実行の要約など) をそのまま JSON で残す。',
      'inputSchema': {'type': 'object', 'required': ['repo', 'report', 'status', 'passed', 'total'], 'properties': {
          'repo': REPO, 'report': REPORT,
          'status': {'type': 'string', 'enum': list(STATUSES)},
@@ -359,6 +594,40 @@ TOOLS = [
          'repo': REPO,
          'gate': {'type': 'string', 'description': 'brief / pbi_quality / report / rework_scope / rework_quality など'},
          'text': {'type': 'string'}}}},
+    {'name': 'route',
+     'description': 'select_model.py の 1 件の判定 (段・試す順の route・外した手順・review・scores・理由・'
+                    '優先テンプレート) をそのまま返す。facts は docs/pbi/<PBI>.facts.json (差し戻しの報告名なら'
+                    '元の PBI)、answers は docs/pbi/jev/<PBI>.brief.json。tier は --tier、skip は --skip と同じ。',
+     'inputSchema': {'type': 'object', 'required': ['repo', 'report'], 'properties': {
+         'repo': REPO, 'report': REPORT,
+         'tier': {'type': 'string', 'enum': list(select_model.TIERS)},
+         'skip': {'type': 'array', 'items': {'type': 'string'},
+                  'description': 'route から外す runner 名かモデル ID (/ を含む値)'}}}},
+    {'name': 'run',
+     'description': '1 件の報告名を、runners.md の渡し方で実行先 (dsh / opencode) に 1 回動かす。prompt を '
+                    'docs/pbi/<runner>/<報告名>.prompt.md に書き (末尾に要約の書き先を足す)、workdir を作業ルートとして'
+                    '起動し、終了コード・.last.md の本文・報告ファイルとログのパス・使えないときの判定を返す。',
+     'inputSchema': {'type': 'object', 'required': ['repo', 'report', 'runner', 'model', 'prompt'], 'properties': {
+         'repo': REPO, 'report': REPORT,
+         'runner': {'type': 'string', 'enum': list(RUN_RUNNERS)},
+         'model': {'type': 'string', 'description': 'route の model (dsh は <provider>/<model>)'},
+         'effort': {'type': 'string', 'description': 'route の effort (null / 省略なら付けない)'},
+         'prompt': {'type': 'string', 'description': '依頼文の本文'},
+         'workdir': {'type': 'string', 'description': '作業ルート (--root の下。省略時は repo)'},
+         'timeout': {'type': 'integer', 'default': RUN_TIMEOUT_DEFAULT, 'description': '打ち切る秒数'}}}},
+    {'name': 'record',
+     'description': 'record_run.py を 1 回呼び、1 回の実行 (PBI × attempt) の結果を docs/pbi/runs.jsonl に '
+                    '1 行足す。同じ (報告名, attempt) が既にあれば record_run.py の終了コード 2 をそのまま返す。',
+     'inputSchema': {'type': 'object', 'required': ['repo', 'report', 'attempt', 'outcome'], 'properties': {
+         'repo': REPO, 'report': REPORT,
+         'attempt': {'type': 'integer', 'minimum': 1, 'description': 'route の何番目か (1 始まり)'},
+         'outcome': {'type': 'string', 'enum': list(OUTCOMES), 'description': 'record_run.py の --outcome と同じ値'},
+         'findings': {'type': 'array', 'items': {'type': 'integer', 'minimum': 0}, 'minItems': 3, 'maxItems': 3,
+                      'description': '重大,中,軽微 の 3 つの整数 (省略可)'},
+         'runner': {'type': 'string', 'description': 'route.json と違う実行先で動かしたとき (--runner)'},
+         'model': {'type': 'string', 'description': 'route.json と違うモデルで動かしたとき (--model)'},
+         'effort': {'type': 'string', 'description': '--effort と同じ'},
+         'tier': {'type': 'string', 'description': '--tier と同じ'}}}},
 ]
 
 
@@ -443,6 +712,7 @@ def serve_stdio(server: Server, stdin=None, stdout=None):
 
 def make_handler(server: Server, port: int):
     allowed = {f'{h}:{port}' for h in ALLOWED_HOSTS} | set(ALLOWED_HOSTS)
+    allowed_origins = {f'{scheme}://{host}' for scheme in ('http', 'https') for host in allowed}
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def _send(self, code, body=None):
@@ -457,6 +727,16 @@ def make_handler(server: Server, port: int):
         def _host_ok(self):
             return self.headers.get('Host', '') in allowed
 
+        def _origin_ok(self):
+            # ブラウザのページからの要求を断る。Origin が無い (ブラウザでない MCP クライアント) か、
+            # このサーバー自身の origin のときだけ通す
+            origin = self.headers.get('Origin')
+            return origin is None or origin in allowed_origins
+
+        def _json_body(self):
+            media = (self.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
+            return media == 'application/json'
+
         def do_GET(self):
             if not self._host_ok():
                 return self._send(403, {'error': 'host not allowed'})
@@ -470,8 +750,12 @@ def make_handler(server: Server, port: int):
         def do_POST(self):
             if not self._host_ok():
                 return self._send(403, {'error': 'host not allowed'})
+            if not self._origin_ok():
+                return self._send(403, {'error': 'origin not allowed'})
             if self.path != '/mcp':
                 return self._send(404, {'error': 'not found'})
+            if not self._json_body():
+                return self._send(415, {'error': 'Content-Type must be application/json'})
             try:
                 length = int(self.headers.get('Content-Length') or 0)
                 body = json.loads(self.rfile.read(length).decode('utf-8'))
