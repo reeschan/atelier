@@ -92,10 +92,16 @@ class ServeTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.saved = []
         self.closed = []
+        self.closed_event = threading.Event()
+
+        def on_close():
+            self.closed.append(True)
+            self.closed_event.set()
+
         self.server = serve.make_server(
             self.home, 0, 'tok',
             lambda kind, path: self.saved.append((kind, str(path))),
-            lambda: self.closed.append(True))
+            on_close)
         self.port = self.server.server_port
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
@@ -399,6 +405,9 @@ class ServeTest(unittest.TestCase):
         code, body = self.request('POST', '/api/close')
         self.assertEqual(code, 200)
         self.assertEqual(json.loads(body), {'ok': True})
+        # The handler calls the callback after it has flushed the response, so the client can
+        # see the response first; wait for the callback instead of checking at once.
+        self.assertTrue(self.closed_event.wait(5), 'the close callback was not called')
         self.assertEqual(self.closed, [True])
 
 
