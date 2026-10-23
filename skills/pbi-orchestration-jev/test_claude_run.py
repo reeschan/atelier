@@ -102,7 +102,9 @@ class CliTest(unittest.TestCase):
         args = log['args']
         self.assertEqual(args[:5], ['-p', '--output-format', 'json', '--model', 'sonnet'])
         self.assertEqual(args[args.index('--effort') + 1], 'high')
-        self.assertEqual(args[args.index('--tools') + 1], 'Read,Write,Edit,Glob,Grep,Bash,PowerShell')
+        # PowerShell is a tool only on Windows.
+        expected = 'Read,Write,Edit,Glob,Grep,Bash' + (',PowerShell' if os.name == 'nt' else '')
+        self.assertEqual(args[args.index('--tools') + 1], expected)
         self.assertEqual(args[args.index('--permission-mode') + 1], 'acceptEdits')
         self.assertEqual(args[args.index('--permission-prompts') + 1], 'none')
         self.assertIn('--strict-mcp-config', args)
