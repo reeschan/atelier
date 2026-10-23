@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 TIERS = ('haiku', 'sonnet', 'opus')
-EXTERNAL_RUNNERS = ('opencode', 'codex', 'agy', 'dsh')
+EXTERNAL_RUNNERS = ('opencode', 'codex', 'agy', 'dsh', 'claude')
 AGENT = 'agent'
 RUNNERS = EXTERNAL_RUNNERS + (AGENT,)
 # プロジェクトごとのディレクトリが並ぶ根

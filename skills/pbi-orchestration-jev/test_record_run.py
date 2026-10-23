@@ -10,6 +10,7 @@ from pathlib import Path
 
 import agent_stats
 import common
+import record_run
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RECORD = os.path.join(HERE, 'record_run.py')
@@ -195,6 +196,62 @@ class RecordRunTest(unittest.TestCase):
         base = self.archive / 'myrepo' / 'feature-x__W-002' / 'PBI-007' / 'attempt-1'
         for name in ('PBI-007.jsonl', 'PBI-007.run.json', 'PBI-007.patch.yml', 'PBI-007.final.md', 'PBI-007.last.md'):
             self.assertTrue((base / 'dsh' / name).is_file(), name)
+
+    def write_claude(self, name, result, start='2026-10-18T15:00:00+09:00', end='2026-10-18T15:02:00+09:00'):
+        d = self.pbi / 'claude'
+        d.mkdir(exist_ok=True)
+        if result is not None:
+            (d / f'{name}.json').write_text(result if isinstance(result, str) else json.dumps(result),
+                                            encoding='utf-8')
+        if start is not None:
+            (d / f'{name}.run.json').write_text(json.dumps({'start': start, 'end': end, 'exit': 0}),
+                                                encoding='utf-8')
+
+    def test_read_claude_tokens_cost_steps_and_time(self):
+        self.write_claude('PBI-007', {'type': 'result', 'is_error': False, 'num_turns': 7, 'total_cost_usd': 0.25,
+                                      'usage': {'input_tokens': 10, 'output_tokens': 20,
+                                                'cache_read_input_tokens': 300, 'cache_creation_input_tokens': 40}})
+        got = record_run.read_claude(self.pbi / 'claude' / 'PBI-007.json')
+        t = got['tokens']
+        self.assertEqual((t['input'], t['output'], t['cache_read'], t['cache_write']), (10, 20, 300, 40))
+        self.assertIsNone(t['reasoning'])
+        self.assertEqual(t['total'], 370)
+        self.assertEqual((got['steps'], got['cost'], got['time']['seconds']), (7, 0.25, 120))
+
+    def test_read_claude_missing_values_are_null(self):
+        self.write_claude('PBI-007', {'type': 'result', 'is_error': True}, start=None)
+        got = record_run.read_claude(self.pbi / 'claude' / 'PBI-007.json')
+        self.assertIsNone(got['tokens']['total'])
+        self.assertIsNone(got['tokens']['input'])
+        self.assertEqual((got['steps'], got['cost'], got['time']['seconds']), (None, None, None))
+        for broken in ('not json', None):
+            self.write_claude('PBI-008', broken, start=None)
+            got = record_run.read_claude(self.pbi / 'claude' / 'PBI-008.json')
+            self.assertEqual((got['tokens']['total'], got['steps'], got['cost']), (None, None, None))
+
+    def test_read_claude_takes_the_last_result_of_an_event_array(self):
+        self.write_claude('PBI-007', [{'type': 'system'}, {'type': 'result', 'num_turns': 2, 'total_cost_usd': 1,
+                                                          'usage': {'input_tokens': 5, 'output_tokens': 6}}])
+        got = record_run.read_claude(self.pbi / 'claude' / 'PBI-007.json')
+        self.assertEqual((got['tokens']['input'], got['tokens']['total'], got['steps']), (5, 11, 2))
+
+    def test_claude_row_uses_total_cost_usd_as_cost_reported(self):
+        claude = {'runner': 'claude', 'model': 'sonnet', 'effort': 'high'}
+        self.write_route('PBI-007', [claude, AGENT], tier='sonnet')
+        self.write_claude('PBI-007', {'type': 'result', 'num_turns': 4, 'total_cost_usd': 0.75,
+                                      'usage': {'input_tokens': 10, 'output_tokens': 20}})
+        for suffix in ('.prompt.md', '.err', '.last.md'):
+            (self.pbi / 'claude' / f'PBI-007{suffix}').write_text('x', encoding='utf-8')
+        self.write_verify('PBI-007', [{'n': 1, 'command': 'x', 'code': 0}])
+        r = self.record('PBI-007', 1, '合格')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        self.assertEqual((row['runner'], row['model']), ('claude', 'sonnet'))
+        self.assertEqual((row['cost_reported'], row['steps'], row['time']['seconds']), (0.75, 4, 120))
+        self.assertEqual(row['tokens']['total'], 30)
+        base = self.archive / 'myrepo' / 'feature-x__W-002' / 'PBI-007' / 'attempt-1' / 'claude'
+        for name in ('PBI-007.json', 'PBI-007.run.json', 'PBI-007.last.md'):
+            self.assertTrue((base / name).is_file(), name)
 
     def test_dsh_cost_api_equiv_uses_home_prices(self):
         self.write_route('PBI-007', [{'runner': 'dsh', 'model': 'deepseek-official/deepseek-v4.1-flash',

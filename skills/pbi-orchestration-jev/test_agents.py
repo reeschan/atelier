@@ -313,6 +313,20 @@ class FindCliTest(Base):
         cli = make_file(self.root / 'dsh', 'bin.js')
         self.assertIsNone(agents.find_cli('opencode', None, self.env(PBI_DSH_BIN=str(cli))))
 
+    def test_claude_is_found_on_path(self):
+        cli = make_cli(self.empty, 'claude')
+        self.assertFound(agents.find_cli('claude', None, self.env()), cli)
+
+    def test_claude_is_found_in_node_global(self):
+        cli = make_file(self.root / 'fnm' / 'node-versions' / 'v22.0.0' / 'installation' / 'bin', 'claude')
+        self.assertFound(agents.find_cli('claude', None, self.env(FNM_DIR=str(self.root / 'fnm'))), cli)
+
+    def test_claude_default_location_on_windows(self):
+        exe = make_file(self.root / 'profile' / '.local' / 'bin', 'claude.exe')
+        env = self.env(USERPROFILE=str(self.root / 'profile'))
+        self.assertFound(agents.default_location('claude', env, 'nt'), exe)
+        self.assertIsNone(agents.default_location('claude', env, 'posix'))
+
     def test_agy_default_location_on_windows(self):
         exe = make_file(self.root / 'local' / 'agy' / 'bin', 'agy.exe')
         env = self.env(LOCALAPPDATA=str(self.root / 'local'))
@@ -402,6 +416,19 @@ class FilterStepsTest(Base):
 
     def test_no_steps(self):
         self.assertEqual(agents.filter_steps([], None, {}), ([], []))
+
+    def test_claude_step_is_kept_only_when_enabled_and_found(self):
+        step = {'runner': 'claude', 'model': 'sonnet', 'effort': 'high'}
+        table = {'runners': {'claude': {'enabled': True}}}
+        self.assertEqual(agents.filter_steps([step, AGENT_STEP], table, {'claude': 'x'}), ([step, AGENT_STEP], []))
+        off = {'runners': {'claude': {'enabled': False}}}
+        kept, dropped = agents.filter_steps([step, AGENT_STEP], off, {'claude': 'x'})
+        self.assertEqual((kept, [d['reason'] for d in dropped]), ([AGENT_STEP], [agents.REASON_DISABLED]))
+        kept, dropped = agents.filter_steps([step, AGENT_STEP], table, {'claude': None})
+        self.assertEqual((kept, [d['reason'] for d in dropped]), ([AGENT_STEP], [agents.REASON_NOT_FOUND]))
+        picked = {'runners': {'claude': {'models': ['opus']}}}
+        kept, dropped = agents.filter_steps([step], picked, {'claude': 'x'})
+        self.assertEqual((kept, [d['reason'] for d in dropped]), ([], [agents.REASON_MODEL_NOT_SELECTED]))
 
     def test_found_by_find_cli(self):
         make_cli(self.empty, 'opencode')
