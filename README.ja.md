@@ -370,6 +370,7 @@ python jev/jev.py --request <request.json>                 # リクエストを�
 ```sh
 python skills/pbi-orchestration-jev/jev_mcp.py --root /path/to/repo                      # stdio
 python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/to/repo   # http://127.0.0.1:7830/mcp
+python skills/pbi-orchestration-jev/jev_mcp.py --root /path/to/repo --session-root /path/to/work  # run_session を使うとき
 ```
 
 | ツール | すること |
@@ -380,6 +381,11 @@ python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/t
 | `fail_task` | NEEDS_CONTEXT / BLOCKED を同じ 2 つのファイルで報告する |
 | `verify` | 作業ツリー (worktree など) で `verify.py` を実行し、表と終了コードを返す |
 | `jev_gate` | `jev/jev.py` で Jev のゲートを 1 回聞く。API キーはサーバーの側だけが持つ |
+| `route` | 役割 (`executor` / `improver`) の段で `select_model` の試す順を出し、substrate か `runners` の手順に絞って、外した手順とともに返す |
+| `run_session` | 改善役のセッションを Claude Code で柵つきで 1 回回す。cwd は `--session-root` の下だけ |
+| `record` | Harness² の試行 1 回につき 1 行を `docs/pbi/runs.jsonl` に足す (`source: "harness2"`、`record_run.py` と同じ列) |
+
+Harness² のモデルのコネクターは、この 3 つを使います。`route` で試すモデルを決め、`run_session` で作業し、`record` で結果を残します。`run_session` は `--session-root` の下の作業ディレクトリでだけ動き、Claude Code を Harness² の `claude_cli` と同じ柵 (読み書きのツールだけ・質問なし・MCP なし・Anthropic の環境変数を外す) で起動します。認証は jev-mcp を動かすユーザーの Claude Code の設定のままで、jev-mcp は Harness² と同じ機械で動かします。
 
 扱うのは `--root` (または `PBI_MCP_ROOTS`) の下のリポジトリだけです。HTTP は 127.0.0.1 だけで待ち受け、ほかの Host は断ります。認証は無いので、ほかの機械には公開しないでください。詳しくは `runners.md` の mcp の節を見てください。
 

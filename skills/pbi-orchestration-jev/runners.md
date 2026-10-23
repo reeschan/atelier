@@ -96,7 +96,10 @@ python <このディレクトリ>/jev_mcp.py --root <作業リポジトリの絶
 python <このディレクトリ>/jev_mcp.py --http --port 7830 --root <作業リポジトリの絶対パス>  # http://127.0.0.1:7830/mcp
 ```
 
-- ツールは `list_tasks`・`claim_task`・`submit_result`・`fail_task`・`verify`・`jev_gate`。`claim_task` は `docs/pbi/mcp/<報告名>.claim.json` を排他的に作り、同じ報告名を 2 回は渡さない
+- ツールは `list_tasks`・`claim_task`・`submit_result`・`fail_task`・`verify`・`jev_gate`・`route`・`run_session`・`record`。`claim_task` は `docs/pbi/mcp/<報告名>.claim.json` を排他的に作り、同じ報告名を 2 回は渡さない
+- `run_session` は改善役の作業を Claude Code で 1 回回す（`runner` は `agent` だけ）。柵は `--restricted`・`--tools Read,Edit,Write,Glob,Grep`・`--permission-mode acceptEdits`・`--permission-prompts none`・`--strict-mcp-config` で、`ANTHROPIC_*` の環境変数は外す。認証は jev-mcp を動かすユーザーの Claude Code の設定のまま。jev-mcp は Harness² と同じ機械で動かす
+- `--session-root` は run_session の cwd を許すディレクトリ（くり返し可。環境変数 `PBI_MCP_SESSION_ROOTS` でも可）。付けずに起動すると `run_session` は使えない。cwd はこの下だけだが、`--root` の外でも `--session-root` の下ならよい
+- `record` は Harness² の試行 1 回の結果を `docs/pbi/runs.jsonl` に 1 行（`source: "harness2"`、`record_run.py` と同じ列）で足す。取れない値は null、attempt は同じ report・role・runner・model の行の数 + 1
 - `submit_result` / `fail_task` は `docs/pbi/reports/<報告名>.md`（詳細）と `.last.md`（worker.md の 5 行）を書く。`.last.md` は最後に書く。実行先の出力（Harness² の summary など）は `<報告名>.artifacts.json` に残る。設計者は他の実行先と同じく `.last.md` だけを読み、8 章の検証は自分で行う（`verify` ツールの結果は実行先の自己申告として扱う）
 - `jev_gate` は jev-mcp の側で `jev/jev.py` を呼ぶ。API キーはサーバーの環境変数だけが持ち、クライアントには渡らない。送るのは文章だけ
 - HTTP は 127.0.0.1 だけで待ち受け、Host が 127.0.0.1・localhost・[::1] でない要求は 403 で断る。認証は無いので、ほかの機械には公開しない
