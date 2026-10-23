@@ -7,7 +7,7 @@
 # 優先テンプレートの正本はローカルの overrides.json で、Web ページは任意の同期先
 # 2026-10-21 にフェーズ・アダプターに合わせて描き直した: adapter_gate.py が最終・セキュリティレビューを使うかを決め、
 # 包むサブエージェント (general-purpose) が任意の呼び出し先 (mattpocock-skills・built-in のレビュー) を呼ぶ。設計の grilling はメインのセッションから
-# 2026-10-23 に jev-mcp を足した: Harness² (MCP クライアント) がタスクを受け取り、モデルの候補 (route)・改善役のセッション (run_session)・記録 (record) を jev-mcp に頼む
+# 2026-10-23 に jev-mcp を足した: 外の MCP クライアントが、タスクの受け渡しと、Jev の振り分け (route = select_model)・実行 (run = runners.md の渡し方)・記録 (record = record_run.py) を使う
 direction: right
 
 vars: {
@@ -131,12 +131,12 @@ runners: "External runners (optional, chosen in setup)" {
   }
 }
 
-jevmcp: "jev-mcp (jev_mcp.py, 127.0.0.1)\ntasks: claim, submit, verify\nmodels: route, run_session, record" {
+jevmcp: "jev-mcp (jev_mcp.py, 127.0.0.1)\ntasks: claim, submit, verify\nJev: route, run, record" {
   class: svc
   icon: https://cdn.simpleicons.org/modelcontextprotocol/__MONO__
 }
 
-harness: "Harness² (MCP client, optional)\ntask and model connectors" {
+harness: "MCP client (optional)\nuses tasks, routing, runs, records" {
   shape: hexagon
   style.stroke-dash: 3
 }
@@ -205,7 +205,7 @@ cc.gate -> home.agents: adapters
 cc.orch -> cc.final: when the gate says run
 cc.final -> callees: "code-review, security-review" {style.stroke-dash: 4}
 cc.final -> repo.pbi: reviews/final.*.md
-harness <-> jevmcp: "claim tasks, route models,\nimprover sessions, record" {style.stroke-dash: 4}
+harness <-> jevmcp: "claim tasks, route,\nrun, record" {style.stroke-dash: 4}
 harness -> repo.code: "" {style.stroke-dash: 4}
 jevmcp -> repo.pbi: "prompts, reports, runs.jsonl" {style.stroke-dash: 4}
 jevmcp -> home: "reads routing, agents.json" {style.stroke-dash: 4}
