@@ -31,8 +31,13 @@ from pathlib import Path
 
 # 設定ごとの道具（--tools に渡す）。default は agents/pbi-worker.md の tools から、headless で使えないもの
 # （MCP の道具と ToolSearch）を除いたもの。PowerShell の道具は Windows だけにある
+def default_tools(os_name: str) -> tuple:
+    """default の設定の道具。PowerShell の道具は Windows (os.name が 'nt') だけにある。"""
+    return ('Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash') + (('PowerShell',) if os_name == 'nt' else ())
+
+
 SETTINGS = {
-    'default': ('Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash') + (('PowerShell',) if os.name == 'nt' else ()),
+    'default': default_tools(os.name),
     'edit-only': ('Read', 'Edit', 'Write', 'Glob', 'Grep'),
 }
 
