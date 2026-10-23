@@ -26,6 +26,7 @@ REASON_MODEL_NOT_SELECTED = '未選択のモデル'
 # PATH にも Node のグローバルにも無いときに見る、Windows のインストーラの既定の場所 (環境変数, その下のパス)
 WINDOWS_DEFAULT_LOCATIONS = {
     'agy': ('LOCALAPPDATA', ('agy', 'bin', 'agy.exe')),
+    'claude': ('USERPROFILE', ('.local', 'bin', 'claude.exe')),
 }
 
 # Node の版ごとのディレクトリの下で CLI を探すときの拡張子。

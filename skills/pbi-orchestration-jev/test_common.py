@@ -78,9 +78,9 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(common.TIERS, ('haiku', 'sonnet', 'opus'))
 
     def test_runners(self):
-        self.assertEqual(common.EXTERNAL_RUNNERS, ('opencode', 'codex', 'agy', 'dsh'))
+        self.assertEqual(common.EXTERNAL_RUNNERS, ('opencode', 'codex', 'agy', 'dsh', 'claude'))
         self.assertEqual(common.AGENT, 'agent')
-        self.assertEqual(common.RUNNERS, ('opencode', 'codex', 'agy', 'dsh', 'agent'))
+        self.assertEqual(common.RUNNERS, ('opencode', 'codex', 'agy', 'dsh', 'claude', 'agent'))
 
 
 class StepLabelTest(unittest.TestCase):

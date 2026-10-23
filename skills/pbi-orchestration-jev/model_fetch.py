@@ -1,6 +1,6 @@
 """実行先ごとに使えるモデルの一覧を取る。
 
-opencode・codex・agy は CLI の出力から、dsh は同梱のカタログと --dump-config から、
+opencode・codex・agy は CLI の出力から、claude は同梱の別名から、dsh は同梱のカタログと --dump-config から、
 agent は組み込みの定義から取る。取得の失敗は FetchError にし、ほかの実行先に
 波及させないのは呼び出し側 (setup_agents.py) の責任にする。
 """
@@ -19,6 +19,9 @@ CATALOG = Path(__file__).resolve().parent / 'dsh.models.json'
 # agent (Agent ツール) の組み込みのモデルと effort
 AGENT_MODELS = ('haiku', 'sonnet', 'opus', 'fable')
 AGENT_EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
+
+# claude（Claude Code の headless）の同梱のモデルの別名。CLI から一覧は取れない
+CLAUDE_MODELS = ('haiku', 'sonnet', 'opus')
 
 # dsh の .js を起動する Node の環境変数
 DSH_NODE = 'PBI_DSH_NODE'
@@ -41,6 +44,9 @@ def fetch(runner: str, cli: str | None, env: dict | None = None, timeout: float 
     if runner == 'dsh':
         # dsh は一覧のコマンドが無いので、cli が無くてもカタログで返す
         return _dsh(cli, env, timeout)
+    if runner == 'claude':
+        # claude は一覧のコマンドが無いので、cli が無くても同梱の別名で返す
+        return _claude()
     if cli is None:
         raise FetchError(f'{runner}: the CLI was not found.')
     if runner == 'opencode':
@@ -72,6 +78,12 @@ def version(runner: str, cli: str | None, env: dict | None = None, timeout: floa
 def _agent() -> dict:
     """agent の組み込みのモデル。CLI は呼ばない。"""
     models = [{'id': model, 'name': None, 'efforts': list(AGENT_EFFORTS)} for model in AGENT_MODELS]
+    return {'method': 'builtin', 'models': models}
+
+
+def _claude() -> dict:
+    """claude の同梱の固定の一覧（別名）。CLI は呼ばない。"""
+    models = [{'id': model, 'name': None, 'efforts': list(AGENT_EFFORTS)} for model in CLAUDE_MODELS]
     return {'method': 'builtin', 'models': models}
 
 
