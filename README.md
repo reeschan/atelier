@@ -10,7 +10,7 @@ Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator passes facts to prepare.py, which asks Jev for gate 1 (brief and PBI quality), picks a tier and a route with select_model.py, reads the routing, overrides and agents.json from your home (~/.config/pbi-orchestration-jev) and docs/pbi/routing.json, and drops steps whose runner is unusable. PBIs go to pbi-worker (the Agent tool), the default runner for every tier, or to external runners (opencode, Codex, Antigravity, DeepSeek Harness) chosen in setup and named in routing.json; they change the source code of the target repository. The orchestrator verifies each PBI with verify.py and unchanged.py, asks Jev in plain text only when a report and the verification disagree and to check rework notes, and records status and HANDOFF in docs/pbi/. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. setup_agents.py and model_fetch.py detect the runner CLIs and fetch each runner's model list into agents.json and models/ in your home. The developer uses the local editor (studio/serve.py, with tabs for agents and models, routing, and priority templates and application) to read and save those files in home only. templates.py keeps priority templates and the local overrides.json, which is the source of truth; the optional priority templates web page (a claude.ai artifact) only syncs with it. Phase adapters use optional callee skills when they are installed: the orchestrator runs mattpocock-skills grilling for design, and after all PBIs adapter_gate.py reads the PBIs and the adapters setting in agents.json to decide whether the final and security reviews run; a general-purpose review wrapper then calls mattpocock-skills code-review or the built-in /code-review and /security-review, and writes the findings to docs/pbi/reviews/. An optional jev-mcp server (jev_mcp.py, on 127.0.0.1) lets an MCP client claim and submit tasks and use Jev's own steps: route (select_model.py), run (one try on a runner, as runners.md describes) and record (record_run.py); it reads the routing and agents.json from your home and writes prompts, reports and runs in docs/pbi/.">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator passes facts to prepare.py, which asks Jev for gate 1 (brief and PBI quality), picks a tier and a route with select_model.py, reads the routing, overrides and agents.json from your home (~/.config/pbi-orchestration-jev) and docs/pbi/routing.json, and drops steps whose runner is unusable. PBIs go to pbi-worker (the Agent tool), the default runner for every tier, or to external runners (opencode, Codex, Antigravity, DeepSeek Harness, Claude Code headless) chosen in setup and named in routing.json; they change the source code of the target repository. The orchestrator verifies each PBI with verify.py and unchanged.py, asks Jev in plain text only when a report and the verification disagree and to check rework notes, and records status and HANDOFF in docs/pbi/. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. setup_agents.py and model_fetch.py detect the runner CLIs and fetch each runner's model list into agents.json and models/ in your home. The developer uses the local editor (studio/serve.py, with tabs for agents and models, routing, and priority templates and application) to read and save those files in home only. templates.py keeps priority templates and the local overrides.json, which is the source of truth; the optional priority templates web page (a claude.ai artifact) only syncs with it. Phase adapters use optional callee skills when they are installed: the orchestrator runs mattpocock-skills grilling for design, and after all PBIs adapter_gate.py reads the PBIs and the adapters setting in agents.json to decide whether the final and security reviews run; a general-purpose review wrapper then calls mattpocock-skills code-review or the built-in /code-review and /security-review, and writes the findings to docs/pbi/reviews/. An optional jev-mcp server (jev_mcp.py, on 127.0.0.1) lets an MCP client claim and submit tasks and use Jev's own steps: route (select_model.py), run (one try on a runner, as runners.md describes) and record (record_run.py); it reads the routing and agents.json from your home and writes prompts, reports and runs in docs/pbi/.">
 </picture>
 
 The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lang.com)).
@@ -204,6 +204,7 @@ The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `ma
 | [Codex CLI](https://github.com/openai/codex) | no | external runner you enable in `routing.json` |
 | Antigravity CLI (`agy`) | no | Claude via a Google AI subscription |
 | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) | no | external runner for `routing.json` or a priority template, e.g. the official DeepSeek API through dsh headless |
+| `claude` (Claude Code headless) | no | external runner for `routing.json` or a priority template, only when enabled in `agents.json`; the setting is `default` or `edit-only` |
 | Node.js | no | the rtk hook, and the JS Jev client (`jev.mjs`) |
 | [rtk](https://github.com/rtk-ai/rtk) | no | compressing command output |
 
@@ -315,6 +316,7 @@ skills/pbi-orchestration-jev/
 ├── SKILL.md                    # the skill (instructions for the orchestrator)
 ├── runners.md                  # how to hand PBIs to opencode / Codex / Antigravity / dsh
 ├── dsh_run.py                  # runs one PBI on DeepSeek Harness headless
+├── claude_run.py               # runs one PBI on Claude Code headless
 ├── verify-commands.md          # pitfalls when writing verification commands
 ├── worker.md                   # how workers proceed and report
 ├── appendix/                   # read only when needed (memory, rework, handoff, finish, jev, setup, adapters, priority-templates)
@@ -342,6 +344,7 @@ skills/pbi-orchestration-jev/
 ├── agent_stats.py              # tokens, cache rebuilds and context size from transcripts
 ├── jev.config.template.json    # template for Jev gates
 ├── opencode.config.json        # opencode permissions (no push, no reset, no outside dirs)
+├── opencode.edit-only.config.json # opencode permissions for edit-only (read, write and search only, no commands)
 ├── rtk/
 │   ├── rtk-gate.mjs            # optional PreToolUse hook for rtk
 │   └── rtk-mode.mjs            # turn rtk on / off for the current session
@@ -351,6 +354,7 @@ skills/pbi-orchestration-jev/
 ├── test_select_model.py / test_agents.py / test_common.py
 ├── test_setup_agents.py / test_model_fetch.py / test_templates.py / test_prepare.py / test_unchanged.py
 ├── test_record_run.py / test_model_report.py / test_dsh_run.py / test_jev_mcp.py
+├── test_claude_run.py          # claude_run: arguments, settings and tools
 ├── test_adapter_gate.py        # the review gates: 299/300/301 lines, 2/3 PBIs, deep and sensitive
 ├── test_references.py          # every file the skill docs name exists
 └── test_agent_stats.py
@@ -383,10 +387,10 @@ python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/t
 | `verify` | runs `verify.py` in a work tree (a worktree, for example) and returns the table and exit codes |
 | `jev_gate` | asks one Jev gate through `jev/jev.py`; the API key stays on the server |
 | `route` | one `select_model.py` decision: the tier, the ordered steps to try, the dropped steps, the review and the scores, the same as `python select_model.py <facts.json> [--tier T] [--skip S]`; it writes no `route.json` |
-| `run` | one step for a report, passed the way `runners.md` says (`dsh` or `opencode`): it writes the prompt to `docs/pbi/<runner>/<report>.prompt.md` and starts that runner once |
+| `run` | one step for a report, passed the way `runners.md` says (`dsh`, `opencode` or `claude`): `setting` (`default` or `edit-only`) picks the runner's tools (edit-only is read, write and search only, with no commands; `dsh` has no `edit-only`). It writes the prompt to `docs/pbi/<runner>/<report>.prompt.md` and starts that runner once |
 | `record` | one `record_run.py` call: one line for an attempt in `docs/pbi/runs.jsonl` |
 
-`route`, `run` and `record` are the three calls an outside MCP client needs: `route` to get the steps to try, `run` to do one of them, and `record` to keep the result. They add no model, no fence and no row of their own; each takes the arguments of the script it wraps. `route` takes `repo`, `report`, `tier` (`--tier`) and `skip` (`--skip`). `run` takes `repo`, `report`, `runner`, `model`, `effort`, `prompt`, `workdir` and `timeout`; `workdir` stays under `--root` and defaults to `repo`, and the call returns the exit code, the `.last.md`, the report and log paths, and whether the runner was unusable by the rules in `runners.md`. `record` takes `repo`, `report`, `attempt`, `outcome`, `findings`, `runner`, `model`, `effort` and `tier`. Run jev-mcp on the machine where those runners work.
+`route`, `run` and `record` are the three calls an outside MCP client needs: `route` to get the steps to try, `run` to do one of them, and `record` to keep the result. They add no model, no fence and no row of their own; each takes the arguments of the script it wraps. `route` takes `repo`, `report`, `tier` (`--tier`) and `skip` (`--skip`). `run` takes `repo`, `report`, `runner`, `model`, `effort`, `setting`, `prompt`, `workdir` and `timeout`; `workdir` stays under `--root` and defaults to `repo`, and the call returns the exit code, the `.last.md`, the report and log paths, and whether the runner was unusable by the rules in `runners.md`. `record` takes `repo`, `report`, `attempt`, `outcome`, `findings`, `runner`, `model`, `effort` and `tier`. Run jev-mcp on the machine where those runners work.
 
 Only repositories under `--root` (or `PBI_MCP_ROOTS`) are served. HTTP listens on 127.0.0.1 only, rejects other Host headers and any browser Origin other than its own, and accepts only `application/json` bodies. There is no authentication, so do not expose it to other machines. See the mcp section of `runners.md`.
 
