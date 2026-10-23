@@ -258,6 +258,14 @@ class JevMcpTest(unittest.TestCase):
         self.assertEqual(out['attempt'], 2)
         self.assertEqual([r['attempt'] for r in self.rows()], [1, 2])
 
+    def test_concurrent_records_get_distinct_attempts(self):
+        threads = [threading.Thread(target=self.record, kwargs={'outcome': {'ok': True}}) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(sorted(r['attempt'] for r in self.rows()), list(range(1, 9)))
+
     def test_record_outcome_three_values(self):
         cases = [({'ok': True}, '合格'),
                  ({'ok': False, 'unavailable': True}, '使えず'),
@@ -599,6 +607,17 @@ class RunSessionTest(unittest.TestCase):
 
     def test_usage_limit_is_unavailable(self):
         self.set_reply({**GOOD_REPLY, 'is_error': True, 'result': 'Claude AI usage limit reached'})
+        out = self.ok(cwd=str(self.work), mission='m')
+        self.assertEqual((out['ok'], out['unavailable']), (False, True))
+
+    def test_auth_words_in_a_failed_reply_are_not_unavailable(self):
+        self.set_reply({**GOOD_REPLY, 'is_error': True,
+                        'result': 'Could not fix the authentication module; the rate limit test still fails'})
+        out = self.ok(cwd=str(self.work), mission='m')
+        self.assertEqual((out['ok'], out['unavailable']), (False, False))
+
+    def test_cli_authentication_error_is_unavailable(self):
+        self.set_reply({**GOOD_REPLY, 'is_error': True, 'result': 'API Error: 401 authentication_error'})
         out = self.ok(cwd=str(self.work), mission='m')
         self.assertEqual((out['ok'], out['unavailable']), (False, True))
 

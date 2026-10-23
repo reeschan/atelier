@@ -40,6 +40,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -77,8 +78,12 @@ SESSION_RUNNERS = {
     'agent': {'bin_env': 'PBI_CLAUDE_BIN', 'bin': 'claude', 'tools': CLAUDE_TOOLS, 'drop_env': CLAUDE_DROP_ENV},
 }
 SYSTEM_ARG_LIMIT = 120_000
-# 結果の文にこれらがあれば、実行先が使えない (利用上限・認証の失敗) とみなす。小文字で比べる
-UNAVAILABLE_MARKERS = ('usage limit', 'rate limit', 'invalid api key', 'please run /login', 'authentication')
+# 結果の文にこれらがあれば、実行先が使えない (利用上限・認証の失敗) とみなす。小文字で比べる。
+# 返答の本文に出うる一般の語 (authentication など) は使わず、CLI のエラーの文言だけにする
+UNAVAILABLE_MARKERS = ('usage limit', 'rate_limit_error', 'invalid api key', 'please run /login',
+                       'authentication_error', 'authentication failed')
+# record の attempt の数え上げと追記を 1 つにするための lock (HTTP の要求は並列に来る)
+RECORD_LOCK = threading.Lock()
 
 
 class ToolError(Exception):
@@ -147,10 +152,10 @@ def kill_tree(proc: subprocess.Popen):
     """プロセスグループごと止める。"""
     try:
         if os.name == 'nt':
-            subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True)
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True, timeout=15)
         else:
             os.killpg(proc.pid, signal.SIGKILL)
-    except (OSError, ValueError):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         pass
     try:
         proc.kill()
@@ -571,46 +576,47 @@ class Tasks:
                 raise ToolError(f'outcome.{name} は文字列')
         # ok が最優先。ok でなく unavailable なら「使えず」、それ以外は「不合格」
         verdict = '合格' if outcome['ok'] else ('使えず' if unavailable else '不合格')
-        base = root / 'docs' / 'pbi'
-        runs = base / 'runs.jsonl'
-        attempt = 1
-        for line in (read_text(runs) or '').splitlines():
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(row, dict) and row.get('report') == report and row.get('role') == role \
-                    and row.get('runner') == runner and row.get('model') == model:
-                attempt += 1
-        row = {
-            'schema': 1,
-            'recorded_at': now_iso(),
-            'repo': root.name,
-            'pbi': m.group(1),
-            'report': report,
-            'attempt': attempt,
-            'rework': int(m.group(2) or 0),
-            'tier': None,
-            'runner': runner,
-            'model': model,
-            'effort': effort or None,
-            'time': {'seconds': wall},
-            'tokens': token_values,
-            'cost_reported': cost,
-            'outcome': verdict,
-            'source': 'harness2',
-            'role': role,
-        }
-        if outcome.get('run_id'):
-            row['run_id'] = outcome['run_id']
-        if outcome.get('label'):
-            row['label'] = outcome['label']
-        if outcome.get('error'):
-            row['error'] = outcome['error'][:500]
-        base.mkdir(parents=True, exist_ok=True)
-        # 追記は 1 行を 1 回の write で書く (同時の呼び出しで行が混ざらないように)
-        with open(runs, 'a', encoding='utf-8', newline='\n') as f:
-            f.write(json.dumps(row, ensure_ascii=False) + '\n')
+        with RECORD_LOCK:
+            base = root / 'docs' / 'pbi'
+            runs = base / 'runs.jsonl'
+            attempt = 1
+            for line in (read_text(runs) or '').splitlines():
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get('report') == report and row.get('role') == role \
+                        and row.get('runner') == runner and row.get('model') == model:
+                    attempt += 1
+            row = {
+                'schema': 1,
+                'recorded_at': now_iso(),
+                'repo': root.name,
+                'pbi': m.group(1),
+                'report': report,
+                'attempt': attempt,
+                'rework': int(m.group(2) or 0),
+                'tier': None,
+                'runner': runner,
+                'model': model,
+                'effort': effort or None,
+                'time': {'seconds': wall},
+                'tokens': token_values,
+                'cost_reported': cost,
+                'outcome': verdict,
+                'source': 'harness2',
+                'role': role,
+            }
+            if outcome.get('run_id'):
+                row['run_id'] = outcome['run_id']
+            if outcome.get('label'):
+                row['label'] = outcome['label']
+            if outcome.get('error'):
+                row['error'] = outcome['error'][:500]
+            base.mkdir(parents=True, exist_ok=True)
+            # 追記は 1 行を 1 回の write で書く (同時の呼び出しで行が混ざらないように)
+            with open(runs, 'a', encoding='utf-8', newline='\n') as f:
+                f.write(json.dumps(row, ensure_ascii=False) + '\n')
         return {'ok': True, 'path': runs.relative_to(root).as_posix(), 'attempt': attempt}
 
 
