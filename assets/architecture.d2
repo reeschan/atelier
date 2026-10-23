@@ -8,6 +8,7 @@
 # 2026-10-21 にフェーズ・アダプターに合わせて描き直した: adapter_gate.py が最終・セキュリティレビューを使うかを決め、
 # 包むサブエージェント (general-purpose) が任意の呼び出し先 (mattpocock-skills・built-in のレビュー) を呼ぶ。設計の grilling はメインのセッションから
 # 2026-10-23 に jev-mcp を足した: 外の MCP クライアントが、タスクの受け渡しと、Jev の振り分け (route = select_model)・実行 (run = runners.md の渡し方)・記録 (record = record_run.py) を使う
+# 2026-10-23 に外部の実行先 claude (Claude Code の headless、既定と読む・書くだけの設定) を足した
 direction: right
 
 vars: {
@@ -128,6 +129,10 @@ runners: "External runners (optional, chosen in setup)" {
   }
   dsh: "DeepSeek Harness (dsh)\ne.g. DeepSeek API V4.1 Flash" {
     shape: hexagon
+  }
+  claude: "Claude Code (headless)\nclaude -p, default or edit-only setting" {
+    class: svc
+    icon: https://cdn.simpleicons.org/claude
   }
 }
 

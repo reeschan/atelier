@@ -74,11 +74,24 @@ QUEUE = 'mcp'
 DSH_RUN = HERE / 'dsh_run.py'
 RECORD_RUN = HERE / 'record_run.py'
 OPENCODE_CONFIG = HERE / 'opencode.config.json'
+OPENCODE_EDIT_ONLY_CONFIG = HERE / 'opencode.edit-only.config.json'
+CLAUDE_RUN = HERE / 'claude_run.py'
 DSH_ERR_RE = re.compile(r'^dsh: [A-Z][A-Z_]*:', re.M)
+CLAUDE_ERR_RE = re.compile(r'usage limit|rate limit|not logged in|invalid api key|/login', re.I)
+SETTINGS = ('default', 'edit-only')
 RUN_RUNNERS = {
     'dsh': {'logs': ('.jsonl', '.err', '.final.md', '.run.json')},
     'opencode': {'logs': ('.jsonl', '.err')},
+    'claude': {'logs': ('.json', '.err', '.run.json')},
 }
+# dsh の権限 (runners.md の dsh の節): コマンドは使える (サンドボックス内)、書き込みは作業ルートの中だけ
+DSH_PERMISSION = {'commands': True, 'tools': None, 'outside_workdir': False}
+
+sys.path.insert(0, str(HERE))
+try:
+    import claude_run
+finally:
+    sys.path.pop(0)
 RUN_TIMEOUT_DEFAULT = 3600
 MODEL_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/:@+-]*$')
 EFFORT_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
@@ -133,9 +146,48 @@ def unusable_reason(runner: str, code, last: str | None, jsonl: str, err: str) -
             reasons.append('.err に database is locked がある')
     elif runner == 'dsh' and DSH_ERR_RE.search(err):
         reasons.append('.err に dsh: <code>: がある')
+    elif runner == 'claude':
+        # jsonl には <報告名>.json の本文が入る
+        result = ''
+        try:
+            data = json.loads(jsonl)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            if data.get('is_error') is True:
+                reasons.append('.json の is_error が true')
+            result = data.get('result') if isinstance(data.get('result'), str) else ''
+        if CLAUDE_ERR_RE.search(err) or CLAUDE_ERR_RE.search(result):
+            reasons.append('.err か .json の result に利用上限・認証のエラーの文言がある')
     if last is None or not last.strip():
         reasons.append('.last.md が無いか空')
     return ', '.join(reasons) or None
+
+
+def _allows(value) -> bool:
+    """opencode の permission の値 (文字列か、パターン → 値の辞書) に allow があるか。"""
+    if isinstance(value, dict):
+        return any(v == 'allow' for v in value.values())
+    return value == 'allow'
+
+
+def permission_for(runner: str, setting: str) -> dict:
+    """その実行先・設定の権限を runners.md の言葉でまとめる (commands / tools / outside_workdir)。
+
+    opencode は設定のファイル、claude は claude_run.SETTINGS の表から作る。
+    """
+    if runner == 'opencode':
+        path = OPENCODE_EDIT_ONLY_CONFIG if setting == 'edit-only' else OPENCODE_CONFIG
+        perm = json.loads(path.read_text(encoding='utf-8')).get('permission', {})
+        commands = _allows(perm.get('bash'))
+        tools = [k for k, v in perm.items() if k not in ('bash', 'external_directory') and _allows(v)]
+        if commands:
+            tools.append('bash')
+        return {'commands': commands, 'tools': tools, 'outside_workdir': perm.get('external_directory') != 'deny'}
+    if runner == 'claude':
+        tools = list(claude_run.SETTINGS[setting])
+        return {'commands': bool({'Bash', 'PowerShell'} & set(tools)), 'tools': tools, 'outside_workdir': False}
+    return dict(DSH_PERMISSION)
 
 
 def kill_tree(proc: subprocess.Popen):
@@ -415,8 +467,10 @@ class Tasks:
                                    routing=routing, home=home, pbi=select_model.pbi_number(report))
 
     def run(self, repo: str, report: str, runner: str, model: str, prompt: str, effort: str | None = None,
-            workdir: str | None = None, timeout: int = RUN_TIMEOUT_DEFAULT) -> dict:
-        """1 件の報告名を、runners.md の渡し方で実行先に 1 回動かす (dsh と opencode だけ)。
+            workdir: str | None = None, timeout: int = RUN_TIMEOUT_DEFAULT, setting: str = 'default') -> dict:
+        """1 件の報告名を、runners.md の渡し方で実行先に 1 回動かす (dsh・opencode・claude)。
+
+        setting は実行先の設定 (default か edit-only)。dsh は default だけ。
 
         依頼文を docs/pbi/<runner>/<報告名>.prompt.md に書き (末尾に要約の書き先を足す)、workdir
         (省略時は repo。--root の下だけ) を作業ルートとして起動する。パスは作業ルートからの相対で返す。
@@ -434,6 +488,10 @@ class Tasks:
             raise ToolError('prompt を書く')
         if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
             raise ToolError('timeout は正の整数 (秒)')
+        if setting not in SETTINGS:
+            raise ToolError(f'setting は {" か ".join(SETTINGS)}: {setting!r}')
+        if runner == 'dsh' and setting != 'default':
+            raise ToolError('dsh には読む・書くだけの設定が無い')
         cwd = self.workdir(workdir, root)
         rel = f'docs/pbi/{runner}'
         base = cwd / rel
@@ -457,10 +515,17 @@ class Tasks:
             if effort:
                 argv += ['--effort', effort]
             streams = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE}
+        elif runner == 'claude':
+            argv = [sys.executable, str(CLAUDE_RUN), report, '--model', model]
+            if effort:
+                argv += ['--effort', effort]
+            argv += ['--setting', setting]
+            streams = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE}
         else:
             argv = [binary, 'run', '-m', f'{model}#{effort}' if effort else model, '--format', 'json',
                     f'{rel}/{report}.prompt.md を読み、その指示どおりに作業してください。']
-            env = {**os.environ, 'OPENCODE_CONFIG': str(OPENCODE_CONFIG)}
+            config = OPENCODE_EDIT_ONLY_CONFIG if setting == 'edit-only' else OPENCODE_CONFIG
+            env = {**os.environ, 'OPENCODE_CONFIG': str(config)}
             files = [open(base / f'{report}.jsonl', 'wb'), open(base / f'{report}.err', 'wb')]
             streams = {'stdin': subprocess.DEVNULL, 'stdout': files[0], 'stderr': files[1]}
         timed_out = False
@@ -485,7 +550,7 @@ class Tasks:
         stderr = (errb or b'').decode('utf-8', errors='replace')
         code = None if timed_out else proc.returncode
         last = read_text(last_path)
-        jsonl = read_text(base / f'{report}.jsonl') or ''
+        jsonl = read_text(base / (f'{report}.json' if runner == 'claude' else f'{report}.jsonl')) or ''
         err = read_text(base / f'{report}.err') or ''
         reason = unusable_reason(runner, code, last, jsonl, err)
         if timed_out:
@@ -497,6 +562,8 @@ class Tasks:
             'runner': runner,
             'model': model,
             'effort': effort,
+            'setting': setting,
+            'permission': permission_for(runner, setting),
             'code': code,
             'last': last,
             'report_path': f'docs/pbi/reports/{report}.md' if report_file.is_file() else None,
@@ -604,7 +671,7 @@ TOOLS = [
          'skip': {'type': 'array', 'items': {'type': 'string'},
                   'description': 'route から外す runner 名かモデル ID (/ を含む値)'}}}},
     {'name': 'run',
-     'description': '1 件の報告名を、runners.md の渡し方で実行先 (dsh / opencode) に 1 回動かす。prompt を '
+     'description': '1 件の報告名を、runners.md の渡し方で実行先 (dsh / opencode / claude) に 1 回動かす。prompt を '
                     'docs/pbi/<runner>/<報告名>.prompt.md に書き (末尾に要約の書き先を足す)、workdir を作業ルートとして'
                     '起動し、終了コード・.last.md の本文・報告ファイルとログのパス・使えないときの判定を返す。',
      'inputSchema': {'type': 'object', 'required': ['repo', 'report', 'runner', 'model', 'prompt'], 'properties': {
@@ -612,6 +679,8 @@ TOOLS = [
          'runner': {'type': 'string', 'enum': list(RUN_RUNNERS)},
          'model': {'type': 'string', 'description': 'route の model (dsh は <provider>/<model>)'},
          'effort': {'type': 'string', 'description': 'route の effort (null / 省略なら付けない)'},
+         'setting': {'type': 'string', 'enum': list(SETTINGS), 'default': 'default',
+                     'description': '実行先の設定 (default / edit-only=コマンドを実行しない読む・書くだけ。dsh は default だけ)'},
          'prompt': {'type': 'string', 'description': '依頼文の本文'},
          'workdir': {'type': 'string', 'description': '作業ルート (--root の下。省略時は repo)'},
          'timeout': {'type': 'integer', 'default': RUN_TIMEOUT_DEFAULT, 'description': '打ち切る秒数'}}}},

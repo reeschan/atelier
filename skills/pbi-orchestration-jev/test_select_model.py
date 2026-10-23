@@ -437,6 +437,33 @@ class AgentFilterTest(unittest.TestCase):
         self.assertEqual([(x['runner'], x['reason']) for x in r['dropped']],
                          [('codex', agents.REASON_NOT_FOUND)])
 
+    def test_claude_is_not_in_the_default_routing_so_it_never_reaches_the_route(self):
+        default = select_model.default_routing()
+        for tier in select_model.TIERS:
+            self.assertNotIn('claude', [s['runner'] for s in default['tiers'][tier]])
+        found = {runner: 'x' for runner in select_model.RUNNERS}
+        with temp_dir() as d:
+            r = self.decide(default, found, Path(d), agents_table={'runners': {'claude': {'enabled': True}}})
+        self.assertNotIn('claude', [s['runner'] for s in r['route']])
+        self.assertEqual(r['dropped'], [])
+
+    def test_claude_step_appears_in_route_only_when_enabled_in_agents_json(self):
+        claude = {'runner': 'claude', 'model': 'sonnet', 'effort': 'high'}
+        template = {'name': 'claude-first', 'description': '', 'tiers': {'haiku': [claude]}}
+        routing = {'name': 'routing', 'tiers': {t: [AGENT_STEPS[t]] for t in select_model.TIERS}}
+        found = {runner: 'x' for runner in select_model.RUNNERS}
+        with temp_dir() as d:
+            write_home(d, {'claude-first': template}, application('claude-first'))
+            on = self.decide(routing, found, Path(d), agents_table={'runners': {'claude': {'enabled': True}}})
+            off = self.decide(routing, found, Path(d), agents_table={'runners': {'claude': {'enabled': False}}})
+            missing = self.decide(routing, {**found, 'claude': None}, Path(d))
+        self.assertEqual([(s['runner'], s['model']) for s in on['route']],
+                         [('claude', 'sonnet'), ('agent', 'haiku')])
+        self.assertEqual([s['runner'] for s in off['route']], ['agent'])
+        self.assertEqual([(x['runner'], x['reason']) for x in off['dropped']],
+                         [('claude', agents.REASON_DISABLED)])
+        self.assertEqual([x['reason'] for x in missing['dropped']], [agents.REASON_NOT_FOUND])
+
     def test_opus_template_note_has_the_override_warning(self):
         for tier in select_model.TIERS:
             with self.subTest(tier=tier):

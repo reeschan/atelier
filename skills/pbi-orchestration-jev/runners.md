@@ -1,4 +1,4 @@
-# 実行先ごとの渡し方（opencode / Codex / Antigravity / dsh / mcp）
+# 実行先ごとの渡し方（opencode / Codex / Antigravity / dsh / claude / mcp）
 
 route に出た実行先を初めて使う前に、その節だけを読む。依頼文（SKILL.md 6 章）は `docs/pbi/<実行先>/<報告名>.prompt.md` に書き、末尾に「要約の書き先: `docs/pbi/<実行先>/<報告名>.last.md`」を足す。リポジトリのルートで Bash から `run_in_background` で 1 件ずつ起動する。cd はリテラルの絶対パスで行う（変数で cd すると Claude Code の権限確認で止まる）。route に出る外部の実行先は、prepare.py が agents.json と CLI の検出で照合済み。見つからない・使わない・選んでいないモデルの手順は、承認一覧の「外した手順」に出て route に入らない。
 
@@ -35,6 +35,7 @@ PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<このディレクトリ>/opencode.confi
 - **権限**: `opencode.config.json`（このディレクトリ）を `OPENCODE_CONFIG` で渡す。編集とコマンドは許可し、`git push`・`git reset --hard`・`git clean`・`rm -rf`・`rm -r` とリポジトリ外への操作を拒否する。`--auto` は付けない。ユーザー全体の設定（`~/.config/opencode/`）は変えない（rtk のプラグインを入れていれば、それはそのまま使う）
 - **拒否は成功扱いで返る**: 拒否されても終了コードは 0。`grep -c 'rule which prevents' <報告名>.jsonl` が 1 以上なら拒否がある（`"tool"` イベントの `"status":"error"`）。検証コマンドだけの拒否なら 8 章で自分で実行すれば足りる。作業が進んでいなければ `route` の次へ進む
 - **使えないとき**（終了コードが 0 以外、`grep -m 3 '"type":"error"'` に当たる（利用上限・認証・リージョン・接続のエラー）、または `.last.md` が無いか空）: 1 回だけ再実行し、だめなら `route` の次へ進む。利用上限で落ちたときは STATUS.md の上に「opencode <model>: 上限到達（日時）」と書き、このセッションの残りの PBI では `--skip <model>`（例 `--skip opencode/deepseek-v4.1-flash-free`）を付けて route を出し直す。外れるのはそのモデルの手順だけで、同じ opencode の別のモデル（交互グループの相方や有料のモデル）は使い続ける。複数のモデルが上限なら、カンマでつなぐ。opencode そのものが動かない（認証・接続のエラー）ときは `--skip opencode` で opencode の手順を全部外す
+- **読む・書くだけの設定**: コマンドを実行せず、ファイルの読み書きだけをさせるときは、`OPENCODE_CONFIG` に `opencode.edit-only.config.json`（このディレクトリ）を渡す（既定は今の `opencode.config.json`）。編集は許可し、コマンド（`bash` は `*` を deny）・サブエージェント（`task`）・スキル（`skill`）・人への質問（`question`）・外への道具（`webfetch`・`websearch`）・リポジトリ外への操作を拒否する。検証コマンドは設計者が 8 章で自分で実行する。jev-mcp の `run` では `setting: "edit-only"` で選ぶ
 - opencode は AGENTS.md を読むが CLAUDE.md は読まない。PBI に要る規約は PBI 本文に書く
 - トークン数・cost・ステップ数・時間は、合否を決めたときの `record_run.py`（SKILL.md 8 章）が `.jsonl` の `step_finish` から読んで runs.jsonl に書く。手で足さない。無料枠（`opencode/…-free`）の cost は 0 で出る
 
@@ -87,6 +88,25 @@ python <このディレクトリ>/dsh_run.py <報告名> --model <route の mode
 - dsh は AGENTS.md・CLAUDE.md を読むとは限らない。PBI に要る規約は PBI 本文に書く
 - トークン数・ステップ数・時間は `record_run.py` が `.jsonl` の `status` イベントの usage と `.run.json` から読む。cost は出ない（null）。DeepSeek 公式の料金は DeepSeek のアカウントの従量課金
 
+## claude（Claude Code の headless）
+
+Claude Code を `claude -p` で動かす外部の実行先。Agent ツールの `agent` とは別で、ほかの外部の実行先と同じく依頼文のファイルを渡して 1 件ずつ起動する。既定の振り分けには入らず、agents.json で有効にして、routing.json か優先テンプレートに `claude` の手順を書いたときだけ route に出る。route の model は `haiku`・`sonnet`・`opus` の別名か、モデル ID。effort は `--effort` で渡す（null なら付けない）。
+
+```bash
+mkdir -p docs/pbi/claude
+python <このディレクトリ>/claude_run.py <報告名> --model <route の model> [--effort <route の effort>] [--setting default|edit-only]
+```
+
+- 依頼文は `docs/pbi/claude/<報告名>.prompt.md`。`claude_run.py` が `claude -p --output-format json --model <model> [--effort <effort>] --tools <設定の道具> --permission-mode acceptEdits --permission-prompts none --strict-mcp-config` を起動し、依頼文は標準入力で「依頼文のファイルを読み、その指示どおりに作業してください」の 1 文と一緒に渡す（`--add-dir` は付けない）。結果は `<報告名>.json`、診断は `<報告名>.err`、開始・終了の時刻・終了コード・使った設定は `<報告名>.run.json` に書く
+- **2 つの設定**（`--setting`）:
+  - `default`（既定）: pbi-worker と同じ道具のうち headless で使えるもの（Read・Write・Edit・Glob・Grep・Bash・PowerShell）。MCP の道具は使わない（`--strict-mcp-config`）ので、PBI の参照欄の ref は依頼文に写してあるものだけが材料
+  - `edit-only`: 道具を Read・Edit・Write・Glob・Grep だけにし、コマンドの道具を持たない。`--restricted` も付く。検証コマンドは設計者が 8 章で自分で実行する
+- **権限**: `--permission-mode acceptEdits --permission-prompts none`。headless では確認に答える人がいないので、許可されない操作は拒否される。書き込みは作業ルート（カレント）の中だけ。子の環境から `ANTHROPIC_API_KEY`・`ANTHROPIC_AUTH_TOKEN`・`ANTHROPIC_BASE_URL`・`ANTHROPIC_BEDROCK_BASE_URL`・`CLAUDE_CODE_USE_BEDROCK` を外すので、認証は Claude Code のログインのまま
+- **場所**: 環境変数 `PBI_CLAUDE_BIN`、無ければ PATH の `claude`（agents.json の path でも指せる）。見つからなければ終了コード 2（`claude_run: claude が見つかりません`）で止まる。使えないときとして次へ進み、STATUS.md に書く
+- **使えないとき**（終了コードが 0 以外、`<報告名>.json` の `is_error` が true、`.err` か `.json` の `result` に利用上限・認証のエラーの文言（`usage limit`・`rate limit`・`not logged in`・`Invalid API key`・`/login` など）が出る、または `.last.md` が無いか空）: 1 回だけ再実行し、だめなら `route` の次へ進む。利用上限で落ちたときは STATUS.md の上に「claude <model>: 上限到達（日時）」と書き、以後 `--skip <model>`。claude そのものが動かないときは `--skip claude`
+- 差し戻しは新しく起動し直す（前の会話は続けない）
+- トークン数・cost・ステップ数・時間は `record_run.py` が `<報告名>.json` の `usage`（input・output・cache の読み・書き）・`total_cost_usd`（cost_reported）・`num_turns` と `.run.json` から読む。取れない値は null。サブスクのログインで動かしたときの `total_cost_usd` は API 換算の目安で、請求額ではない
+
 ## mcp（MCP クライアントの実行先。jev-mcp で受け渡す）
 
 外の MCP クライアント（実装担当）が、MCP サーバー jev-mcp（`jev_mcp.py`）から PBI を受け取る。jev-mcp は、外の MCP クライアントが Jev の振り分け・実行・記録をそのまま使うための口。設計者は起動しない。依頼文を `docs/pbi/mcp/<報告名>.prompt.md` に書き（要約の書き先は `docs/pbi/mcp/<報告名>.last.md`）、`.last.md` ができるのを待つ。2026-10 時点では route には出ない（routing.json の実行先に mcp は無い）。ユーザーが mcp に渡すと決めた PBI だけをこの形で置く。
@@ -98,7 +118,7 @@ python <このディレクトリ>/jev_mcp.py --http --port 7830 --root <作業�
 
 - ツールは `list_tasks`・`claim_task`・`submit_result`・`fail_task`・`verify`・`jev_gate`・`route`・`run`・`record`。`claim_task` は `docs/pbi/mcp/<報告名>.claim.json` を排他的に作り、同じ報告名を 2 回は渡さない
 - `route` は `select_model.py` の 1 件の判定（`repo`・`report`・`tier`・`skip`）をそのまま返す。`tier` は `--tier`、`skip` は `--skip` と同じ値で、`docs/pbi/PBI-<n>.route.json` は書かない
-- `run` は `runners.md` の渡し方で 1 件の報告名を 1 回動かす。扱う実行先は今は `dsh` と `opencode` だけ。`runner`・`model`・`effort`・`prompt`・`workdir`（`--root` の下だけ。省けば `repo`）・`timeout` を取り、依頼文を `docs/pbi/<実行先>/<報告名>.prompt.md` に書いて起動し、終了コード・`.last.md`・報告ファイル・ログのパスと、使えないときの判定を返す
+- `run` は `runners.md` の渡し方で 1 件の報告名を 1 回動かす。扱う実行先は `dsh`・`opencode`・`claude`。`runner`・`model`・`effort`・`setting`（`default` か `edit-only`。省けば `default`。`dsh` は `default` だけ）・`prompt`・`workdir`（`--root` の下だけ。省けば `repo`）・`timeout` を取り、依頼文を `docs/pbi/<実行先>/<報告名>.prompt.md` に書いて起動し、終了コード・`.last.md`・報告ファイル・ログのパスと、使えないときの判定、使った `setting` とその `permission`（`commands`・`tools`・`outside_workdir`）を返す
 - `record` は `record_run.py` を 1 回呼び、試行 1 回の結果を `docs/pbi/runs.jsonl` に 1 行足す。`repo`・`report`・`attempt`・`outcome`・`findings`・`runner`・`model`・`effort`・`tier` を取り、`record_run.py` と同じ列になる
 - `submit_result` / `fail_task` は `docs/pbi/reports/<報告名>.md`（詳細）と `.last.md`（worker.md の 5 行）を書く。`.last.md` は最後に書く。実行先の出力（クライアントの summary など）は `<報告名>.artifacts.json` に残る。設計者は他の実行先と同じく `.last.md` だけを読み、8 章の検証は自分で行う（`verify` ツールの結果は実行先の自己申告として扱う）
 - `jev_gate` は jev-mcp の側で `jev/jev.py` を呼ぶ。API キーはサーバーの環境変数だけが持ち、クライアントには渡らない。送るのは文章だけ
