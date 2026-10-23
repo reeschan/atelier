@@ -367,7 +367,7 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 
 ### jev-mcp (MCP server)
 
-`jev_mcp.py` is the mouth through which an outside MCP client uses Jev's routing, execution and recording as they are. The orchestrator writes the prompt to `docs/pbi/mcp/<report>.prompt.md` as for any external runner. The client claims it, works, and reports back in the usual shape: details in `docs/pbi/reports/<report>.md` and the 5-line summary in `docs/pbi/mcp/<report>.last.md`. Approval, verification, review and rework stay with the orchestrator.
+`jev_mcp.py` is the interface through which an outside MCP client uses Jev's routing, execution and recording unchanged. The orchestrator writes the prompt to `docs/pbi/mcp/<report>.prompt.md` as for any external runner. The client claims it, works, and reports back in the usual shape: details in `docs/pbi/reports/<report>.md` and the 5-line summary in `docs/pbi/mcp/<report>.last.md`. Approval, verification, review and rework stay with the orchestrator.
 
 ```sh
 python skills/pbi-orchestration-jev/jev_mcp.py --root /path/to/repo                      # stdio
@@ -386,9 +386,9 @@ python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/t
 | `run` | one step for a report, passed the way `runners.md` says (`dsh` or `opencode`): it writes the prompt to `docs/pbi/<runner>/<report>.prompt.md` and starts that runner once |
 | `record` | one `record_run.py` call: one line for an attempt in `docs/pbi/runs.jsonl` |
 
-`route`, `run` and `record` are the three calls an outside MCP client needs: `route` to get the steps to try, `run` to do one of them, and `record` to keep the result. They add no model, no fence and no row of their own; each takes the arguments of the script it wraps. `route` takes `repo`, `report`, `tier` (`--tier`) and `skip` (`--skip`). `run` takes `repo`, `report`, `runner`, `model`, `effort`, `prompt`, `workdir` and `timeout`; `workdir` stays under `--root` and defaults to `repo`, and the call returns the exit code, the `.last.md`, the report and log paths, and the unusable check from `runners.md`. `record` takes `repo`, `report`, `attempt`, `outcome`, `findings`, `runner`, `model`, `effort` and `tier`. Run jev-mcp on the machine where those runners work.
+`route`, `run` and `record` are the three calls an outside MCP client needs: `route` to get the steps to try, `run` to do one of them, and `record` to keep the result. They add no model, no fence and no row of their own; each takes the arguments of the script it wraps. `route` takes `repo`, `report`, `tier` (`--tier`) and `skip` (`--skip`). `run` takes `repo`, `report`, `runner`, `model`, `effort`, `prompt`, `workdir` and `timeout`; `workdir` stays under `--root` and defaults to `repo`, and the call returns the exit code, the `.last.md`, the report and log paths, and whether the runner was unusable by the rules in `runners.md`. `record` takes `repo`, `report`, `attempt`, `outcome`, `findings`, `runner`, `model`, `effort` and `tier`. Run jev-mcp on the machine where those runners work.
 
-Only repositories under `--root` (or `PBI_MCP_ROOTS`) are served. HTTP listens on 127.0.0.1 only and rejects other Host headers. There is no authentication, so do not expose it to other machines. See the mcp section of `runners.md`.
+Only repositories under `--root` (or `PBI_MCP_ROOTS`) are served. HTTP listens on 127.0.0.1 only, rejects other Host headers and any browser Origin other than its own, and accepts only `application/json` bodies. There is no authentication, so do not expose it to other machines. See the mcp section of `runners.md`.
 
 ## Tuning
 

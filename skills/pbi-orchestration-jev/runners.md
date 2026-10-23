@@ -102,5 +102,5 @@ python <このディレクトリ>/jev_mcp.py --http --port 7830 --root <作業�
 - `record` は `record_run.py` を 1 回呼び、試行 1 回の結果を `docs/pbi/runs.jsonl` に 1 行足す。`repo`・`report`・`attempt`・`outcome`・`findings`・`runner`・`model`・`effort`・`tier` を取り、`record_run.py` と同じ列になる
 - `submit_result` / `fail_task` は `docs/pbi/reports/<報告名>.md`（詳細）と `.last.md`（worker.md の 5 行）を書く。`.last.md` は最後に書く。実行先の出力（クライアントの summary など）は `<報告名>.artifacts.json` に残る。設計者は他の実行先と同じく `.last.md` だけを読み、8 章の検証は自分で行う（`verify` ツールの結果は実行先の自己申告として扱う）
 - `jev_gate` は jev-mcp の側で `jev/jev.py` を呼ぶ。API キーはサーバーの環境変数だけが持ち、クライアントには渡らない。送るのは文章だけ
-- HTTP は 127.0.0.1 だけで待ち受け、Host が 127.0.0.1・localhost・[::1] でない要求は 403 で断る。認証は無いので、ほかの機械には公開しない
+- HTTP は 127.0.0.1 だけで待ち受け、Host が 127.0.0.1・localhost・[::1] でない要求と、自分以外の Origin を持つ要求は 403、Content-Type が `application/json` でない POST は 415 で断る。認証は無いので、ほかの機械には公開しない
 - **使えないとき**（`.last.md` が来ない、状態が NEEDS_CONTEXT / BLOCKED）: 他の実行先と同じく `route` の次へ進むか、差し戻しの手順に従う。取得済みのまま止まった `.claim.json` は、実行先が止まったことを確かめてから消す

@@ -57,6 +57,8 @@ SERVER_VERSION = '0.1.0'
 PROTOCOL_VERSIONS = ('2025-06-18', '2025-03-26', '2024-11-05')
 DEFAULT_PORT = 7830
 ALLOWED_HOSTS = ('127.0.0.1', 'localhost', '[::1]')
+# record_run.py の 1 回の呼び出しの上限 (秒)。lock の中で動くので、止まったまま次の record を塞がない
+RECORD_TIMEOUT = 300
 
 REPORT_RE = re.compile(r'^(PBI-\d+)(?:\.rework-(\d+))?$')
 NAME_RE = re.compile(r'^[A-Za-z0-9._-]+$')
@@ -535,9 +537,12 @@ class Tasks:
         with RECORD_LOCK:
             try:
                 r = subprocess.run(argv, cwd=root, capture_output=True, text=True, encoding='utf-8',
-                                   errors='replace', env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
+                                   errors='replace', env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
+                                   timeout=RECORD_TIMEOUT)
             except OSError as error:
                 raise ToolError(f'record_run.py を起動できない: {error}') from None
+            except subprocess.TimeoutExpired:
+                raise ToolError(f'record_run.py が {RECORD_TIMEOUT} 秒で終わらない') from None
         return {'code': r.returncode, 'stdout': r.stdout, 'stderr': r.stderr[-2000:]}
 
 
@@ -707,6 +712,7 @@ def serve_stdio(server: Server, stdin=None, stdout=None):
 
 def make_handler(server: Server, port: int):
     allowed = {f'{h}:{port}' for h in ALLOWED_HOSTS} | set(ALLOWED_HOSTS)
+    allowed_origins = {f'{scheme}://{host}' for scheme in ('http', 'https') for host in allowed}
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def _send(self, code, body=None):
@@ -721,6 +727,16 @@ def make_handler(server: Server, port: int):
         def _host_ok(self):
             return self.headers.get('Host', '') in allowed
 
+        def _origin_ok(self):
+            # ブラウザのページからの要求を断る。Origin が無い (ブラウザでない MCP クライアント) か、
+            # このサーバー自身の origin のときだけ通す
+            origin = self.headers.get('Origin')
+            return origin is None or origin in allowed_origins
+
+        def _json_body(self):
+            media = (self.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
+            return media == 'application/json'
+
         def do_GET(self):
             if not self._host_ok():
                 return self._send(403, {'error': 'host not allowed'})
@@ -734,8 +750,12 @@ def make_handler(server: Server, port: int):
         def do_POST(self):
             if not self._host_ok():
                 return self._send(403, {'error': 'host not allowed'})
+            if not self._origin_ok():
+                return self._send(403, {'error': 'origin not allowed'})
             if self.path != '/mcp':
                 return self._send(404, {'error': 'not found'})
+            if not self._json_body():
+                return self._send(415, {'error': 'Content-Type must be application/json'})
             try:
                 length = int(self.headers.get('Content-Length') or 0)
                 body = json.loads(self.rfile.read(length).decode('utf-8'))

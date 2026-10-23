@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -266,6 +267,14 @@ class JevMcpTest(unittest.TestCase):
         for column in ('role', 'source', 'label'):
             self.assertNotIn(column, row)
 
+    def test_record_timeout_is_a_tool_error(self):
+        def slow(*args, **kwargs):
+            raise subprocess.TimeoutExpired(args[0], kwargs.get('timeout'))
+        with unittest.mock.patch.object(jev_mcp.subprocess, 'run', side_effect=slow):
+            r = self.call('record', repo=str(self.repo), report='PBI-001', attempt=1, outcome='合格')
+        self.assertTrue(r.get('isError'))
+        self.assertIn(str(jev_mcp.RECORD_TIMEOUT), r['content'][0]['text'])
+
     def test_record_second_same_attempt_is_exit_code_2(self):
         self.write_runner_log()
         self.assertEqual(self.record()['code'], 0)
@@ -503,11 +512,13 @@ class JevMcpTest(unittest.TestCase):
         self.addCleanup(httpd.server_close)
         self.addCleanup(httpd.shutdown)
 
-        def post(body, host=None):
+        def post(body, host=None, content_type='application/json', origin=None):
             req = urllib.request.Request(f'http://127.0.0.1:{port}/mcp', data=json.dumps(body).encode(),
-                                         headers={'Content-Type': 'application/json'})
+                                         headers={'Content-Type': content_type})
             if host:
                 req.add_header('Host', host)
+            if origin:
+                req.add_header('Origin', origin)
             try:
                 with urllib.request.urlopen(req, timeout=10) as res:
                     return res.status, res.read()
@@ -519,6 +530,15 @@ class JevMcpTest(unittest.TestCase):
         self.assertEqual(len(json.loads(data)['result']['tools']), 9)
         self.assertEqual(post({'jsonrpc': '2.0', 'method': 'notifications/initialized'})[0], 202)
         self.assertEqual(post({'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}, host='evil.example')[0], 403)
+        ping = {'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}
+        # A simple cross-site POST from a browser page (text/plain, or a foreign Origin) is refused.
+        self.assertEqual(post(ping, content_type='text/plain')[0], 415)
+        self.assertEqual(post(ping, content_type='application/x-www-form-urlencoded')[0], 415)
+        self.assertEqual(post(ping, origin='https://evil.example')[0], 403)
+        self.assertEqual(post(ping, origin='null')[0], 403)
+        # A charset parameter and the server's own origin are fine.
+        self.assertEqual(post(ping, content_type='application/json; charset=utf-8')[0], 200)
+        self.assertEqual(post(ping, origin=f'http://127.0.0.1:{port}')[0], 200)
 
 
 FAKE_RUNNER = '''import json, os, sys, time

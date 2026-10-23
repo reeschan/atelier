@@ -386,7 +386,7 @@ python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/t
 
 `route`・`run`・`record` は、外の MCP クライアントが使う 3 つの口です。`route` で試す手順を受け取り、`run` でその 1 つを動かし、`record` で結果を残します。どれも包んでいるスクリプトと同じ引数を取り、その結果をそのまま返します。`route` は `repo`・`report`・`tier` (`--tier`)・`skip` (`--skip`)、`run` は `repo`・`report`・`runner`・`model`・`effort`・`prompt`・`workdir`・`timeout`、`record` は `repo`・`report`・`attempt`・`outcome`・`findings`・`runner`・`model`・`effort`・`tier` です。`run` の `workdir` は `--root` の下だけ (省けば `repo`) で、終了コード・`.last.md`・報告ファイルとログのパス・使えないときの判定を返します。`record` は `record_run.py` と同じ列を `docs/pbi/runs.jsonl` に足します。jev-mcp は、それらの実行先が動く機械で動かしてください。
 
-扱うのは `--root` (または `PBI_MCP_ROOTS`) の下のリポジトリだけです。HTTP は 127.0.0.1 だけで待ち受け、ほかの Host は断ります。認証は無いので、ほかの機械には公開しないでください。詳しくは `runners.md` の mcp の節を見てください。
+扱うのは `--root` (または `PBI_MCP_ROOTS`) の下のリポジトリだけです。HTTP は 127.0.0.1 だけで待ち受け、ほかの Host と、自分以外のブラウザーの Origin は断り、本文は `application/json` だけを受け付けます。認証は無いので、ほかの機械には公開しないでください。詳しくは `runners.md` の mcp の節を見てください。
 
 ## 調整
 
