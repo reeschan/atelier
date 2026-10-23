@@ -123,6 +123,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .mark.codex { background: #10a37f; }
 .mark.agy { background: #d97757; }
 .mark.dsh { background: #7c5cff; }
+.mark.claude { background: #c96442; }
 .mark.agent { background: #3a5bd9; }
 .switch { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .switch input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
@@ -460,11 +461,11 @@ footer { font-size: 12px; color: var(--ink-soft); }
     },
   };
 
-  const RUNNERS = ['opencode', 'codex', 'agy', 'dsh', 'agent'];
-  const EXTERNAL = ['opencode', 'codex', 'agy', 'dsh'];
+  const RUNNERS = ['opencode', 'codex', 'agy', 'dsh', 'claude', 'agent'];
+  const EXTERNAL = ['opencode', 'codex', 'agy', 'dsh', 'claude'];
   const TIERS = ['haiku', 'sonnet', 'opus'];
   const TABS = ['agents', 'routing', 'priority'];
-  const RUNNER_LABEL = { opencode: 'opencode', codex: 'Codex', agy: 'Antigravity', dsh: 'DSH', agent: 'Claude Code' };
+  const RUNNER_LABEL = { opencode: 'opencode', codex: 'Codex', agy: 'Antigravity', dsh: 'DSH', claude: 'Claude Code (headless)', agent: 'Claude Code' };
 
   const boot = (() => {
     try {
@@ -722,7 +723,7 @@ footer { font-size: 12px; color: var(--ink-soft); }
   // --- エージェントとモデル ---
 
   function mark(runner) {
-    return { opencode: 'O', codex: 'C', agy: 'A', dsh: 'D', agent: '★' }[runner] || '?';
+    return { opencode: 'O', codex: 'C', agy: 'A', dsh: 'D', claude: 'H', agent: '★' }[runner] || '?';
   }
 
   function modelRow(runner, model, checked) {

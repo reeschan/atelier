@@ -17,6 +17,8 @@
   agy:      docs/pbi/agy/<報告名>.json に usage があれば読む。無ければ null
   dsh:      docs/pbi/dsh/<報告名>.jsonl の status イベントの usage (トークンの合計、数をステップ数) と
             <報告名>.run.json の開始・終了時刻 (dsh_run.py が書く)
+  claude:   docs/pbi/claude/<報告名>.json (--output-format json) の usage のトークン、total_cost_usd (cost_reported)、
+            num_turns (ステップ数) と <報告名>.run.json の開始・終了時刻 (claude_run.py が書く)
   検証:     docs/pbi/verify/<報告名>.json (verify.py が書く)。unchanged.py check の行の終了コードを触らない範囲とする
 取れない値は 0 ではなく null にする。cost_reported は実行先が出した USD (opencode の cost)、cost_api_equiv は
 トークン × 単価表の API 換算 (参考値で請求額ではない)。単価表は同梱の --prices に home の --home/prices.json を
@@ -46,7 +48,7 @@ SCHEMA = 1
 OUTCOMES = ('合格', '差し戻し', '昇格', '使えず', '保留')
 SEVERITIES = ('重大', '中', '軽微')
 REPORT_RE = re.compile(r'^(PBI-\d+)(?:\.rework-(\d+))?$')
-RUNNER_DIRS = ('opencode', 'codex', 'agy', 'dsh')
+RUNNER_DIRS = ('opencode', 'codex', 'agy', 'dsh', 'claude')
 RUNNER_SUFFIXES = ('.prompt.md', '.jsonl', '.err', '.log', '.last.md', '.json', '.patch.yml', '.run.json', '.final.md')
 TOKEN_FIELDS = ('input', 'output', 'reasoning', 'cache_read', 'cache_write', 'cache_write_5m', 'cache_write_1h')
 PRICE_KEYS = ('input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h')
@@ -202,6 +204,44 @@ def read_dsh(path: Path) -> dict:
         t['cache_read'] += usage.get('cacheReadTokens') or 0
         t['cache_write'] += usage.get('cacheWriteTokens') or 0
     return {'tokens': with_total(t), 'steps': steps, 'time': when, 'cost': None}
+
+
+def read_claude(path: Path) -> dict:
+    """claude の --output-format json の結果から、usage のトークン・total_cost_usd・num_turns を読む。
+    時刻は claude_run.py が書く <報告名>.run.json から読む。取れない値は null。"""
+    run_json = path.with_name(path.name.removesuffix('.json') + '.run.json')
+    when = span(None, None)
+    if run_json.is_file():
+        try:
+            run = json.loads(run_json.read_text(encoding='utf-8'))
+            when = span(datetime.datetime.fromisoformat(run['start']), datetime.datetime.fromisoformat(run['end']))
+        except (ValueError, KeyError, TypeError):
+            pass
+    result = {'tokens': empty_tokens(), 'steps': None, 'time': when, 'cost': None}
+    if not path.is_file():
+        return result
+    try:
+        data = json.loads(path.read_text(encoding='utf-8', errors='replace'))
+    except ValueError:
+        return result
+    if isinstance(data, list):
+        # 古い版はイベントの配列を返す。最後の result を使う
+        data = next((e for e in reversed(data) if isinstance(e, dict) and e.get('type') == 'result'), None)
+    if not isinstance(data, dict):
+        return result
+    usage = data.get('usage')
+    if isinstance(usage, dict):
+        t = empty_tokens(path.as_posix())
+        t['input'] = usage.get('input_tokens')
+        t['output'] = usage.get('output_tokens')
+        t['cache_read'] = usage.get('cache_read_input_tokens')
+        t['cache_write'] = usage.get('cache_creation_input_tokens')
+        result['tokens'] = with_total(t)
+    cost = data.get('total_cost_usd')
+    result['cost'] = cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+    turns = data.get('num_turns')
+    result['steps'] = turns if isinstance(turns, int) and not isinstance(turns, bool) else None
+    return result
 
 
 def matches(description: str, name: str) -> bool:
@@ -439,6 +479,9 @@ def main():
         got = read_agy(base / 'agy' / f'{args.report}.json')
     elif runner == 'dsh':
         got = read_dsh(base / 'dsh' / f'{args.report}.jsonl')
+    elif runner == 'claude':
+        got = read_claude(base / 'claude' / f'{args.report}.json')
+        cost_reported = got['cost']
     else:
         transcript = find_agent_transcript(Path(args.projects), cwd, args.report)
         got = read_agent(transcript, prices)

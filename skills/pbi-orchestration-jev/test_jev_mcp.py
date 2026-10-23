@@ -544,16 +544,18 @@ class JevMcpTest(unittest.TestCase):
 FAKE_RUNNER = '''import json, os, sys, time
 args = sys.argv[1:]
 opencode = bool(args) and args[0] == 'run'
+claude = '--setting' in args
 with open(os.environ['FAKE_RECORD'], 'w', encoding='utf-8') as f:
-    json.dump({'kind': 'opencode' if opencode else 'dsh', 'argv': args, 'cwd': os.getcwd(),
+    json.dump({'kind': 'opencode' if opencode else 'claude' if claude else 'dsh', 'argv': args, 'cwd': os.getcwd(),
                'opencode_config': os.environ.get('OPENCODE_CONFIG'),
-               'prompt': None if opencode else open('docs/pbi/dsh/%s.prompt.md' % args[0], encoding='utf-8').read()}, f)
+               'prompt': None if opencode or claude
+               else open('docs/pbi/dsh/%s.prompt.md' % args[0], encoding='utf-8').read()}, f)
 report = os.environ['FAKE_REPORT']
-base = os.path.join('docs', 'pbi', 'opencode' if opencode else 'dsh')
+base = os.path.join('docs', 'pbi', 'opencode' if opencode else 'claude' if claude else 'dsh')
 os.makedirs(base, exist_ok=True)
 if os.environ.get('FAKE_SLEEP'):
     time.sleep(float(os.environ['FAKE_SLEEP']))
-with open(os.path.join(base, report + '.jsonl'), 'w', encoding='utf-8') as f:
+with open(os.path.join(base, report + ('.json' if claude else '.jsonl')), 'w', encoding='utf-8') as f:
     f.write(os.environ.get('FAKE_JSONL', '{"type":"step_finish"}\\n'))
 with open(os.path.join(base, report + '.err'), 'w', encoding='utf-8') as f:
     f.write(os.environ.get('FAKE_ERR', ''))
@@ -588,6 +590,9 @@ class RunTest(unittest.TestCase):
         script.write_text(FAKE_RUNNER, encoding='utf-8')
         # 偽の dsh_run.py は run が呼ぶスクリプトの場所 (jev_mcp.DSH_RUN) を差し替える
         patch = mock.patch.object(jev_mcp, 'DSH_RUN', script)
+        patch.start()
+        self.addCleanup(patch.stop)
+        patch = mock.patch.object(jev_mcp, 'CLAUDE_RUN', script)
         patch.start()
         self.addCleanup(patch.stop)
         if os.name == 'nt':
@@ -627,7 +632,8 @@ class RunTest(unittest.TestCase):
         self.assertEqual(Path(rec['cwd']).resolve(), self.repo)
         self.assertEqual(rec['prompt'], 'PBI-001 を実装する\n\n要約の書き先: `docs/pbi/dsh/PBI-001.last.md`\n')
         self.assertEqual(out, {
-            'runner': 'dsh', 'model': 'deepseek-official/deepseek-flash', 'effort': 'high', 'code': 0, 'last': LAST,
+            'runner': 'dsh', 'model': 'deepseek-official/deepseek-flash', 'effort': 'high',
+            'setting': 'default', 'permission': jev_mcp.DSH_PERMISSION, 'code': 0, 'last': LAST,
             'report_path': None,
             'logs': ['docs/pbi/dsh/PBI-001.jsonl', 'docs/pbi/dsh/PBI-001.err'],
             'unusable': False, 'unusable_reason': None})
@@ -736,7 +742,7 @@ class RunTest(unittest.TestCase):
                 r = self.call(runner=runner, model='a/b')
                 self.assertTrue(r['isError'])
                 self.assertIn('dsh と opencode', r['content'][0]['text'])
-        self.assertEqual(list(jev_mcp.RUN_RUNNERS), ['dsh', 'opencode'])
+        self.assertEqual(list(jev_mcp.RUN_RUNNERS), ['dsh', 'opencode', 'claude'])
         self.assertFalse(self.record.exists())
         self.assertFalse((self.repo / 'docs/pbi/agent').exists())
 
@@ -772,8 +778,84 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0]['inputSchema']['required'], ['repo', 'report', 'runner', 'model', 'prompt'])
         self.assertEqual(list(found[0]['inputSchema']['properties']),
-                         ['repo', 'report', 'runner', 'model', 'effort', 'prompt', 'workdir', 'timeout'])
+                         ['repo', 'report', 'runner', 'model', 'effort', 'setting', 'prompt', 'workdir', 'timeout'])
         self.assertNotIn('run_session', [t['name'] for t in tools])
+
+    def test_opencode_edit_only_uses_the_edit_only_config(self):
+        out = self.ok(runner='opencode', model='a/b', setting='edit-only')
+        self.assertEqual(Path(self.recorded()['opencode_config']), jev_mcp.HERE / 'opencode.edit-only.config.json')
+        self.assertEqual(out['setting'], 'edit-only')
+        out = self.ok(runner='opencode', model='a/b', setting='default')
+        self.assertEqual(Path(self.recorded()['opencode_config']), jev_mcp.HERE / 'opencode.config.json')
+        self.assertEqual(out['setting'], 'default')
+
+    def test_claude_passes_the_setting_to_claude_run(self):
+        for setting, given in (('default', {}), ('default', {'setting': 'default'}),
+                               ('edit-only', {'setting': 'edit-only'})):
+            with self.subTest(setting=setting, given=given):
+                out = self.ok(runner='claude', model='sonnet', effort='high', **given)
+                rec = self.recorded()
+                self.assertEqual(rec['kind'], 'claude')
+                self.assertEqual(rec['argv'], ['PBI-001', '--model', 'sonnet', '--effort', 'high',
+                                               '--setting', setting])
+                self.assertEqual(Path(rec['cwd']).resolve(), self.repo)
+                self.assertTrue((self.repo / 'docs/pbi/claude/PBI-001.prompt.md').is_file())
+                self.assertEqual((out['setting'], out['unusable']), (setting, False))
+                self.assertEqual(out['logs'], ['docs/pbi/claude/PBI-001.json', 'docs/pbi/claude/PBI-001.err'])
+        self.ok(runner='claude', model='sonnet')
+        self.assertEqual(self.recorded()['argv'], ['PBI-001', '--model', 'sonnet', '--setting', 'default'])
+
+    def test_claude_unusable_conditions(self):
+        cases = ({'FAKE_JSONL': '{"is_error": true, "result": "x"}'},
+                 {'FAKE_JSONL': '{"is_error": false, "result": "Claude usage limit reached"}'},
+                 {'FAKE_ERR': 'Invalid API key - please run /login\n'},
+                 {'FAKE_EXIT': '1'})
+        for env in cases:
+            with self.subTest(env=env), mock.patch.dict(os.environ, env):
+                self.assertTrue(self.ok(runner='claude', model='sonnet')['unusable'])
+        with mock.patch.dict(os.environ, {'FAKE_JSONL': '{"is_error": false, "result": "done"}'}):
+            self.assertFalse(self.ok(runner='claude', model='sonnet')['unusable'])
+
+    def test_dsh_edit_only_and_bad_setting_are_errors(self):
+        r = self.call(runner='dsh', model='a/b', setting='edit-only')
+        self.assertTrue(r['isError'])
+        self.assertIn('dsh には読む・書くだけの設定が無い', r['content'][0]['text'])
+        for runner in ('dsh', 'opencode', 'claude'):
+            for setting in ('readonly', '', 3):
+                with self.subTest(runner=runner, setting=setting):
+                    self.assertTrue(self.call(runner=runner, model='a/b', setting=setting)['isError'])
+        self.assertFalse(self.record.exists())
+
+    def test_permission_matches_the_setting(self):
+        out = self.ok(runner='opencode', model='a/b', setting='edit-only')
+        self.assertEqual(out['permission'], {'commands': False, 'tools': ['edit'], 'outside_workdir': False})
+        out = self.ok(runner='opencode', model='a/b')
+        self.assertEqual(out['permission'], {'commands': True, 'tools': ['edit', 'bash'], 'outside_workdir': False})
+        out = self.ok(runner='claude', model='a')
+        self.assertTrue(out['permission']['commands'])
+        self.assertEqual(out['permission']['tools'], list(jev_mcp.claude_run.SETTINGS['default']))
+        out = self.ok(runner='claude', model='a', setting='edit-only')
+        self.assertEqual(out['permission'], {'commands': False, 'tools': ['Read', 'Edit', 'Write', 'Glob', 'Grep'],
+                                             'outside_workdir': False})
+        self.assertEqual(self.ok(runner='dsh', model='a/b')['permission'], jev_mcp.DSH_PERMISSION)
+
+
+class EditOnlyConfigTest(unittest.TestCase):
+    def test_config_denies_commands_and_outside(self):
+        cfg = json.loads((jev_mcp.HERE / 'opencode.edit-only.config.json').read_text(encoding='utf-8'))
+        perm = cfg['permission']
+        self.assertEqual(cfg['$schema'], 'https://opencode.ai/config.json')
+        self.assertEqual(perm['edit'], 'allow')
+        self.assertEqual(perm['bash'], {'*': 'deny'})
+        self.assertEqual(perm['external_directory'], 'deny')
+        for key in ('webfetch', 'websearch', 'task', 'skill', 'question'):
+            self.assertEqual(perm[key], 'deny', key)
+        self.assertEqual([k for k, v in perm.items() if k != 'edit' and v not in ('deny', {'*': 'deny'})], [])
+
+    def test_default_config_keeps_allowing_commands(self):
+        perm = json.loads((jev_mcp.HERE / 'opencode.config.json').read_text(encoding='utf-8'))['permission']
+        self.assertEqual(perm['bash']['*'], 'allow')
+        self.assertEqual(perm['external_directory'], 'deny')
 
 
 if __name__ == '__main__':

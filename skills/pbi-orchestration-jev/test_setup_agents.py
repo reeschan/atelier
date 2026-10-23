@@ -157,7 +157,7 @@ class DetectTest(Base):
         self.assertTrue(detected['codex']['found'])
         self.assertEqual(detected['codex']['version'], 'codex-cli 0.153.4')
         # 偽の CLI が無い実行先は missing
-        for runner in ('agy', 'dsh'):
+        for runner in ('agy', 'dsh', 'claude'):
             self.assertFalse(detected[runner]['found'])
             self.assertIsNone(detected[runner]['path'])
             self.assertIsNone(detected[runner]['version'])
@@ -171,7 +171,7 @@ class DetectTest(Base):
         proc = self.run_cli('detect')
         self.assertEqual(proc.returncode, 0, proc.stderr)
         lines = proc.stdout.strip().splitlines()
-        self.assertEqual(len(lines), 5)
+        self.assertEqual(len(lines), 6)
         self.assertTrue(any(line.startswith('agent  found  -  -') for line in lines))
         self.assertTrue(any(line.startswith('dsh  missing  -  -') for line in lines))
 
@@ -191,7 +191,7 @@ class RecordTest(Base):
 
         for runner in ('opencode', 'agy', 'agent'):
             self.assertTrue(agents['runners'][runner]['enabled'], runner)
-        for runner in ('codex', 'dsh'):
+        for runner in ('codex', 'dsh', 'claude'):
             self.assertFalse(agents['runners'][runner]['enabled'], runner)
 
         for runner, version in (('opencode', '2.0.29'), ('agy', '1.4.3')):
@@ -216,7 +216,7 @@ class RecordTest(Base):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         agents = self.read_agents()['runners']
         self.assertTrue(agents['agent']['enabled'])
-        for runner in ('opencode', 'codex', 'agy', 'dsh'):
+        for runner in ('opencode', 'codex', 'agy', 'dsh', 'claude'):
             self.assertFalse(agents[runner]['enabled'], runner)
 
 
