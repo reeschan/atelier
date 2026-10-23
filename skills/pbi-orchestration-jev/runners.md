@@ -89,18 +89,18 @@ python <このディレクトリ>/dsh_run.py <報告名> --model <route の mode
 
 ## mcp（MCP クライアントの実行先。jev-mcp で受け渡す）
 
-Harness² などの外部の実装担当が、MCP サーバー jev-mcp（`jev_mcp.py`）から PBI を受け取る。設計者は起動しない。依頼文を `docs/pbi/mcp/<報告名>.prompt.md` に書き（要約の書き先は `docs/pbi/mcp/<報告名>.last.md`）、`.last.md` ができるのを待つ。2026-10 時点では route には出ない（routing.json の実行先に mcp は無い）。ユーザーが mcp に渡すと決めた PBI だけをこの形で置く。
+外の MCP クライアント（実装担当）が、MCP サーバー jev-mcp（`jev_mcp.py`）から PBI を受け取る。jev-mcp は、外の MCP クライアントが Jev の振り分け・実行・記録をそのまま使うための口。設計者は起動しない。依頼文を `docs/pbi/mcp/<報告名>.prompt.md` に書き（要約の書き先は `docs/pbi/mcp/<報告名>.last.md`）、`.last.md` ができるのを待つ。2026-10 時点では route には出ない（routing.json の実行先に mcp は無い）。ユーザーが mcp に渡すと決めた PBI だけをこの形で置く。
 
 ```bash
 python <このディレクトリ>/jev_mcp.py --root <作業リポジトリの絶対パス>                  # stdio
 python <このディレクトリ>/jev_mcp.py --http --port 7830 --root <作業リポジトリの絶対パス>  # http://127.0.0.1:7830/mcp
 ```
 
-- ツールは `list_tasks`・`claim_task`・`submit_result`・`fail_task`・`verify`・`jev_gate`・`route`・`run_session`・`record`。`claim_task` は `docs/pbi/mcp/<報告名>.claim.json` を排他的に作り、同じ報告名を 2 回は渡さない
-- `run_session` は改善役の作業を Claude Code で 1 回回す（`runner` は `agent` だけ）。柵は `--restricted`・`--tools Read,Edit,Write,Glob,Grep`・`--permission-mode acceptEdits`・`--permission-prompts none`・`--strict-mcp-config` で、`ANTHROPIC_*` の環境変数は外す。認証は jev-mcp を動かすユーザーの Claude Code の設定のまま。jev-mcp は Harness² と同じ機械で動かす
-- `--session-root` は run_session の cwd を許すディレクトリ（くり返し可。環境変数 `PBI_MCP_SESSION_ROOTS` でも可）。付けずに起動すると `run_session` は使えない。cwd はこの下だけだが、`--root` の外でも `--session-root` の下ならよい
-- `record` は Harness² の試行 1 回の結果を `docs/pbi/runs.jsonl` に 1 行（`source: "harness2"`、`record_run.py` と同じ列）で足す。取れない値は null、attempt は同じ report・role・runner・model の行の数 + 1
-- `submit_result` / `fail_task` は `docs/pbi/reports/<報告名>.md`（詳細）と `.last.md`（worker.md の 5 行）を書く。`.last.md` は最後に書く。実行先の出力（Harness² の summary など）は `<報告名>.artifacts.json` に残る。設計者は他の実行先と同じく `.last.md` だけを読み、8 章の検証は自分で行う（`verify` ツールの結果は実行先の自己申告として扱う）
+- ツールは `list_tasks`・`claim_task`・`submit_result`・`fail_task`・`verify`・`jev_gate`・`route`・`run`・`record`。`claim_task` は `docs/pbi/mcp/<報告名>.claim.json` を排他的に作り、同じ報告名を 2 回は渡さない
+- `route` は `select_model.py` の 1 件の判定（`repo`・`report`・`tier`・`skip`）をそのまま返す。`tier` は `--tier`、`skip` は `--skip` と同じ値で、`docs/pbi/PBI-<n>.route.json` は書かない
+- `run` は `runners.md` の渡し方で 1 件の報告名を 1 回動かす。扱う実行先は今は `dsh` と `opencode` だけ。`runner`・`model`・`effort`・`prompt`・`workdir`（`--root` の下だけ。省けば `repo`）・`timeout` を取り、依頼文を `docs/pbi/<実行先>/<報告名>.prompt.md` に書いて起動し、終了コード・`.last.md`・報告ファイル・ログのパスと、使えないときの判定を返す
+- `record` は `record_run.py` を 1 回呼び、試行 1 回の結果を `docs/pbi/runs.jsonl` に 1 行足す。`repo`・`report`・`attempt`・`outcome`・`findings`・`runner`・`model`・`effort`・`tier` を取り、`record_run.py` と同じ列になる
+- `submit_result` / `fail_task` は `docs/pbi/reports/<報告名>.md`（詳細）と `.last.md`（worker.md の 5 行）を書く。`.last.md` は最後に書く。実行先の出力（クライアントの summary など）は `<報告名>.artifacts.json` に残る。設計者は他の実行先と同じく `.last.md` だけを読み、8 章の検証は自分で行う（`verify` ツールの結果は実行先の自己申告として扱う）
 - `jev_gate` は jev-mcp の側で `jev/jev.py` を呼ぶ。API キーはサーバーの環境変数だけが持ち、クライアントには渡らない。送るのは文章だけ
 - HTTP は 127.0.0.1 だけで待ち受け、Host が 127.0.0.1・localhost・[::1] でない要求は 403 で断る。認証は無いので、ほかの機械には公開しない
 - **使えないとき**（`.last.md` が来ない、状態が NEEDS_CONTEXT / BLOCKED）: 他の実行先と同じく `route` の次へ進むか、差し戻しの手順に従う。取得済みのまま止まった `.claim.json` は、実行先が止まったことを確かめてから消す

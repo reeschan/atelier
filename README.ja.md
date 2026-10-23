@@ -8,7 +8,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎのあとに再開する。オーケストレーターは facts を prepare.py に渡し、prepare.py は Jev にゲート 1 (brief と PBI の品質) を聞き、select_model.py で段と route を決める。そのとき home (~/.config/pbi-orchestration-jev) の振り分け・適用・agents.json と docs/pbi/routing.json を読み、使えない実行先の手順を外す。PBI は、全段の既定の実行先である pbi-worker (Agent ツール) か、setup で選び routing.json に書いた外部の実行先 (opencode・Codex・Antigravity・DeepSeek Harness) に渡り、対象リポジトリのソースコードを変える。オーケストレーターは verify.py と unchanged.py で検証し、Jev には文章だけで、報告と検証が食い違うときの仕分けと差し戻し文の点検を聞き、状態と HANDOFF を docs/pbi/ に記録する。任意の shared-memory の MCP が作業ごとの ref と引き継ぎのメモリを持ち、pbi-worker は ref を get するだけ。setup_agents.py と model_fetch.py が実行先の CLI を検出し、実行先ごとのモデルの一覧を home の agents.json と models/ に控える。開発者は手元の編集画面 (studio/serve.py。エージェントとモデル・振り分け・優先テンプレートと適用の 3 タブ) で、それらを home の中だけで読み書きする。templates.py は優先テンプレートと、正本であるローカルの overrides.json を持ち、任意の優先テンプレートの Web ページ (claude.ai の Artifact) はそれと同期するだけ。フェーズ・アダプターは、任意の呼び出し先のスキルが入っていれば使う。設計では、オーケストレーターが mattpocock-skills の grilling を呼ぶ。全 PBI のあとは adapter_gate.py が PBI と agents.json の adapters の設定を読んで、最終レビューとセキュリティレビューを使うかを決め、general-purpose のレビュー用のサブエージェントが mattpocock-skills の code-review か built-in の /code-review・/security-review を呼んで、指摘を docs/pbi/reviews/ に書く。任意の jev-mcp (jev_mcp.py、127.0.0.1) を使うと、Harness² などの MCP クライアントがタスクを受け取って返し、実行役と改善役のために、モデルの候補 (route)・柵つきの Claude Code での改善役のセッション (run_session)・試行ごとの runs.jsonl への記録 (record) を頼める。jev-mcp は home の振り分けと agents.json を読み、docs/pbi/ に依頼文・報告・runs を書く。">
+  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎのあとに再開する。オーケストレーターは facts を prepare.py に渡し、prepare.py は Jev にゲート 1 (brief と PBI の品質) を聞き、select_model.py で段と route を決める。そのとき home (~/.config/pbi-orchestration-jev) の振り分け・適用・agents.json と docs/pbi/routing.json を読み、使えない実行先の手順を外す。PBI は、全段の既定の実行先である pbi-worker (Agent ツール) か、setup で選び routing.json に書いた外部の実行先 (opencode・Codex・Antigravity・DeepSeek Harness) に渡り、対象リポジトリのソースコードを変える。オーケストレーターは verify.py と unchanged.py で検証し、Jev には文章だけで、報告と検証が食い違うときの仕分けと差し戻し文の点検を聞き、状態と HANDOFF を docs/pbi/ に記録する。任意の shared-memory の MCP が作業ごとの ref と引き継ぎのメモリを持ち、pbi-worker は ref を get するだけ。setup_agents.py と model_fetch.py が実行先の CLI を検出し、実行先ごとのモデルの一覧を home の agents.json と models/ に控える。開発者は手元の編集画面 (studio/serve.py。エージェントとモデル・振り分け・優先テンプレートと適用の 3 タブ) で、それらを home の中だけで読み書きする。templates.py は優先テンプレートと、正本であるローカルの overrides.json を持ち、任意の優先テンプレートの Web ページ (claude.ai の Artifact) はそれと同期するだけ。フェーズ・アダプターは、任意の呼び出し先のスキルが入っていれば使う。設計では、オーケストレーターが mattpocock-skills の grilling を呼ぶ。全 PBI のあとは adapter_gate.py が PBI と agents.json の adapters の設定を読んで、最終レビューとセキュリティレビューを使うかを決め、general-purpose のレビュー用のサブエージェントが mattpocock-skills の code-review か built-in の /code-review・/security-review を呼んで、指摘を docs/pbi/reviews/ に書く。任意の jev-mcp (jev_mcp.py、127.0.0.1) を使うと、MCP クライアントがタスクを受け取って返し、Jev の手順の route (select_model.py)・run (runners.md の渡し方で実行先を 1 回動かす)・record (record_run.py) を使える。jev-mcp は home の振り分けと agents.json を読み、docs/pbi/ に依頼文・報告・runs を書く。">
 </picture>
 
 図のソースは `assets/architecture.d2` です ([D2](https://d2lang.com) で描いています)。
@@ -365,27 +365,26 @@ python jev/jev.py --request <request.json>                 # リクエストを�
 
 ### jev-mcp (MCP サーバー)
 
-`jev_mcp.py` を使うと、Harness² などの MCP クライアントを実行先の 1 つとして使えます。設計者は他の外部の実行先と同じく `docs/pbi/mcp/<報告名>.prompt.md` に依頼文を書きます。クライアントはそれを取得して作業し、いつもの形で報告します (詳細は `docs/pbi/reports/<報告名>.md`、5 行の要約は `docs/pbi/mcp/<報告名>.last.md`)。承認・検証・レビュー・差し戻しは設計者のままです。
+`jev_mcp.py` は、外の MCP クライアントが、Jev の振り分け・実行・記録をそのまま使うための口です。設計者は他の外部の実行先と同じく `docs/pbi/mcp/<報告名>.prompt.md` に依頼文を書きます。クライアントはそれを取得して作業し、いつもの形で報告します (詳細は `docs/pbi/reports/<報告名>.md`、5 行の要約は `docs/pbi/mcp/<報告名>.last.md`)。承認・検証・レビュー・差し戻しは設計者のままです。
 
 ```sh
 python skills/pbi-orchestration-jev/jev_mcp.py --root /path/to/repo                      # stdio
 python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/to/repo   # http://127.0.0.1:7830/mcp
-python skills/pbi-orchestration-jev/jev_mcp.py --root /path/to/repo --session-root /path/to/work  # run_session を使うとき
 ```
 
 | ツール | すること |
 |---|---|
 | `list_tasks` | `docs/pbi/mcp/` の依頼文と状態 (queued / claimed / done) |
 | `claim_task` | 依頼文を取得済みにし (1 回だけ)、依頼文・PBI と見出しごとの節・検証コマンド・差し戻し文・facts・route・`worker.md` を返す |
-| `submit_result` | 詳細ファイルと 5 行の要約を書く。`artifacts` (Harness² の summary など) は `<報告名>.artifacts.json` に残る |
+| `submit_result` | 詳細ファイルと 5 行の要約を書く。`artifacts` (クライアントの summary など) は `<報告名>.artifacts.json` に残る |
 | `fail_task` | NEEDS_CONTEXT / BLOCKED を同じ 2 つのファイルで報告する |
 | `verify` | 作業ツリー (worktree など) で `verify.py` を実行し、表と終了コードを返す |
 | `jev_gate` | `jev/jev.py` で Jev のゲートを 1 回聞く。API キーはサーバーの側だけが持つ |
-| `route` | 役割 (`executor` / `improver`) の段で `select_model` の試す順を出し、substrate か `runners` の手順に絞って、外した手順とともに返す |
-| `run_session` | 改善役のセッションを Claude Code で柵つきで 1 回回す。cwd は `--session-root` の下だけ |
-| `record` | Harness² の試行 1 回につき 1 行を `docs/pbi/runs.jsonl` に足す (`source: "harness2"`、`record_run.py` と同じ列) |
+| `route` | `select_model.py` の 1 件の判定。段・試す順の手順・外した手順・レビュー・scores を、`python select_model.py <facts.json> [--tier T] [--skip S]` と同じに返す。`route.json` は書かない |
+| `run` | `runners.md` の渡し方で、報告名 1 件を実行先 (`dsh` / `opencode`) で 1 回動かす。依頼文を `docs/pbi/<実行先>/<報告名>.prompt.md` に書いて起動する |
+| `record` | `record_run.py` を 1 回呼び、試行 1 回の結果を `docs/pbi/runs.jsonl` に 1 行足す |
 
-Harness² のモデルのコネクターは、この 3 つを使います。`route` で試すモデルを決め、`run_session` で作業し、`record` で結果を残します。`run_session` は `--session-root` の下の作業ディレクトリでだけ動き、Claude Code を Harness² の `claude_cli` と同じ柵 (読み書きのツールだけ・質問なし・MCP なし・Anthropic の環境変数を外す) で起動します。認証は jev-mcp を動かすユーザーの Claude Code の設定のままで、jev-mcp は Harness² と同じ機械で動かします。
+`route`・`run`・`record` は、外の MCP クライアントが使う 3 つの口です。`route` で試す手順を受け取り、`run` でその 1 つを動かし、`record` で結果を残します。どれも包んでいるスクリプトと同じ引数を取り、その結果をそのまま返します。`route` は `repo`・`report`・`tier` (`--tier`)・`skip` (`--skip`)、`run` は `repo`・`report`・`runner`・`model`・`effort`・`prompt`・`workdir`・`timeout`、`record` は `repo`・`report`・`attempt`・`outcome`・`findings`・`runner`・`model`・`effort`・`tier` です。`run` の `workdir` は `--root` の下だけ (省けば `repo`) で、終了コード・`.last.md`・報告ファイルとログのパス・使えないときの判定を返します。`record` は `record_run.py` と同じ列を `docs/pbi/runs.jsonl` に足します。jev-mcp は、それらの実行先が動く機械で動かしてください。
 
 扱うのは `--root` (または `PBI_MCP_ROOTS`) の下のリポジトリだけです。HTTP は 127.0.0.1 だけで待ち受け、ほかの Host は断ります。認証は無いので、ほかの機械には公開しないでください。詳しくは `runners.md` の mcp の節を見てください。
 
