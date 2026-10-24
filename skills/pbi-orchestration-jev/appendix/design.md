@@ -1,6 +1,6 @@
 # Appendix: understand and design
 
-Read this when the understand or design stage picks `understand.builtin`, `design.grilling`, `design.domain-modeling` or `design.builtin`.
+Read this when the understand or design stage picks `understand.builtin`, `design.builtin`, or an external understand or design component (`appendix/engine.md`).
 
 ## Understand
 

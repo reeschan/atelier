@@ -47,6 +47,8 @@ STAGE_DOCS = {
 GATE_DOCS = dict(STAGE_DOCS, route='appendix/engine.md', build='appendix/verify.md')
 # レビューの部品に渡さない引数 (報告だけをさせる。appendix/review.md)
 REVIEW_FORBID = ['--fix', '--comment', 'ultra', '--max-findings']
+# remove に渡す部品の id (<工程か gate>.<名前>)
+COMPONENT_ID = re.compile(r'^(?:' + '|'.join(flow.STAGES + (flow.GATE,)) + r')\.[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$')
 # read-skill の部品はサブエージェントで動かし、出力のファイルだけを書かせる (appendix/engine.md)
 READ_SKILL_FORBID = ['do not change any file except the output file named in the prompt']
 SKILL_NAME = re.compile(r'^(?:([A-Za-z0-9][A-Za-z0-9_.-]{0,63}):)?([A-Za-z0-9][A-Za-z0-9_.-]{0,63})$')
@@ -161,7 +163,7 @@ def build_component(skill: str, skill_md: Path, plugin: str | None, name: str, r
         'doc': doc,
         'where': where,
         'memory': memory,
-        'when': args.when or 'always',
+        'when': 'always',
         'cost': 'mid',
         'requires': {'plugins': [plugin]} if read_skill else {'skills': [skill]},
         'forbid': (REVIEW_FORBID if role == 'review' or (role == 'gate' and args.after == 'review') else [])
@@ -175,18 +177,29 @@ def build_component(skill: str, skill_md: Path, plugin: str | None, name: str, r
 
 
 def load_workflow(home: Path, name: str) -> tuple[Path, dict]:
-    """home のテンプレート (無ければ同梱のものの写し) を返す。どちらも無ければ ValueError。"""
+    """home のテンプレート (無ければ同梱のものの写し) を返す。どちらも無ければ ValueError。
+
+    home にあって読めないファイルは、同梱のもので上書きしないように ValueError にする。
+    """
     path = home / 'workflows' / f'{name}.json'
-    data = common.load_json(path)
-    if data is None:
-        data = common.load_json(flow.BUNDLED_WORKFLOWS / f'{name}.json')
+    if path.exists():
+        data = common.load_json(path)
+        if not isinstance(data, dict):
+            raise ValueError(f'{common.shown(path)}: not a readable workflow; fix or remove it first')
+        return path, data
+    data = common.load_json(flow.BUNDLED_WORKFLOWS / f'{name}.json')
     if not isinstance(data, dict):
         raise ValueError(f'workflow not found: {name}')
     return path, data
 
 
-def insert(workflow: dict, cid: str, stage: str, after: str | None) -> None:
-    """工程なら先頭、関所なら after の工程の関所の最後に差す (もう入っていれば何もしない)。"""
+def insert(workflow: dict, cid: str, stage: str, after: str | None, when: str | None = None) -> None:
+    """工程なら先頭、関所なら after の工程の関所の最後に差す。
+
+    when はテンプレートの中の候補 ({"id", "when"}) に書く。部品の定義は複数のテンプレートで共有するので、
+    あるテンプレートの when が別のテンプレートの動きを変えないようにするため。もう入っていれば when だけ書き換える。
+    """
+    item = {'id': cid, 'when': when} if when else cid
     if stage == 'gate':
         gates = workflow.setdefault('gates', [])
         gate = next((g for g in gates if isinstance(g, dict) and g.get('after') == after), None)
@@ -197,12 +210,19 @@ def insert(workflow: dict, cid: str, stage: str, after: str | None) -> None:
                        if isinstance(g, dict) and g.get('after') in flow.STAGES
                        and flow.STAGES.index(g['after']) > order), len(gates))
             gates.insert(at, gate)
-        if cid not in [flow.entry(item)[0] for item in gate['components']]:
-            gate['components'].append(cid)
+        place(gate['components'], cid, item, at_end=True)
         return
-    items = workflow['stages'][stage]
-    if cid not in [flow.entry(item)[0] for item in items]:
-        items.insert(0, cid)
+    place(workflow['stages'][stage], cid, item, at_end=False)
+
+
+def place(items: list, cid: str, item, at_end: bool) -> None:
+    ids = [flow.entry(existing)[0] for existing in items]
+    if cid in ids:
+        items[ids.index(cid)] = item
+    elif at_end:
+        items.append(item)
+    else:
+        items.insert(0, item)
 
 
 def take_out(workflow: dict, cid: str) -> None:
@@ -260,8 +280,13 @@ def cmd_add(args, home: Path) -> int:
     if component['id'] in bundled:
         print(f'{component["id"]}: a bundled component already has this id', file=sys.stderr)
         return 2
-    insert(workflow, component['id'], args.stage, args.after)
     comp_path = home / 'components' / f'{component["id"]}.json'
+    existing = common.load_json(comp_path)
+    if comp_path.exists() and existing != component:
+        print(f'{component["id"]}: already registered with other settings ({common.shown(comp_path)}); '
+              'remove it from every workflow first', file=sys.stderr)
+        return 2
+    insert(workflow, component['id'], args.stage, args.after, args.when)
     errors = save_checked(home, wf_path, workflow, comp_path, component)
     if errors:
         for error in errors:
@@ -275,26 +300,56 @@ def cmd_add(args, home: Path) -> int:
 
 
 def cmd_remove(args, home: Path) -> int:
+    # id はファイル名になるので、形を確かめてから components/ の直下に限る (../ で別のファイルを消さない)
+    if not COMPONENT_ID.match(args.id):
+        print(f'{args.id}: not a component id (<stage>.<name>)', file=sys.stderr)
+        return 2
     bundled, _ = flow.load_components()
     if args.id in bundled:
         print(f'{args.id}: a bundled component cannot be removed', file=sys.stderr)
         return 2
-    comp_path = home / 'components' / f'{args.id}.json'
+    components_dir = (home / 'components').resolve()
+    comp_path = (components_dir / f'{args.id}.json').resolve()
+    if comp_path.parent != components_dir:
+        print(f'{args.id}: not a component id (<stage>.<name>)', file=sys.stderr)
+        return 2
     try:
         wf_path, workflow = load_workflow(home, args.workflow)
     except ValueError as e:
         print(str(e), file=sys.stderr)
         return 2
     take_out(workflow, args.id)
+    # ほかの home のテンプレートがまだ使っていれば、何も変えずに止める
+    others = sorted(p.stem for p in (home / 'workflows').glob('*.json')
+                    if p.resolve() != wf_path.resolve() and uses(common.load_json(p), args.id))
+    if others:
+        print(f'{args.id}: still used by workflows {", ".join(others)}; remove it there first', file=sys.stderr)
+        return 2
+    errors = check_without(home, workflow, args.id)
+    if errors:
+        for error in errors:
+            print(f'error {error}')
+        return 2
     if wf_path.is_file():
         common.write_json(wf_path, workflow)
     comp_path.unlink(missing_ok=True)
-    # 同じ部品を使う別のテンプレートがあれば、ここで誤りになる
-    errors = check(home, workflow)
-    for error in errors:
-        print(f'error {error}')
     print(f'removed {args.id} from {common.shown(wf_path)}')
-    return 2 if errors else 0
+    return 0
+
+
+def uses(workflow, cid: str) -> bool:
+    if not isinstance(workflow, dict):
+        return False
+    items = [i for v in (workflow.get('stages') or {}).values() if isinstance(v, list) for i in v]
+    items += [i for g in workflow.get('gates') or [] if isinstance(g, dict) for i in g.get('components') or []]
+    return cid in [flow.entry(item)[0] for item in items]
+
+
+def check_without(home: Path, workflow: dict, cid: str) -> list[str]:
+    """部品 cid を消したとしたときのテンプレートの誤り (消す前に確かめる)。"""
+    components, errors = flow.load_components(home=home)
+    components.pop(cid, None)
+    return errors + flow.workflow_errors(workflow, components)
 
 
 def cmd_list(home: Path) -> int:

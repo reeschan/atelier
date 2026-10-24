@@ -28,7 +28,7 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
    - `check skill list`: the skill's name is in the skill list in your context. Do not scan the disk for skills.
    - `adapters` in agents.json can turn a design, review or security stage off, or name a skill for it (`appendix/adapters.md`).
 4. Never use a skill that the model cannot invoke through the Skill tool; those run as `read-skill`.
-5. A component's `then` lists components to run right after it, when each one is usable and its own `when` holds (grilling, then domain-modeling).
+5. A component's `then` lists components to run right after it, when each one is usable and its own `when` holds.
 6. A component's `forbid` lists arguments never to pass and steps to skip. Put each item in the prompt when the component runs in a subagent.
 
 ## when
@@ -55,15 +55,15 @@ The per-PBI values are decided by a script. Once every `route.json` exists, run 
 - `runner`: the worker on the PBI's route (`runners.md`).
 - `full`: the component may search and read shared memory like you do. `refs-only`: it may `get` only the refs listed in the PBI. `none`: no memory tools.
 - The template's `build.external_memory` says whether external runners may `get` refs themselves (`refs-only`) or not (`none`, the default). Either way you copy the listed refs into their prompt (`runners.md`).
-- `record_run.py` checks every attempt against this: it counts the worker's memory calls (from the agent's transcript, or by scanning an external runner's logs) and marks a search, a write, a `get` under `none`, or a `get` of a ref not in the PBI's Refs as `memory.violation` in `runs.jsonl`.
+- `record_run.py` checks every attempt against this: it counts the worker's memory calls (from the agent's transcript, or from the tool-call events in an external runner's JSON logs; `violation` is null when it cannot tell) and marks a search, a write, a `get` under `none`, or a `get` of a ref not in the PBI's Refs as `memory.violation` in `runs.jsonl`.
 
 ## External components
 
 The bundled components cover only this skill and the skills built into Claude Code (`code-review`, `security-review`). This skill ships no one else's skill and no component for one. Any other skill, the user's own included, becomes an **external component**:
 
 1. The user installs the skill with Claude Code's plugin commands (`/plugin marketplace add <repo>`, `/plugin install <plugin>@<marketplace>`), or keeps their own in `~/.claude/skills/<name>/`.
-2. `python <skill>/component.py add <plugin>:<name> --stage <stage> [--after <stage>] [--when W] [--forbid TEXT]` reads the installed SKILL.md and writes `<home>/components/<stage>.<plugin>-<name>.json`: `skill` when the model can invoke it, `read-skill` when it has `disable-model-invocation`, with the license and link from the plugin's `plugin.json`. It puts the component first in that stage of `<home>/workflows/<workflow>.json` (default `jev-routed`, copied from the bundled one when missing), or last in the gate after `--after`. It checks the result like `flow.py` and leaves nothing on an error.
-3. `component.py remove <id>` takes it out again; `component.py list` shows bundled and external components.
+2. `python <skill>/component.py add <plugin>:<name> --stage <stage> [--after <stage>] [--when W] [--forbid TEXT]` reads the installed SKILL.md and writes `<home>/components/<stage>.<plugin>-<name>.json`: `skill` when the model can invoke it, `read-skill` when it has `disable-model-invocation` (plugin skills only; a personal skill must be model-invocable), with the license and link from the plugin's `plugin.json`. `--when` goes on the template's entry (`{"id", "when"}`), not into the shared component file, so one template's condition never changes another's; registering the same component again with other settings is refused. It puts the component first in that stage of `<home>/workflows/<workflow>.json` (default `jev-routed`, copied from the bundled one when missing), or last in the gate after `--after`. It checks the result like `flow.py` and leaves nothing on an error.
+3. `component.py remove <id>` takes it out of that template and deletes the component, refusing while another home template still uses it; `component.py list` shows bundled and external components.
 
 - A home component cannot reuse a bundled id; `flow.py` reports it as an error, so every stage keeps its fallback.
 - Run `component.py` only when the user asks for that skill (or `setup --recommended`, `appendix/adapters.md`). The commands for the skills this skill was built around are in the README ("External components").

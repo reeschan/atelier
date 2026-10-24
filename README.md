@@ -132,7 +132,7 @@ An **adapter** calls a skill you already have at fixed phases of a run. The bund
 
 | Phase | When | Callees, in priority order | Notes |
 |---|---|---|---|
-| design | before the split into PBIs | the orchestrator's own procedure; with `setup --recommended`, `mattpocock-skills:grilling`, then `mattpocock-skills:domain-modeling` | domain-modeling only when the target repository already has `GLOSSARY.md` or `CONTEXT.md`; both run in the main session, because they ask you questions |
+| design | before the split into PBIs | the orchestrator's own procedure; with `setup --recommended`, `mattpocock-skills:grilling` | it runs in the main session, because it asks you questions |
 | final review | after the last PBI | the built-in `/code-review` (with `setup --recommended`, `mattpocock-skills:code-review` first) | the built-in one runs at level `medium` with no flags; each gets the merge-base, the head and the spec path |
 | security review | at the same time, when a PBI is sensitive or deep | the built-in `/security-review` | no arguments |
 
@@ -193,7 +193,7 @@ Nothing outside this skill and Claude Code is used by default. `/pbi-orchestrati
 claude plugin install mattpocock-skills@claude-plugins-official --scope user
 ```
 
-- [mattpocock/skills](https://github.com/mattpocock/skills) — MIT, Copyright (c) 2026 Matt Pocock. It brings grilling and domain-modeling for design, and code-review for the final review.
+- [mattpocock/skills](https://github.com/mattpocock/skills) — MIT, Copyright (c) 2026 Matt Pocock. It brings grilling for design, and code-review for the final review.
 - `setup --recommended` shows the name, the phases it fills, the link, the licence and the command. After you approve once, the orchestrator runs the install command itself, and registers grilling and code-review as external components; the bundled scripts never install anything (package installation is exactly what package scanners flag).
 - If you answer no, or `claude` is not on the PATH, you only get the command to run yourself.
 - Run `/reload-plugins` or restart Claude Code afterwards. Until then the plugin's skills are not listed, and the adapters keep using the built-in procedures.

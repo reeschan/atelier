@@ -279,6 +279,19 @@ def status(component: dict, agents, env) -> str:
     return 'script ok'
 
 
+def route_error(route) -> str | None:
+    """--decide が読む route.json の欄の誤り。正しければ None。"""
+    if not isinstance(route, dict):
+        return 'not a readable JSON object'
+    if not isinstance(route.get('tier'), str):
+        return 'tier must be a string'
+    if not isinstance(route.get('scores', {}), dict):
+        return 'scores must be an object'
+    if 'review' in route and not isinstance(route['review'], str):
+        return 'review must be a string'
+    return None
+
+
 def per_pbi(when: str, route: dict) -> tuple[str, str]:
     """route.json 1 つについて、when の判定 (decision, reason)。"""
     if when == 'always':
@@ -368,10 +381,16 @@ def main(argv=None) -> int:
 
     print(f'workflow {workflow["name"]} ({common.shown(path)})')
     if args.decide:
-        routes = {r.name.removesuffix('.route.json'): common.load_json(r) or {}
+        routes = {r.name.removesuffix('.route.json'): common.load_json(r)
                   for r in sorted(base.glob('PBI-*.route.json'))}
         if not routes:
             print(f'{args.pbi_dir}: no PBI-*.route.json yet (run the route stage first)', file=sys.stderr)
+            return 2
+        # 読めない route.json を空の route として skip と判定しないよう、表を出す前に止める
+        bad = [f'{pbi}.route.json: {problem}' for pbi, route in routes.items() if (problem := route_error(route))]
+        if bad:
+            for line in bad:
+                print(f'error {line}', file=sys.stderr)
             return 2
         print(DECIDE_HEADER)
         for cells in decide_rows(workflow, components, routes):

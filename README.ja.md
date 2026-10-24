@@ -130,7 +130,7 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 
 | フェーズ | いつ | 呼び出し先 (優先順) | 補足 |
 |---|---|---|---|
-| 設計 | PBI に分解する前 | 設計者自身の手順。`setup --recommended` のあとは `mattpocock-skills:grilling`、続いて `mattpocock-skills:domain-modeling` | domain-modeling は、対象のリポジトリにもう `GLOSSARY.md` か `CONTEXT.md` があるときだけ。どちらも質問をするのでメインのセッションで呼びます |
+| 設計 | PBI に分解する前 | 設計者自身の手順。`setup --recommended` のあとは `mattpocock-skills:grilling` | 質問をするのでメインのセッションで呼びます |
 | 最終レビュー | 最後の PBI のあと | built-in の `/code-review` (`setup --recommended` のあとは、その前に `mattpocock-skills:code-review`) | built-in はレベル `medium`・フラグなし。どれにも merge-base・head・仕様のパスを渡します |
 | セキュリティレビュー | 同じ時点で、sensitive か deep な PBI があるとき | built-in の `/security-review` | 引数なし |
 
@@ -191,7 +191,7 @@ python $S/component.py add yomiyasu:yomiyasu --stage gate --after finish
 claude plugin install mattpocock-skills@claude-plugins-official --scope user
 ```
 
-- [mattpocock/skills](https://github.com/mattpocock/skills) — MIT (Copyright (c) 2026 Matt Pocock)。設計に grilling と domain-modeling、最終レビューに code-review が加わります。
+- [mattpocock/skills](https://github.com/mattpocock/skills) — MIT (Copyright (c) 2026 Matt Pocock)。設計に grilling、最終レビューに code-review が加わります。
 - `setup --recommended` は、名前・使うフェーズ・リンク・ライセンス・入れるコマンドを見せます。1 回承認すると、設計者が install のコマンドを実行し、grilling と code-review を外部部品として登録します。同梱のスクリプトは何もインストールしません (パッケージのインストールは、パッケージのスキャンで危険なコマンドとして検出されるためです)。
 - 「いいえ」と答えたときや、`claude` コマンドが PATH に無いときは、コマンドを表示するだけです。
 - 入れたあとに `/reload-plugins` か Claude Code の再起動が要ります。それまではプラグインのスキルが一覧に出ず、アダプターは組み込みの手順のまま動きます。

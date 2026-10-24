@@ -58,9 +58,15 @@ SEVERITIES = ('重大', '中', '軽微')
 REPORT_RE = re.compile(r'^(PBI-\d+)(?:\.rework-(\d+))?$')
 MEMORY_TOOLS = ('get', 'search', 'write')
 AGENT_MEMORY_TOOL = re.compile(r'^mcp__shared-memory__(get|search|write)$')
-# 外部の実行先のログに出る道具の名前 (mcp__shared-memory__get・shared-memory_get・shared_memory.search など)
-LOG_MEMORY_TOOL = re.compile(r'shared[-_]memory(?:__|[_.:])(get|search|write)\b')
+# 外部の実行先のログの道具の呼び出しの名前 (mcp__shared-memory__get・shared-memory_get・shared_memory.search など)。
+# 名前の欄の値と完全に一致したときだけ呼び出しとみなす (依頼文や worker.md の文中に名前が出ても数えない)
+LOG_MEMORY_TOOL = re.compile(r'^(?:mcp__)?shared[-_]memory(?:__|[_.:])(get|search|write)$')
 LOG_SUFFIXES = ('.jsonl', '.json', '.log')
+# 道具の呼び出しの JSON で、道具の名前と引数を入れる欄 (opencode の part.tool / part.state.input、Codex・dsh の name / arguments)
+LOG_NAME_KEYS = ('tool', 'name', 'tool_name', 'toolName')
+LOG_ARG_KEYS = ('input', 'arguments', 'args', 'params')
+# Refs の欄から id を拾う
+REF_ID = re.compile(r'[\w.-]+')
 RUNNER_DIRS = ('opencode', 'codex', 'agy', 'dsh', 'claude')
 RUNNER_SUFFIXES = ('.prompt.md', '.jsonl', '.err', '.log', '.last.md', '.json', '.patch.yml', '.run.json', '.final.md')
 TOKEN_FIELDS = ('input', 'output', 'reasoning', 'cache_read', 'cache_write', 'cache_write_5m', 'cache_write_1h')
@@ -367,13 +373,64 @@ def agent_memory_calls(transcript: Path) -> list[tuple[str, str | None]]:
     return calls
 
 
-def log_memory_tools(paths: list[Path]) -> set[str]:
-    """外部の実行先のログに名前が出た shared-memory の道具。"""
-    found = set()
+def call_ref(event: dict):
+    """道具の呼び出しの JSON から get の id を取る。取れなければ None。"""
+    holders = [event, event.get('state') if isinstance(event.get('state'), dict) else {}]
+    for holder in holders:
+        for key in LOG_ARG_KEYS:
+            args = holder.get(key)
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    continue
+            if isinstance(args, dict) and args.get('id') is not None:
+                return str(args['id'])
+    return None
+
+
+def json_memory_calls(node, calls: list) -> None:
+    """JSON の中の、名前の欄が shared-memory の道具の名前と一致する呼び出しを (道具, id) で calls に足す。"""
+    if isinstance(node, list):
+        for item in node:
+            json_memory_calls(item, calls)
+        return
+    if not isinstance(node, dict):
+        return
+    for key in LOG_NAME_KEYS:
+        m = LOG_MEMORY_TOOL.match(node[key]) if isinstance(node.get(key), str) else None
+        if m:
+            calls.append((m.group(1), call_ref(node)))
+            break
+    for value in node.values():
+        if isinstance(value, (dict, list)):
+            json_memory_calls(value, calls)
+
+
+def log_memory_calls(paths: list[Path]) -> list[tuple[str, str | None]] | None:
+    """外部の実行先の JSON / JSONL のログにある shared-memory の呼び出し。読めるログが 1 つも無ければ None。
+
+    テキストのログ (.log) は呼び出しと文中の名前を見分けられないので読まない。
+    """
+    calls, readable = [], False
     for path in paths:
-        if path.suffix in LOG_SUFFIXES and path.is_file():
-            found |= set(LOG_MEMORY_TOOL.findall(path.read_text(encoding='utf-8', errors='replace')))
-    return found
+        if path.suffix not in ('.jsonl', '.json') or not path.is_file():
+            continue
+        text = path.read_text(encoding='utf-8', errors='replace')
+        lines = text.splitlines() if path.suffix == '.jsonl' else [text]
+        for line in lines:
+            try:
+                node = json.loads(line)
+            except ValueError:
+                continue
+            readable = True
+            json_memory_calls(node, calls)
+    return calls if readable else None
+
+
+def listed_refs(pbi_text: str) -> set[str]:
+    """PBI の Refs の欄に書いた id (語ごとに区切る。mem-1 と mem-10 を取り違えない)。"""
+    return set(REF_ID.findall(refs_section(pbi_text)))
 
 
 def refs_section(pbi_text: str) -> str:
@@ -393,20 +450,26 @@ def allowed_memory(runner: str, base: Path, home: Path) -> str:
 
 
 def read_memory(runner: str, transcript: Path | None, logs: list[Path], pbi_text: str, allowed: str) -> dict:
+    unknown = {'allowed': allowed, 'calls': None, 'used': None, 'unlisted_refs': None, 'violation': None,
+               'source': None}
     if runner == 'agent':
         if transcript is None:
-            return {'allowed': allowed, 'calls': None, 'used': None, 'unlisted_refs': None, 'violation': None,
-                    'source': None}
-        calls = agent_memory_calls(transcript)
-        counts = {tool: sum(1 for t, _ in calls if t == tool) for tool in MEMORY_TOOLS}
-        refs = refs_section(pbi_text)
-        unlisted = sorted({ref for tool, ref in calls if tool == 'get' and ref and ref not in refs})
-        used = {tool for tool, n in counts.items() if n}
-        source = 'transcript'
+            return unknown
+        calls, source = agent_memory_calls(transcript), 'transcript'
     else:
-        used = log_memory_tools(logs)
-        counts, unlisted, source = None, None, 'log scan'
-    violation = bool(used & {'search', 'write'}) or ('get' in used and allowed == 'none') or bool(unlisted)
+        calls, source = log_memory_calls(logs), 'log scan'
+        # 読めるログが無いのは「使っていない」ではなく「確かめられない」
+        if calls is None:
+            return unknown
+    counts = {tool: sum(1 for t, _ in calls if t == tool) for tool in MEMORY_TOOLS}
+    used = {tool for tool, n in counts.items() if n}
+    refs = listed_refs(pbi_text)
+    gets = [ref for tool, ref in calls if tool == 'get']
+    unlisted = sorted({ref for ref in gets if ref and ref not in refs})
+    violation = bool(used & {'search', 'write'}) or (bool(gets) and allowed == 'none') or bool(unlisted)
+    # refs-only で id の分からない get があれば、守ったとは言えない
+    if not violation and any(ref is None for ref in gets):
+        violation = None
     return {'allowed': allowed, 'calls': counts, 'used': sorted(used), 'unlisted_refs': unlisted,
             'violation': violation, 'source': source}
 
