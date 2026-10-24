@@ -9,15 +9,19 @@
 確かめる。同梱するのはこのスキルの部品と Claude Code の built-in だけ。他の人のスキルは利用者がプラグインのコマンドで
 入れ、component.py add がその SKILL.md から home の部品を書く。home の部品は同梱の id を上書きできない (後ろ盾を守るため)。
 
+オプションの工程 (ui-design・marketing) は、テンプレートの optional に {"stage", "after", "components"} で置いたときだけ
+after の工程の直後 (関所より先) に並ぶ。関所と同じく成り立つ部品をすべて動かし、後ろ盾は要らない (appendix/optional.md)。
+
 検証すること: 9 つの工程がすべてあること・知らない工程が無いこと、各工程の候補が 1 つ以上で、どれも実在し、
 その工程を担う部品であること、最後の候補が後ろ盾 (builtin か、requires の無い script) であること、
 関所の after が工程であり、部品が gate を担うこと、when の値、PBI ごとの when (tier-opus・coupling-high) が
 after: route の関所だけにあること、where が runner の部品が memory full でないこと、calls_back が真の部品を
-使っていないこと、fix.max_rework が 0〜5 の整数、build.external_memory が none か refs-only。
+使っていないこと、オプションの工程の stage・after・部品 (その工程を担うもの、1 つの工程は 1 回だけ)、
+fix.max_rework が 0〜5 の整数、build.external_memory が none か refs-only。
 
 標準出力はタブ区切りの表 (stage / component / invoke / where / memory / when / status / doc。1 行目は見出し)。
 doc は、その部品を動かす手順が書いてあるスキルの中のファイル (設計者はそこを読んで動かす)。
-関所の行の stage は `gate after <工程>`。status は builtin・script ok・cli missing <名前>・env missing <名前>・
+関所の行の stage は `gate after <工程>`、オプションの工程の行は `<工程> after <工程>`。status は builtin・script ok・cli missing <名前>・env missing <名前>・
 plugin ok <SKILL.md の場所>・plugin missing <名前> (read-skill の部品。プラグインの置き場 PBI_PLUGINS_DIR、
 無ければ ~/.claude/plugins の下で、<プラグイン名>/ か <プラグイン名>/<版>/ の直下に invoke.path があるかを見る)・
 check skill list (Skill ツールで呼ぶスキルはスクリプトからは見えないので、設計者が自分のスキル一覧で確かめる)。
@@ -47,10 +51,16 @@ DEFAULT_WORKFLOW = 'jev-routed'
 
 STAGES = ('understand', 'design', 'plan', 'route', 'build', 'verify', 'review', 'fix', 'finish')
 GATE = 'gate'
+# オプションの工程。テンプレートの optional に置いたときだけ、after の工程の直後に動く。後ろ盾は要らない (無ければ飛ばす)
+OPTIONAL = ('ui-design', 'marketing')
+# optional に置くときの既定の after (component.py add が使う)
+OPTIONAL_AFTER = {'ui-design': 'design', 'marketing': 'understand'}
+ROLES = STAGES + (GATE,) + OPTIONAL
 INVOKE_KINDS = ('skill', 'read-skill', 'script', 'builtin')
 WHERE = ('main', 'subagent-readonly', 'subagent', 'runner')
 MEMORY = ('full', 'refs-only', 'none')
-WHEN = ('always', 'clearly-complex', 'ask-or-decide', 'adapter-gate', 'tier-opus', 'coupling-high', 'deep')
+WHEN = ('always', 'clearly-complex', 'ask-or-decide', 'adapter-gate', 'tier-opus', 'coupling-high', 'deep',
+        'ui-change', 'user-facing')
 # PBI ごとに決まる条件。段と brief の値が出そろう振り分けのあと (after: route の関所) でしか判定できない
 PER_PBI_WHEN = ('tier-opus', 'coupling-high')
 COST = ('low', 'mid', 'high')
@@ -96,8 +106,8 @@ def component_error(data: dict, stem: str) -> str | None:
     if data.get('id') != stem:
         return 'id does not match the file name'
     stages = data.get('stages')
-    if not isinstance(stages, list) or not stages or any(s not in STAGES + (GATE,) for s in stages):
-        return 'stages must be a non-empty list of stages or gate'
+    if not isinstance(stages, list) or not stages or any(s not in ROLES for s in stages):
+        return 'stages must be a non-empty list of stages, gate or optional stages'
     title = data.get('title')
     if not isinstance(title, dict) or not all(isinstance(title.get(k), str) and title[k] for k in ('ja', 'en')):
         return 'title needs ja and en'
@@ -201,6 +211,24 @@ def workflow_errors(workflow, components: dict) -> list[str]:
             continue
         for item in gate['components']:
             check_item(item, GATE, f'gate after {gate["after"]}', components, errors, after=gate['after'])
+    optional = workflow.get('optional', [])
+    if not isinstance(optional, list):
+        errors.append('optional must be a list')
+        optional = []
+    seen = set()
+    for step in optional:
+        if not isinstance(step, dict) or step.get('stage') not in OPTIONAL or step.get('after') not in STAGES \
+                or not isinstance(step.get('components'), list) or not step['components']:
+            errors.append(f'each optional step needs stage ({", ".join(OPTIONAL)}), after (a stage) '
+                          'and a non-empty components list')
+            continue
+        if step['stage'] in seen:
+            errors.append(f'optional: {step["stage"]} appears more than once')
+            continue
+        seen.add(step['stage'])
+        for item in step['components']:
+            check_item(item, step['stage'], f'{step["stage"]} after {step["after"]}', components, errors,
+                       after=step['after'])
     fix = workflow.get('fix', {})
     rework = fix.get('max_rework') if isinstance(fix, dict) else None
     low, high = MAX_REWORK_RANGE
@@ -231,7 +259,7 @@ def check_item(item, role: str, place: str, components: dict, errors: list, afte
     effective = when or component['when']
     if when is not None and when not in WHEN:
         errors.append(f'{place}: {cid} has an unknown when: {when}')
-    elif effective in PER_PBI_WHEN and after != 'route':
+    elif effective in PER_PBI_WHEN and (role != GATE or after != 'route'):
         errors.append(f'{place}: {cid} uses when {effective}, which only a gate after route can decide')
     return component
 
@@ -329,9 +357,10 @@ def decide_rows(workflow: dict, components: dict, routes: dict) -> list[tuple]:
 
 
 def plan_rows(workflow: dict, components: dict, agents, env) -> list[tuple]:
-    """工程と関所の順に、表の行を返す。関所は after の工程の直後に置く。"""
+    """工程・オプションの工程・関所の順に、表の行を返す。オプションの工程と関所は after の工程の直後に置く。"""
     rows = []
     gates = workflow.get('gates', [])
+    optional = workflow.get('optional', [])
 
     def row(place, item):
         cid, when = entry(item)
@@ -342,6 +371,10 @@ def plan_rows(workflow: dict, components: dict, agents, env) -> list[tuple]:
     for stage in STAGES:
         for item in workflow['stages'][stage]:
             row(stage, item)
+        for step in optional:
+            if step['after'] == stage:
+                for item in step['components']:
+                    row(f'{step["stage"]} after {stage}', item)
         for gate in gates:
             if gate['after'] == stage:
                 for item in gate['components']:

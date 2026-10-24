@@ -1,6 +1,6 @@
 """入れたスキルを外部部品 (home の components/) として登録し、テンプレートに差す (docs/specs/atelier-workflow.md)。
 
-  python component.py add <skill> --stage <stage> [--after <stage>] [--workflow NAME] [--when W] [--where W]
+  python component.py add <skill> --stage <stage|gate|ui-design|marketing> [--after <stage>] [--workflow NAME] [--when W] [--where W]
                           [--memory M] [--forbid TEXT ...] [--home DIR]
   python component.py remove <id> [--workflow NAME] [--home DIR]
   python component.py list [--home DIR]
@@ -21,7 +21,8 @@ SKILL.md の frontmatter が disable-model-invocation: true なら read-skill �
 
 add は <home>/components/<stage>.<plugin>-<name>.json (関所は gate.…、自分のスキルは <stage>.<name>.json) を書き、--workflow のテンプレート
 (既定 jev-routed) に差す。home にそのテンプレートが無ければ同梱のものを写してから変える。工程では先頭
-(足した部品をいちばん先に試す) に、関所では --after の工程の関所の最後に入れる。書いたあと flow.py と同じ検証をして、誤りがあれば
+(足した部品をいちばん先に試す) に、関所では --after の工程の関所の最後に、オプションの工程 (ui-design・marketing) では
+その工程の最後に入れる (テンプレートにまだ無ければ --after か既定の場所に置く)。書いたあと flow.py と同じ検証をして、誤りがあれば
 何も残さず終了コード 2 で止める。remove は部品を home とテンプレートから外す。同梱の部品は消せない。
 
 example は、外部部品を使うテンプレートの見本 (examples/workflows/<name>.json) を扱う。見本はテンプレート (workflow) と、
@@ -58,10 +59,14 @@ STAGE_DOCS = {
 }
 # 関所はどの工程のあとにも置ける。手順は read-skill なら engine.md、ほかはその工程の doc
 GATE_DOCS = dict(STAGE_DOCS, route='appendix/engine.md', build='appendix/verify.md')
+# オプションの工程 (flow.OPTIONAL) の手順
+OPTIONAL_DOC = 'appendix/optional.md'
+# add の --stage に渡せるもの
+ADD_STAGES = sorted(STAGE_DOCS) + ['gate'] + list(flow.OPTIONAL)
 # レビューの部品に渡さない引数 (報告だけをさせる。appendix/review.md)
 REVIEW_FORBID = ['--fix', '--comment', 'ultra', '--max-findings']
 # remove に渡す部品の id (<工程か gate>.<名前>)
-COMPONENT_ID = re.compile(r'^(?:' + '|'.join(flow.STAGES + (flow.GATE,)) + r')\.[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$')
+COMPONENT_ID = re.compile(r'^(?:' + '|'.join(flow.ROLES) + r')\.[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$')
 # read-skill の部品はサブエージェントで動かし、出力のファイルだけを書かせる (appendix/engine.md)
 READ_SKILL_FORBID = ['do not change any file except the output file named in the prompt']
 EXAMPLES = HERE / 'examples' / 'workflows'
@@ -164,8 +169,9 @@ def build_component(skill: str, skill_md: Path, plugin: str | None, name: str, r
         raise ValueError(f'{skill}: cannot be invoked by the model and is not a plugin skill')
     stage = args.stage
     role = 'gate' if stage == 'gate' else stage
-    doc = 'appendix/engine.md' if read_skill else (GATE_DOCS[args.after] if stage == 'gate' else STAGE_DOCS[stage])
-    interactive = role in ('understand', 'design') and not read_skill
+    doc = 'appendix/engine.md' if read_skill else (GATE_DOCS[args.after] if stage == 'gate' else
+                                                    OPTIONAL_DOC if stage in flow.OPTIONAL else STAGE_DOCS[stage])
+    interactive = role in ('understand', 'design') + flow.OPTIONAL and not read_skill
     where = args.where or ('subagent-readonly' if read_skill else 'main' if interactive else 'subagent')
     memory = args.memory or ('full' if where == 'main' else 'none')
     meta = plugin_meta(skill_md) if plugin else {}
@@ -210,7 +216,7 @@ def load_workflow(home: Path, name: str) -> tuple[Path, dict]:
 
 
 def insert(workflow: dict, cid: str, stage: str, after: str | None, when: str | None = None) -> None:
-    """工程なら先頭、関所なら after の工程の関所の最後に差す。
+    """工程なら先頭、関所なら after の工程の関所の最後、オプションの工程ならその工程の最後に差す。
 
     when はテンプレートの中の候補 ({"id", "when"}) に書く。部品の定義は複数のテンプレートで共有するので、
     あるテンプレートの when が別のテンプレートの動きを変えないようにするため。もう入っていれば when だけ書き換える。
@@ -227,6 +233,14 @@ def insert(workflow: dict, cid: str, stage: str, after: str | None, when: str | 
                        and flow.STAGES.index(g['after']) > order), len(gates))
             gates.insert(at, gate)
         place(gate['components'], cid, item, at_end=True)
+        return
+    if stage in flow.OPTIONAL:
+        steps = workflow.setdefault('optional', [])
+        step = next((s for s in steps if isinstance(s, dict) and s.get('stage') == stage), None)
+        if step is None:
+            step = {'stage': stage, 'after': after, 'components': []}
+            steps.append(step)
+        place(step['components'], cid, item, at_end=True)
         return
     place(workflow['stages'][stage], cid, item, at_end=False)
 
@@ -250,6 +264,13 @@ def take_out(workflow: dict, cid: str) -> None:
         if gate['components']:
             gates.append(gate)
     workflow['gates'] = gates
+    if 'optional' in workflow:
+        steps = []
+        for step in workflow['optional']:
+            step['components'] = [item for item in step.get('components', []) if flow.entry(item)[0] != cid]
+            if step['components']:
+                steps.append(step)
+        workflow['optional'] = steps
 
 
 def check(home: Path, workflow: dict) -> list[str]:
@@ -273,12 +294,34 @@ def save_checked(home: Path, wf_path: Path, workflow: dict, comp_path: Path | No
     return errors
 
 
+def optional_after(workflow: dict, stage: str, after: str | None) -> str | None:
+    """オプションの工程を置く after。テンプレートにもうあればその after (違う after を渡したら ValueError)、
+    無ければ渡した after か既定 (flow.OPTIONAL_AFTER)。ほかの工程は after をそのまま返す。"""
+    if stage not in flow.OPTIONAL:
+        return after
+    step = next((s for s in workflow.get('optional') or [] if isinstance(s, dict) and s.get('stage') == stage), None)
+    if step is not None:
+        if after and after != step.get('after'):
+            raise ValueError(f'{stage} is already placed after {step.get("after")} in this workflow')
+        return step.get('after')
+    return after or flow.OPTIONAL_AFTER[stage]
+
+
+def place_of(stage: str, after: str | None) -> str:
+    """表に出す場所 (工程、`gate after <工程>`、`<オプションの工程> after <工程>`)。"""
+    if stage == 'gate':
+        return f'gate after {after}'
+    if stage in flow.OPTIONAL:
+        return f'{stage} after {after or flow.OPTIONAL_AFTER[stage]}'
+    return stage
+
+
 def cmd_add(args, home: Path) -> int:
     if args.stage == 'gate' and args.after not in flow.STAGES:
         print('--stage gate needs --after <stage>', file=sys.stderr)
         return 2
-    if args.stage != 'gate' and args.after:
-        print('--after is only for --stage gate', file=sys.stderr)
+    if args.stage not in ('gate',) + flow.OPTIONAL and args.after:
+        print('--after is only for --stage gate or an optional stage', file=sys.stderr)
         return 2
     skill_md, plugin, name, rel = find_skill(args.skill, os.environ)
     if skill_md is None:
@@ -302,6 +345,11 @@ def cmd_add(args, home: Path) -> int:
         print(f'{component["id"]}: already registered with other settings ({common.shown(comp_path)}); '
               'remove it from every workflow first', file=sys.stderr)
         return 2
+    try:
+        args.after = optional_after(workflow, args.stage, args.after)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
     insert(workflow, component['id'], args.stage, args.after, args.when)
     errors = save_checked(home, wf_path, workflow, comp_path, component)
     if errors:
@@ -309,7 +357,7 @@ def cmd_add(args, home: Path) -> int:
             print(f'error {error}')
         return 2
     kind = component['invoke']['kind']
-    place = f'gate after {args.after}' if args.stage == 'gate' else args.stage
+    place = place_of(args.stage, args.after)
     print(f'added {component["id"]} ({kind}, {place}) to {common.shown(wf_path)}')
     print(f'component {common.shown(comp_path)}')
     return 0
@@ -357,7 +405,8 @@ def uses(workflow, cid: str) -> bool:
     if not isinstance(workflow, dict):
         return False
     items = [i for v in (workflow.get('stages') or {}).values() if isinstance(v, list) for i in v]
-    items += [i for g in workflow.get('gates') or [] if isinstance(g, dict) for i in g.get('components') or []]
+    for key in ('gates', 'optional'):
+        items += [i for g in workflow.get(key) or [] if isinstance(g, dict) for i in g.get('components') or []]
     return cid in [flow.entry(item)[0] for item in items]
 
 
@@ -403,10 +452,14 @@ def example_error(data: dict) -> str | None:
     for item in skills:
         if not isinstance(item, dict) or not isinstance(item.get('skill'), str) or not SKILL_NAME.match(item['skill']):
             return 'each skill needs skill (<plugin>:<name> or <name>)'
-        if item.get('stage') not in list(STAGE_DOCS) + ['gate']:
-            return f'{item["skill"]}: stage must be one of {", ".join(sorted(STAGE_DOCS))} or gate'
-        if (item['stage'] == 'gate') != (item.get('after') in flow.STAGES):
-            return f'{item["skill"]}: after (a stage) goes with stage gate only'
+        if item.get('stage') not in ADD_STAGES:
+            return f'{item["skill"]}: stage must be one of {", ".join(ADD_STAGES)}'
+        if item['stage'] == 'gate' and item.get('after') not in flow.STAGES:
+            return f'{item["skill"]}: stage gate needs after (a stage)'
+        if item['stage'] in flow.OPTIONAL and item.get('after') not in (None,) + flow.STAGES:
+            return f'{item["skill"]}: after must be a stage'
+        if item['stage'] not in ('gate',) + flow.OPTIONAL and 'after' in item:
+            return f'{item["skill"]}: after goes with stage gate or an optional stage only'
         for key, allowed in (('where', flow.WHERE), ('memory', flow.MEMORY)):
             if item.get(key) is not None and item[key] not in allowed:
                 return f'{item["skill"]}: {key} must be one of {", ".join(allowed)}'
@@ -417,7 +470,7 @@ def example_error(data: dict) -> str | None:
             return f'{item["skill"]}: forbid must be a list'
         install = item.get('install', {})
         if not isinstance(install, dict) or not all(isinstance(v, str) for v in install.values()):
-            return f'{item["skill"]}: install takes marketplace and plugin strings'
+            return f'{item["skill"]}: install takes strings (marketplace, marketplace_source, command, note)'
     return None
 
 
@@ -431,10 +484,13 @@ def example_args(item: dict):
 
 
 def install_commands(item: dict) -> list[str]:
-    """入っていないスキルを入れるコマンド。プラグインは marketplace add と plugin install、自分のスキルは案内だけ。"""
+    """入っていないスキルを入れるコマンド。プラグインは marketplace add と plugin install、
+    自分のスキルは install.command (clone して写すなど) か、無ければ置き場の案内。"""
     plugin, _name = SKILL_NAME.match(item['skill']).groups()
     install = item.get('install', {})
     if not plugin:
+        if install.get('command'):
+            return [install['command']]
         return [f'# put the skill in ~/.claude/skills/{item["skill"]}/ ({install.get("note", "your own skill")})']
     commands = []
     if install.get('marketplace_source'):
@@ -471,7 +527,7 @@ def print_rows(rows: list[dict]) -> list[str]:
     commands = []
     for row in rows:
         item = row['item']
-        place = f'gate after {item["after"]}' if item['stage'] == 'gate' else item['stage']
+        place = place_of(item['stage'], item.get('after'))
         print('\t'.join([item['skill'], place, 'installed' if row['installed'] else 'missing', row['registered'],
                          item.get('license', ''), item.get('link', '')]))
         if not row['installed']:
@@ -561,8 +617,9 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest='command', required=True)
     add = sub.add_parser('add', help='入れたスキルを外部部品として登録し、テンプレートに差す')
     add.add_argument('skill', help='<plugin>:<name> か、~/.claude/skills の <name>')
-    add.add_argument('--stage', required=True, choices=sorted(STAGE_DOCS) + ['gate'])
-    add.add_argument('--after', choices=flow.STAGES, help='--stage gate のとき、どの工程のあとか')
+    add.add_argument('--stage', required=True, choices=ADD_STAGES)
+    add.add_argument('--after', choices=flow.STAGES,
+                     help='--stage gate かオプションの工程のとき、どの工程のあとか (オプションの工程は省けば既定の場所)')
     add.add_argument('--workflow', default=flow.DEFAULT_WORKFLOW, help='差すテンプレート (既定 jev-routed)')
     add.add_argument('--when', choices=flow.WHEN)
     add.add_argument('--where', choices=flow.WHERE)

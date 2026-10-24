@@ -182,6 +182,18 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - `setup --recommended` はこれを使う。足りないスキルをライセンスとリンク付きで見せ、1 回の承認でオーケストレーターが install のコマンドを実行し、既定にするか別名で置くかを聞いて use を走らせる。
 - 名前で頼まれたテンプレートは `flow.py --workflow <名前>` で読む (SKILL.md の Start)。
 
+### オプションの工程 (UI デザイン・マーケティング)
+
+- 利用者の求めで、9 つの工程とは別に、テンプレートで入れたときだけ動く**オプションの工程**を 2 つ足した。`ui-design` (画面の方向性・テーマ・モックアップ・操作の動画。成果物は `docs/pbi/ui/<slug>/`) と `marketing` (誰のための作業で、どう受け取られるか。成果物は `docs/pbi/marketing/<slug>.md`)。手順は `appendix/optional.md`。
+- テンプレートの `optional` に `{"stage", "after", "components"}` で置く。`after` は 9 つの工程のどれか (既定は ui-design が design、marketing が understand)。1 つのオプションの工程は 1 テンプレートに 1 回だけ。表の行は `<工程> after <工程>` で、after の工程の直後、関所より先に並ぶ。
+- 関所と同じく、使えて `when` が成り立つ部品をすべて動かす (デザインのスキルのあとに動画のスキル、のように)。後ろ盾は要らず、使える部品が無ければ飛ばす。後ろ盾を必須にしないのは、入れない限り動かない工程で、無くても開発は終わるため。
+- when に `ui-change` (画面を足す・見た目や操作の流れを変える) と `user-facing` (利用者に見える・お金を払う部分を足す・変える) を足した。どちらもオーケストレーターが依頼から判断し、迷えば設計の判断と同じときに 1 回だけ聞く。PBI ごとの when はオプションの工程でも使えない。
+- 部品は `stages` にオプションの工程の名前を持つ。`component.py add <スキル> --stage ui-design|marketing [--after <工程>]` で登録し、doc は `appendix/optional.md` (read-skill は engine.md)。モデルから呼べるスキルは main で動く (画面の確認や質問があるため)。テンプレートにもう置いてあれば違う `--after` は断る。`remove` で最後の部品を外すと、そのオプションの工程ごとテンプレートから消す。
+- 見本の `skills[].stage` にもオプションの工程を書ける。自分のスキル (プラグインでないもの) は `install.command` に入れ方のコマンド (clone して写すなど) を書け、`example check` がそのまま `install` の行に出す。
+- 編集画面の「開発フロー」タブに「オプションの工程」を足した。工程ごとに入れる・入れないを選び、after と部品を並べる。保存のとき、部品の無いオプションの工程は書かない。
+- 同梱のテンプレートはどちらも入れない (同梱は自作のものだけの方針のまま)。推奨の見本には、marketing に founder-skill (Jakeschincariol/founder-skill、MIT) の `founder-consumer` (`user-facing`)、ui-design に作者の design-studio (reeschan/claude-skill-design-studio) と ui-video (`ui-change`) を入れた。
+- UI の動画を作るスキルは作者の PC に無かった (knowledge-digest は会話のダイジェスト、pstack の ketchup-video は作業経過のスライド) ので、作者のスキルとして `skills/ui-video` を足した。storyboard の JSON (場面ごとのページ・字幕・hover / click / type / scroll・待ち時間) から Playwright で録画し、ffmpeg があれば MP4 にする。atelier の一部ではなく、外部部品として登録して使う。
+
 ## Testing Decisions
 
 - generic-reorg.md と同じく、スクリプトを CLI として一時ディレクトリ (docs/pbi と home) で動かし、出力だけを見る。

@@ -47,7 +47,10 @@ class ComponentCliTest(unittest.TestCase):
         self.plugin('grouped', {'deep': True}, {'license': 'MIT'}, group='productivity')
         self.plugin('pstack', {'how': True, 'blast-radius': True, 'architect': True, 'interrogate': True}, {'license': 'MIT', 'repository': {'url': 'https://github.com/cursor/plugins'}})
         self.plugin('yomiyasu', {'yomiyasu': False}, {'license': 'MIT', 'repository': 'https://github.com/nanaism/yomiyasu'})
+        self.plugin('founder-skill', {'founder-consumer': False}, {'license': 'MIT'})
         write(os.path.join(self.skills, 'my-review', 'SKILL.md'), skill_md('my-review'))
+        for name in ('design-studio', 'ui-video'):
+            write(os.path.join(self.skills, name, 'SKILL.md'), skill_md(name))
         write(os.path.join(self.skills, 'my-hidden', 'SKILL.md'), skill_md('my-hidden', disabled=True))
 
     def plugin(self, name, skills, meta, group=''):
@@ -134,6 +137,31 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(data['invoke'], {'kind': 'skill', 'name': 'my-review'})
         self.assertEqual(data['where'], 'subagent')
         self.assertEqual(data['forbid'], component.REVIEW_FORBID)
+
+    def test_add_to_optional_stages(self):
+        code, out, err = self.run_cli('add', 'my-review', '--stage', 'ui-design', '--when', 'ui-change')
+        self.assertEqual(code, 0, out + err)
+        self.assertIn('(skill, ui-design after design)', out)
+        data = self.load('components', 'ui-design.my-review.json')
+        self.assertEqual((data['doc'], data['where'], data['interactive']), ('appendix/optional.md', 'main', True))
+        self.assertEqual(data['forbid'], [])
+        self.run_cli('add', 'mattpocock-skills:grilling', '--stage', 'ui-design')
+        workflow = self.load('workflows', 'jev-routed.json')
+        self.assertEqual(workflow['optional'], [{'stage': 'ui-design', 'after': 'design', 'components': [
+            {'id': 'ui-design.my-review', 'when': 'ui-change'}, 'ui-design.mattpocock-skills-grilling']}])
+        # 置き場所はテンプレートで 1 つ。違う after は断る
+        code, _, err = self.run_cli('add', 'yomiyasu:yomiyasu', '--stage', 'ui-design', '--after', 'plan')
+        self.assertEqual(code, 2)
+        self.assertIn('ui-design is already placed after design', err)
+        code, out, err = self.run_cli('add', 'yomiyasu:yomiyasu', '--stage', 'marketing', '--after', 'finish')
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.load('workflows', 'jev-routed.json')['optional'][-1]['after'], 'finish')
+        # remove は最後の部品を外すとその工程ごと消す
+        self.assertEqual(self.run_cli('remove', 'marketing.yomiyasu')[0], 0)
+        self.assertEqual([s['stage'] for s in self.load('workflows', 'jev-routed.json')['optional']], ['ui-design'])
+        code, _, err = self.run_cli('add', 'my-review', '--stage', 'review', '--after', 'design')
+        self.assertEqual(code, 2)
+        self.assertIn('--after is only for --stage gate or an optional stage', err)
 
     def test_errors_leave_nothing(self):
         cases = [
@@ -234,6 +262,13 @@ class ComponentCliTest(unittest.TestCase):
         self.assertIn('install claude plugin marketplace add nanaism/yomiyasu', out)
         self.assertIn('install claude plugin install yomiyasu@yomiyasu --scope user', out)
         self.assertNotIn('install claude plugin install pstack', out)
+        self.assertIn('design-studio\tui-design after design\tinstalled', out)
+        self.assertIn('founder-skill:founder-consumer\tmarketing after understand\tinstalled', out)
+        # 自分のスキルは見本の install.command をそのまま出す
+        shutil.rmtree(os.path.join(self.skills, 'ui-video'))
+        _code, out, _err = self.run_cli('example', 'check', 'recommended')
+        self.assertIn('install git clone https://github.com/reeschan/atelier.git ~/dev/atelier && '
+                      'cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/', out)
         code, out, err = self.run_cli('example', 'use', 'recommended')
         self.assertEqual(code, component.MISSING)
         self.assertFalse(os.path.exists(os.path.join(self.home, 'workflows')))
@@ -248,6 +283,8 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(architect['invoke']['kind'], 'read-skill')
         self.assertIn('do not run Phase D (implementation) or Phase E', architect['forbid'])
         self.assertEqual(self.load('components', 'gate.yomiyasu.json')['doc'], 'appendix/finish.md')
+        self.assertEqual([s['stage'] for s in workflow['optional']], ['marketing', 'ui-design'])
+        self.assertEqual(self.load('components', 'ui-design.ui-video.json')['doc'], 'appendix/optional.md')
         code, out, err = self.run_cli('example', 'check', 'recommended')
         self.assertEqual(code, 0, out + err)
         self.assertNotIn('not registered', out)
@@ -279,7 +316,7 @@ class ComponentCliTest(unittest.TestCase):
         write(path, json.dumps({'name': 'x', 'workflow': {}, 'skills': [{'skill': 'a:b', 'stage': 'gate'}]}))
         code, _out, err = self.run_cli('example', 'check', path)
         self.assertEqual(code, 2)
-        self.assertIn('after (a stage) goes with stage gate only', err)
+        self.assertIn('stage gate needs after (a stage)', err)
         write(path, json.dumps({'name': 'x', 'workflow': {}, 'skills': [{'skill': 'a:b', 'stage': 'review', 'link': None}]}))
         code, _out, err = self.run_cli('example', 'check', path)
         self.assertEqual(code, 2)
