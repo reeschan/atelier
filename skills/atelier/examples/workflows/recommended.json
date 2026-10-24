@@ -1,0 +1,79 @@
+{
+  "name": "recommended",
+  "description": {
+    "ja": "作者が実際に使っている構成。jev-routed に、pstack (理解・振り分けのあとの関所・深いレビュー)、mattpocock-skills (設計の grilling と最終レビュー)、yomiyasu (完了報告の推敲) を足したもの。スキルはこの例に含まれず、component.py example check が入れ方を出す。",
+    "en": "The author's own setup: jev-routed plus pstack (understand, gates after route, deep review), mattpocock-skills (grilling for design, the final review) and yomiyasu (polishing the Japanese completion report). The skills are not included; component.py example check prints how to install them."
+  },
+  "skills": [
+    {
+      "skill": "pstack:how", "stage": "understand",
+      "install": {"marketplace_source": "cursor/plugins", "marketplace": "cursor-plugins"},
+      "license": "MIT", "link": "https://github.com/cursor/plugins"
+    },
+    {
+      "skill": "mattpocock-skills:grilling", "stage": "design",
+      "install": {"marketplace": "claude-plugins-official"},
+      "license": "MIT", "link": "https://github.com/mattpocock/skills"
+    },
+    {
+      "skill": "pstack:blast-radius", "stage": "gate", "after": "route",
+      "install": {"marketplace_source": "cursor/plugins", "marketplace": "cursor-plugins"},
+      "license": "MIT", "link": "https://github.com/cursor/plugins"
+    },
+    {
+      "skill": "pstack:architect", "stage": "gate", "after": "route",
+      "forbid": ["do not run Phase D (implementation) or Phase E"],
+      "install": {"marketplace_source": "cursor/plugins", "marketplace": "cursor-plugins"},
+      "license": "MIT", "link": "https://github.com/cursor/plugins"
+    },
+    {
+      "skill": "mattpocock-skills:code-review", "stage": "review",
+      "install": {"marketplace": "claude-plugins-official"},
+      "license": "MIT", "link": "https://github.com/mattpocock/skills"
+    },
+    {
+      "skill": "pstack:interrogate", "stage": "review",
+      "install": {"marketplace_source": "cursor/plugins", "marketplace": "cursor-plugins"},
+      "license": "MIT", "link": "https://github.com/cursor/plugins"
+    },
+    {
+      "skill": "yomiyasu:yomiyasu", "stage": "gate", "after": "finish",
+      "install": {"marketplace_source": "nanaism/yomiyasu", "marketplace": "yomiyasu"},
+      "license": "MIT", "link": "https://github.com/nanaism/yomiyasu"
+    }
+  ],
+  "workflow": {
+    "name": "recommended",
+    "description": {
+      "ja": "作者の構成 (examples/workflows/recommended.json から)。jev-routed に pstack・mattpocock-skills・yomiyasu を足したもの。",
+      "en": "The author's setup (from examples/workflows/recommended.json): jev-routed plus pstack, mattpocock-skills and yomiyasu."
+    },
+    "stages": {
+      "understand": [{"id": "understand.pstack-how", "when": "clearly-complex"}, "understand.builtin"],
+      "design": [{"id": "design.mattpocock-skills-grilling", "when": "ask-or-decide"}, "design.builtin"],
+      "plan": ["plan.builtin"],
+      "route": ["route.jev"],
+      "build": ["build.runners"],
+      "verify": ["verify.builtin"],
+      "review": [
+        {"id": "review.mattpocock-skills-code-review", "when": "adapter-gate"},
+        {"id": "review.pstack-interrogate", "when": "deep"},
+        "review.code-review",
+        "review.builtin"
+      ],
+      "fix": ["fix.rework"],
+      "finish": ["finish.builtin"]
+    },
+    "gates": [
+      {"after": "plan", "components": ["gate.jev"]},
+      {"after": "route", "components": [
+        {"id": "gate.pstack-blast-radius", "when": "coupling-high"},
+        {"id": "gate.pstack-architect", "when": "tier-opus"}
+      ]},
+      {"after": "review", "components": ["gate.security-review"]},
+      {"after": "finish", "components": ["gate.yomiyasu"]}
+    ],
+    "fix": {"max_rework": 2},
+    "build": {"external_memory": "none"}
+  }
+}

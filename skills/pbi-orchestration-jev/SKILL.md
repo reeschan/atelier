@@ -11,7 +11,7 @@ This skill is now **atelier**. Reply in the user's language.
 2. If it is not, tell the user the skill was renamed and how to install it, then stop:
 
    ```sh
-   git clone https://github.com/reeschan/pbi-orchestration-jev.git atelier
+   git clone https://github.com/reeschan/atelier.git
    cp -r atelier/skills/atelier ~/.claude/skills/
    ```
 

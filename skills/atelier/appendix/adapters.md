@@ -24,24 +24,16 @@ The skills a stage may call are the components in `components/` and `<home>/comp
 
 ## Recommended set
 
-The bundled templates call no one else's skills (`appendix/engine.md`, `## External components`). `setup --recommended` is the opt-in for mattpocock-skills: https://github.com/mattpocock/skills, MIT (Copyright (c) 2026 Matt Pocock). This skill does not ship it.
+The bundled templates call no one else's skills (`appendix/engine.md`, `## External components`). `setup --recommended` is the opt-in for the author's own setup, the example template `examples/workflows/recommended.json`: jev-routed plus pstack (MIT, https://github.com/cursor/plugins), mattpocock-skills (MIT, https://github.com/mattpocock/skills) and yomiyasu (MIT, https://github.com/nanaism/yomiyasu). The example holds only the template and how to install and register each skill; this skill ships none of them. `setup --recommended <name>` uses another example from `component.py example list`.
 
 For `setup --recommended`:
 
-1. Show the name, the stages it serves (design: grilling; review: code-review), the link, the license, and the install command.
-2. Ask once with AskUserQuestion: install now, or not.
-3. On yes, run it yourself and wait for it to end:
-
-   ```bash
-   claude plugin install mattpocock-skills@claude-plugins-official --scope user
-   ```
-
-4. Register them as external components (`appendix/engine.md`, `## External components`) and show any `error` line:
-
-   ```bash
-   python <skill>/component.py add mattpocock-skills:grilling --stage design --when ask-or-decide
-   python <skill>/component.py add mattpocock-skills:code-review --stage review --when adapter-gate
-   ```
-
-5. After it succeeds, tell the user to run `/reload-plugins` or restart Claude Code. Until then the skill is not used.
-6. On no, or when the `claude` command is missing, only show the command and stop.
+1. Run `python <skill>/component.py example check recommended`. It prints one row per skill (skill, stage, installed or missing, registered or not, license, link) and one `install <command>` line per command still needed. Show the table to the user.
+2. If there are `install` lines, ask once with AskUserQuestion: install the missing skills now, or not. Name each plugin with its license and link.
+   - On yes, run each `install` command yourself, in order, and wait for each to end. On a failure, show it and stop.
+   - On no, or when the `claude` command is missing, show the commands and stop.
+3. Ask once with AskUserQuestion how to use the template:
+   - make it the default: `python <skill>/component.py example use recommended --as jev-routed --replace`;
+   - keep it as its own template: `python <skill>/component.py example use recommended` (then the user asks for it by name; `## Start` in SKILL.md passes `--workflow recommended`).
+   Run the choice and show any `error` line. A row with `differs` means a component of that id was registered with other settings: show the `component.py remove <id> --workflow <name>` command for each and stop.
+4. After it succeeds, tell the user to run `/reload-plugins` or restart Claude Code when anything was installed. Until then the new skills are not listed.

@@ -93,7 +93,7 @@ The 10-second hook timeout is room for the gate's own 5-second limit. Turn the m
 
 ## recommended
 
-The argument `setup --recommended` installs nothing by itself: it shows the one recommended set and asks once. Follow `appendix/adapters.md` (`## Recommended set`).
+The argument `setup --recommended` installs nothing without the user's yes: it checks the recommended example template, shows the missing skills and asks once. Follow `appendix/adapters.md` (`## Recommended set`).
 
 ## home
 
