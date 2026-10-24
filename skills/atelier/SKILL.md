@@ -33,7 +33,7 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 | Argument `resume`, or the end of a wave | `appendix/handoff.md` |
 | Argument `setup`, `setup --recommended`, `models` or `templates`, or home has no `agents.json` | `appendix/setup.md` |
 | Picking a component, a `when` you cannot decide, a `read-skill` component, writing a stage record, the user asks to add a skill to the workflow | `appendix/engine.md` |
-| The template has an `optional` list (`ui-design`, `marketing` rows in the flow table) | `appendix/optional.md` |
+| The template has an `optional` list (`ui-design`, `marketing`, `security` rows in the flow table) | `appendix/optional.md` |
 | A component is picked | its `doc` column in the flow table |
 | Choosing the work key, writing refs, handing off, promoting at the end | `appendix/memory.md` |
 | Priority templates: the start-time sync, applying or editing one in chat, an expired application | `appendix/priority-templates.md` |
@@ -64,7 +64,7 @@ Go through the stages in this order. For each stage, take the first row that is 
 | fix | write a rework note and send the PBI back to build | `docs/pbi/PBI-<n>.rework-<k>.md` |
 | finish | promote refs, collect stats, write the completion report | the report |
 
-Build, verify and fix repeat per PBI until each PBI passes or stops. Review runs once, after all PBIs; a confirmed finding sends its PBI back to fix. The rework limit is the template's `fix.max_rework`.
+Build, verify and fix repeat per PBI until each PBI passes or stops. Review runs once, after all PBIs; a confirmed finding (from review, or from the security stage when it runs) sends its PBI back to fix. The rework limit is the template's `fix.max_rework`.
 
 ## Approve
 
@@ -73,6 +73,7 @@ After route and its gates, show the user the PBI list and wait for approval. Per
 - one line per stage from the flow table: the component picked, or the fallback with its reason
 - the priority-template line from `prepare.py`, and the warning when a template overrides the opus tier
 - open assumptions from the design stage, and expired priority applications (`appendix/priority-templates.md`)
+- the question for each optional stage with an `ask-user` row placed after route or later (security, by default): whether to run it this time (`appendix/optional.md`)
 
 ## One PBI
 

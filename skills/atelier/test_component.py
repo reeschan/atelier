@@ -49,7 +49,7 @@ class ComponentCliTest(unittest.TestCase):
         self.plugin('yomiyasu', {'yomiyasu': False}, {'license': 'MIT', 'repository': 'https://github.com/nanaism/yomiyasu'})
         self.plugin('founder-skill', {'founder-consumer': False}, {'license': 'MIT'})
         write(os.path.join(self.skills, 'my-review', 'SKILL.md'), skill_md('my-review'))
-        for name in ('design-studio', 'ui-video'):
+        for name in ('design-studio', 'ui-video', 'security-audit'):
             write(os.path.join(self.skills, name, 'SKILL.md'), skill_md(name))
         write(os.path.join(self.skills, 'my-hidden', 'SKILL.md'), skill_md('my-hidden', disabled=True))
 
@@ -267,6 +267,7 @@ class ComponentCliTest(unittest.TestCase):
         self.assertNotIn('install claude plugin install pstack', out)
         self.assertIn('design-studio\tui-design after design\tinstalled', out)
         self.assertIn('founder-skill:founder-consumer\tmarketing after understand\tinstalled', out)
+        self.assertIn('security-audit\tsecurity after review\tinstalled', out)
         # 自分のスキルは見本の install.command をそのまま出す
         shutil.rmtree(os.path.join(self.skills, 'ui-video'))
         _code, out, _err = self.run_cli('example', 'check', 'recommended')
@@ -286,7 +287,8 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(architect['invoke']['kind'], 'read-skill')
         self.assertIn('do not run Phase D (implementation) or Phase E', architect['forbid'])
         self.assertEqual(self.load('components', 'gate.yomiyasu.json')['doc'], 'appendix/finish.md')
-        self.assertEqual([s['stage'] for s in workflow['optional']], ['marketing', 'ui-design'])
+        self.assertEqual([s['stage'] for s in workflow['optional']], ['marketing', 'ui-design', 'security'])
+        self.assertEqual(workflow['optional'][2]['components'], [{'id': 'security.security-audit', 'when': 'ask-user'}])
         self.assertEqual(self.load('components', 'ui-design.ui-video.json')['doc'], 'appendix/optional.md')
         code, out, err = self.run_cli('example', 'check', 'recommended')
         self.assertEqual(code, 0, out + err)

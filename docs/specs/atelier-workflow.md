@@ -194,6 +194,12 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - 同梱のテンプレートはどちらも入れない (同梱は自作のものだけの方針のまま)。推奨の見本には、marketing に founder-skill (Jakeschincariol/founder-skill、MIT) の `founder-consumer` (`user-facing`)、ui-design に作者の design-studio (reeschan/claude-skill-design-studio) と ui-video (`ui-change`) を入れた。
 - UI の動画を作るスキルは作者の PC に無かった (knowledge-digest は会話のダイジェスト、pstack の ketchup-video は作業経過のスライド) ので、作者のスキルとして `skills/ui-video` を足した。storyboard の JSON (場面ごとのページ・字幕・hover / click / type / scroll・待ち時間) から Playwright で録画し、ffmpeg があれば MP4 にする。atelier の一部ではなく、外部部品として登録して使う。
 
+### オプションの工程: セキュリティ
+
+- 利用者の求めで、3 つ目のオプションの工程 `security` を足した。変えたコードのセキュリティ監査をし、要約を `docs/pbi/security/<slug>.md` に書く (スキル自身の出力はスキルの既定の場所、リポジトリの外)。既定の場所は review のあと。fix より前なので、PBI が変えたファイルで確かめられた指摘は、レビューの指摘と同じくその PBI の差し戻しにする (上限に数える)。PBI の外の指摘と、確かめきれなかった候補は完了報告に書き、この回では直さない。
+- when に `ask-user` を足した。オーケストレーターは自分で決めず、毎回 1 回だけ利用者に聞き、はいのときだけ動かす。route 以降に置いた工程なら PBI 一覧の承認のときに一緒に聞き、あとで止まらない (承認は route のあとなので、plan 以前に置いた工程はその工程の最初の行の前に聞く)。使えるのはオプションの工程だけで、ほかの工程と関所では flow.py が誤りにする。答えは `docs/pbi/adapters.json` に残し、resume で聞き直さない。答えが無ければ動かさない。
+- 推奨の見本では、security に Cloudflare の security-audit (cloudflare/security-audit-skill、MIT) を `ask-user` で入れた。プラグインではなく Skills CLI で `~/.claude/skills/security-audit` に入る自分のスキルの形なので、`install.command` に `npx skills add ... --global --agent claude-code --yes` を書く。スキルの中身はリポジトリに入れない。対象のコードを動かすのはスキルが求めるサンドボックスの中だけで、無ければ候補のまま報告させる。
+
 ## Testing Decisions
 
 - generic-reorg.md と同じく、スクリプトを CLI として一時ディレクトリ (docs/pbi と home) で動かし、出力だけを見る。
