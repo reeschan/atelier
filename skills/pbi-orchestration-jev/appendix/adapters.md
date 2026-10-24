@@ -24,11 +24,11 @@ The skills a stage may call are the components in `components/` and `<home>/comp
 
 ## Recommended set
 
-The bundled templates call no one else's skills (`appendix/engine.md`, "Other people's skills"). `setup --recommended` is the opt-in for mattpocock-skills: https://github.com/mattpocock/skills, MIT (Copyright (c) 2026 Matt Pocock). This skill does not ship it.
+The bundled templates call no one else's skills (`appendix/engine.md`, `## External components`). `setup --recommended` is the opt-in for mattpocock-skills: https://github.com/mattpocock/skills, MIT (Copyright (c) 2026 Matt Pocock). This skill does not ship it.
 
 For `setup --recommended`:
 
-1. Show the name, the stages it serves (design: grilling and domain-modeling; review: code-review), the link, the license, and the install command.
+1. Show the name, the stages it serves (design: grilling; review: code-review), the link, the license, and the install command.
 2. Ask once with AskUserQuestion: install now, or not.
 3. On yes, run it yourself and wait for it to end:
 
@@ -36,6 +36,12 @@ For `setup --recommended`:
    claude plugin install mattpocock-skills@claude-plugins-official --scope user
    ```
 
-4. Copy `examples/components/design.grilling.json`, `examples/components/design.domain-modeling.json` and `examples/components/review.mattpocock-code-review.json` to `<home>/components/`. Unless `<home>/workflows/jev-routed.json` exists, write it: the bundled `workflows/jev-routed.json` with `design.grilling` before `design.builtin` and `review.mattpocock-code-review` first in review. Run `flow.py docs/pbi` and show any `error` line.
+4. Register them as external components (`appendix/engine.md`, `## External components`) and show any `error` line:
+
+   ```bash
+   python <skill>/component.py add mattpocock-skills:grilling --stage design --when ask-or-decide
+   python <skill>/component.py add mattpocock-skills:code-review --stage review --when adapter-gate
+   ```
+
 5. After it succeeds, tell the user to run `/reload-plugins` or restart Claude Code. Until then the skill is not used.
 6. On no, or when the `claude` command is missing, only show the command and stop.
