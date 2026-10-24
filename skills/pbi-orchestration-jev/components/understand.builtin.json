@@ -1,0 +1,20 @@
+{
+  "id": "understand.builtin",
+  "stages": [
+    "understand"
+  ],
+  "title": {
+    "ja": "設計者が既存コードと CLAUDE.md を調べる",
+    "en": "The orchestrator reads the code and CLAUDE.md"
+  },
+  "invoke": {
+    "kind": "builtin",
+    "doc": "SKILL.md"
+  },
+  "where": "main",
+  "memory": "full",
+  "when": "always",
+  "cost": "low",
+  "interactive": false,
+  "calls_back": false
+}

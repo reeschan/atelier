@@ -1,0 +1,20 @@
+{
+  "id": "plan.builtin",
+  "stages": [
+    "plan"
+  ],
+  "title": {
+    "ja": "PBI に分けて起票する",
+    "en": "Split the work into PBIs"
+  },
+  "invoke": {
+    "kind": "builtin",
+    "doc": "SKILL.md"
+  },
+  "where": "main",
+  "memory": "full",
+  "when": "always",
+  "cost": "low",
+  "interactive": false,
+  "calls_back": false
+}

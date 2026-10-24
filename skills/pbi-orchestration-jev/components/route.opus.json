@@ -1,0 +1,20 @@
+{
+  "id": "route.opus",
+  "stages": [
+    "route"
+  ],
+  "title": {
+    "ja": "すべての PBI を agent の opus に回す",
+    "en": "Send every PBI to the opus agent"
+  },
+  "invoke": {
+    "kind": "builtin",
+    "doc": "SKILL.md"
+  },
+  "where": "main",
+  "memory": "none",
+  "when": "always",
+  "cost": "high",
+  "interactive": false,
+  "calls_back": false
+}

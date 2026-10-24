@@ -1,0 +1,33 @@
+{
+  "id": "design.pstack-architect",
+  "stages": [
+    "design",
+    "gate"
+  ],
+  "title": {
+    "ja": "pstack の architect で型と関数の形を描く (スケッチまで)",
+    "en": "Sketch types and signatures with pstack architect (sketch only)"
+  },
+  "invoke": {
+    "kind": "read-skill",
+    "plugin": "pstack",
+    "path": "skills/architect/SKILL.md"
+  },
+  "where": "subagent-readonly",
+  "memory": "full",
+  "when": "tier-opus",
+  "cost": "high",
+  "requires": {
+    "plugins": [
+      "pstack"
+    ]
+  },
+  "forbid": [
+    "Phase D (実装) と Phase E は行わない",
+    "スケッチは docs/pbi/notes/PBI-<n>.sketch.md に書く"
+  ],
+  "interactive": false,
+  "calls_back": false,
+  "license": "MIT",
+  "link": "https://github.com/cursor/plugins/tree/main/pstack"
+}

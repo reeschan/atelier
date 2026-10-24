@@ -1,0 +1,20 @@
+{
+  "id": "fix.rework",
+  "stages": [
+    "fix"
+  ],
+  "title": {
+    "ja": "差し戻す (上限はテンプレートの fix.max_rework)",
+    "en": "Send the PBI back (limit: fix.max_rework)"
+  },
+  "invoke": {
+    "kind": "builtin",
+    "doc": "appendix/rework.md"
+  },
+  "where": "main",
+  "memory": "full",
+  "when": "always",
+  "cost": "low",
+  "interactive": false,
+  "calls_back": false
+}

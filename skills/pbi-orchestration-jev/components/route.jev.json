@@ -1,0 +1,20 @@
+{
+  "id": "route.jev",
+  "stages": [
+    "route"
+  ],
+  "title": {
+    "ja": "Jev 振り分け (段と試す順番。振り分けテンプレートと優先テンプレートに従う)",
+    "en": "Jev routing (tier and try order from the routing and priority templates)"
+  },
+  "invoke": {
+    "kind": "script",
+    "path": "select_model.py"
+  },
+  "where": "main",
+  "memory": "none",
+  "when": "always",
+  "cost": "low",
+  "interactive": false,
+  "calls_back": false
+}

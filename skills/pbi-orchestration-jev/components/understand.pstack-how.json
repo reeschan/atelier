@@ -1,0 +1,32 @@
+{
+  "id": "understand.pstack-how",
+  "stages": [
+    "understand"
+  ],
+  "title": {
+    "ja": "pstack の how で仕組みを調べる",
+    "en": "Explain the subsystem with pstack how"
+  },
+  "invoke": {
+    "kind": "read-skill",
+    "plugin": "pstack",
+    "path": "skills/how/SKILL.md"
+  },
+  "where": "subagent-readonly",
+  "memory": "full",
+  "when": "clearly-complex",
+  "cost": "high",
+  "requires": {
+    "plugins": [
+      "pstack"
+    ]
+  },
+  "forbid": [
+    "ファイルを変えない",
+    "結論は docs/pbi/notes/<slug>.how.md に書き、5 行以内の要約とパスだけを返す"
+  ],
+  "interactive": false,
+  "calls_back": false,
+  "license": "MIT",
+  "link": "https://github.com/cursor/plugins/tree/main/pstack"
+}
