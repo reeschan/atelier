@@ -174,6 +174,14 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - `skills/pbi-orchestration-jev/SKILL.md` は案内だけの中身にした。atelier がスキル一覧にあれば同じ引数で atelier を動かし、無ければ入れ方を伝えて止まる。
 - リポジトリ名の変更は利用者が GitHub で行う。README の clone は旧い URL のまま (GitHub は改名後も旧い URL から転送する) で、置き場を `atelier` にする。
 
+### テンプレートの見本と足りないスキルの導入
+
+- 利用者の求めで、作者の PC のテンプレートを推奨の見本 `examples/workflows/recommended.json` として置いた。見本はテンプレート (`workflow`) と、使うスキルごとの入れ方 (`install`: マーケットプレイスの名前と取得元) と登録のしかた (`stage`・`after`・`where`・`memory`・`forbid`)、ライセンスとリンクだけを持つ。部品の定義は持たない (他の人のスキルの中身をリポジトリに置かない方針のまま。定義は入ったスキルの SKILL.md から作る)。
+- `component.py example check <名前>` は、スキルごとに installed / missing と registered / not registered / differs を出し、足りないスキルを入れるコマンドを `install <コマンド>` の行で出す (足りなければ終了コード 3)。スクリプトは何も入れない。
+- `component.py example use <名前> [--as 名前] [--replace]` は、全部入っていれば部品を登録し、テンプレートを home に書く。同じ id がほかの設定で登録済みなら止め、誤りがあれば書いたものを元に戻す。
+- `setup --recommended` はこれを使う。足りないスキルをライセンスとリンク付きで見せ、1 回の承認でオーケストレーターが install のコマンドを実行し、既定にするか別名で置くかを聞いて use を走らせる。
+- 名前で頼まれたテンプレートは `flow.py --workflow <名前>` で読む (SKILL.md の Start)。
+
 ## Testing Decisions
 
 - generic-reorg.md と同じく、スクリプトを CLI として一時ディレクトリ (docs/pbi と home) で動かし、出力だけを見る。

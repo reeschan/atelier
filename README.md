@@ -209,19 +209,30 @@ python $S/component.py add yomiyasu:yomiyasu --stage gate --after finish
 
 Add `--workflow high-model` to put a component into another template. A skill that is not installed, a component whose `when` does not fit its place, or an id that a bundled component already uses stops with exit code 2 and leaves nothing behind.
 
-### Recommended: mattpocock-skills
+### Recommended: the author's template
 
-Nothing outside this skill and Claude Code is used by default. `/atelier setup --recommended` offers one set, and installs nothing without your yes:
+Nothing outside this skill and Claude Code is used by default. The author's own setup is kept as an example template, `examples/workflows/recommended.json`: jev-routed plus [pstack](https://github.com/cursor/plugins) (understand with `how`, `blast-radius` and `architect` after route, `interrogate` for deep reviews), [mattpocock-skills](https://github.com/mattpocock/skills) (`grilling` for design, `code-review` for the final review) and [yomiyasu](https://github.com/nanaism/yomiyasu) (polishing the Japanese completion report). All three are MIT. The example holds only the template and, for each skill, how to install and register it; none of the skills is copied into this repository.
 
 ```sh
-/atelier setup --recommended
-claude plugin install mattpocock-skills@claude-plugins-official --scope user
+/atelier setup --recommended          # checks, asks once, installs what is missing, registers, writes the template
 ```
 
-- [mattpocock/skills](https://github.com/mattpocock/skills) — MIT, Copyright (c) 2026 Matt Pocock. It brings grilling for design, and code-review for the final review.
-- `setup --recommended` shows the name, the phases it fills, the link, the licence and the command. After you approve once, the orchestrator runs the install command itself, and registers grilling and code-review as external components; the bundled scripts never install anything (package installation is exactly what package scanners flag).
-- If you answer no, or `claude` is not on the PATH, you only get the command to run yourself.
-- Run `/reload-plugins` or restart Claude Code afterwards. Until then the plugin's skills are not listed, and the adapters keep using the built-in procedures.
+The same steps by hand:
+
+```sh
+python $S/component.py example check recommended   # which skills are missing, and the install commands (exit 3 while missing)
+# run every install line that check printed; on a fresh machine they are:
+claude plugin marketplace add cursor/plugins
+claude plugin install pstack@cursor-plugins --scope user
+claude plugin install mattpocock-skills@claude-plugins-official --scope user
+claude plugin marketplace add nanaism/yomiyasu
+claude plugin install yomiyasu@yomiyasu --scope user
+python $S/component.py example use recommended --as jev-routed --replace   # make it your default template
+```
+
+- `check` installs nothing; it prints one `install <command>` line per command still needed. `setup --recommended` shows the skills with their licenses and links, and runs those commands only after you say yes.
+- `use` registers every skill as an external component and writes the template to `workflows/` in your home: under its own name (`recommended`, which you then ask for by name), or with `--as jev-routed --replace` as your default. A component already registered with other settings stops it; nothing is left behind on an error.
+- `component.py example list` lists the bundled examples. Run `/reload-plugins` or restart Claude Code after installing.
 
 ## Priority templates
 
@@ -265,7 +276,7 @@ Only Claude Code is required. Jev, shared-memory, the external CLIs, the web pag
 ## Install
 
 ```sh
-git clone https://github.com/reeschan/pbi-orchestration-jev.git atelier
+git clone https://github.com/reeschan/atelier.git
 cp -r atelier/skills/atelier ~/.claude/skills/
 mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/pbi-worker.md ~/.claude/agents/
 ```
@@ -405,6 +416,7 @@ skills/atelier/
 ├── web/priority-templates.html # web page (artifact) to view and set priority templates
 ├── examples/routing/           # example routing template with external runners (multi-runner.json)
 ├── examples/templates/         # example priority templates (copy to templates/ in your home)
+├── examples/workflows/         # example workflow templates with the skills they need (component.py example)
 ├── unchanged.py                # hash snapshot to check files a PBI must not touch
 ├── jev_mcp.py                  # jev-mcp: MCP server that hands PBIs to MCP clients (stdio / HTTP)
 ├── agent_stats.py              # tokens, cache rebuilds and context size from transcripts
