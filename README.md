@@ -61,7 +61,7 @@ A run is a **workflow template** (`workflows/<name>.json`): nine stages in a fix
 
 - Templates: two are bundled: `jev-routed` (the default; cheap models where the decision table allows) and `high-model` (every PBI goes to the opus agent). A `docs/pbi/workflow.json` in the target repository, then `workflows/<name>.json` in your home, take precedence over the bundled ones. Each template also sets `fix.max_rework` (0-5) and `build.external_memory` (whether external runners may read the refs listed in a PBI).
 - Your own components: install any skill with Claude Code's plugin commands and register it with `component.py add`; see [External components](#external-components). The bundled templates use only this skill and Claude Code's built-ins.
-- Optional stages: two stages run only when a template turns them on, right after the stage it picks: `ui-design` (screens: direction, theme, mockups, a walkthrough video; default after design) and `marketing` (who the work is for and how they react; default after understand). They run every component whose `when` holds (`ui-change`, `user-facing`, decided by the orchestrator) and need no fallback; when nothing is usable they are skipped. Their files go to `docs/pbi/ui/<slug>/` and `docs/pbi/marketing/<slug>.md`, and the plan links them in the PBIs that build those screens (`skills/atelier/appendix/optional.md`). No bundled template turns them on; register a skill with `component.py add <skill> --stage ui-design` (or `marketing`, with `--after <stage>` to move it).
+- Optional stages: three stages run only when a template turns them on, right after the stage it picks: `ui-design` (screens: direction, theme, mockups, a walkthrough video; default after design), `marketing` (who the work is for and how they react; default after understand) and `security` (a security audit of the changed code; default after review). They run every component whose `when` holds and need no fallback; when nothing is usable they are skipped. The orchestrator decides `ui-change` and `user-facing`; `ask-user` always asks you (with the PBI list approval when the stage comes after route; optional stages only). Their files go to `docs/pbi/ui/<slug>/`, `docs/pbi/marketing/<slug>.md` and `docs/pbi/security/<slug>.md`; the plan links the screens in the PBIs that build them, and a confirmed security finding sends its PBI back to fix (`skills/atelier/appendix/optional.md`). No bundled template turns them on; register a skill with `component.py add <skill> --stage ui-design` (or `marketing` or `security`, with `--after <stage>` to move it).
 - To build a template without writing JSON, use the editor's Workflow tab: it arranges components per stage, gate and optional stage and saves the template to your home (see [Setup and the editor](#setup-and-the-editor)).
 - The spec is [docs/specs/atelier-workflow.md](docs/specs/atelier-workflow.md) (Japanese); the orchestrator's procedure is `skills/atelier/appendix/engine.md`.
 
@@ -222,13 +222,17 @@ python $S/component.py add founder-skill:founder-consumer --stage marketing --wh
 # your own skills for the UI design stage (design-studio, and ui-video from this repository)
 python $S/component.py add design-studio --stage ui-design --when ui-change
 python $S/component.py add ui-video --stage ui-design --when ui-change
+
+# Cloudflare's security-audit (MIT): the security stage, asked every run
+npx skills add https://github.com/cloudflare/security-audit-skill --skill security-audit --global --agent claude-code --yes
+python $S/component.py add security-audit --stage security --when ask-user
 ```
 
 Add `--workflow high-model` to put a component into another template. A skill that is not installed, a component whose `when` does not fit its place, or an id that a bundled component already uses stops with exit code 2 and leaves nothing behind.
 
 ### The author's recommended template
 
-Nothing outside this skill and Claude Code is used by default. The author's own setup is kept as an example template, `examples/workflows/recommended.json`: jev-routed plus [pstack](https://github.com/cursor/plugins) (understand with `how`, `blast-radius` and `architect` after route, `interrogate` for deep reviews), [mattpocock-skills](https://github.com/mattpocock/skills) (`grilling` for design, `code-review` for the final review) and [yomiyasu](https://github.com/nanaism/yomiyasu) (polishing the Japanese completion report), plus both optional stages: marketing with [founder-skill](https://github.com/Jakeschincariol/founder-skill)'s `founder-consumer` (a simulated buyer panel, for user-facing work) and UI design with the author's [design-studio](https://github.com/reeschan/claude-skill-design-studio) and [ui-video](skills/ui-video/SKILL.md) (for work that changes screens). All are MIT. The example holds only the template and, for each skill, how to install and register it; none of the other people's skills is copied into this repository.
+Nothing outside this skill and Claude Code is used by default. The author's own setup is kept as an example template, `examples/workflows/recommended.json`: jev-routed plus [pstack](https://github.com/cursor/plugins) (understand with `how`, `blast-radius` and `architect` after route, `interrogate` for deep reviews), [mattpocock-skills](https://github.com/mattpocock/skills) (`grilling` for design, `code-review` for the final review) and [yomiyasu](https://github.com/nanaism/yomiyasu) (polishing the Japanese completion report), plus all three optional stages: marketing with [founder-skill](https://github.com/Jakeschincariol/founder-skill)'s `founder-consumer` (a simulated buyer panel, for user-facing work) and UI design with the author's [design-studio](https://github.com/reeschan/claude-skill-design-studio) and [ui-video](skills/ui-video/SKILL.md) (for work that changes screens), and security with Cloudflare's [security-audit](https://github.com/cloudflare/security-audit-skill) (asked every run). All are MIT. The example holds only the template and, for each skill, how to install and register it; none of the other people's skills is copied into this repository.
 
 ```sh
 /atelier setup --recommended          # checks, asks once, installs what is missing, registers, writes the template
@@ -248,6 +252,7 @@ claude plugin marketplace add Jakeschincariol/founder-skill
 claude plugin install founder-skill@founder-skill --scope user
 git clone https://github.com/reeschan/claude-skill-design-studio.git ~/dev/claude-skill-design-studio && node ~/dev/claude-skill-design-studio/scripts/install-self.ts
 git clone https://github.com/reeschan/atelier.git ~/dev/atelier && mkdir -p ~/.claude/skills && cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/
+npx skills add https://github.com/cloudflare/security-audit-skill --skill security-audit --global --agent claude-code --yes
 python $S/component.py example use recommended --as jev-routed --replace   # make it your default template
 ```
 
