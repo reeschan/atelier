@@ -52,9 +52,9 @@ DEFAULT_WORKFLOW = 'jev-routed'
 STAGES = ('understand', 'design', 'plan', 'route', 'build', 'verify', 'review', 'fix', 'finish')
 GATE = 'gate'
 # オプションの工程。テンプレートの optional に置いたときだけ、after の工程の直後に動く。後ろ盾は要らない (無ければ飛ばす)
-OPTIONAL = ('ui-design', 'marketing')
+OPTIONAL = ('ui-design', 'marketing', 'security')
 # optional に置くときの既定の after (component.py add が使う)
-OPTIONAL_AFTER = {'ui-design': 'design', 'marketing': 'understand'}
+OPTIONAL_AFTER = {'ui-design': 'design', 'marketing': 'understand', 'security': 'review'}
 ROLES = STAGES + (GATE,) + OPTIONAL
 # オプションの工程を置ける after。finish のあとは完了報告に載らないので置かない
 OPTIONAL_PLACES = STAGES[:-1]
@@ -62,7 +62,7 @@ INVOKE_KINDS = ('skill', 'read-skill', 'script', 'builtin')
 WHERE = ('main', 'subagent-readonly', 'subagent', 'runner')
 MEMORY = ('full', 'refs-only', 'none')
 WHEN = ('always', 'clearly-complex', 'ask-or-decide', 'adapter-gate', 'tier-opus', 'coupling-high', 'deep',
-        'ui-change', 'user-facing')
+        'ui-change', 'user-facing', 'ask-user')
 # PBI ごとに決まる条件。段と brief の値が出そろう振り分けのあと (after: route の関所) でしか判定できない
 PER_PBI_WHEN = ('tier-opus', 'coupling-high')
 COST = ('low', 'mid', 'high')

@@ -1,8 +1,8 @@
 {
   "name": "recommended",
   "description": {
-    "ja": "作者が実際に使っている構成。jev-routed に、pstack (理解・振り分けのあとの関所・深いレビュー)、mattpocock-skills (設計の grilling と最終レビュー)、yomiyasu (完了報告の推敲) と、オプションの工程のマーケティング (founder-skill の利用者パネル) と UI デザイン (design-studio と ui-video) を足したもの。スキルはこの例に含まれず、component.py example check が入れ方を出す。",
-    "en": "The author's own setup: jev-routed plus pstack (understand, gates after route, deep review), mattpocock-skills (grilling for design, the final review), yomiyasu (polishing the Japanese completion report), and the optional stages marketing (founder-skill's user panel) and UI design (design-studio and ui-video). The skills are not included; component.py example check prints how to install them."
+    "ja": "作者が実際に使っている構成。jev-routed に、pstack (理解・振り分けのあとの関所・深いレビュー)、mattpocock-skills (設計の grilling と最終レビュー)、yomiyasu (完了報告の推敲) と、オプションの工程のマーケティング (founder-skill の利用者パネル)、UI デザイン (design-studio と ui-video)、セキュリティ (Cloudflare の security-audit。使うかを毎回聞く) を足したもの。スキルはこの例に含まれず、component.py example check が入れ方を出す。",
+    "en": "The author's own setup: jev-routed plus pstack (understand, gates after route, deep review), mattpocock-skills (grilling for design, the final review), yomiyasu (polishing the Japanese completion report), the optional stages marketing (founder-skill's user panel), UI design (design-studio and ui-video) and security (Cloudflare's security-audit, asked every run). The skills are not included; component.py example check prints how to install them."
   },
   "skills": [
     {
@@ -55,13 +55,18 @@
       "skill": "ui-video", "stage": "ui-design", "after": "design",
       "install": {"command": "git clone https://github.com/reeschan/atelier.git ~/dev/atelier && mkdir -p ~/.claude/skills && cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/"},
       "license": "MIT", "link": "https://github.com/reeschan/atelier/tree/main/skills/ui-video"
+    },
+    {
+      "skill": "security-audit", "stage": "security", "after": "review",
+      "install": {"command": "npx skills add https://github.com/cloudflare/security-audit-skill --skill security-audit --global --agent claude-code --yes"},
+      "license": "MIT", "link": "https://github.com/cloudflare/security-audit-skill"
     }
   ],
   "workflow": {
     "name": "recommended",
     "description": {
-      "ja": "作者の構成 (examples/workflows/recommended.json から)。jev-routed に pstack・mattpocock-skills・yomiyasu と、オプションの工程 (マーケティング・UI デザイン) を足したもの。",
-      "en": "The author's setup (from examples/workflows/recommended.json): jev-routed plus pstack, mattpocock-skills, yomiyasu and the optional stages (marketing, UI design)."
+      "ja": "作者の構成 (examples/workflows/recommended.json から)。jev-routed に pstack・mattpocock-skills・yomiyasu と、オプションの工程 (マーケティング・UI デザイン・セキュリティ) を足したもの。",
+      "en": "The author's setup (from examples/workflows/recommended.json): jev-routed plus pstack, mattpocock-skills, yomiyasu and the optional stages (marketing, UI design, security)."
     },
     "stages": {
       "understand": [{"id": "understand.pstack-how", "when": "clearly-complex"}, "understand.builtin"],
@@ -95,6 +100,9 @@
       {"stage": "ui-design", "after": "design", "components": [
         {"id": "ui-design.design-studio", "when": "ui-change"},
         {"id": "ui-design.ui-video", "when": "ui-change"}
+      ]},
+      {"stage": "security", "after": "review", "components": [
+        {"id": "security.security-audit", "when": "ask-user"}
       ]}
     ],
     "fix": {"max_rework": 2},

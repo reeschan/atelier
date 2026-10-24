@@ -141,15 +141,16 @@ class FlowCliTest(unittest.TestCase):
         self.assertEqual(route_gates, ['gate.pstack-blast-radius', 'gate.pstack-architect'])
 
     def add_optional(self):
-        """自分のスキルを 2 つ、オプションの工程 (ui-design と marketing) に component.py add で差す。"""
+        """自分のスキルを 3 つ、オプションの工程 (ui-design・marketing・security) に component.py add で差す。"""
         skills = os.path.join(self.dir, 'skills')
-        for name in ('my-ui', 'my-fb'):
+        for name in ('my-ui', 'my-fb', 'my-sec'):
             path = os.path.join(skills, name, 'SKILL.md')
             os.makedirs(os.path.dirname(path))
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(f'---\nname: {name}\ndescription: {name}\n---\n')
         adds = [['my-ui', '--stage', 'ui-design', '--when', 'ui-change'],
-                ['my-fb', '--stage', 'marketing', '--after', 'design', '--when', 'user-facing']]
+                ['my-fb', '--stage', 'marketing', '--after', 'design', '--when', 'user-facing'],
+                ['my-sec', '--stage', 'security', '--when', 'ask-user']]
         with mock.patch.dict(os.environ, {'PBI_SKILLS_DIR': skills}), contextlib.redirect_stdout(io.StringIO()):
             for args in adds:
                 self.assertEqual(component.main(['--home', self.home, 'add', *args]), 0, args)
@@ -164,6 +165,7 @@ class FlowCliTest(unittest.TestCase):
         self.assertEqual(workflow['optional'], [
             {'stage': 'ui-design', 'after': 'design', 'components': [{'id': 'ui-design.my-ui', 'when': 'ui-change'}]},
             {'stage': 'marketing', 'after': 'design', 'components': [{'id': 'marketing.my-fb', 'when': 'user-facing'}]},
+            {'stage': 'security', 'after': 'review', 'components': [{'id': 'security.my-sec', 'when': 'ask-user'}]},
         ])
         result = self.run_flow()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -171,12 +173,15 @@ class FlowCliTest(unittest.TestCase):
         design = places.index('design')
         self.assertEqual(places[design + 1:design + 3], ['ui-design after design', 'marketing after design'])
         self.assertEqual(places[places.index('plan') + 1], 'gate after plan')
+        # security は既定で review のあと、review の関所の前に動く
+        review = len(places) - 1 - places[::-1].index('review')
+        self.assertEqual(places[review + 1:review + 3], ['security after review', 'gate after review'])
 
     def test_optional_validation_errors(self):
         self.add_optional()
         good = self.home_workflow()
         cases = [
-            ('error each optional step needs stage (ui-design, marketing), after (a stage before finish) and a non-empty components list',
+            ('error each optional step needs stage (ui-design, marketing, security), after (a stage before finish) and a non-empty components list',
              [{'stage': 'deploy', 'after': 'finish', 'components': ['ui-design.my-ui']}]),
             ('error optional: ui-design appears more than once',
              [{'stage': 'ui-design', 'after': 'design', 'components': ['ui-design.my-ui']},
