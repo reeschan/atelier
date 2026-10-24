@@ -41,18 +41,20 @@ class ComponentCliTest(unittest.TestCase):
         self.home = os.path.join(self.dir, 'home')
         self.plugins = os.path.join(self.dir, 'plugins')
         self.skills = os.path.join(self.dir, 'skills')
+        # mattpocock-skills は skills/<分類>/<名前>/ の構成 (1.3.1 で確認)
         self.plugin('mattpocock-skills', {'grilling': False, 'code-review': False},
-                    {'license': 'MIT', 'homepage': 'https://github.com/mattpocock/skills'})
+                    {'license': 'MIT', 'homepage': 'https://github.com/mattpocock/skills'}, group='engineering')
+        self.plugin('grouped', {'deep': True}, {'license': 'MIT'}, group='productivity')
         self.plugin('pstack', {'how': True}, {'license': 'MIT', 'repository': {'url': 'https://github.com/cursor/plugins'}})
         self.plugin('yomiyasu', {'yomiyasu': False}, {'license': 'MIT', 'repository': 'https://github.com/nanaism/yomiyasu'})
         write(os.path.join(self.skills, 'my-review', 'SKILL.md'), skill_md('my-review'))
         write(os.path.join(self.skills, 'my-hidden', 'SKILL.md'), skill_md('my-hidden', disabled=True))
 
-    def plugin(self, name, skills, meta):
+    def plugin(self, name, skills, meta, group=''):
         root = os.path.join(self.plugins, 'cache', 'market', name, '1.0.0')
         write(os.path.join(root, '.claude-plugin', 'plugin.json'), json.dumps(dict(meta, name=name)))
         for skill, disabled in skills.items():
-            write(os.path.join(root, 'skills', skill, 'SKILL.md'), skill_md(skill, disabled))
+            write(os.path.join(root, 'skills', group, skill, 'SKILL.md'), skill_md(skill, disabled))
 
     def run_cli(self, *args):
         out, err = io.StringIO(), io.StringIO()
@@ -75,6 +77,12 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual((data['license'], data['link']), ('MIT', 'https://github.com/mattpocock/skills'))
         self.assertEqual(data['title']['en'], 'Does grilling')
         self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['design'], ['design.mattpocock-skills-grilling', 'design.builtin'])
+
+    def test_read_skill_under_a_group_folder_keeps_its_path(self):
+        code, out, err = self.run_cli('add', 'grouped:deep', '--stage', 'review')
+        self.assertEqual(code, 0, out + err)
+        data = self.load('components', 'review.grouped-deep.json')
+        self.assertEqual(data['invoke'], {'kind': 'read-skill', 'plugin': 'grouped', 'path': 'skills/productivity/deep/SKILL.md'})
 
     def test_add_twice_keeps_one_entry(self):
         self.run_cli('add', 'my-review', '--stage', 'review')
