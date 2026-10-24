@@ -1,0 +1,32 @@
+{
+  "id": "review.pstack-interrogate",
+  "stages": [
+    "review"
+  ],
+  "title": {
+    "ja": "pstack の interrogate で複数の目で diff を崩しにいく",
+    "en": "Attack the diff with pstack interrogate"
+  },
+  "invoke": {
+    "kind": "read-skill",
+    "plugin": "pstack",
+    "path": "skills/interrogate/SKILL.md"
+  },
+  "where": "subagent-readonly",
+  "memory": "full",
+  "when": "deep",
+  "cost": "high",
+  "requires": {
+    "plugins": [
+      "pstack"
+    ]
+  },
+  "forbid": [
+    "ファイルを変えない",
+    "結果は docs/pbi/reviews/final.review.md に adapters.md の書式で書く"
+  ],
+  "interactive": false,
+  "calls_back": false,
+  "license": "MIT",
+  "link": "https://github.com/cursor/plugins/tree/main/pstack"
+}

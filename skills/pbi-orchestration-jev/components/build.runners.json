@@ -1,0 +1,20 @@
+{
+  "id": "build.runners",
+  "stages": [
+    "build"
+  ],
+  "title": {
+    "ja": "実装担当 (worker.md) を route の実行先で動かす",
+    "en": "Run the worker (worker.md) on the routed runners"
+  },
+  "invoke": {
+    "kind": "builtin",
+    "doc": "runners.md"
+  },
+  "where": "runner",
+  "memory": "refs-only",
+  "when": "always",
+  "cost": "mid",
+  "interactive": false,
+  "calls_back": false
+}

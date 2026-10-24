@@ -1,0 +1,20 @@
+{
+  "id": "verify.builtin",
+  "stages": [
+    "verify"
+  ],
+  "title": {
+    "ja": "PBI の検証コマンドを実行する",
+    "en": "Run the PBI verification commands"
+  },
+  "invoke": {
+    "kind": "script",
+    "path": "verify.py"
+  },
+  "where": "main",
+  "memory": "none",
+  "when": "always",
+  "cost": "low",
+  "interactive": false,
+  "calls_back": false
+}

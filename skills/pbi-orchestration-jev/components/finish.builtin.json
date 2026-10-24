@@ -1,0 +1,20 @@
+{
+  "id": "finish.builtin",
+  "stages": [
+    "finish"
+  ],
+  "title": {
+    "ja": "完了報告と昇格",
+    "en": "Completion report and promotion"
+  },
+  "invoke": {
+    "kind": "builtin",
+    "doc": "appendix/finish.md"
+  },
+  "where": "main",
+  "memory": "full",
+  "when": "always",
+  "cost": "low",
+  "interactive": false,
+  "calls_back": false
+}

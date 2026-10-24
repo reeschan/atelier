@@ -1,0 +1,68 @@
+{
+  "name": "jev-routed-pstack",
+  "description": {
+    "ja": "jev-routed に pstack の部品を足したもの。明らかに複雑なときの how、opus 段の architect、coupling の高い PBI の blast-radius、deep な作業の interrogate。",
+    "en": "jev-routed plus pstack parts: how for clearly complex work, architect for opus-tier PBIs, blast-radius for high-coupling PBIs, interrogate for deep work."
+  },
+  "stages": {
+    "understand": [
+      "understand.pstack-how",
+      "understand.builtin"
+    ],
+    "design": [
+      "design.grilling",
+      "design.builtin"
+    ],
+    "plan": [
+      "plan.builtin"
+    ],
+    "route": [
+      "route.jev"
+    ],
+    "build": [
+      "build.runners"
+    ],
+    "verify": [
+      "verify.builtin"
+    ],
+    "review": [
+      "review.pstack-interrogate",
+      "review.mattpocock-code-review",
+      "review.code-review",
+      "review.builtin"
+    ],
+    "fix": [
+      "fix.rework"
+    ],
+    "finish": [
+      "finish.builtin"
+    ]
+  },
+  "gates": [
+    {
+      "after": "plan",
+      "components": [
+        "gate.jev"
+      ]
+    },
+    {
+      "after": "route",
+      "components": [
+        "gate.pstack-blast-radius",
+        "design.pstack-architect"
+      ]
+    },
+    {
+      "after": "review",
+      "components": [
+        "gate.security-review"
+      ]
+    }
+  ],
+  "fix": {
+    "max_rework": 2
+  },
+  "build": {
+    "external_memory": "none"
+  }
+}

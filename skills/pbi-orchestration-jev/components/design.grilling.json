@@ -1,0 +1,36 @@
+{
+  "id": "design.grilling",
+  "stages": [
+    "design"
+  ],
+  "title": {
+    "ja": "mattpocock-skills の grilling で設計を詰める",
+    "en": "Grill the design with mattpocock-skills"
+  },
+  "invoke": {
+    "kind": "skill",
+    "name": "mattpocock-skills:grilling"
+  },
+  "where": "main",
+  "memory": "full",
+  "when": "ask-or-decide",
+  "cost": "mid",
+  "requires": {
+    "skills": [
+      "mattpocock-skills:grilling"
+    ]
+  },
+  "forbid": [
+    "--fix",
+    "--comment",
+    "ultra",
+    "--max-findings"
+  ],
+  "then": [
+    "design.domain-modeling"
+  ],
+  "interactive": true,
+  "calls_back": false,
+  "license": "MIT",
+  "link": "https://github.com/mattpocock/skills"
+}
