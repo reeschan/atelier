@@ -23,10 +23,12 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - コンポーネント同士は直接呼び合わない。工程ごとに決めた**成果物** (`docs/pbi/` のファイル) でだけつながる。そのため差し替えても前後の工程は変わらない。
 - 各工程の最後の候補は必ず後ろ盾 (`builtin` か、`requires` の無い `script`) にする。必須は Claude Code だけ、という汎用化の原則 (generic-reorg.md) を工程ごとに守るためである。
 - テンプレートの解決順は振り分けテンプレートと同じで、作業リポジトリ (`docs/pbi/workflow.json`) → home (`workflows/<名前>.json`) → 同梱 (`workflows/<名前>.json`)。
-- 同梱するプリセット:
+- 同梱するプリセット (このスキルの部品と Claude Code の built-in だけを使う。下の「同梱は自作のものだけ」):
   - `jev-routed`: 今の動きそのもの。既定。振り分けが同梱の既定 (全段 agent) のままなら「全部 agent」で動く
-  - `high-model`: 理解に pstack の how、設計に architect (スケッチまで)、振り分けは全段 opus、レビューに interrogate
-  - `jev-routed-pstack`: jev-routed に、明らかに複雑なときの how、opus 段の architect、coupling の高い PBI の blast-radius、deep な PBI の interrogate を足したもの
+  - `high-model`: 振り分けは全段 opus。ほかは jev-routed と同じ組み込みの手順
+- examples/workflows/ に置く例 (他の人のスキルを使う。home に写したときだけ動く):
+  - `high-model-pstack`: high-model に、理解に pstack の how、設計に architect (スケッチまで)、レビューに interrogate、完了報告に yomiyasu を足したもの
+  - `jev-routed-pstack`: jev-routed に、mattpocock-skills の grilling と code-review、明らかに複雑なときの how、opus 段の architect、coupling の高い PBI の blast-radius、deep な PBI の interrogate、完了報告の yomiyasu を足したもの
 - **開発工程はどのテンプレートでも、このスキルの実装担当 (`worker.md`) のまま**にする。pstack の poteto-agent は pstack の進め方全体を読み込み、「PBI と参照だけを材料に作り、5 行で報告する」実装担当の決まりとぶつかるので使わない。高位モデル中心型との違いは、振り分けで opus に寄せることだけである。
 - pstack は同梱しない。利用者が入れたプラグインを `read-skill` で参照する。入っていなければ、その工程は次の候補 (最後は builtin) で進む。
 - 共有メモリの使い方はコンポーネントごとに `full` / `refs-only` / `none` で宣言する。設計者のセッションで動くもの (pstack のサブエージェントを含む) は `full`。実装担当は、agent が `refs-only` (今の pbi-worker と同じ)、外部の実行先は既定で `none`。テンプレートの `build.external_memory` で `refs-only` に広げられる。
@@ -106,10 +108,10 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 ```
 
 - 9 つの工程をすべて書く。各工程の配列は 1 つ以上で、最後は後ろ盾の部品。
-- 候補は id の文字列か `{"id": ..., "when": ...}`。後者はテンプレートの中だけで `when` を上書きする (high-model で how を `always` にするなど)。
+- 候補は id の文字列か `{"id": ..., "when": ...}`。後者はテンプレートの中だけで `when` を上書きする (high-model-pstack で how を `always` にするなど)。
 - 工程の配列の順が優先順。エンジンは前から順に、使えるもの (`requires` が満たされ、`when` が当たるもの) を 1 つだけ選ぶ。
 - 関所の配列は、使えるものを全部動かす (Jev ゲート 1 と blast-radius を両方など)。
-- 1 つの部品が工程と関所の両方を担ってよい (`design.pstack-architect` は、high-model では設計の工程、jev-routed-pstack では `after: route` の関所で opus 段の PBI にだけ動く)。
+- 1 つの部品が工程と関所の両方を担ってよい (`design.pstack-architect` は、high-model-pstack では設計の工程、jev-routed-pstack では `after: route` の関所で opus 段の PBI にだけ動く)。
 - `route` と `build` には同梱の `route.jev`・`route.opus`・`build.runners` を差す。`route.jev` の設定は今の振り分けテンプレート (`routing.json`) と優先テンプレートで、テンプレートには書き写さない。
 - `fix.max_rework` は 0〜5。今の上限は 2。
 - `build.external_memory` は `none` か `refs-only`。
@@ -149,7 +151,14 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - **read-skill の実行**: `flow.py` が read-skill の部品の status を、プラグインの置き場 (`PBI_PLUGINS_DIR`、無ければ `~/.claude/plugins`) の下の `<プラグイン名>/` か `<プラグイン名>/<版>/` の直下に `invoke.path` があるかで決める (`plugin ok <SKILL.md の場所>` / `plugin missing <名前>`)。設計者はその SKILL.md を、部品の `where` のサブエージェントに読ませて従わせる (`appendix/engine.md`)。
 - **PBI ごとの when の判定**: `flow.py <pbi-dir> --decide` が route.json から判定する。`tier-opus` は tier が opus、`coupling-high` は scores.coupling が 2、`deep` は review が deep。after: route の関所の部品は PBI ごとに 1 行、review の工程の deep の部品は「どれかの PBI が deep なら run」の 1 行。設計者は自分で判定しない。
 - **メモリの点検**: 実行先に道具を渡さない仕組みは実行先ごとにまちまちなので、強制は「毎回の記録で確かめる」形にした。`record_run.py` が試行ごとに実装担当の shared-memory の呼び出しを調べ、`runs.jsonl` の `memory` に残す。agent は会話記録の tool_use を数え、get した id が PBI の Refs に無ければ `unlisted_refs` に入れる。外部の実行先はログに道具の名前が出たかだけを見る。許す使い方は agent が refs-only、外部の実行先がテンプレートの `build.external_memory`。search・write、none での get、Refs に無い id の get を `violation` にして、標準出力に `memory violation` の 1 行を出す。設計者は STATUS.md に書き、同じ実行先が繰り返したら `--skip` で外し、完了報告に並べる。
-- **yomiyasu**: `gate.yomiyasu` (Skill ツールの `yomiyasu:yomiyasu`、MIT、https://github.com/nanaism/yomiyasu) を 3 つのプリセットの `after: finish` の関所に足した。完了報告を `docs/pbi/REPORT.md` に書いてから、日本語の報告の言い回しだけを整え、数値・id・パス・コマンド・貼った表は変えない。入っていなければ飛ばす。
+- **yomiyasu**: `gate.yomiyasu` (Skill ツールの `yomiyasu:yomiyasu`、MIT、https://github.com/nanaism/yomiyasu) を `after: finish` の関所に足した (下の変更で、同梱のプリセットからは外し examples/ の例にだけ残した)。完了報告を `docs/pbi/REPORT.md` に書いてから、日本語の報告の言い回しだけを整え、数値・id・パス・コマンド・貼った表は変えない。入っていなければ飛ばす。
+
+### 同梱は自作のものだけ (PR 3)
+
+- 利用者の求めで、同梱する部品とプリセットを、このスキルの部品と Claude Code の built-in (`code-review`・`security-review`) だけにした。他の人のスキルを呼ぶ部品 (mattpocock-skills の 3 つ、pstack の 6 つ、yomiyasu) は `examples/components/` に移し、pstack のプリセットは `examples/workflows/` の例にした。
+- `flow.py` は同梱の `components/` のあとに `<home>/components/` も読む。使う人は例の部品を home に写し、例のテンプレートを home の `workflows/` か作業の `docs/pbi/workflow.json` に置く。home の部品は同梱の id を使えない (誤りにする)。どの工程も後ろ盾を失わないようにするためである。
+- `setup --recommended` は、承認されたら mattpocock-skills を入れ、3 つの部品を home に写し、それを使う `workflows/jev-routed.json` を home に書く。設計の呼び出し先が無いときに `setup --recommended` を勧める 1 行は出さない。
+- `test_flow.py` が、同梱の部品が read-skill でなく、plugins を要らず、skill なら link が built-in であることを確かめる。
 
 ## Testing Decisions
 

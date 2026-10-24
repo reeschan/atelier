@@ -1,0 +1,69 @@
+{
+  "name": "high-model-pstack",
+  "description": {
+    "ja": "high-model に pstack の部品と yomiyasu を足した例。pstack で調べて設計し、すべての PBI を agent の opus に回す。実装担当は worker.md のまま。",
+    "en": "Example: high-model plus pstack parts and yomiyasu. pstack explains and sketches; every PBI goes to the opus agent. The worker stays worker.md."
+  },
+  "stages": {
+    "understand": [
+      {
+        "id": "understand.pstack-how",
+        "when": "always"
+      },
+      "understand.builtin"
+    ],
+    "design": [
+      {
+        "id": "design.pstack-architect",
+        "when": "clearly-complex"
+      },
+      "design.builtin"
+    ],
+    "plan": [
+      "plan.builtin"
+    ],
+    "route": [
+      "route.opus"
+    ],
+    "build": [
+      "build.runners"
+    ],
+    "verify": [
+      "verify.builtin"
+    ],
+    "review": [
+      {
+        "id": "review.pstack-interrogate",
+        "when": "always"
+      },
+      "review.code-review",
+      "review.builtin"
+    ],
+    "fix": [
+      "fix.rework"
+    ],
+    "finish": [
+      "finish.builtin"
+    ]
+  },
+  "gates": [
+    {
+      "after": "review",
+      "components": [
+        "gate.security-review"
+      ]
+    },
+    {
+      "after": "finish",
+      "components": [
+        "gate.yomiyasu"
+      ]
+    }
+  ],
+  "fix": {
+    "max_rework": 2
+  },
+  "build": {
+    "external_memory": "none"
+  }
+}

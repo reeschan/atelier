@@ -2,7 +2,7 @@
 
 Read this when agents.json has an `adapters` object, or the argument is `setup --recommended`.
 
-The skills a stage may call are the components in `components/`. Each external one carries its link and license, and none calls this skill back (`calls_back` is false). The two built-in reviews ship with Claude Code and need no install.
+The skills a stage may call are the components in `components/` and `<home>/components/`. Each external one carries its link and license, and none calls this skill back (`calls_back` is false). The two built-in reviews ship with Claude Code and need no install.
 
 ## Settings
 
@@ -24,7 +24,7 @@ The skills a stage may call are the components in `components/`. Each external o
 
 ## Recommended set
 
-Only mattpocock-skills is recommended: https://github.com/mattpocock/skills, MIT (Copyright (c) 2026 Matt Pocock). This skill does not ship it.
+The bundled templates call no one else's skills (`appendix/engine.md`, "Other people's skills"). `setup --recommended` is the opt-in for mattpocock-skills: https://github.com/mattpocock/skills, MIT (Copyright (c) 2026 Matt Pocock). This skill does not ship it.
 
 For `setup --recommended`:
 
@@ -36,5 +36,6 @@ For `setup --recommended`:
    claude plugin install mattpocock-skills@claude-plugins-official --scope user
    ```
 
-4. After it succeeds, tell the user to run `/reload-plugins` or restart Claude Code. Until then the skill is not used.
-5. On no, or when the `claude` command is missing, only show the command and stop.
+4. Copy `examples/components/design.grilling.json`, `examples/components/design.domain-modeling.json` and `examples/components/review.mattpocock-code-review.json` to `<home>/components/`. Unless `<home>/workflows/jev-routed.json` exists, write it: the bundled `workflows/jev-routed.json` with `design.grilling` before `design.builtin` and `review.mattpocock-code-review` first in review. Run `flow.py docs/pbi` and show any `error` line.
+5. After it succeeds, tell the user to run `/reload-plugins` or restart Claude Code. Until then the skill is not used.
+6. On no, or when the `claude` command is missing, only show the command and stop.
