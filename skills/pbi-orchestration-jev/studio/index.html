@@ -192,6 +192,15 @@ input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px;
 .app-grid dd { margin: 0; overflow-wrap: anywhere; }
 .app-grid .wide { grid-column: 1 / -1; }
 
+.flow-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; min-width: 0; }
+.flow-row { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 13px; background: var(--glass-strong); min-width: 0; }
+.flow-row.fallback { border-style: dashed; }
+.flow-row-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; justify-content: space-between; min-width: 0; }
+.flow-row-head b { font-size: 13px; overflow-wrap: anywhere; }
+.flow-row .field-row select { font-size: 12.5px; padding: 5px 8px; }
+.gate-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; justify-content: space-between; }
+.gate-head .field-row { flex: 1 1 150px; }
+
 footer { font-size: 12px; color: var(--ink-soft); }
 @media (max-width: 560px) {
   .tab { flex: 1 1 auto; text-align: center; padding: 8px 12px; font-size: 12.5px; }
@@ -221,6 +230,7 @@ footer { font-size: 12px; color: var(--ink-soft); }
     <button class="tab" id="tab-agents" type="button" role="tab" aria-controls="panel-agents" aria-selected="true" data-i18n="tabAgents"></button>
     <button class="tab" id="tab-routing" type="button" role="tab" aria-controls="panel-routing" aria-selected="false" data-i18n="tabRouting"></button>
     <button class="tab" id="tab-priority" type="button" role="tab" aria-controls="panel-priority" aria-selected="false" data-i18n="tabPriority"></button>
+    <button class="tab" id="tab-flow" type="button" role="tab" aria-controls="panel-flow" aria-selected="false" data-i18n="tabFlow"></button>
   </nav>
 
   <main>
@@ -269,6 +279,14 @@ footer { font-size: 12px; color: var(--ink-soft); }
         <h3 data-i18n="applicationTitle"></h3>
         <div id="application"></div>
       </section>
+    </section>
+
+    <section id="panel-flow" class="panel" role="tabpanel" aria-labelledby="tab-flow" hidden>
+      <div class="panel-head">
+        <h2 data-i18n="flowTitle"></h2>
+        <p data-i18n="flowIntro"></p>
+      </div>
+      <div id="flow-body" class="panel"></div>
     </section>
   </main>
 
@@ -400,6 +418,26 @@ footer { font-size: 12px; color: var(--ink-soft); }
       noTemplateToApply: '適用できるテンプレートが無い。', needUntil: '日時を入れるか「期限なし」を選ぶ。',
       statusNone: '適用なし', statusActive: '適用中', statusExpiredAsk: '期限切れ (確認待ち)',
       statusExpiredDrop: '期限切れ (元に戻した)', statusUnknown: 'テンプレートが見つからない',
+      tabFlow: '開発フロー', flowTitle: '開発フローのテンプレート',
+      flowIntro: '9 つの工程それぞれに部品を上から並べます。工程は上から見て使えて when が成り立つ最初の部品を 1 つ動かし、関所は成り立つ部品をすべて動かします。各工程の最後は必ず使える部品 (builtin か script) にします。保存は home の workflows/ に書き、同梱の版はそのまま残ります。',
+      flowPick: 'テンプレート', flowSourceHome: 'home の版', flowSourceBundled: '同梱の版 (保存すると home に写す)',
+      flowSourceNew: '新しいテンプレート (未保存)', flowCopyAs: '別の名前で写す', flowCopyBtn: '写して作る',
+      flowSave: 'フローを保存', flowDeleteHome: 'home の版を消す', flowDeleteNew: 'home から消す',
+      flowConfirmDelete: 'home の {0} を消してよい? 同梱の同名があればそちらに戻る。',
+      flowSaved: '{0} を保存しました。', flowDeleted: '{0} を home から消しました。',
+      flowDeletedBack: '{0} を home から消し、同梱の版に戻しました。',
+      flowErrors: 'このテンプレートの誤り (保存できない)', flowComponentErrors: '部品の定義の誤り',
+      flowDescJa: '説明 (日本語)', flowDescEn: '説明 (英語)',
+      flowWhen: 'when', flowWhenDefault: '部品の既定 ({0})',
+      flowAdd: '部品を足す', flowNoAdd: '足せる部品が無い', flowLastFallback: '最後の部品が builtin か script ではない。',
+      flowEmptyStage: '部品が 1 つも無い。', flowGates: '関所', flowGatesIntro: '工程のあとに、成り立つ部品をすべて動かす。',
+      flowGateAfter: 'この工程のあと', flowAddGate: '関所を足す', flowRemoveGate: '関所を消す',
+      flowSettings: '設定', flowMaxRework: '差し戻しの上限 (fix.max_rework)',
+      flowExternalMemory: '外部の実行先の共有メモリ (build.external_memory)',
+      flowSourceTagHome: 'home の部品', flowNone: 'テンプレートが無い。', flowNeedName: '名前は英小文字・数字・- で 1〜63 文字。',
+      flowExists: '{0} はもうある。',
+      stage_understand: '理解', stage_design: '設計', stage_plan: '計画', stage_route: '振り分け', stage_build: '実装',
+      stage_verify: '検証', stage_review: 'レビュー', stage_fix: '差し戻し', stage_finish: '仕上げ',
     },
     en: {
       tagline: 'Set up runners and models, routing and priority templates on one screen',
@@ -458,13 +496,34 @@ footer { font-size: 12px; color: var(--ink-soft); }
       noTemplateToApply: 'There is no valid template to apply.', needUntil: 'Enter a date or choose No expiry.',
       statusNone: 'none', statusActive: 'active', statusExpiredAsk: 'expired (ask)',
       statusExpiredDrop: 'expired (dropped)', statusUnknown: 'template missing',
+      tabFlow: 'Workflow', flowTitle: 'Workflow templates',
+      flowIntro: 'List components from the top for each of the 9 stages. A stage runs the first component that is usable and whose when holds; a gate runs every component whose when holds. The last component of each stage must always be usable (builtin or a script). Saving writes to workflows/ in home; the bundled version is kept.',
+      flowPick: 'Template', flowSourceHome: 'home version', flowSourceBundled: 'bundled version (saving copies it to home)',
+      flowSourceNew: 'new template (not saved)', flowCopyAs: 'Copy under another name', flowCopyBtn: 'Copy',
+      flowSave: 'Save workflow', flowDeleteHome: 'Delete the home version', flowDeleteNew: 'Delete from home',
+      flowConfirmDelete: 'Delete {0} from home? A bundled template with that name takes over.',
+      flowSaved: 'Saved {0}.', flowDeleted: 'Deleted {0} from home.',
+      flowDeletedBack: 'Deleted {0} from home; the bundled version is used again.',
+      flowErrors: 'Errors in this template (it cannot be saved)', flowComponentErrors: 'Errors in component definitions',
+      flowDescJa: 'Description (Japanese)', flowDescEn: 'Description (English)',
+      flowWhen: 'when', flowWhenDefault: 'component default ({0})',
+      flowAdd: 'Add component', flowNoAdd: 'No component to add', flowLastFallback: 'The last component is not builtin or a script.',
+      flowEmptyStage: 'No components yet.', flowGates: 'Gates', flowGatesIntro: 'After a stage, every component whose when holds runs.',
+      flowGateAfter: 'After stage', flowAddGate: 'Add gate', flowRemoveGate: 'Remove gate',
+      flowSettings: 'Settings', flowMaxRework: 'Rework limit (fix.max_rework)',
+      flowExternalMemory: 'Shared memory for external runners (build.external_memory)',
+      flowSourceTagHome: 'home component', flowNone: 'No templates.', flowNeedName: 'The name must be 1-63 lowercase letters, digits or hyphens.',
+      flowExists: '{0} already exists.',
+      stage_understand: 'Understand', stage_design: 'Design', stage_plan: 'Plan', stage_route: 'Route', stage_build: 'Build',
+      stage_verify: 'Verify', stage_review: 'Review', stage_fix: 'Fix', stage_finish: 'Finish',
     },
   };
 
   const RUNNERS = ['opencode', 'codex', 'agy', 'dsh', 'claude', 'agent'];
   const EXTERNAL = ['opencode', 'codex', 'agy', 'dsh', 'claude'];
   const TIERS = ['haiku', 'sonnet', 'opus'];
-  const TABS = ['agents', 'routing', 'priority'];
+  const TABS = ['agents', 'routing', 'priority', 'flow'];
+  const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
   const RUNNER_LABEL = { opencode: 'opencode', codex: 'Codex', agy: 'Antigravity', dsh: 'DSH', claude: 'Claude Code (headless)', agent: 'Claude Code' };
 
   const boot = (() => {
@@ -526,6 +585,8 @@ footer { font-size: 12px; color: var(--ink-soft); }
     answerUntil: '',
     search: {},
     copyAs: '',
+    // 開発フロー: 選んだ名前・編集中の下書き・未保存の新しい名前か
+    flow: { name: null, draft: null, isNew: false, copyAs: '' },
   };
 
   function initialTab() {
@@ -674,6 +735,7 @@ footer { font-size: 12px; color: var(--ink-soft); }
   async function refresh() {
     const data = await request('GET', '/api/state');
     state.data = data;
+    syncFlow();
     if (!state.routing) {
       state.routing = clone(data.routing.table);
       normalizeRouting();
@@ -717,6 +779,7 @@ footer { font-size: 12px; color: var(--ink-soft); }
   function renderPanel() {
     if (state.tab === 'agents') renderAgents();
     else if (state.tab === 'routing') renderRouting();
+    else if (state.tab === 'flow') renderFlow();
     else renderPriority();
   }
 
@@ -1184,6 +1247,191 @@ footer { font-size: 12px; color: var(--ink-soft); }
     });
   }
 
+  // --- 開発フロー ---
+
+  const flowInfo = () => (state.data && state.data.flow) || null;
+  const entryId = (item) => (typeof item === 'string' ? item : (isObject(item) ? item.id : null));
+  const entryWhen = (item) => (isObject(item) && typeof item.when === 'string' ? item.when : '');
+  const titleOf = (component, cid) => (component && component.title && (component.title[lang] || component.title.ja)) || cid;
+
+  // 読み直したあと、選んでいるテンプレートが無ければ既定 (無ければ先頭) を選び、下書きが無ければ作る
+  function syncFlow() {
+    const info = flowInfo();
+    if (!info) return;
+    const names = Object.keys(info.workflows || {});
+    const flow = state.flow;
+    if (flow.isNew && flow.draft) return;
+    if (!flow.name || names.indexOf(flow.name) < 0) {
+      flow.name = names.indexOf(info.default) >= 0 ? info.default : (names[0] || null);
+      flow.draft = null;
+    }
+    if (!flow.draft && flow.name) loadFlowDraft(flow.name);
+  }
+
+  function loadFlowDraft(name) {
+    const info = flowInfo();
+    const entry = info && info.workflows ? info.workflows[name] : null;
+    state.flow.name = name;
+    state.flow.isNew = false;
+    state.flow.draft = entry && entry.data ? clone(entry.data) : null;
+    if (state.flow.draft) normalizeFlow(state.flow.draft);
+  }
+
+  function normalizeFlow(draft) {
+    const info = flowInfo();
+    if (!isObject(draft.stages)) draft.stages = {};
+    for (const stage of info.stages) if (!Array.isArray(draft.stages[stage])) draft.stages[stage] = [];
+    if (!Array.isArray(draft.gates)) draft.gates = [];
+    if (!isObject(draft.fix)) draft.fix = { max_rework: 2 };
+    if (!isObject(draft.build)) draft.build = { external_memory: 'none' };
+    if (!isObject(draft.description)) draft.description = { ja: '', en: '' };
+  }
+
+  function whenSelect(item, perPbi, attrs) {
+    const info = flowInfo();
+    const component = info.components[entryId(item)];
+    const current = entryWhen(item);
+    const values = info.when.filter((value) => perPbi || info.per_pbi_when.indexOf(value) < 0 || value === current);
+    const options = ['<option value="">' + esc(t('flowWhenDefault', component ? component.when : '?')) + '</option>']
+      .concat(values.map((value) => '<option value="' + esc(value) + '"' + (value === current ? ' selected' : '') + '>' + esc(value) + '</option>'));
+    return '<label class="field-row"><span>' + esc(t('flowWhen')) + '</span><select data-role="flow-when"' + attrs + '>' + options.join('') + '</select></label>';
+  }
+
+  function flowRow(item, index, count, place, perPbi) {
+    const info = flowInfo();
+    const cid = entryId(item);
+    const component = info.components[cid];
+    const attrs = ' data-place="' + esc(place) + '" data-index="' + index + '"';
+    const tags = component
+      ? [component.kind, component.where, 'memory ' + component.memory, 'cost ' + component.cost]
+        .map((tag) => '<span class="tag">' + esc(tag) + '</span>').join('') +
+        (component.source === 'home' ? '<span class="tag manual">' + esc(t('flowSourceTagHome')) + '</span>' : '')
+      : '<span class="badge">unknown</span>';
+    return '<div class="flow-row' + (component && component.fallback ? ' fallback' : '') + '">' +
+      '<div class="flow-row-head"><b>' + esc(titleOf(component, cid)) + '</b><span class="model-id">' + esc(cid) + '</span></div>' +
+      '<div class="tags">' + tags + '</div>' +
+      whenSelect(item, perPbi, attrs) +
+      '<div class="step-actions">' +
+      '<button class="icon" type="button" data-act="flow-up"' + attrs + (index === 0 ? ' disabled' : '') + ' aria-label="' + esc(t('up')) + '">↑</button>' +
+      '<button class="icon" type="button" data-act="flow-down"' + attrs + (index === count - 1 ? ' disabled' : '') + ' aria-label="' + esc(t('down')) + '">↓</button>' +
+      '<button class="icon" type="button" data-act="flow-del"' + attrs + ' aria-label="' + esc(t('remove')) + '">✕</button>' +
+      '</div></div>';
+  }
+
+  function flowAddRow(place, role, items) {
+    const info = flowInfo();
+    const used = new Set(items.map(entryId));
+    const ids = Object.keys(info.components).filter((cid) => info.components[cid].stages.indexOf(role) >= 0 && !used.has(cid)).sort();
+    if (!ids.length) return '<p class="muted">' + esc(t('flowNoAdd')) + '</p>';
+    return '<div class="add-row"><select data-role="flow-add-choice" aria-label="' + esc(t('flowAdd')) + '">' +
+      ids.map((cid) => '<option value="' + esc(cid) + '">' + esc(titleOf(info.components[cid], cid)) + ' (' + esc(cid) + ')</option>').join('') +
+      '</select><button class="btn small" type="button" data-act="flow-add" data-place="' + esc(place) + '">' + esc(t('flowAdd')) + '</button></div>';
+  }
+
+  function flowList(place) {
+    const draft = state.flow.draft;
+    if (place.indexOf('gate:') === 0) {
+      const gate = draft.gates[Number(place.slice(5))];
+      return gate ? gate.components : null;
+    }
+    return draft.stages[place] || null;
+  }
+
+  function renderFlowStage(stage) {
+    const info = flowInfo();
+    const items = state.flow.draft.stages[stage];
+    const last = items.length ? info.components[entryId(items[items.length - 1])] : null;
+    const warn = !items.length ? t('flowEmptyStage') : (last && !last.fallback ? t('flowLastFallback') : '');
+    return '<section class="glass tier-col">' +
+      '<div class="tier-head"><span class="tier-name">' + esc(t('stage_' + stage)) + '</span><code>' + esc(stage) + '</code></div>' +
+      '<div class="steps">' + items.map((item, i) => flowRow(item, i, items.length, stage, false)).join('') + '</div>' +
+      (warn ? '<p class="warn-text">' + esc(warn) + '</p>' : '') +
+      flowAddRow(stage, stage, items) + '</section>';
+  }
+
+  function renderFlowGate(gate, index) {
+    const info = flowInfo();
+    const place = 'gate:' + index;
+    const items = Array.isArray(gate.components) ? gate.components : (gate.components = []);
+    const after = '<label class="field-row"><span>' + esc(t('flowGateAfter')) + '</span><select data-role="flow-gate-after" data-index="' + index + '">' +
+      info.stages.map((stage) => '<option value="' + esc(stage) + '"' + (stage === gate.after ? ' selected' : '') + '>' + esc(t('stage_' + stage)) + ' (' + esc(stage) + ')</option>').join('') +
+      '</select></label>';
+    return '<section class="glass tier-col">' +
+      '<div class="gate-head">' + after +
+      '<button class="btn small danger" type="button" data-act="flow-del-gate" data-index="' + index + '">' + esc(t('flowRemoveGate')) + '</button></div>' +
+      '<div class="steps">' + items.map((item, i) => flowRow(item, i, items.length, place, gate.after === 'route')).join('') + '</div>' +
+      (items.length ? '' : '<p class="warn-text">' + esc(t('flowEmptyStage')) + '</p>') +
+      flowAddRow(place, 'gate', items) + '</section>';
+  }
+
+  function renderFlow() {
+    const box = $('flow-body');
+    const info = flowInfo();
+    if (!info) { box.innerHTML = '<p class="muted">' + esc(t('loading')) + '</p>'; return; }
+    const flow = state.flow;
+    const names = Object.keys(info.workflows).sort();
+    if (flow.isNew && names.indexOf(flow.name) < 0) names.push(flow.name);
+    if (!names.length) { box.innerHTML = '<p class="muted">' + esc(t('flowNone')) + '</p>'; return; }
+    const entry = info.workflows[flow.name] || null;
+    const source = flow.isNew ? t('flowSourceNew') : (entry && entry.source === 'home' ? t('flowSourceHome') : t('flowSourceBundled'));
+    const pick = '<label class="field-row"><span>' + esc(t('flowPick')) + '</span><select data-role="flow-pick">' +
+      names.map((name) => '<option value="' + esc(name) + '"' + (name === flow.name ? ' selected' : '') + '>' + esc(name) + '</option>').join('') +
+      '</select></label>';
+    const copy = '<label class="field-row"><span>' + esc(t('flowCopyAs')) + '</span><input type="text" data-role="flow-copy-as" value="' + esc(flow.copyAs) + '" autocomplete="off" spellcheck="false"></label>' +
+      '<button class="btn" type="button" data-act="flow-copy">' + esc(t('flowCopyBtn')) + '</button>';
+    const canDelete = !flow.isNew && entry && entry.source === 'home';
+    const actions = '<div class="bar"><span class="pill">' + esc(source) + '</span>' +
+      '<button class="btn primary" type="button" data-act="flow-save"' + (flow.draft ? '' : ' disabled') + '>' + esc(t('flowSave')) + '</button>' +
+      '<button class="btn" type="button" data-act="flow-reset">' + esc(t('reset')) + '</button>' +
+      (canDelete ? '<button class="btn danger" type="button" data-act="flow-delete">' + esc(entry.bundled ? t('flowDeleteHome') : t('flowDeleteNew')) + '</button>' : '') +
+      '</div>';
+    const errorList = (title, list) => (list && list.length
+      ? '<div class="warnings"><b>' + esc(title) + '</b><ul>' + list.map((e) => '<li>' + esc(e) + '</li>').join('') + '</ul></div>' : '');
+    let html = '<section class="glass card"><div class="fields two">' + pick + '<div class="add-row">' + copy + '</div></div>' + actions +
+      (entry && entry.path && !flow.isNew ? '<p class="muted mono">' + esc(entry.path) + '</p>' : '') + '</section>' +
+      errorList(t('flowComponentErrors'), info.errors) +
+      errorList(t('flowErrors'), !flow.isNew && entry ? entry.errors : []);
+    const draft = flow.draft;
+    if (!draft) { box.innerHTML = html; return; }
+    html += '<section class="glass card"><div class="fields two">' +
+      '<label class="field-row"><span>' + esc(t('flowDescJa')) + '</span><textarea data-role="flow-desc" data-lang="ja">' + esc(draft.description.ja || '') + '</textarea></label>' +
+      '<label class="field-row"><span>' + esc(t('flowDescEn')) + '</span><textarea data-role="flow-desc" data-lang="en">' + esc(draft.description.en || '') + '</textarea></label>' +
+      '</div></section>';
+    html += '<div class="flow-grid">' + info.stages.map(renderFlowStage).join('') + '</div>';
+    html += '<section class="glass card"><div class="editor-head"><h3>' + esc(t('flowGates')) + '</h3>' +
+      '<button class="btn small" type="button" data-act="flow-add-gate">' + esc(t('flowAddGate')) + '</button></div>' +
+      '<p class="muted">' + esc(t('flowGatesIntro')) + '</p></section>';
+    html += '<div class="flow-grid">' + draft.gates.map(renderFlowGate).join('') + '</div>';
+    const [low, high] = info.max_rework;
+    const rework = [];
+    for (let n = low; n <= high; n += 1) rework.push('<option value="' + n + '"' + (n === draft.fix.max_rework ? ' selected' : '') + '>' + n + '</option>');
+    html += '<section class="glass card"><h3>' + esc(t('flowSettings')) + '</h3><div class="fields two">' +
+      '<label class="field-row"><span>' + esc(t('flowMaxRework')) + '</span><select data-role="flow-rework">' + rework.join('') + '</select></label>' +
+      '<label class="field-row"><span>' + esc(t('flowExternalMemory')) + '</span><select data-role="flow-memory">' +
+      info.external_memory.map((value) => '<option value="' + esc(value) + '"' + (value === draft.build.external_memory ? ' selected' : '') + '>' + esc(value) + '</option>').join('') +
+      '</select></label></div></section>';
+    box.innerHTML = html;
+  }
+
+  function saveFlow() {
+    run(async () => {
+      const flow = state.flow;
+      if (!flow.draft || !flow.name) return;
+      const body = clone(flow.draft);
+      body.name = flow.name;
+      try {
+        await request('PUT', '/api/workflows/' + encodeURIComponent(flow.name), body);
+      } catch (error) {
+        notice(t('saveFail', error.message || String(error)), 'err');
+        return;
+      }
+      flow.isNew = false;
+      flow.draft = null;
+      await refresh();
+      notice(t('flowSaved', flow.name), 'ok');
+    });
+  }
+
   function setTab(tab, updateHash) {
     state.tab = TABS.indexOf(tab) >= 0 ? tab : 'agents';
     if (updateHash !== false) {
@@ -1205,6 +1453,8 @@ footer { font-size: 12px; color: var(--ink-soft); }
     });
     $('reload').addEventListener('click', () => run(async () => {
       state.routing = null;
+      state.flow.draft = null;
+      state.flow.isNew = false;
       await refresh();
       if (state.templateOriginal && state.data.templates[state.templateOriginal]) {
         state.template = clone(state.data.templates[state.templateOriginal]);
@@ -1461,6 +1711,113 @@ footer { font-size: 12px; color: var(--ink-soft); }
       if (el.dataset.role === 'tpl-name' && state.template) state.template.name = el.value;
       else if (el.dataset.role === 'tpl-desc' && state.template) state.template.description = el.value;
       else if (el.dataset.role === 'app-reason') state.app.reason = el.value;
+    });
+
+    $('panel-flow').addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-act]');
+      if (!button || !state.flow) return;
+      const act = button.dataset.act;
+      const flow = state.flow;
+      if (act === 'flow-save') { saveFlow(); return; }
+      if (act === 'flow-reset') {
+        if (flow.isNew) { flow.isNew = false; flow.name = null; flow.draft = null; syncFlow(); }
+        else loadFlowDraft(flow.name);
+        renderFlow();
+        return;
+      }
+      if (act === 'flow-delete') {
+        const name = flow.name;
+        if (!window.confirm(t('flowConfirmDelete', name))) return;
+        run(async () => {
+          const result = await request('DELETE', '/api/workflows/' + encodeURIComponent(name));
+          flow.draft = null;
+          await refresh();
+          notice(result.fallback === 'bundled' ? t('flowDeletedBack', name) : t('flowDeleted', name), 'ok');
+        });
+        return;
+      }
+      if (act === 'flow-copy') {
+        const name = String(flow.copyAs || '').trim();
+        if (!NAME_RE.test(name)) { notice(t('flowNeedName'), 'err'); return; }
+        if (flowInfo().workflows[name]) { notice(t('flowExists', name), 'err'); return; }
+        if (!flow.draft) return;
+        flow.draft = clone(flow.draft);
+        flow.draft.name = name;
+        flow.name = name;
+        flow.isNew = true;
+        flow.copyAs = '';
+        renderFlow();
+        return;
+      }
+      if (!flow.draft) return;
+      if (act === 'flow-add-gate') {
+        flow.draft.gates.push({ after: 'review', components: [] });
+        renderFlow();
+        return;
+      }
+      if (act === 'flow-del-gate') {
+        flow.draft.gates.splice(Number(button.dataset.index), 1);
+        renderFlow();
+        return;
+      }
+      const list = flowList(button.dataset.place || '');
+      if (!list) return;
+      const index = Number(button.dataset.index);
+      if (act === 'flow-add') {
+        const select = button.parentElement.querySelector('select[data-role="flow-add-choice"]');
+        const cid = select ? select.value : '';
+        if (!cid) return;
+        const component = flowInfo().components[cid];
+        const last = list.length ? flowInfo().components[entryId(list[list.length - 1])] : null;
+        // 工程では後ろ盾を最後に保つため、後ろ盾でない部品は最後の後ろ盾の手前に入れる
+        const isGate = button.dataset.place.indexOf('gate:') === 0;
+        const at = !isGate && last && last.fallback && !(component && component.fallback) ? list.length - 1 : list.length;
+        list.splice(at, 0, cid);
+      } else if (act === 'flow-up' || act === 'flow-down') {
+        const to = index + (act === 'flow-up' ? -1 : 1);
+        if (to < 0 || to >= list.length) return;
+        list.splice(to, 0, list.splice(index, 1)[0]);
+      } else if (act === 'flow-del') {
+        list.splice(index, 1);
+      } else {
+        return;
+      }
+      renderFlow();
+    });
+    $('panel-flow').addEventListener('change', (event) => {
+      const el = event.target;
+      if (!el || !el.dataset || !state.flow) return;
+      const role = el.dataset.role;
+      const flow = state.flow;
+      if (role === 'flow-pick') {
+        flow.isNew = false;
+        loadFlowDraft(el.value);
+        renderFlow();
+        return;
+      }
+      if (!flow.draft) return;
+      if (role === 'flow-when') {
+        const list = flowList(el.dataset.place || '');
+        const index = Number(el.dataset.index);
+        if (!list || !list[index]) return;
+        const cid = entryId(list[index]);
+        list[index] = el.value ? { id: cid, when: el.value } : cid;
+        renderFlow();
+      } else if (role === 'flow-gate-after') {
+        const gate = flow.draft.gates[Number(el.dataset.index)];
+        if (gate) gate.after = el.value;
+        renderFlow();
+      } else if (role === 'flow-rework') {
+        flow.draft.fix.max_rework = Number(el.value);
+      } else if (role === 'flow-memory') {
+        flow.draft.build.external_memory = el.value;
+      }
+    });
+    $('panel-flow').addEventListener('input', (event) => {
+      const el = event.target;
+      if (!el || !el.dataset || !state.flow) return;
+      if (el.dataset.role === 'flow-copy-as') state.flow.copyAs = el.value;
+      else if (el.dataset.role === 'flow-desc' && state.flow.draft) state.flow.draft.description[el.dataset.lang] = el.value;
     });
 
     window.addEventListener('hashchange', () => {

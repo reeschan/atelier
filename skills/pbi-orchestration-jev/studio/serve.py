@@ -1,14 +1,14 @@
 """Template Studio の編集画面のサーバー。home のファイルだけを読み書きする。
 
   python serve.py [--home DIR] [--port 0] [--no-open] [--timeout 1800]
-                  [--tab agents|routing|priority]
+                  [--tab agents|routing|priority|flow]
 
 127.0.0.1 だけで待ち受け、画面 (index.html) にその起動だけの合言葉 (token) と home を
-埋め込む。画面は 3 つのタブ (agents / models・routing・priority) から、home の
-agents.json・models/<runner>.json・routing.json・templates/<name>.json・overrides.json を
-HTTP の API で読み書きする。
+埋め込む。画面は 4 つのタブ (agents / models・routing・priority・flow) から、home の
+agents.json・models/<runner>.json・routing.json・templates/<name>.json・overrides.json・
+workflows/<name>.json を HTTP の API で読み書きする。
 - GET /                 画面。studio-boot の JSON に token と home を入れる
-- GET /api/state         home の今の中身 (runners・routing・templates・examples・application)
+- GET /api/state         home の今の中身 (runners・routing・templates・examples・application・flow)
 - PUT /api/agents/<runner>         選んだモデル・enabled・billing を変える
 - POST /api/models/<runner>        手入力のモデルを足す
 - PUT /api/routing                 振り分けテンプレートを書く (前の版は routing.prev.json)
@@ -16,6 +16,8 @@ HTTP の API で読み書きする。
 - POST /api/examples/<name>/copy   同梱の例を home にコピーする
 - PUT /api/application             優先テンプレートの適用を始める
 - POST /api/application/answer     期限切れへの答え (extend / stop / forever)
+- PUT / DELETE /api/workflows/<name>  開発フローのテンプレートを home に書く・消す (flow.py と同じ検証。
+                                      消すと同梱の同名があればそれに戻る)
 - POST /api/close                  応答を返してから終わる
 
 標準出力は起動時に OPEN <url>、保存のたびに SAVED <kind> <path>、/api/close で CLOSED、
@@ -39,6 +41,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import agents  # noqa: E402
 import common  # noqa: E402
+import flow  # noqa: E402
 import select_model  # noqa: E402
 import setup_agents  # noqa: E402
 import templates  # noqa: E402
@@ -199,7 +202,55 @@ def state(home: Path, catalog: dict, now) -> dict:
         warnings.append('the applied template is missing or invalid.')
     return {'home': str(home), 'runners': runner_table, 'routing': routing,
             'templates': templates.load_all(home), 'examples': examples(),
-            'application': application, 'application_status': status, 'warnings': warnings}
+            'application': application, 'application_status': status,
+            'flow': flow_state(home), 'warnings': warnings}
+
+
+def component_summary(component: dict, source: str) -> dict:
+    """部品 1 つを、フローのタブが選ぶのに要る欄だけにする。"""
+    return {'title': component['title'], 'stages': component['stages'], 'when': component['when'],
+            'kind': component['invoke']['kind'], 'where': component['where'],
+            'memory': component['memory'], 'cost': component['cost'],
+            'fallback': flow.is_fallback(component), 'source': source,
+            'link': component.get('link')}
+
+
+def workflow_names(directory: Path) -> list:
+    if not directory.is_dir():
+        return []
+    return sorted(p.stem for p in directory.glob('*.json') if templates.NAME_RE.fullmatch(p.stem))
+
+
+def flow_state(home: Path) -> dict:
+    """フローのタブの中身。部品の一覧と、home・同梱のテンプレート (home が同名を隠す) とその誤り。"""
+    components, errors = flow.load_components(home=home)
+    bundled = {p.stem for p in flow.COMPONENTS.glob('*.json')}
+    workflows = {}
+    home_dir = home / 'workflows'
+    for name in sorted(set(workflow_names(flow.BUNDLED_WORKFLOWS)) | set(workflow_names(home_dir))):
+        has_bundled = (flow.BUNDLED_WORKFLOWS / f'{name}.json').is_file()
+        path = home_dir / f'{name}.json'
+        source = 'home' if path.is_file() else 'bundled'
+        if source == 'bundled':
+            path = flow.BUNDLED_WORKFLOWS / f'{name}.json'
+        data = common.load_json(path)
+        problems = (flow.workflow_errors(data, components) if isinstance(data, dict)
+                    else ['not readable JSON'])
+        workflows[name] = {'source': source, 'bundled': has_bundled, 'path': str(path),
+                           'data': data if isinstance(data, dict) else None, 'errors': problems}
+    return {'stages': list(flow.STAGES), 'when': list(flow.WHEN),
+            'per_pbi_when': list(flow.PER_PBI_WHEN), 'external_memory': list(flow.EXTERNAL_MEMORY),
+            'max_rework': list(flow.MAX_REWORK_RANGE), 'default': flow.DEFAULT_WORKFLOW,
+            'components': {cid: component_summary(c, 'bundled' if cid in bundled else 'home')
+                           for cid, c in components.items()},
+            'workflows': workflows, 'errors': errors}
+
+
+def workflow_path(home: Path, name: str) -> Path:
+    """home の workflows/<name>.json。名前は templates.NAME_RE に合うものだけ。"""
+    if not isinstance(name, str) or not templates.NAME_RE.fullmatch(name):
+        raise ApiError(400, 'the workflow name is not valid.')
+    return home / 'workflows' / f'{name}.json'
 
 
 def write_routing(home: Path, table: dict) -> Path:
@@ -397,6 +448,8 @@ def make_server(home: Path, port: int, token: str, on_saved=None,
                 return self.put_template(path.removeprefix('/api/templates/'))
             if path == '/api/application':
                 return self.put_application()
+            if path.startswith('/api/workflows/'):
+                return self.put_workflow(path.removeprefix('/api/workflows/'))
             self.fail(404, 'the requested path does not exist.')
 
         def handle_post(self):
@@ -416,6 +469,8 @@ def make_server(home: Path, port: int, token: str, on_saved=None,
             path = self.request_path()
             if path.startswith('/api/templates/'):
                 return self.delete_template(path.removeprefix('/api/templates/'))
+            if path.startswith('/api/workflows/'):
+                return self.delete_workflow(path.removeprefix('/api/workflows/'))
             self.fail(404, 'the requested path does not exist.')
 
         def put_agent(self, runner: str):
@@ -489,6 +544,31 @@ def make_server(home: Path, port: int, token: str, on_saved=None,
                 out.unlink()
             self.save('template', out)
             self.send_json(200, {'ok': True})
+
+        def put_workflow(self, name: str):
+            out = workflow_path(home, name)
+            body = self.body_object()
+            if body.get('name', name) != name:
+                raise ApiError(400, 'the name in the body must match the workflow name.')
+            body = dict(body, name=name)
+            with lock:
+                components, errors = flow.load_components(home=home)
+                errors += flow.workflow_errors(body, components)
+                if errors:
+                    raise ApiError(400, 'the workflow is not valid: ' + '; '.join(errors))
+                common.write_json(out, body)
+            self.save('workflow', out)
+            self.send_json(200, {'ok': True, 'name': name, 'path': str(out)})
+
+        def delete_workflow(self, name: str):
+            out = workflow_path(home, name)
+            if not out.is_file():
+                raise ApiError(404, 'the workflow is not in home.')
+            with lock:
+                out.unlink()
+            self.save('workflow', out)
+            bundled = (flow.BUNDLED_WORKFLOWS / f'{name}.json').is_file()
+            self.send_json(200, {'ok': True, 'fallback': 'bundled' if bundled else None})
 
         def copy_example(self, name: str):
             if not isinstance(name, str) or not templates.NAME_RE.fullmatch(name):
@@ -588,8 +668,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--no-open', action='store_true', help='do not open a browser')
     parser.add_argument('--timeout', type=int, default=1800,
                         help='seconds without a save before exit (0 or less: no timeout)')
-    parser.add_argument('--tab', choices=('agents', 'routing', 'priority'),
-                        help='tab to open (#agents, #routing or #priority)')
+    parser.add_argument('--tab', choices=('agents', 'routing', 'priority', 'flow'),
+                        help='tab to open (#agents, #routing, #priority or #flow)')
     return parser
 
 

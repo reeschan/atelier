@@ -160,6 +160,13 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - `setup --recommended` は、承認されたら mattpocock-skills を入れ、grilling と code-review を `component.py add` で登録する。設計の呼び出し先が無いときに `setup --recommended` を勧める 1 行は出さない。README の「External components」に、mattpocock-skills・pstack・yomiyasu を入れて登録するコマンドを並べた。
 - `test_component.py` が偽のプラグインと自分のスキルの置き場で add・remove・list を、`test_flow.py` が add で差した pstack の部品での `--decide` と plugin の status、同梱の部品が他の人のスキルを呼ばないことを確かめる。
 
+### Template Studio のフロータブ (PR 4)
+
+- 編集画面に 4 つ目のタブ「開発フロー」を足した。テンプレートを選び、9 つの工程と関所ごとに部品を並べ替え・足し・外し、候補ごとの `when` (空なら部品の既定) を選ぶ。PBI ごとの when は after: route の関所でだけ選べる。差し戻しの上限と `build.external_memory` も選ぶ。別の名前で写して新しいテンプレートを作れる。
+- 足す部品の候補は、その工程 (関所は gate) を担う部品から、まだ並んでいないものだけ。工程に後ろ盾でない部品を足すと、最後の後ろ盾の手前に入れる。
+- API は `GET /api/state` の `flow`、`PUT /api/workflows/<name>` (flow.py と同じ検証。home に書く)、`DELETE /api/workflows/<name>` (home の版だけ。同梱の同名があればそれに戻る)。同梱のテンプレートは書き換えない。
+- 部品そのもの (components/) の登録と削除は画面では扱わず、`component.py` のまま。
+
 ## Testing Decisions
 
 - generic-reorg.md と同じく、スクリプトを CLI として一時ディレクトリ (docs/pbi と home) で動かし、出力だけを見る。
