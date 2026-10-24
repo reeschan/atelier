@@ -56,8 +56,8 @@
       "build": ["build.runners"],
       "verify": ["verify.builtin"],
       "review": [
-        {"id": "review.mattpocock-skills-code-review", "when": "adapter-gate"},
         {"id": "review.pstack-interrogate", "when": "deep"},
+        {"id": "review.mattpocock-skills-code-review", "when": "adapter-gate"},
         "review.code-review",
         "review.builtin"
       ],
