@@ -399,6 +399,93 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(self.request('DELETE', '/api/templates/cheap-all-tiers')[0], 409)
         self.assertTrue((self.home / 'templates' / 'cheap-all-tiers.json').is_file())
 
+    # --- 開発フローのテンプレート ---
+
+    def bundled_workflow(self, name='jev-routed'):
+        return json.loads((SKILL / 'workflows' / f'{name}.json').read_text(encoding='utf-8'))
+
+    def test_state_reports_flow_components_and_bundled_workflows(self):
+        flow_state = self.get_state()['flow']
+        self.assertEqual(flow_state['stages'][0], 'understand')
+        self.assertIn('deep', flow_state['when'])
+        self.assertEqual(flow_state['default'], 'jev-routed')
+        self.assertEqual(flow_state['errors'], [])
+        review = flow_state['components']['review.code-review']
+        self.assertEqual(review['source'], 'bundled')
+        self.assertFalse(review['fallback'])
+        self.assertTrue(flow_state['components']['review.builtin']['fallback'])
+        routed = flow_state['workflows']['jev-routed']
+        self.assertEqual(routed['source'], 'bundled')
+        self.assertEqual(routed['errors'], [])
+        self.assertEqual(routed['data']['fix']['max_rework'], 2)
+
+    def test_put_workflow_writes_home_and_delete_falls_back_to_bundled(self):
+        workflow = self.bundled_workflow()
+        workflow['fix']['max_rework'] = 3
+        workflow['stages']['review'] = ['review.builtin']
+        code, body = self.request('PUT', '/api/workflows/jev-routed', workflow)
+        self.assertEqual(code, 200, body)
+        written = self.read_json('workflows/jev-routed.json')
+        self.assertEqual(written['fix']['max_rework'], 3)
+        self.assertEqual(self.saved[-1][0], 'workflow')
+        routed = self.get_state()['flow']['workflows']['jev-routed']
+        self.assertEqual(routed['source'], 'home')
+        self.assertTrue(routed['bundled'])
+        code, body = self.request('DELETE', '/api/workflows/jev-routed')
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body)['fallback'], 'bundled')
+        self.assertFalse((self.home / 'workflows' / 'jev-routed.json').exists())
+        self.assertEqual(self.get_state()['flow']['workflows']['jev-routed']['source'], 'bundled')
+
+    def test_put_workflow_with_a_new_name_and_delete_leaves_no_fallback(self):
+        workflow = self.bundled_workflow()
+        del workflow['name']
+        code, body = self.request('PUT', '/api/workflows/mine', workflow)
+        self.assertEqual(code, 200, body)
+        self.assertEqual(self.read_json('workflows/mine.json')['name'], 'mine')
+        code, body = self.request('DELETE', '/api/workflows/mine')
+        self.assertEqual(json.loads(body)['fallback'], None)
+        self.assertNotIn('mine', self.get_state()['flow']['workflows'])
+
+    def test_put_workflow_refuses_invalid_ones_and_writes_nothing(self):
+        workflow = self.bundled_workflow()
+        workflow['stages']['review'] = ['review.code-review']
+        code, body = self.request('PUT', '/api/workflows/jev-routed', workflow)
+        self.assertEqual(code, 400)
+        self.assertIn('the last component must be builtin', json.loads(body)['error'])
+        workflow = self.bundled_workflow()
+        workflow['build']['external_memory'] = 'full'
+        self.assertEqual(self.request('PUT', '/api/workflows/jev-routed', workflow)[0], 400)
+        workflow = self.bundled_workflow()
+        self.assertEqual(self.request('PUT', '/api/workflows/other', workflow)[0], 400)
+        self.assertEqual(self.request('PUT', '/api/workflows/Bad_Name', workflow)[0], 400)
+        self.assertEqual(self.request('PUT', '/api/workflows/jev-routed', ['x'])[0], 400)
+        self.assertFalse((self.home / 'workflows').exists())
+        self.assertEqual(self.saved, [])
+        self.assertEqual(self.request('DELETE', '/api/workflows/jev-routed')[0], 404)
+        self.assertEqual(self.request('DELETE', '/api/workflows/..')[0], 400)
+
+    def test_home_components_can_be_placed_in_a_workflow(self):
+        self.write_json('components/review.mine.json', {
+            'id': 'review.mine', 'stages': ['review'],
+            'title': {'ja': '自分のレビュー', 'en': 'My review'},
+            'invoke': {'kind': 'skill', 'name': 'mine'}, 'doc': 'appendix/review.md',
+            'where': 'subagent', 'memory': 'none', 'when': 'always', 'cost': 'mid',
+            'requires': {'skills': ['mine']}, 'forbid': [], 'interactive': False,
+            'calls_back': False, 'license': 'MIT', 'link': 'local'})
+        components = self.get_state()['flow']['components']
+        self.assertEqual(components['review.mine']['source'], 'home')
+        workflow = self.bundled_workflow()
+        workflow['stages']['review'] = [{'id': 'review.mine', 'when': 'deep'}, 'review.builtin']
+        code, body = self.request('PUT', '/api/workflows/jev-routed', workflow)
+        self.assertEqual(code, 200, body)
+        # 同梱の id を使う home の部品は誤りとして返り、その間は保存も断る
+        self.write_json('components/review.builtin.json',
+                        json.loads((SKILL / 'components' / 'review.builtin.json').read_text(encoding='utf-8')))
+        flow_state = self.get_state()['flow']
+        self.assertIn('a bundled component already has this id', ' '.join(flow_state['errors']))
+        self.assertEqual(self.request('PUT', '/api/workflows/jev-routed', workflow)[0], 400)
+
     # --- close ---
 
     def test_close_calls_the_callback_after_the_response(self):
