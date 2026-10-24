@@ -108,7 +108,7 @@ home is optional; a missing file means "not set", and the skill creates a file o
 | `routing.json` | The routing template that maps each tier to a step order |
 | `templates/<name>.json` | One priority template |
 | `workflows/<name>.json` | A workflow template; `flow.py` reads it before the bundled one of the same name |
-| `components/<id>.json` | A component you add, such as one copied from `examples/components/`; it cannot reuse a bundled id |
+| `components/<id>.json` | An external component written by `component.py add`; it cannot reuse a bundled id |
 | `overrides.json` | The source of truth for the current application: `synced_at`, `updated_at` and `application` |
 | `history.jsonl` | One line per finished application, with `ended_at` and `ended_how` (replaced, stopped, declined, expired) |
 | `web.json` | The URL of the optional priority-templates page; sync runs only while this file has a URL |

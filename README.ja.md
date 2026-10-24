@@ -126,7 +126,7 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 
 ## フェーズ・アダプター
 
-**アダプター**は、作業の決まった場面で、すでに入っているスキルを呼ぶための取り決めです。同梱のテンプレートが呼ぶのは、このスキル自身の手順と Claude Code の built-in のレビューだけです。他の人のスキル (mattpocock-skills・pstack・yomiyasu) を呼ぶ部品は `examples/components/` に、それを使うテンプレートの例は `examples/workflows/` に置いてあり、home の `components/` と `workflows/` に写すと使えます。
+**アダプター**は、作業の決まった場面で、すでに入っているスキルを呼ぶための取り決めです。同梱のテンプレートが呼ぶのは、このスキル自身の手順と Claude Code の built-in のレビューだけです。mattpocock-skills・pstack・yomiyasu などほかのスキルは、利用者が入れて外部部品として足します (下の「外部部品」)。
 
 | フェーズ | いつ | 呼び出し先 (優先順) | 補足 |
 |---|---|---|---|
@@ -154,6 +154,34 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 
 表に無い呼び出し先を使えるのは、ここに名前を書いたときだけです。名前が似ているだけのスキルが勝手に使われることはなく、モデルから呼べないスキル (`disable-model-invocation`) も使いません。
 
+### 外部部品
+
+このスキルは、他の人のスキルも、その部品の定義も同梱しません。スキルは Claude Code のプラグインのコマンドで入れ、`component.py add` で登録します。入ったスキルの `SKILL.md` を読んで部品を home の `components/` に書き、home の `workflows/` のテンプレート (既定 `jev-routed`。初回は同梱のものを写します) に差します。`component.py remove <id>` で外し、`component.py list` で一覧を見られます。`~/.claude/skills/<name>/` にある自分のスキルも同じ形で使えます (`add <name>`)。
+
+```sh
+S=skills/pbi-orchestration-jev   # スキルを入れた場所
+
+# mattpocock-skills (MIT): 設計に grilling、最終レビューに code-review
+/plugin install mattpocock-skills@claude-plugins-official
+python $S/component.py add mattpocock-skills:grilling --stage design --when ask-or-decide
+python $S/component.py add mattpocock-skills:code-review --stage review --when adapter-gate
+
+# pstack (MIT、cursor/plugins): モデルから呼べないスキルなので read-skill の部品になる
+/plugin marketplace add cursor/plugins
+/plugin install pstack@cursor-plugins
+python $S/component.py add pstack:how --stage understand --when clearly-complex
+python $S/component.py add pstack:blast-radius --stage gate --after route --when coupling-high
+python $S/component.py add pstack:architect --stage gate --after route --when tier-opus --forbid "do not run Phase D (implementation) or Phase E"
+python $S/component.py add pstack:interrogate --stage review --when deep
+
+# yomiyasu (MIT): 日本語の完了報告の言い回しを整える
+/plugin marketplace add nanaism/yomiyasu
+/plugin install yomiyasu@yomiyasu
+python $S/component.py add yomiyasu:yomiyasu --stage gate --after finish
+```
+
+別のテンプレートに差すときは `--workflow high-model` を足します。スキルが入っていない、`when` がその場所に合わない、同梱の部品と id が重なる、のどれかなら終了コード 2 で止まり、何も残しません。
+
 ### おすすめ: mattpocock-skills
 
 既定では、このスキルと Claude Code の外にあるものは使いません。`/pbi-orchestration-jev setup --recommended` が、推奨のセットを 1 つだけ案内します。はいと答えるまで何も入れません。
@@ -164,7 +192,7 @@ claude plugin install mattpocock-skills@claude-plugins-official --scope user
 ```
 
 - [mattpocock/skills](https://github.com/mattpocock/skills) — MIT (Copyright (c) 2026 Matt Pocock)。設計に grilling と domain-modeling、最終レビューに code-review が加わります。
-- `setup --recommended` は、名前・使うフェーズ・リンク・ライセンス・入れるコマンドを見せます。1 回承認すると、設計者が install のコマンドを実行し、`examples/components/` の 3 つの部品を home に写して、それを使う `workflows/jev-routed.json` を home に書きます。同梱のスクリプトは何もインストールしません (パッケージのインストールは、パッケージのスキャンで危険なコマンドとして検出されるためです)。
+- `setup --recommended` は、名前・使うフェーズ・リンク・ライセンス・入れるコマンドを見せます。1 回承認すると、設計者が install のコマンドを実行し、grilling と code-review を外部部品として登録します。同梱のスクリプトは何もインストールしません (パッケージのインストールは、パッケージのスキャンで危険なコマンドとして検出されるためです)。
 - 「いいえ」と答えたときや、`claude` コマンドが PATH に無いときは、コマンドを表示するだけです。
 - 入れたあとに `/reload-plugins` か Claude Code の再起動が要ります。それまではプラグインのスキルが一覧に出ず、アダプターは組み込みの手順のまま動きます。
 
@@ -313,6 +341,7 @@ skills/pbi-orchestration-jev/
 ├── SKILL.md                    # スキル本文 (オーケストレーターが従うワークフローのエンジン)
 ├── CONTEXT.md                  # 用語集 (英語と日本語の対訳)
 ├── flow.py                     # 開発フローのテンプレートを解決・検証し、工程ごとの計画を表で出す
+├── component.py                # 入れたスキルを外部部品として home に登録する
 ├── workflows/                  # 同梱のテンプレート (jev-routed・high-model)
 ├── components/                 # コンポーネントの定義 (各工程に差す部品と、その手順の doc。このスキルと Claude Code の built-in だけ)
 ├── runners.md                  # opencode / Codex / Antigravity / dsh への渡し方
@@ -337,8 +366,6 @@ skills/pbi-orchestration-jev/
 ├── web/priority-templates.html # 優先テンプレートを見て設定する Web ページ (Artifact)
 ├── examples/routing/           # 外部の実行先を使う振り分けの見本 (multi-runner.json)
 ├── examples/templates/         # 優先テンプレートの例 (home の templates/ にコピーして使う)
-├── examples/components/        # 他の人のスキル (mattpocock-skills・pstack・yomiyasu) を呼ぶ部品 (home の components/ にコピーして使う)
-├── examples/workflows/         # それを使うテンプレートの例 (jev-routed-pstack・high-model-pstack)
 ├── unchanged.py                # PBI が触ってはいけないファイルをハッシュで確かめる
 ├── jev_mcp.py                  # jev-mcp: PBI を MCP クライアントに渡す MCP サーバー (stdio / HTTP)
 ├── agent_stats.py              # 会話記録からトークン・キャッシュ・文脈の大きさを集計

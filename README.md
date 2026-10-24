@@ -128,7 +128,7 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 
 ## Phase adapters
 
-An **adapter** calls a skill you already have at fixed phases of a run. The bundled templates call only this skill's own procedures and the reviews built into Claude Code. Components for other people's skills (mattpocock-skills, pstack, yomiyasu) live in `examples/components/` with example templates in `examples/workflows/`; copy them into your home's `components/` and `workflows/` to use them.
+An **adapter** calls a skill you already have at fixed phases of a run. The bundled templates call only this skill's own procedures and the reviews built into Claude Code. Other skills, such as mattpocock-skills, pstack and yomiyasu, are installed by you and added as external components (see [External components](#external-components)).
 
 | Phase | When | Callees, in priority order | Notes |
 |---|---|---|---|
@@ -156,6 +156,34 @@ To stop a phase or name a callee, add `adapters` to `agents.json` in your home. 
 
 Naming a skill here is the only way to use a callee outside the table; a name that merely looks like one of the above is never picked up on its own, and skills marked `disable-model-invocation` are never used.
 
+### External components
+
+This skill bundles no one else's skill and no component for one. Install a skill with Claude Code's plugin commands, then register it with `component.py add`: it reads the installed `SKILL.md`, writes the component to `components/` in your home, and puts it into a template in your home's `workflows/` (default `jev-routed`, copied from the bundled one the first time). `component.py remove <id>` takes it out, and `component.py list` shows what you have. Your own skills in `~/.claude/skills/<name>/` work the same way (`add <name>`).
+
+```sh
+S=skills/pbi-orchestration-jev   # or wherever the skill is installed
+
+# mattpocock-skills (MIT): grilling for design, code-review for the final review
+/plugin install mattpocock-skills@claude-plugins-official
+python $S/component.py add mattpocock-skills:grilling --stage design --when ask-or-decide
+python $S/component.py add mattpocock-skills:code-review --stage review --when adapter-gate
+
+# pstack (MIT, cursor/plugins): read-skill components, since its skills cannot be invoked by the model
+/plugin marketplace add cursor/plugins
+/plugin install pstack@cursor-plugins
+python $S/component.py add pstack:how --stage understand --when clearly-complex
+python $S/component.py add pstack:blast-radius --stage gate --after route --when coupling-high
+python $S/component.py add pstack:architect --stage gate --after route --when tier-opus --forbid "do not run Phase D (implementation) or Phase E"
+python $S/component.py add pstack:interrogate --stage review --when deep
+
+# yomiyasu (MIT): polishes the wording of a Japanese completion report
+/plugin marketplace add nanaism/yomiyasu
+/plugin install yomiyasu@yomiyasu
+python $S/component.py add yomiyasu:yomiyasu --stage gate --after finish
+```
+
+Add `--workflow high-model` to put a component into another template. A skill that is not installed, a component whose `when` does not fit its place, or an id that a bundled component already uses stops with exit code 2 and leaves nothing behind.
+
 ### Recommended: mattpocock-skills
 
 Nothing outside this skill and Claude Code is used by default. `/pbi-orchestration-jev setup --recommended` offers one set, and installs nothing without your yes:
@@ -166,7 +194,7 @@ claude plugin install mattpocock-skills@claude-plugins-official --scope user
 ```
 
 - [mattpocock/skills](https://github.com/mattpocock/skills) — MIT, Copyright (c) 2026 Matt Pocock. It brings grilling and domain-modeling for design, and code-review for the final review.
-- `setup --recommended` shows the name, the phases it fills, the link, the licence and the command. After you approve once, the orchestrator runs the install command itself, copies the three components from `examples/components/` into your home and writes a `workflows/jev-routed.json` there that uses them; the bundled scripts never install anything (package installation is exactly what package scanners flag).
+- `setup --recommended` shows the name, the phases it fills, the link, the licence and the command. After you approve once, the orchestrator runs the install command itself, and registers grilling and code-review as external components; the bundled scripts never install anything (package installation is exactly what package scanners flag).
 - If you answer no, or `claude` is not on the PATH, you only get the command to run yourself.
 - Run `/reload-plugins` or restart Claude Code afterwards. Until then the plugin's skills are not listed, and the adapters keep using the built-in procedures.
 
@@ -315,6 +343,7 @@ skills/pbi-orchestration-jev/
 ├── SKILL.md                    # the skill: the workflow engine the orchestrator follows
 ├── CONTEXT.md                  # glossary (English and Japanese terms)
 ├── flow.py                     # resolves and checks a workflow template; prints the plan per stage
+├── component.py                # registers an installed skill as an external component in your home
 ├── workflows/                  # bundled workflow templates (jev-routed, high-model)
 ├── components/                 # component definitions: what fills each stage, and the doc that runs it (this skill and Claude Code built-ins only)
 ├── runners.md                  # how to hand PBIs to opencode / Codex / Antigravity / dsh
@@ -342,8 +371,6 @@ skills/pbi-orchestration-jev/
 ├── web/priority-templates.html # web page (artifact) to view and set priority templates
 ├── examples/routing/           # example routing template with external runners (multi-runner.json)
 ├── examples/templates/         # example priority templates (copy to templates/ in your home)
-├── examples/components/        # components for other people's skills: mattpocock-skills, pstack, yomiyasu (copy to components/ in your home)
-├── examples/workflows/         # example templates that use them (jev-routed-pstack, high-model-pstack)
 ├── unchanged.py                # hash snapshot to check files a PBI must not touch
 ├── jev_mcp.py                  # jev-mcp: MCP server that hands PBIs to MCP clients (stdio / HTTP)
 ├── agent_stats.py              # tokens, cache rebuilds and context size from transcripts

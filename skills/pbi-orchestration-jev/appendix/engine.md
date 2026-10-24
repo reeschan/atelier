@@ -1,6 +1,6 @@
 # Appendix: the workflow engine
 
-Read this when you pick a component, cannot decide a `when`, run a `read-skill` component, or write STATUS.md. Templates live in `workflows/`, components in `components/` and `<home>/components/`; the contract is `docs/specs/atelier-workflow.md` in the repository.
+Read this when you pick a component, cannot decide a `when`, run a `read-skill` component, or write STATUS.md. Templates live in `workflows/`, components in `components/` and `<home>/components/` (`## External components`); the contract is `docs/specs/atelier-workflow.md` in the repository.
 
 ## The flow table
 
@@ -57,17 +57,20 @@ The per-PBI values are decided by a script. Once every `route.json` exists, run 
 - The template's `build.external_memory` says whether external runners may `get` refs themselves (`refs-only`) or not (`none`, the default). Either way you copy the listed refs into their prompt (`runners.md`).
 - `record_run.py` checks every attempt against this: it counts the worker's memory calls (from the agent's transcript, or by scanning an external runner's logs) and marks a search, a write, a `get` under `none`, or a `get` of a ref not in the PBI's Refs as `memory.violation` in `runs.jsonl`.
 
-## Other people's skills
+## External components
 
-The bundled components cover only this skill and the skills built into Claude Code (`code-review`, `security-review`). Components that call other people's skills (mattpocock-skills, pstack, yomiyasu) are not bundled: they sit in `examples/components/`, with example templates in `examples/workflows/` (`jev-routed-pstack`, `high-model-pstack`).
+The bundled components cover only this skill and the skills built into Claude Code (`code-review`, `security-review`). This skill ships no one else's skill and no component for one. Any other skill, the user's own included, becomes an **external component**:
 
-- To use them, the user copies the components to `<home>/components/` and a template to `<home>/workflows/` (or the work's `docs/pbi/workflow.json`). `flow.py` reads home components after the bundled ones.
+1. The user installs the skill with Claude Code's plugin commands (`/plugin marketplace add <repo>`, `/plugin install <plugin>@<marketplace>`), or keeps their own in `~/.claude/skills/<name>/`.
+2. `python <skill>/component.py add <plugin>:<name> --stage <stage> [--after <stage>] [--when W] [--forbid TEXT]` reads the installed SKILL.md and writes `<home>/components/<stage>.<plugin>-<name>.json`: `skill` when the model can invoke it, `read-skill` when it has `disable-model-invocation`, with the license and link from the plugin's `plugin.json`. It puts the component first in that stage of `<home>/workflows/<workflow>.json` (default `jev-routed`, copied from the bundled one when missing), or last in the gate after `--after`. It checks the result like `flow.py` and leaves nothing on an error.
+3. `component.py remove <id>` takes it out again; `component.py list` shows bundled and external components.
+
 - A home component cannot reuse a bundled id; `flow.py` reports it as an error, so every stage keeps its fallback.
-- Never copy them for the user unless asked (`setup --recommended`, `appendix/adapters.md`).
+- Run `component.py` only when the user asks for that skill (or `setup --recommended`, `appendix/adapters.md`). The commands for the skills this skill was built around are in the README ("External components").
 
 ## read-skill components
 
-A `read-skill` component points at a skill that the model cannot invoke (all pstack skills, in `examples/components/`). Run it like this:
+A `read-skill` component points at a skill that the model cannot invoke (all pstack skills). Run it like this:
 
 1. The status column gives the SKILL.md path (`plugin ok <path>`); `flow.py` looked under `~/.claude/plugins/` (or `PBI_PLUGINS_DIR`). With `plugin missing`, record `fallback (plugin not installed)` and take the next row.
 2. Start a subagent of the row's `where` type. In its prompt: the SKILL.md path to read and follow, the harness notes to read first when the plugin has them (pstack: `docs/harness/claude-code.md`, two levels above `skills/`), the component's `forbid` items, the request or the PBI path, and the output file below.

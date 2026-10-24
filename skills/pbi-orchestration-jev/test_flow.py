@@ -1,13 +1,15 @@
 """flow.py の解決順・検証・表・終了コードを、CLI を subprocess で動かして確かめる。
 
-同梱の 2 つのプリセットと examples/ の 2 つの例 (home に写したもの) が誤りなく解決されること、
-同梱の部品が自作か Claude Code の built-in だけであること、home の部品の読み込みと id の重なり、テンプレートの解決順 (作業リポジトリ → home → 同梱)、
+同梱の 2 つのプリセットと、component.py add で pstack の部品 (偽のプラグイン) を差したテンプレートが
+誤りなく解決されること、同梱の部品が自作か Claude Code の built-in だけであること、home の部品と id の重なり、テンプレートの解決順 (作業リポジトリ → home → 同梱)、
 検証の誤り (知らない工程・工程の抜け・工程に合わない部品・最後が後ろ盾でない・知らない部品・
 PBI ごとの when の置き場所・max_rework の範囲・external_memory の値)、requires の cli と env の status、
 同梱のコンポーネントの定義がすべて形どおりであることを見る。home は必ず一時ディレクトリにして、
 実際のユーザーの home を読まないようにする。
 """
+import contextlib
 import copy
+import io
 import json
 import os
 import shutil
@@ -16,18 +18,19 @@ import sys
 import tempfile
 import unittest
 import uuid
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, 'flow.py')
 sys.path.insert(0, HERE)
 
+import component  # noqa: E402
 import flow  # noqa: E402
 
 HEADER = 'stage\tcomponent\tinvoke\twhere\tmemory\twhen\tstatus\tdoc'
 PRESETS = ('jev-routed', 'high-model')
-# 他の人のスキルを足した例。home に写したときだけ使える
-EXAMPLES = ('jev-routed-pstack', 'high-model-pstack')
-EXAMPLES_DIR = os.path.join(HERE, 'examples')
+# 偽の pstack に置くスキル (どれも disable-model-invocation なので read-skill の部品になる)
+PSTACK_SKILLS = ('how', 'blast-radius', 'architect', 'interrogate')
 
 
 def write_json(path, data):
@@ -64,10 +67,30 @@ class FlowCliTest(unittest.TestCase):
         self.assertEqual(lines[1], HEADER)
         return [line.split('\t') for line in lines[2:]]
 
-    def install_examples(self):
-        '''examples/ の部品とテンプレートを home に写す (使う人が他の人のスキルを足すときと同じ)。'''
-        for sub in ('components', 'workflows'):
-            shutil.copytree(os.path.join(EXAMPLES_DIR, sub), os.path.join(self.home, sub), dirs_exist_ok=True)
+    def install_pstack(self):
+        '''偽の pstack をプラグインの置き場に作り、component.py add で home の jev-routed に差す。
+
+        how は理解、blast-radius と architect は振り分けのあとの関所 (PBI ごと)、interrogate は deep のレビュー。
+        '''
+        self.plugins = os.path.join(self.dir, 'plugins')
+        root = os.path.join(self.plugins, 'cache', 'cursor-plugins', 'pstack', '0.15.30')
+        write_json(os.path.join(root, '.claude-plugin', 'plugin.json'),
+                   {'name': 'pstack', 'license': 'MIT', 'repository': 'https://github.com/cursor/plugins'})
+        for name in PSTACK_SKILLS:
+            path = os.path.join(root, 'skills', name, 'SKILL.md')
+            os.makedirs(os.path.dirname(path))
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(f'---\nname: {name}\ndescription: {name}\ndisable-model-invocation: true\n---\n')
+        adds = [
+            ['pstack:how', '--stage', 'understand', '--when', 'clearly-complex'],
+            ['pstack:blast-radius', '--stage', 'gate', '--after', 'route', '--when', 'coupling-high'],
+            ['pstack:architect', '--stage', 'gate', '--after', 'route', '--when', 'tier-opus'],
+            ['pstack:interrogate', '--stage', 'review', '--when', 'deep'],
+        ]
+        with mock.patch.dict(os.environ, {'PBI_PLUGINS_DIR': self.plugins}), contextlib.redirect_stdout(io.StringIO()):
+            for args in adds:
+                self.assertEqual(component.main(['--home', self.home, 'add', *args]), 0, args)
+        return {'PBI_PLUGINS_DIR': self.plugins}
 
     def errors_for(self, workflow):
         write_json(os.path.join(self.base, 'workflow.json'), workflow)
@@ -76,8 +99,7 @@ class FlowCliTest(unittest.TestCase):
         return result.stdout.splitlines()
 
     def test_presets_resolve(self):
-        self.install_examples()
-        for name in PRESETS + EXAMPLES:
+        for name in PRESETS:
             with self.subTest(name=name):
                 result = self.run_flow('--workflow', name)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -85,24 +107,24 @@ class FlowCliTest(unittest.TestCase):
                 stages = [row[0] for row in rows if not row[0].startswith('gate')]
                 self.assertEqual(list(dict.fromkeys(stages)), list(flow.STAGES))
 
+    def test_added_components_resolve(self):
+        env = self.install_pstack()
+        result = self.run_flow(env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        rows = self.rows(result.stdout)
+        self.assertEqual([row[1] for row in rows if row[0] == 'understand'], ['understand.pstack-how', 'understand.builtin'])
+        self.assertEqual([row[1] for row in rows if row[0] == 'build'], ['build.runners'])
+
     def test_default_is_jev_routed(self):
         result = self.run_flow()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(result.stdout.startswith('workflow jev-routed ('))
 
     def test_build_uses_the_worker_in_every_preset(self):
-        self.install_examples()
-        for name in PRESETS + EXAMPLES:
+        for name in PRESETS:
             with self.subTest(name=name):
                 rows = self.rows(self.run_flow('--workflow', name).stdout)
                 self.assertEqual([row[1] for row in rows if row[0] == 'build'], ['build.runners'])
-
-    def test_examples_need_their_components_in_home(self):
-        missing = self.run_flow('--workflow', 'jev-routed-pstack')
-        self.assertEqual(missing.returncode, 2)
-        shutil.copytree(os.path.join(EXAMPLES_DIR, 'workflows'), os.path.join(self.home, 'workflows'))
-        lines = self.run_flow('--workflow', 'jev-routed-pstack').stdout.splitlines()
-        self.assertIn('error design: unknown component design.grilling', lines)
 
     def test_home_component_cannot_replace_a_bundled_one(self):
         with open(os.path.join(HERE, 'components', 'review.builtin.json'), encoding='utf-8') as f:
@@ -111,12 +133,12 @@ class FlowCliTest(unittest.TestCase):
         self.assertIn('error home component review.builtin.json: a bundled component already has this id', lines)
 
     def test_gates_follow_their_stage(self):
-        self.install_examples()
-        rows = self.rows(self.run_flow('--workflow', 'jev-routed-pstack').stdout)
+        env = self.install_pstack()
+        rows = self.rows(self.run_flow(env=env).stdout)
         places = [row[0] for row in rows]
         self.assertEqual(places.index('gate after plan'), places.index('plan') + 1)
         route_gates = [row[1] for row in rows if row[0] == 'gate after route']
-        self.assertEqual(route_gates, ['gate.pstack-blast-radius', 'design.pstack-architect'])
+        self.assertEqual(route_gates, ['gate.pstack-blast-radius', 'gate.pstack-architect'])
 
     def test_resolution_order(self):
         custom = bundled('jev-routed')
@@ -130,7 +152,7 @@ class FlowCliTest(unittest.TestCase):
         self.assertTrue(self.run_flow('--workflow', 'jev-routed').stdout.startswith('workflow from-home ('))
 
     def test_validation_errors(self):
-        self.install_examples()
+        self.install_pstack()
         good = bundled('jev-routed')
         cases = []
 
@@ -164,8 +186,8 @@ class FlowCliTest(unittest.TestCase):
     def test_decide_per_pbi_gates_and_deep_review(self):
         self.write_route('PBI-001', 'opus', 1, 'normal')
         self.write_route('PBI-002', 'sonnet', 2, 'deep')
-        self.install_examples()
-        result = self.run_flow('--workflow', 'jev-routed-pstack', '--decide')
+        env = self.install_pstack()
+        result = self.run_flow('--decide', env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = result.stdout.splitlines()
         self.assertEqual(lines[1], flow.DECIDE_HEADER)
@@ -173,8 +195,8 @@ class FlowCliTest(unittest.TestCase):
         self.assertEqual(rows, [
             ['gate after route', 'gate.pstack-blast-radius', 'PBI-001', 'skip', 'coupling 1'],
             ['gate after route', 'gate.pstack-blast-radius', 'PBI-002', 'run', 'coupling 2'],
-            ['gate after route', 'design.pstack-architect', 'PBI-001', 'run', 'tier opus'],
-            ['gate after route', 'design.pstack-architect', 'PBI-002', 'skip', 'tier sonnet'],
+            ['gate after route', 'gate.pstack-architect', 'PBI-001', 'run', 'tier opus'],
+            ['gate after route', 'gate.pstack-architect', 'PBI-002', 'skip', 'tier sonnet'],
             ['review', 'review.pstack-interrogate', 'all', 'run', 'review deep: PBI-002'],
         ])
 
@@ -184,26 +206,15 @@ class FlowCliTest(unittest.TestCase):
         self.assertIn('no PBI-*.route.json yet', result.stderr)
 
     def test_read_skill_status_finds_the_plugin(self):
-        self.install_examples()
-        plugins = os.path.join(self.dir, 'plugins')
-        missing = self.run_flow('--workflow', 'high-model-pstack', env={'PBI_PLUGINS_DIR': plugins})
-        self.assertIn('plugin missing pstack', missing.stdout)
-        skill = os.path.join(plugins, 'cache', 'cursor-plugins', 'pstack', '0.15.30', 'skills', 'how', 'SKILL.md')
-        os.makedirs(os.path.dirname(skill))
-        with open(skill, 'w', encoding='utf-8') as f:
-            f.write('# how\n')
-        rows = self.rows(self.run_flow('--workflow', 'high-model-pstack', env={'PBI_PLUGINS_DIR': plugins}).stdout)
+        env = self.install_pstack()
+        interrogate_dir = os.path.join(self.plugins, 'cache', 'cursor-plugins', 'pstack', '0.15.30', 'skills', 'interrogate')
+        shutil.rmtree(interrogate_dir)
+        rows = self.rows(self.run_flow(env=env).stdout)
         [how] = [row for row in rows if row[1] == 'understand.pstack-how']
+        skill = os.path.join(self.plugins, 'cache', 'cursor-plugins', 'pstack', '0.15.30', 'skills', 'how', 'SKILL.md')
         self.assertEqual(how[6], f'plugin ok {skill}')
         [interrogate] = [row for row in rows if row[1] == 'review.pstack-interrogate']
         self.assertEqual(interrogate[6], 'plugin missing pstack')
-
-    def test_yomiyasu_runs_after_finish_in_every_example(self):
-        self.install_examples()
-        for name in EXAMPLES:
-            with self.subTest(name=name):
-                rows = self.rows(self.run_flow('--workflow', name).stdout)
-                self.assertEqual(rows[-1][:2], ['gate after finish', 'gate.yomiyasu'])
 
     def test_missing_dir_and_workflow(self):
         missing = subprocess.run([sys.executable, SCRIPT, os.path.join(self.dir, 'nope'), '--home', self.home],
@@ -220,13 +231,8 @@ class ComponentDefinitionsTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertGreater(len(components), 0)
 
-    def test_example_components_are_valid(self):
-        components, errors = flow.load_components(home=EXAMPLES_DIR)
-        self.assertEqual(errors, [])
-        self.assertIn('gate.yomiyasu', components)
-
     def test_bundled_components_call_no_one_elses_skill(self):
-        # 同梱するのはこのスキルの部品と Claude Code の built-in だけ。他の人のスキルは examples/ に置く
+        # 同梱するのはこのスキルの部品と Claude Code の built-in だけ。他の人のスキルは component.py add で home に足す
         components, _ = flow.load_components()
         for component in components.values():
             with self.subTest(component=component['id']):
@@ -252,13 +258,6 @@ class ComponentDefinitionsTest(unittest.TestCase):
         for component in components.values():
             if component['where'] == 'runner':
                 self.assertNotEqual(component['memory'], 'full', component['id'])
-
-    def test_pstack_components_are_read_skill(self):
-        # pstack のスキルは disable-model-invocation なので Skill ツールでは呼べない
-        components, _ = flow.load_components(home=EXAMPLES_DIR)
-        for component in components.values():
-            if 'pstack' in component.get('requires', {}).get('plugins', []):
-                self.assertEqual(component['invoke']['kind'], 'read-skill', component['id'])
 
     def test_status_for_requires(self):
         base = {'invoke': {'kind': 'script', 'path': 'verify.py'}}

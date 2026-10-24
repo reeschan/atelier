@@ -6,8 +6,8 @@
 同梱の workflows/jev-routed.json。--workflow NAME を渡すと <home>/workflows/NAME.json → 同梱の workflows/NAME.json
 (<pbi-dir>/workflow.json は読まない)。home は common.resolve_home で解決する。
 コンポーネントの定義は同梱の components/<id>.json と <home>/components/<id>.json を読み、then に書いた部品が実在することも
-確かめる。同梱するのはこのスキルの部品と Claude Code の built-in だけで、他の人のスキルを呼ぶ部品は examples/components/ に
-置いてあり、使う人が home に写す。home の部品は同梱の id を上書きできない (後ろ盾を守るため)。
+確かめる。同梱するのはこのスキルの部品と Claude Code の built-in だけ。他の人のスキルは利用者がプラグインのコマンドで
+入れ、component.py add がその SKILL.md から home の部品を書く。home の部品は同梱の id を上書きできない (後ろ盾を守るため)。
 
 検証すること: 9 つの工程がすべてあること・知らない工程が無いこと、各工程の候補が 1 つ以上で、どれも実在し、
 その工程を担う部品であること、最後の候補が後ろ盾 (builtin か、requires の無い script) であること、

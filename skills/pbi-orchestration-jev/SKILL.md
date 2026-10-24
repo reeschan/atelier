@@ -32,7 +32,7 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 |---|---|
 | Argument `resume`, or the end of a wave | `appendix/handoff.md` |
 | Argument `setup`, `setup --recommended`, `models` or `templates`, or home has no `agents.json` | `appendix/setup.md` |
-| Picking a component, a `when` you cannot decide, a `read-skill` component, writing a stage record | `appendix/engine.md` |
+| Picking a component, a `when` you cannot decide, a `read-skill` component, writing a stage record, the user asks to add a skill to the workflow | `appendix/engine.md` |
 | A component is picked | its `doc` column in the flow table |
 | Choosing the work key, writing refs, handing off, promoting at the end | `appendix/memory.md` |
 | Priority templates: the start-time sync, applying or editing one in chat, an expired application | `appendix/priority-templates.md` |
