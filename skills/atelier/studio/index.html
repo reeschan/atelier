@@ -1361,7 +1361,7 @@ footer { font-size: 12px; color: var(--ink-soft); }
       const place = 'opt:' + stage;
       const items = Array.isArray(step.components) ? step.components : (step.components = []);
       body = '<label class="field-row"><span>' + esc(t('flowGateAfter')) + '</span><select data-role="flow-opt-after" data-stage="' + esc(stage) + '">' +
-        info.stages.map((s) => '<option value="' + esc(s) + '"' + (s === step.after ? ' selected' : '') + '>' + esc(t('stage_' + s)) + ' (' + esc(s) + ')</option>').join('') +
+        info.optional_places.map((s) => '<option value="' + esc(s) + '"' + (s === step.after ? ' selected' : '') + '>' + esc(t('stage_' + s)) + ' (' + esc(s) + ')</option>').join('') +
         '</select></label>' +
         '<div class="steps">' + items.map((item, i) => flowRow(item, i, items.length, place, false)).join('') + '</div>' +
         (items.length ? '' : '<p class="warn-text">' + esc(t('flowEmptyStage')) + '</p>') +

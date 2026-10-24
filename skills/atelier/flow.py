@@ -56,6 +56,8 @@ OPTIONAL = ('ui-design', 'marketing')
 # optional に置くときの既定の after (component.py add が使う)
 OPTIONAL_AFTER = {'ui-design': 'design', 'marketing': 'understand'}
 ROLES = STAGES + (GATE,) + OPTIONAL
+# オプションの工程を置ける after。finish のあとは完了報告に載らないので置かない
+OPTIONAL_PLACES = STAGES[:-1]
 INVOKE_KINDS = ('skill', 'read-skill', 'script', 'builtin')
 WHERE = ('main', 'subagent-readonly', 'subagent', 'runner')
 MEMORY = ('full', 'refs-only', 'none')
@@ -217,9 +219,9 @@ def workflow_errors(workflow, components: dict) -> list[str]:
         optional = []
     seen = set()
     for step in optional:
-        if not isinstance(step, dict) or step.get('stage') not in OPTIONAL or step.get('after') not in STAGES \
+        if not isinstance(step, dict) or step.get('stage') not in OPTIONAL or step.get('after') not in OPTIONAL_PLACES \
                 or not isinstance(step.get('components'), list) or not step['components']:
-            errors.append(f'each optional step needs stage ({", ".join(OPTIONAL)}), after (a stage) '
+            errors.append(f'each optional step needs stage ({", ".join(OPTIONAL)}), after (a stage before finish) '
                           'and a non-empty components list')
             continue
         if step['stage'] in seen:

@@ -176,7 +176,7 @@ class FlowCliTest(unittest.TestCase):
         self.add_optional()
         good = self.home_workflow()
         cases = [
-            ('error each optional step needs stage (ui-design, marketing), after (a stage) and a non-empty components list',
+            ('error each optional step needs stage (ui-design, marketing), after (a stage before finish) and a non-empty components list',
              [{'stage': 'deploy', 'after': 'finish', 'components': ['ui-design.my-ui']}]),
             ('error optional: ui-design appears more than once',
              [{'stage': 'ui-design', 'after': 'design', 'components': ['ui-design.my-ui']},
