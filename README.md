@@ -54,7 +54,8 @@ A run is a **workflow template** (`workflows/<name>.json`): nine stages in a fix
 
 - **Templates.** Two are bundled: `jev-routed` (the default; cheap models where the decision table allows) and `high-model` (every PBI goes to the opus agent). A `docs/pbi/workflow.json` in the target repository, then `workflows/<name>.json` in your home, take precedence over the bundled ones. Each template also sets `fix.max_rework` (0-5) and `build.external_memory` (whether external runners may read the refs listed in a PBI).
 - **Your own components.** Install any skill with Claude Code's plugin commands and register it with `component.py add`; see [External components](#external-components). The bundled templates use only this skill and Claude Code's built-ins.
-- **Edit without JSON.** The Workflow tab of the editor arranges components per stage and gate and saves the template to your home (see [Setup and the editor](#setup-and-the-editor)).
+- **Optional stages.** Two stages run only when a template turns them on, right after the stage it picks: `ui-design` (screens: direction, theme, mockups, a walkthrough video; default after design) and `marketing` (who the work is for and how they react; default after understand). They run every component whose `when` holds (`ui-change`, `user-facing`, decided by the orchestrator) and need no fallback; when nothing is usable they are skipped. Their files go to `docs/pbi/ui/<slug>/` and `docs/pbi/marketing/<slug>.md`, and the plan links them in the PBIs that build those screens (`skills/atelier/appendix/optional.md`). No bundled template turns them on; register a skill with `component.py add <skill> --stage ui-design` (or `marketing`, with `--after <stage>` to move it).
+- **Edit without JSON.** The Workflow tab of the editor arranges components per stage, gate and optional stage and saves the template to your home (see [Setup and the editor](#setup-and-the-editor)).
 - The contract is [docs/specs/atelier-workflow.md](docs/specs/atelier-workflow.md) (Japanese); the orchestrator's procedure is `skills/atelier/appendix/engine.md`.
 
 ## The default flow (jev-routed)
@@ -205,13 +206,22 @@ python $S/component.py add pstack:interrogate --stage review --when deep
 /plugin marketplace add nanaism/yomiyasu
 /plugin install yomiyasu@yomiyasu
 python $S/component.py add yomiyasu:yomiyasu --stage gate --after finish
+
+# founder-skill (MIT): a simulated buyer panel for the marketing stage
+/plugin marketplace add Jakeschincariol/founder-skill
+/plugin install founder-skill@founder-skill
+python $S/component.py add founder-skill:founder-consumer --stage marketing --when user-facing
+
+# your own skills for the UI design stage (design-studio, and ui-video from this repository)
+python $S/component.py add design-studio --stage ui-design --when ui-change
+python $S/component.py add ui-video --stage ui-design --when ui-change
 ```
 
 Add `--workflow high-model` to put a component into another template. A skill that is not installed, a component whose `when` does not fit its place, or an id that a bundled component already uses stops with exit code 2 and leaves nothing behind.
 
 ### Recommended: the author's template
 
-Nothing outside this skill and Claude Code is used by default. The author's own setup is kept as an example template, `examples/workflows/recommended.json`: jev-routed plus [pstack](https://github.com/cursor/plugins) (understand with `how`, `blast-radius` and `architect` after route, `interrogate` for deep reviews), [mattpocock-skills](https://github.com/mattpocock/skills) (`grilling` for design, `code-review` for the final review) and [yomiyasu](https://github.com/nanaism/yomiyasu) (polishing the Japanese completion report). All three are MIT. The example holds only the template and, for each skill, how to install and register it; none of the skills is copied into this repository.
+Nothing outside this skill and Claude Code is used by default. The author's own setup is kept as an example template, `examples/workflows/recommended.json`: jev-routed plus [pstack](https://github.com/cursor/plugins) (understand with `how`, `blast-radius` and `architect` after route, `interrogate` for deep reviews), [mattpocock-skills](https://github.com/mattpocock/skills) (`grilling` for design, `code-review` for the final review) and [yomiyasu](https://github.com/nanaism/yomiyasu) (polishing the Japanese completion report), plus both optional stages: marketing with [founder-skill](https://github.com/Jakeschincariol/founder-skill)'s `founder-consumer` (a simulated buyer panel, for user-facing work) and UI design with the author's [design-studio](https://github.com/reeschan/claude-skill-design-studio) and [ui-video](skills/ui-video/SKILL.md) (for work that changes screens). All are MIT. The example holds only the template and, for each skill, how to install and register it; none of the other people's skills is copied into this repository.
 
 ```sh
 /atelier setup --recommended          # checks, asks once, installs what is missing, registers, writes the template
@@ -227,6 +237,10 @@ claude plugin install pstack@cursor-plugins --scope user
 claude plugin install mattpocock-skills@claude-plugins-official --scope user
 claude plugin marketplace add nanaism/yomiyasu
 claude plugin install yomiyasu@yomiyasu --scope user
+claude plugin marketplace add Jakeschincariol/founder-skill
+claude plugin install founder-skill@founder-skill --scope user
+git clone https://github.com/reeschan/claude-skill-design-studio.git ~/dev/claude-skill-design-studio && node ~/dev/claude-skill-design-studio/scripts/install-self.ts
+git clone https://github.com/reeschan/atelier.git ~/dev/atelier && mkdir -p ~/.claude/skills && cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/
 python $S/component.py example use recommended --as jev-routed --replace   # make it your default template
 ```
 
@@ -395,7 +409,7 @@ skills/atelier/
 ├── dsh_run.py                  # runs one PBI on DeepSeek Harness headless
 ├── claude_run.py               # runs one PBI on Claude Code headless
 ├── worker.md                   # how workers proceed and report
-├── appendix/                   # read only when needed: engine, the stage procedures (design, plan, verify, review, rework, finish), handoff, memory, jev, setup, adapters, priority-templates
+├── appendix/                   # read only when needed: engine, the stage procedures (design, plan, verify, review, rework, finish, optional), handoff, memory, jev, setup, adapters, priority-templates
 ├── prompts/                    # subagent prompts (design review, PBI review, final review)
 ├── agents/pbi-worker.md        # worker / reviewer sub-agent (copy to ~/.claude/agents)
 ├── prepare.py                  # Jev gate 1 + decision table in one call; prints a table
@@ -436,6 +450,8 @@ skills/atelier/
 ├── test_adapter_gate.py        # the review gates: 299/300/301 lines, 2/3 PBIs, deep and sensitive
 ├── test_references.py          # every file the skill docs name exists
 └── test_agent_stats.py
+skills/ui-video/                # the author's skill for the ui-design stage: records a walkthrough video of UI pages from a storyboard (Playwright, ffmpeg)
+skills/pbi-orchestration-jev/   # the old name; points to atelier
 ```
 
 ### Jev client

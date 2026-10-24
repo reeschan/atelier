@@ -1,8 +1,8 @@
 {
   "name": "recommended",
   "description": {
-    "ja": "作者が実際に使っている構成。jev-routed に、pstack (理解・振り分けのあとの関所・深いレビュー)、mattpocock-skills (設計の grilling と最終レビュー)、yomiyasu (完了報告の推敲) を足したもの。スキルはこの例に含まれず、component.py example check が入れ方を出す。",
-    "en": "The author's own setup: jev-routed plus pstack (understand, gates after route, deep review), mattpocock-skills (grilling for design, the final review) and yomiyasu (polishing the Japanese completion report). The skills are not included; component.py example check prints how to install them."
+    "ja": "作者が実際に使っている構成。jev-routed に、pstack (理解・振り分けのあとの関所・深いレビュー)、mattpocock-skills (設計の grilling と最終レビュー)、yomiyasu (完了報告の推敲) と、オプションの工程のマーケティング (founder-skill の利用者パネル) と UI デザイン (design-studio と ui-video) を足したもの。スキルはこの例に含まれず、component.py example check が入れ方を出す。",
+    "en": "The author's own setup: jev-routed plus pstack (understand, gates after route, deep review), mattpocock-skills (grilling for design, the final review), yomiyasu (polishing the Japanese completion report), and the optional stages marketing (founder-skill's user panel) and UI design (design-studio and ui-video). The skills are not included; component.py example check prints how to install them."
   },
   "skills": [
     {
@@ -40,13 +40,28 @@
       "skill": "yomiyasu:yomiyasu", "stage": "gate", "after": "finish",
       "install": {"marketplace_source": "nanaism/yomiyasu", "marketplace": "yomiyasu"},
       "license": "MIT", "link": "https://github.com/nanaism/yomiyasu"
+    },
+    {
+      "skill": "founder-skill:founder-consumer", "stage": "marketing", "after": "understand",
+      "install": {"marketplace_source": "Jakeschincariol/founder-skill", "marketplace": "founder-skill"},
+      "license": "MIT", "link": "https://github.com/Jakeschincariol/founder-skill"
+    },
+    {
+      "skill": "design-studio", "stage": "ui-design", "after": "design",
+      "install": {"command": "git clone https://github.com/reeschan/claude-skill-design-studio.git ~/dev/claude-skill-design-studio && node ~/dev/claude-skill-design-studio/scripts/install-self.ts"},
+      "license": "MIT", "link": "https://github.com/reeschan/claude-skill-design-studio"
+    },
+    {
+      "skill": "ui-video", "stage": "ui-design", "after": "design",
+      "install": {"command": "git clone https://github.com/reeschan/atelier.git ~/dev/atelier && mkdir -p ~/.claude/skills && cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/"},
+      "license": "MIT", "link": "https://github.com/reeschan/atelier/tree/main/skills/ui-video"
     }
   ],
   "workflow": {
     "name": "recommended",
     "description": {
-      "ja": "作者の構成 (examples/workflows/recommended.json から)。jev-routed に pstack・mattpocock-skills・yomiyasu を足したもの。",
-      "en": "The author's setup (from examples/workflows/recommended.json): jev-routed plus pstack, mattpocock-skills and yomiyasu."
+      "ja": "作者の構成 (examples/workflows/recommended.json から)。jev-routed に pstack・mattpocock-skills・yomiyasu と、オプションの工程 (マーケティング・UI デザイン) を足したもの。",
+      "en": "The author's setup (from examples/workflows/recommended.json): jev-routed plus pstack, mattpocock-skills, yomiyasu and the optional stages (marketing, UI design)."
     },
     "stages": {
       "understand": [{"id": "understand.pstack-how", "when": "clearly-complex"}, "understand.builtin"],
@@ -72,6 +87,15 @@
       ]},
       {"after": "review", "components": ["gate.security-review"]},
       {"after": "finish", "components": ["gate.yomiyasu"]}
+    ],
+    "optional": [
+      {"stage": "marketing", "after": "understand", "components": [
+        {"id": "marketing.founder-skill-founder-consumer", "when": "user-facing"}
+      ]},
+      {"stage": "ui-design", "after": "design", "components": [
+        {"id": "ui-design.design-studio", "when": "ui-change"},
+        {"id": "ui-design.ui-video", "when": "ui-change"}
+      ]}
     ],
     "fix": {"max_rework": 2},
     "build": {"external_memory": "none"}

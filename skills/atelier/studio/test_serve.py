@@ -408,6 +408,9 @@ class ServeTest(unittest.TestCase):
         flow_state = self.get_state()['flow']
         self.assertEqual(flow_state['stages'][0], 'understand')
         self.assertIn('deep', flow_state['when'])
+        self.assertEqual(flow_state['optional'], ['ui-design', 'marketing'])
+        self.assertEqual(flow_state['optional_after'], {'ui-design': 'design', 'marketing': 'understand'})
+        self.assertNotIn('finish', flow_state['optional_places'])
         self.assertEqual(flow_state['default'], 'jev-routed')
         self.assertEqual(flow_state['errors'], [])
         review = flow_state['components']['review.code-review']
@@ -446,6 +449,14 @@ class ServeTest(unittest.TestCase):
         code, body = self.request('DELETE', '/api/workflows/mine')
         self.assertEqual(json.loads(body)['fallback'], None)
         self.assertNotIn('mine', self.get_state()['flow']['workflows'])
+
+    def test_put_workflow_checks_optional_stages(self):
+        workflow = self.bundled_workflow()
+        workflow['optional'] = [{'stage': 'ui-design', 'after': 'design', 'components': ['review.builtin']}]
+        code, body = self.request('PUT', '/api/workflows/jev-routed', workflow)
+        self.assertEqual(code, 400)
+        self.assertIn('ui-design after design: review.builtin does not serve ui-design', body.decode('utf-8'))
+        self.assertFalse((self.home / 'workflows' / 'jev-routed.json').exists())
 
     def test_put_workflow_refuses_invalid_ones_and_writes_nothing(self):
         workflow = self.bundled_workflow()
