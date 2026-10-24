@@ -36,3 +36,6 @@ jobs:
       - name: Node tests (jev)
         working-directory: skills/atelier/jev
         run: node --test jev.test.mjs
+      - name: Node tests (ui-video)
+        working-directory: skills/ui-video/scripts
+        run: node --test record.test.mjs

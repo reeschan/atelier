@@ -238,7 +238,9 @@ def flow_state(home: Path) -> dict:
                     else ['not readable JSON'])
         workflows[name] = {'source': source, 'bundled': has_bundled, 'path': str(path),
                            'data': data if isinstance(data, dict) else None, 'errors': problems}
-    return {'stages': list(flow.STAGES), 'when': list(flow.WHEN),
+    return {'stages': list(flow.STAGES), 'optional': list(flow.OPTIONAL), 'optional_after': dict(flow.OPTIONAL_AFTER),
+            'optional_places': list(flow.OPTIONAL_PLACES),
+            'when': list(flow.WHEN),
             'per_pbi_when': list(flow.PER_PBI_WHEN), 'external_memory': list(flow.EXTERNAL_MEMORY),
             'max_rework': list(flow.MAX_REWORK_RANGE), 'default': flow.DEFAULT_WORKFLOW,
             'components': {cid: component_summary(c, 'bundled' if cid in bundled else 'home')

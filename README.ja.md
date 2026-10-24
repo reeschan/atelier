@@ -54,7 +54,8 @@ Atelier (旧名 **pbi-orchestration-jev**) は、開発を**ワークフロー�
 
 - **テンプレート**: 同梱は 2 つです。`jev-routed` (既定。判定表が許す PBI は安いモデルへ) と `high-model` (すべての PBI を agent の opus へ)。対象リポジトリの `docs/pbi/workflow.json`、次に home の `workflows/<名前>.json` が同梱より優先されます。テンプレートは `fix.max_rework` (0〜5) と `build.external_memory` (外部の実行先が PBI に書かれた ref を読めるか) も決めます。
 - **自分の部品**: どのスキルも Claude Code のプラグインのコマンドで入れ、`component.py add` で登録できます ([外部部品](#外部部品))。同梱のテンプレートが使うのは、このスキルと Claude Code の built-in だけです。
-- **JSON を書かずに組む**: 編集画面の「開発フロー」タブで、工程と関所ごとに部品を並べて home に保存できます ([セットアップと編集画面](#セットアップと編集画面))。
+- **オプションの工程**: テンプレートで入れたときだけ、選んだ工程の直後に動く工程が 2 つあります。`ui-design` (画面の方向性・テーマ・モックアップ・操作の動画。既定は design のあと) と `marketing` (誰のための作業で、どう受け取られるか。既定は understand のあと) です。`when` (`ui-change`・`user-facing`。オーケストレーターが判断) が成り立つ部品をすべて動かし、後ろ盾は要りません。使える部品が無ければ飛ばします。できたものは `docs/pbi/ui/<slug>/` と `docs/pbi/marketing/<slug>.md` に置き、計画がその画面を作る PBI からリンクします (`skills/atelier/appendix/optional.md`)。同梱のテンプレートはどちらも入れていません。`component.py add <スキル> --stage ui-design` (か `marketing`。場所を変えるときは `--after <工程>`) で登録します。
+- **JSON を書かずに組む**: 編集画面の「開発フロー」タブで、工程・関所・オプションの工程ごとに部品を並べて home に保存できます ([セットアップと編集画面](#セットアップと編集画面))。
 - 契約は [docs/specs/atelier-workflow.md](docs/specs/atelier-workflow.md)、オーケストレーターの手順は `skills/atelier/appendix/engine.md` にあります。
 
 ## 既定の流れ (jev-routed)
@@ -205,13 +206,22 @@ python $S/component.py add pstack:interrogate --stage review --when deep
 /plugin marketplace add nanaism/yomiyasu
 /plugin install yomiyasu@yomiyasu
 python $S/component.py add yomiyasu:yomiyasu --stage gate --after finish
+
+# founder-skill (MIT): マーケティングの工程で、買い手のパネルを模して反応を見る
+/plugin marketplace add Jakeschincariol/founder-skill
+/plugin install founder-skill@founder-skill
+python $S/component.py add founder-skill:founder-consumer --stage marketing --when user-facing
+
+# UI デザインの工程に自分のスキル (design-studio と、このリポジトリの ui-video)
+python $S/component.py add design-studio --stage ui-design --when ui-change
+python $S/component.py add ui-video --stage ui-design --when ui-change
 ```
 
 別のテンプレートに差すときは `--workflow high-model` を足します。スキルが入っていない、`when` がその場所に合わない、同梱の部品と id が重なる、のどれかなら終了コード 2 で止まり、何も残しません。
 
 ### おすすめ: 作者のテンプレート
 
-既定では、このスキルと Claude Code の外にあるものは使いません。作者が実際に使っている構成は、テンプレートの見本 `examples/workflows/recommended.json` として置いてあります。jev-routed に、[pstack](https://github.com/cursor/plugins) (理解の `how`、振り分けのあとの `blast-radius` と `architect`、深いレビューの `interrogate`)、[mattpocock-skills](https://github.com/mattpocock/skills) (設計の `grilling`、最終レビューの `code-review`)、[yomiyasu](https://github.com/nanaism/yomiyasu) (日本語の完了報告の推敲) を足したものです。どれも MIT です。見本が持つのはテンプレートと、スキルごとの入れ方・登録のしかただけで、スキルの中身はこのリポジトリに入れていません。
+既定では、このスキルと Claude Code の外にあるものは使いません。作者が実際に使っている構成は、テンプレートの見本 `examples/workflows/recommended.json` として置いてあります。jev-routed に、[pstack](https://github.com/cursor/plugins) (理解の `how`、振り分けのあとの `blast-radius` と `architect`、深いレビューの `interrogate`)、[mattpocock-skills](https://github.com/mattpocock/skills) (設計の `grilling`、最終レビューの `code-review`)、[yomiyasu](https://github.com/nanaism/yomiyasu) (日本語の完了報告の推敲) と、2 つのオプションの工程を足したものです。マーケティングは [founder-skill](https://github.com/Jakeschincariol/founder-skill) の `founder-consumer` (買い手のパネルを模す。利用者に見える作業のとき)、UI デザインは作者の [design-studio](https://github.com/reeschan/claude-skill-design-studio) と [ui-video](skills/ui-video/SKILL.md) (画面が変わる作業のとき) です。どれも MIT です。見本が持つのはテンプレートと、スキルごとの入れ方・登録のしかただけで、他の人のスキルの中身はこのリポジトリに入れていません。
 
 ```sh
 /atelier setup --recommended          # 確かめ、1 回だけ聞き、足りないものを入れ、登録し、テンプレートを書く
@@ -227,6 +237,10 @@ claude plugin install pstack@cursor-plugins --scope user
 claude plugin install mattpocock-skills@claude-plugins-official --scope user
 claude plugin marketplace add nanaism/yomiyasu
 claude plugin install yomiyasu@yomiyasu --scope user
+claude plugin marketplace add Jakeschincariol/founder-skill
+claude plugin install founder-skill@founder-skill --scope user
+git clone https://github.com/reeschan/claude-skill-design-studio.git ~/dev/claude-skill-design-studio && node ~/dev/claude-skill-design-studio/scripts/install-self.ts
+git clone https://github.com/reeschan/atelier.git ~/dev/atelier && mkdir -p ~/.claude/skills && cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/
 python $S/component.py example use recommended --as jev-routed --replace   # 既定のテンプレートにする
 ```
 
@@ -395,7 +409,7 @@ skills/atelier/
 ├── dsh_run.py                  # DeepSeek Harness の headless で PBI を 1 件動かす
 ├── claude_run.py               # Claude Code の headless で PBI を 1 件動かす
 ├── worker.md                   # 実装担当の進め方と報告の形
-├── appendix/                   # 場面ごとに読む付録: engine、工程の手順 (design・plan・verify・review・rework・finish)、handoff・memory・jev・setup・adapters・priority-templates
+├── appendix/                   # 場面ごとに読む付録: engine、工程の手順 (design・plan・verify・review・rework・finish・optional)、handoff・memory・jev・setup・adapters・priority-templates
 ├── prompts/                    # サブエージェントへの依頼文 (設計の見直し・PBI のレビュー・最終レビュー)
 ├── agents/pbi-worker.md        # 実装担当・レビュー用のサブエージェントの定義 (~/.claude/agents に置く)
 ├── prepare.py                  # Jev のゲート 1 と決定表を 1 回で実行し、表だけを出す
@@ -436,6 +450,8 @@ skills/atelier/
 ├── test_adapter_gate.py        # レビューの判定 (299/300/301 行・PBI 2/3 件・deep・sensitive)
 ├── test_references.py          # スキルの文書が名前を挙げるファイルの実在
 └── test_agent_stats.py
+skills/ui-video/                # 作者の UI デザイン工程用のスキル: storyboard から UI の操作動画を録る (Playwright・ffmpeg)
+skills/pbi-orchestration-jev/   # 旧名。atelier を案内する
 ```
 
 ### Jev クライアント
