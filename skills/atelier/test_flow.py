@@ -196,6 +196,11 @@ class FlowCliTest(unittest.TestCase):
                 data = copy.deepcopy(good)
                 data['optional'] = optional
                 self.assertIn(expected, self.errors_for(data))
+        # ask-user は聞く時点が決まっているオプションの工程だけで使える
+        data = copy.deepcopy(good)
+        data['stages']['review'][0] = {'id': 'review.code-review', 'when': 'ask-user'}
+        self.assertIn('error review: review.code-review uses when ask-user, which only an optional stage can use',
+                      self.errors_for(data))
 
     def test_resolution_order(self):
         custom = bundled('jev-routed')

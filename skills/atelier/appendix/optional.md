@@ -24,7 +24,7 @@ Read this when the template has an `optional` list and one of its rows is picked
 
 You decide `ui-change` and `user-facing` from the request, like `clearly-complex`. When you cannot tell, ask once with AskUserQuestion before the first row of that stage runs, and save the answer in `docs/pbi/adapters.json` as `{"<stage>": {"decision": "run|skip", "asked": true}}`. When the design decision (`appendix/design.md`) also needs asking at that point, put both in the same AskUserQuestion. An optional stage placed before design (marketing, by default) is asked about on its own.
 
-`ask-user` never decides on its own: ask every run, once, even when the answer seems obvious. For a stage placed after `plan` or later (security, by default), put the question in the PBI list approval (Approve in `SKILL.md`), so the run does not stop again later; for a stage placed earlier, ask before its first row. Save the answer in `docs/pbi/adapters.json` the same way, so a resume does not ask again. With no answer, the stage does not run.
+`ask-user` never decides on its own: ask every run, once, even when the answer seems obvious. For a stage placed after `route` or later (security, by default), put the question in the PBI list approval (Approve in `SKILL.md`), so the run does not stop again later. For a stage placed after `plan` or earlier, ask before its first row, because the approval comes after route. Only optional stages take `ask-user`; `flow.py` rejects it elsewhere. Save the answer in `docs/pbi/adapters.json` the same way, so a resume does not ask again. With no answer, the stage does not run.
 
 ## Run
 

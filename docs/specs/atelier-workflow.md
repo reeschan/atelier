@@ -197,7 +197,7 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 ### オプションの工程: セキュリティ
 
 - 利用者の求めで、3 つ目のオプションの工程 `security` を足した。変えたコードのセキュリティ監査をし、要約を `docs/pbi/security/<slug>.md` に書く (スキル自身の出力はスキルの既定の場所、リポジトリの外)。既定の場所は review のあと。fix より前なので、PBI が変えたファイルで確かめられた指摘は、レビューの指摘と同じくその PBI の差し戻しにする (上限に数える)。PBI の外の指摘と、確かめきれなかった候補は完了報告に書き、この回では直さない。
-- when に `ask-user` を足した。オーケストレーターは自分で決めず、毎回 1 回だけ利用者に聞き、はいのときだけ動かす。plan より後に置いた工程なら PBI 一覧の承認のときに一緒に聞き、あとで止まらない。答えは `docs/pbi/adapters.json` に残し、resume で聞き直さない。答えが無ければ動かさない。
+- when に `ask-user` を足した。オーケストレーターは自分で決めず、毎回 1 回だけ利用者に聞き、はいのときだけ動かす。route 以降に置いた工程なら PBI 一覧の承認のときに一緒に聞き、あとで止まらない (承認は route のあとなので、plan 以前に置いた工程はその工程の最初の行の前に聞く)。使えるのはオプションの工程だけで、ほかの工程と関所では flow.py が誤りにする。答えは `docs/pbi/adapters.json` に残し、resume で聞き直さない。答えが無ければ動かさない。
 - 推奨の見本では、security に Cloudflare の security-audit (cloudflare/security-audit-skill、MIT) を `ask-user` で入れた。プラグインではなく Skills CLI で `~/.claude/skills/security-audit` に入る自分のスキルの形なので、`install.command` に `npx skills add ... --global --agent claude-code --yes` を書く。スキルの中身はリポジトリに入れない。対象のコードを動かすのはスキルが求めるサンドボックスの中だけで、無ければ候補のまま報告させる。
 
 ## Testing Decisions

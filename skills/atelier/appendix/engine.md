@@ -44,7 +44,7 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 | `deep` | in a gate after route: the PBI's `route.json` has review `deep`. In the review stage: any PBI does |
 | `ui-change` | the request adds a screen, changes how one looks, or changes a user flow (`appendix/optional.md`) |
 | `user-facing` | the request adds or changes something end users see or pay for (`appendix/optional.md`) |
-| `ask-user` | the user said yes when asked this run; always ask, never decide alone (`appendix/optional.md`) |
+| `ask-user` | the user said yes when asked this run; always ask, never decide alone. Optional stages only (`appendix/optional.md`) |
 
 A template entry `{"id", "when"}` replaces the component's own `when` in that template only.
 
