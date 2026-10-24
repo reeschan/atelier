@@ -131,6 +131,51 @@ class FlowCliTest(unittest.TestCase):
                 self.assertIn(expected, lines)
                 self.assertNotIn(HEADER, lines)
 
+    def write_route(self, pbi, tier, coupling, review):
+        write_json(os.path.join(self.base, f'{pbi}.route.json'),
+                   {'tier': tier, 'route': [], 'review': review, 'scores': {'coupling': coupling}})
+
+    def test_decide_per_pbi_gates_and_deep_review(self):
+        self.write_route('PBI-001', 'opus', 1, 'normal')
+        self.write_route('PBI-002', 'sonnet', 2, 'deep')
+        result = self.run_flow('--workflow', 'jev-routed-pstack', '--decide')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertEqual(lines[1], flow.DECIDE_HEADER)
+        rows = [line.split('\t') for line in lines[2:]]
+        self.assertEqual(rows, [
+            ['gate after route', 'gate.pstack-blast-radius', 'PBI-001', 'skip', 'coupling 1'],
+            ['gate after route', 'gate.pstack-blast-radius', 'PBI-002', 'run', 'coupling 2'],
+            ['gate after route', 'design.pstack-architect', 'PBI-001', 'run', 'tier opus'],
+            ['gate after route', 'design.pstack-architect', 'PBI-002', 'skip', 'tier sonnet'],
+            ['review', 'review.pstack-interrogate', 'all', 'run', 'review deep: PBI-002'],
+        ])
+
+    def test_decide_needs_routes(self):
+        result = self.run_flow('--decide')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('no PBI-*.route.json yet', result.stderr)
+
+    def test_read_skill_status_finds_the_plugin(self):
+        plugins = os.path.join(self.dir, 'plugins')
+        missing = self.run_flow('--workflow', 'high-model', env={'PBI_PLUGINS_DIR': plugins})
+        self.assertIn('plugin missing pstack', missing.stdout)
+        skill = os.path.join(plugins, 'cache', 'cursor-plugins', 'pstack', '0.15.30', 'skills', 'how', 'SKILL.md')
+        os.makedirs(os.path.dirname(skill))
+        with open(skill, 'w', encoding='utf-8') as f:
+            f.write('# how\n')
+        rows = self.rows(self.run_flow('--workflow', 'high-model', env={'PBI_PLUGINS_DIR': plugins}).stdout)
+        [how] = [row for row in rows if row[1] == 'understand.pstack-how']
+        self.assertEqual(how[6], f'plugin ok {skill}')
+        [interrogate] = [row for row in rows if row[1] == 'review.pstack-interrogate']
+        self.assertEqual(interrogate[6], 'plugin missing pstack')
+
+    def test_yomiyasu_runs_after_finish_in_every_preset(self):
+        for name in PRESETS:
+            with self.subTest(name=name):
+                rows = self.rows(self.run_flow('--workflow', name).stdout)
+                self.assertEqual(rows[-1][:2], ['gate after finish', 'gate.yomiyasu'])
+
     def test_missing_dir_and_workflow(self):
         missing = subprocess.run([sys.executable, SCRIPT, os.path.join(self.dir, 'nope'), '--home', self.home],
                                  capture_output=True, text=True, encoding='utf-8')
@@ -176,8 +221,8 @@ class ComponentDefinitionsTest(unittest.TestCase):
         self.assertEqual(flow.status(dict(base, requires={'env': ['KEY']}), None, {}), 'env missing KEY')
         self.assertEqual(flow.status(dict(base, requires={'env': ['KEY']}), None, {'KEY': 'x'}), 'script ok')
         self.assertEqual(flow.status(dict(base, requires={'cli': ['dsh']}), {'runners': {}}, {'PATH': ''}), 'cli missing dsh')
-        self.assertEqual(flow.status({'invoke': {'kind': 'read-skill'}, 'requires': {'plugins': ['pstack']}}, None, {}),
-                         'check skill list')
+        self.assertEqual(flow.status({'invoke': {'kind': 'skill', 'name': 'x:y'}, 'requires': {'skills': ['x:y']}},
+                                     None, {}), 'check skill list')
         self.assertEqual(flow.status({'invoke': {'kind': 'builtin'}}, None, {}), 'builtin')
 
     def test_component_errors(self):

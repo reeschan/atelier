@@ -48,6 +48,12 @@
       "components": [
         "gate.security-review"
       ]
+    },
+    {
+      "after": "finish",
+      "components": [
+        "gate.yomiyasu"
+      ]
     }
   ],
   "fix": {

@@ -144,6 +144,13 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - 外部の実行先には、今までどおり設計者が参照欄の ref を依頼文に書き写す。`build.external_memory` は実行先が自分で ref を get してよいかだけを決める (強制は PR 3)。
 - 最終レビューの前の「全体の確認」(diff の読み直しと検証コマンドの再実行) は、どの部品が選ばれても必ず行う (今の動きのまま)。review.builtin はこの確認だけを指す。
 
+### pstack の部品・when の判定・メモリの点検 (PR 3)
+
+- **read-skill の実行**: `flow.py` が read-skill の部品の status を、プラグインの置き場 (`PBI_PLUGINS_DIR`、無ければ `~/.claude/plugins`) の下の `<プラグイン名>/` か `<プラグイン名>/<版>/` の直下に `invoke.path` があるかで決める (`plugin ok <SKILL.md の場所>` / `plugin missing <名前>`)。設計者はその SKILL.md を、部品の `where` のサブエージェントに読ませて従わせる (`appendix/engine.md`)。
+- **PBI ごとの when の判定**: `flow.py <pbi-dir> --decide` が route.json から判定する。`tier-opus` は tier が opus、`coupling-high` は scores.coupling が 2、`deep` は review が deep。after: route の関所の部品は PBI ごとに 1 行、review の工程の deep の部品は「どれかの PBI が deep なら run」の 1 行。設計者は自分で判定しない。
+- **メモリの点検**: 実行先に道具を渡さない仕組みは実行先ごとにまちまちなので、強制は「毎回の記録で確かめる」形にした。`record_run.py` が試行ごとに実装担当の shared-memory の呼び出しを調べ、`runs.jsonl` の `memory` に残す。agent は会話記録の tool_use を数え、get した id が PBI の Refs に無ければ `unlisted_refs` に入れる。外部の実行先はログに道具の名前が出たかだけを見る。許す使い方は agent が refs-only、外部の実行先がテンプレートの `build.external_memory`。search・write、none での get、Refs に無い id の get を `violation` にして、標準出力に `memory violation` の 1 行を出す。設計者は STATUS.md に書き、同じ実行先が繰り返したら `--skip` で外し、完了報告に並べる。
+- **yomiyasu**: `gate.yomiyasu` (Skill ツールの `yomiyasu:yomiyasu`、MIT、https://github.com/nanaism/yomiyasu) を 3 つのプリセットの `after: finish` の関所に足した。完了報告を `docs/pbi/REPORT.md` に書いてから、日本語の報告の言い回しだけを整え、数値・id・パス・コマンド・貼った表は変えない。入っていなければ飛ばす。
+
 ## Testing Decisions
 
 - generic-reorg.md と同じく、スクリプトを CLI として一時ディレクトリ (docs/pbi と home) で動かし、出力だけを見る。

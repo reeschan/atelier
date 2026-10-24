@@ -1,6 +1,6 @@
 """開発フローのテンプレート (workflows/) を解決して検証し、工程ごとの計画を表で返す (docs/specs/atelier-workflow.md)。
 
-  python flow.py <pbi-dir> [--workflow NAME] [--home DIR]
+  python flow.py <pbi-dir> [--workflow NAME] [--home DIR] [--decide]
 
 テンプレートの解決順は、--workflow を省くと <pbi-dir>/workflow.json → <home>/workflows/jev-routed.json →
 同梱の workflows/jev-routed.json。--workflow NAME を渡すと <home>/workflows/NAME.json → 同梱の workflows/NAME.json
@@ -16,8 +16,16 @@ after: route の関所だけにあること、where が runner の部品が memo
 標準出力はタブ区切りの表 (stage / component / invoke / where / memory / when / status / doc。1 行目は見出し)。
 doc は、その部品を動かす手順が書いてあるスキルの中のファイル (設計者はそこを読んで動かす)。
 関所の行の stage は `gate after <工程>`。status は builtin・script ok・cli missing <名前>・env missing <名前>・
-check skill list (スキルとプラグインはスクリプトからは見えないので、設計者が自分のスキル一覧で確かめる)。
+plugin ok <SKILL.md の場所>・plugin missing <名前> (read-skill の部品。プラグインの置き場 PBI_PLUGINS_DIR、
+無ければ ~/.claude/plugins の下で、<プラグイン名>/ か <プラグイン名>/<版>/ の直下に invoke.path があるかを見る)・
+check skill list (Skill ツールで呼ぶスキルはスクリプトからは見えないので、設計者が自分のスキル一覧で確かめる)。
 表の前に `workflow <名前> (<読んだファイル>)` の 1 行を出す。
+
+--decide は、振り分けのあと (<pbi-dir>/PBI-*.route.json が揃ってから) に使う。PBI ごとに決まる when を
+route.json から判定し、表 (place / component / pbi / decision / reason) を出す。対象は after: route の関所の部品
+(PBI ごとに 1 行) と、review の工程の when が deep の部品 (pbi は all。どれかの PBI の review が deep なら run)。
+tier-opus は tier が opus、coupling-high は scores.coupling が 2、deep は review が deep のとき run。always は run、
+設計者が判断する when (clearly-complex など) は decision を orchestrator にする。route.json が 1 つも無ければ終了コード 2。
 
 終了コード: 0 = 正常。2 = 検証の誤り (表は出さず、`error <内容>` を 1 行ずつ標準出力に出す)・
 テンプレートが読めない・<pbi-dir> が無い・引数の誤り。
@@ -49,6 +57,9 @@ EXTERNAL_MEMORY = ('none', 'refs-only')
 MAX_REWORK_RANGE = (0, 5)
 
 HEADER = 'stage\tcomponent\tinvoke\twhere\tmemory\twhen\tstatus\tdoc'
+DECIDE_HEADER = 'place\tcomponent\tpbi\tdecision\treason'
+# プラグインの置き場の下を探す深さ (~/.claude/plugins/cache/<marketplace>/<plugin>/<版> まで届く)
+PLUGIN_SEARCH_DEPTH = 5
 
 
 def load_components(base=COMPONENTS) -> tuple[dict, list[str]]:
@@ -216,8 +227,30 @@ def check_item(item, role: str, place: str, components: dict, errors: list, afte
     return component
 
 
+def plugins_root(env) -> Path:
+    """プラグインの置き場。PBI_PLUGINS_DIR、無ければ ~/.claude/plugins。"""
+    return Path(env['PBI_PLUGINS_DIR']) if env.get('PBI_PLUGINS_DIR') else Path.home() / '.claude' / 'plugins'
+
+
+def find_plugin_file(plugin: str, rel: str, root: Path) -> Path | None:
+    """root の下の <plugin>/<rel> か <plugin>/<版>/<rel> のうち、いちばん新しいもの。無ければ None。"""
+    found = []
+    root = Path(root)
+    if not root.is_dir():
+        return None
+    for current, dirs, _files in os.walk(root):
+        depth = len(Path(current).relative_to(root).parts)
+        if depth >= PLUGIN_SEARCH_DEPTH:
+            dirs[:] = []
+        if Path(current).name != plugin:
+            continue
+        here = Path(current)
+        found += [c for c in [here / rel, *(d / rel for d in here.iterdir() if d.is_dir())] if c.is_file()]
+    return max(found, key=lambda c: c.stat().st_mtime) if found else None
+
+
 def status(component: dict, agents, env) -> str:
-    """部品が使えるかの見込み。スクリプトから見えないもの (スキル・プラグイン) は check skill list。"""
+    """部品が使えるかの見込み。Skill ツールで呼ぶスキルはスクリプトから見えないので check skill list。"""
     kind = component['invoke']['kind']
     if kind == 'builtin':
         return 'builtin'
@@ -228,9 +261,49 @@ def status(component: dict, agents, env) -> str:
     for name in requires.get('env', []):
         if not env.get(name):
             return f'env missing {name}'
-    if requires.get('skills') or requires.get('plugins') or kind in ('skill', 'read-skill'):
+    if kind == 'read-skill':
+        plugin = component['invoke']['plugin']
+        found = find_plugin_file(plugin, component['invoke']['path'], plugins_root(env))
+        return f'plugin ok {found}' if found else f'plugin missing {plugin}'
+    if requires.get('skills') or requires.get('plugins') or kind == 'skill':
         return 'check skill list'
     return 'script ok'
+
+
+def per_pbi(when: str, route: dict) -> tuple[str, str]:
+    """route.json 1 つについて、when の判定 (decision, reason)。"""
+    if when == 'always':
+        return 'run', 'always'
+    if when == 'tier-opus':
+        tier = route.get('tier')
+        return ('run' if tier == 'opus' else 'skip'), f'tier {tier}'
+    if when == 'coupling-high':
+        coupling = (route.get('scores') or {}).get('coupling')
+        return ('run' if coupling == 2 else 'skip'), f'coupling {coupling}'
+    if when == 'deep':
+        review = route.get('review')
+        return ('run' if review == 'deep' else 'skip'), f'review {review}'
+    return 'orchestrator', f'when {when} is decided by the orchestrator'
+
+
+def decide_rows(workflow: dict, components: dict, routes: dict) -> list[tuple]:
+    """after: route の関所の部品 (PBI ごと) と、review の工程の deep の部品の判定の行。"""
+    rows = []
+    for gate in workflow.get('gates', []):
+        if gate['after'] != 'route':
+            continue
+        for item in gate['components']:
+            cid, when = entry(item)
+            effective = when or components[cid]['when']
+            for pbi, route in routes.items():
+                rows.append(('gate after route', cid, pbi, *per_pbi(effective, route)))
+    for item in workflow['stages']['review']:
+        cid, when = entry(item)
+        if (when or components[cid]['when']) == 'deep':
+            deep = [pbi for pbi, route in routes.items() if route.get('review') == 'deep']
+            rows.append(('review', cid, 'all', 'run' if deep else 'skip',
+                         f'review deep: {", ".join(deep)}' if deep else 'no PBI has review deep'))
+    return rows
 
 
 def plan_rows(workflow: dict, components: dict, agents, env) -> list[tuple]:
@@ -259,6 +332,7 @@ def main(argv=None) -> int:
     ap.add_argument('pbi_dir', help='作業の docs/pbi (workflow.json を探す場所)')
     ap.add_argument('--workflow', help='テンプレートの名前 (home か同梱の workflows/<名前>.json)')
     ap.add_argument('--home', help='workflows/ と agents.json を置く home (common.resolve_home)')
+    ap.add_argument('--decide', action='store_true', help='route.json から PBI ごとの when を判定して表で出す')
     args = ap.parse_args(argv)
     common.utf8_stdout()
 
@@ -284,6 +358,16 @@ def main(argv=None) -> int:
         return 2
 
     print(f'workflow {workflow["name"]} ({common.shown(path)})')
+    if args.decide:
+        routes = {r.name.removesuffix('.route.json'): common.load_json(r) or {}
+                  for r in sorted(base.glob('PBI-*.route.json'))}
+        if not routes:
+            print(f'{args.pbi_dir}: no PBI-*.route.json yet (run the route stage first)', file=sys.stderr)
+            return 2
+        print(DECIDE_HEADER)
+        for cells in decide_rows(workflow, components, routes):
+            print('\t'.join(cells))
+        return 0
     print(HEADER)
     for cells in plan_rows(workflow, components, agents_module.load_agents(home), os.environ):
         print('\t'.join(cells))

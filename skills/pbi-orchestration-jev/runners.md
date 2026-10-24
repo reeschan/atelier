@@ -23,7 +23,7 @@ How to work and report: read docs/pbi/worker.md first and follow it.
 
 - Write the prompt to `docs/pbi/<runner>/<report>.prompt.md` and end it with `Summary file: docs/pbi/<runner>/<report>.last.md`.
 - Launch one per background Bash call (`run_in_background`) from the repository root, never several joined with `&`. cd with a literal absolute path; a cd through a variable stops at Claude Code's permission check.
-- Treat them as unable to use shared memory. When the PBI lists refs, `get` each one yourself and append them to the prompt file under `## Refs (workspace)`, by id, adding "The refs are copied below. Do not use memory." The template's `build.external_memory` stays `none` unless the user chose `refs-only` for a runner that has a memory `get` tool.
+- Treat them as unable to use shared memory. When the PBI lists refs, `get` each one yourself and append them to the prompt file under `## Refs (workspace)`, by id, adding "The refs are copied below. Do not use memory." The template's `build.external_memory` stays `none` unless the user chose `refs-only` for a runner that has a memory `get` tool; `record_run.py` flags any other memory use (`appendix/engine.md`).
 - They read AGENTS.md or nothing, never CLAUDE.md. Put the conventions a PBI needs in the PBI.
 - Read only `.last.md` (5 lines). Never read `.jsonl`, `.log` or `.json` whole; take the items named below with `grep -m` or `tail -n`.
 - `record_run.py` reads tokens, cost, steps and time from each runner's logs. Never add them by hand.

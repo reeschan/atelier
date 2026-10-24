@@ -24,6 +24,8 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
 
 ## The completion report
 
+Write it to `docs/pbi/REPORT.md` first, in the user's language. The gates after finish run on that file (`gate.yomiyasu` polishes a Japanese report's wording when the yomiyasu skill is installed: call it on the file, apply its wording fixes, and keep numbers, ids, paths, commands and pasted tables as they are). Then send the file's text to the user.
+
 Three headings, in this order:
 
 - **Waiting on you**: PBIs at the limit, held, or left with quality warnings, and the decision each one needs.
@@ -38,4 +40,4 @@ Three headings, in this order:
   - where Jev was skipped, and the number of handoffs
   - the stats summary: the orchestrator's share and the top 3 subagents by reads
   - rtk savings (tokens and rate, top commands), or "rtk: off (context below the threshold)"
-  - working memory: the work key, the number of refs written, the promoted memory ids and titles, and whether workers only ever called `get`
+  - working memory: the work key, the number of refs written, the promoted memory ids and titles, and every `runs.jsonl` row whose `memory.violation` is true (runner, model, what was used)

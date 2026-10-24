@@ -49,7 +49,7 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 
 ## Run the stages
 
-Go through the stages in this order. For each stage, take the first row that is usable and whose `when` holds (`appendix/engine.md`), follow its `doc`, and write its stage record. Then run every usable row of the gates after that stage.
+Go through the stages in this order. For each stage, take the first row that is usable and whose `when` holds (`appendix/engine.md`), follow its `doc`, and write its stage record. Then run every usable row of the gates after that stage; after route, `flow.py docs/pbi --decide` says which PBIs each gate row runs for.
 
 | Stage | Default component does | Artifact |
 |---|---|---|
