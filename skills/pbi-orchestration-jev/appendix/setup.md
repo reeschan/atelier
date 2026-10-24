@@ -93,18 +93,7 @@ The 10-second hook timeout is room for the gate's own 5-second limit. Turn the m
 
 ## recommended
 
-The argument `setup --recommended` installs nothing by itself. It shows the one recommended set and asks once. The rules behind it are in `appendix/adapters.md` (`## Recommended set`).
-
-1. Show the name (mattpocock-skills), the phases it serves (design: grilling and domain-modeling; review: code-review), the link https://github.com/mattpocock/skills, the license (MIT, Copyright (c) 2026 Matt Pocock), and the install command.
-2. Ask once with AskUserQuestion: install now, or not.
-3. On yes, run the command yourself and wait for it to end:
-
-   ```bash
-   claude plugin install mattpocock-skills@claude-plugins-official --scope user
-   ```
-
-4. After it succeeds, tell the user to run `/reload-plugins` or restart Claude Code. Until then the skill is not used.
-5. On no, or when the `claude` command is missing, only show the command and stop.
+The argument `setup --recommended` installs nothing by itself: it shows the one recommended set and asks once. Follow `appendix/adapters.md` (`## Recommended set`).
 
 ## home
 
@@ -118,6 +107,7 @@ home is optional; a missing file means "not set", and the skill creates a file o
 | `models/<runner>.json` | The last model list fetched for that runner, with its fetch time, method, error, and effort levels |
 | `routing.json` | The routing template that maps each tier to a step order |
 | `templates/<name>.json` | One priority template |
+| `workflows/<name>.json` | A workflow template; `flow.py` reads it before the bundled one of the same name |
 | `overrides.json` | The source of truth for the current application: `synced_at`, `updated_at` and `application` |
 | `history.jsonl` | One line per finished application, with `ended_at` and `ended_how` (replaced, stopped, declined, expired) |
 | `web.json` | The URL of the optional priority-templates page; sync runs only while this file has a URL |

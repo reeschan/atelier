@@ -13,6 +13,7 @@
     "plugin": "pstack",
     "path": "skills/architect/SKILL.md"
   },
+  "doc": "appendix/engine.md",
   "where": "subagent-readonly",
   "memory": "full",
   "when": "tier-opus",
@@ -23,8 +24,8 @@
     ]
   },
   "forbid": [
-    "Phase D (実装) と Phase E は行わない",
-    "スケッチは docs/pbi/notes/PBI-<n>.sketch.md に書く"
+    "do not run Phase D (implementation) or Phase E",
+    "write the sketch to docs/pbi/notes/PBI-<n>.sketch.md"
   ],
   "interactive": false,
   "calls_back": false,

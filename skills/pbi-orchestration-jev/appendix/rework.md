@@ -1,37 +1,34 @@
-# 付録: 差し戻しと止まるとき
+# Appendix: rework and stopping
 
-SKILL.md 8 章のレビューで差し戻すと決めたとき、または止まる条件に当たったときに読む。
+Read this when the fix stage picks `fix.rework` (verify or the final review decided rework), or a stop condition is met.
 
-## 9. 差し戻し（最大2回）と ゲート3
+## Rework
 
-差し戻しは、同じ route の先頭から新しく起動する。
+The limit is the template's `fix.max_rework` (2 in the bundled templates). Each rework starts a new worker from the head of the same route.
 
-### 9.2 差し戻し文
+1. Write `docs/pbi/PBI-<n>.rework-<k>.md`:
 
-`docs/pbi/PBI-<連番>.rework-<n>.md` に書き、6.1 の依頼文で新しく起動する。
+   ```markdown
+   ## Rework <k>: PBI-<n>
 
-```markdown
-## 差し戻し <1 | 2> 回目: PBI-<連番>
+   - Criterion <number>: fail
+     - Now: <what happens; the error log or the line>
+     - Expected: <what passing looks like>
+     - Repro: <a command or steps that show the failure>
+   - Out-of-scope change: <file and what to revert, if any>
+   ```
 
-- 条件 <番号>: fail
-  - 現状: <何が起きているか。エラーログや該当行>
-  - 期待: <どうなっていれば pass か>
-  - 再現: <失敗を確認できるコマンドや手順>
-- 範囲外の変更: <あれば、ファイルと戻すべき内容>
-```
+2. Check the note with the Jev gate `rework_quality` (names_condition, states_current_and_expected, has_repro; `appendix/jev.md`). Rewrite any item under 0.6 before sending.
+3. Launch it with the prompt of `runners.md`, report name `PBI-<n>.rework-<k>`, and add one to the PBI's rework count in STATUS.md.
 
-送る前に、差し戻し文をゲート `rework_quality`（names_condition / states_current_and_expected / has_repro）で点検する。0.6 未満の項目があれば書き直してから送る。送ったら STATUS.md の差し戻し回数を増やす。
+## Stop
 
-## 10. 止まるとき
+Stop a PBI when it still fails after the last allowed rework, or when it needs a third continue. Raise its tier, rewrite the PBI or build it yourself only when the user picks that.
 
-2回差し戻しても pass しないPBI、続行の指示が3回目になるPBIはそこで止める。段上げ・PBIの書き換え・自分での実装は、ユーザーが選んだときだけ行う。
-
-そのPBIに依存しない他のPBIは続行する。依存するPBIは保留にする。
-
-ユーザーには次を報告して判断を待つ。
-
-- どのPBIが、どのモデルで止まったか
-- 試行ごとに何が fail だったか
-- 原因の見立て（PBIの記述不足 / モデルの能力不足 / 設計の問題 のどれに近いか）
-- 選択肢（モデルを1段上げて再実行 / PBIを書き直すか分割する / 設計を見直す / ユーザーが引き取る）
-  - 段上げは `python <このディレクトリ>/prepare.py docs/pbi --only PBI-<連番> --tier <段>` で route.json を書き直し、新しい route の先頭から起動する。上げた先の route は、その時点の振り分けから引かれる
+- PBIs that do not depend on it keep running. PBIs that depend on it are held.
+- Tell the user, then wait:
+  - which PBI stopped, and on which model
+  - what failed on each attempt
+  - the likely cause: the PBI said too little, the model fell short, or the design is wrong
+  - the choices: raise the tier and run again, rewrite or split the PBI, revisit the design, or the user takes it over
+- Raising the tier: `python <skill>/prepare.py docs/pbi --only PBI-<n> --tier <tier>` rewrites its `route.json` from the routing in force at that time; start from the head of the new route.

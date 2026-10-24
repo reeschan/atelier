@@ -12,6 +12,7 @@
     "plugin": "pstack",
     "path": "skills/why/SKILL.md"
   },
+  "doc": "appendix/engine.md",
   "where": "subagent-readonly",
   "memory": "full",
   "when": "clearly-complex",
@@ -22,8 +23,8 @@
     ]
   },
   "forbid": [
-    "ファイルを変えない",
-    "結論は docs/pbi/notes/<slug>.why.md に書き、5 行以内の要約とパスだけを返す"
+    "do not change any file",
+    "write the conclusion to docs/pbi/notes/<slug>.why.md and return at most 5 lines and the path"
   ],
   "interactive": false,
   "calls_back": false,

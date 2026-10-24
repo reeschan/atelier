@@ -22,7 +22,7 @@ sys.path.insert(0, HERE)
 
 import flow  # noqa: E402
 
-HEADER = 'stage\tcomponent\tinvoke\twhere\tmemory\twhen\tstatus'
+HEADER = 'stage\tcomponent\tinvoke\twhere\tmemory\twhen\tstatus\tdoc'
 PRESETS = ('jev-routed', 'high-model', 'jev-routed-pstack')
 
 
@@ -152,7 +152,7 @@ class ComponentDefinitionsTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
         write_json(os.path.join(directory, 'x.y.json'), {
             'id': 'x.y', 'stages': ['design'], 'title': {'ja': 'あ', 'en': 'a'},
-            'invoke': {'kind': 'builtin', 'doc': 'SKILL.md'}, 'where': 'main', 'memory': 'full',
+            'invoke': {'kind': 'builtin'}, 'doc': 'SKILL.md', 'where': 'main', 'memory': 'full',
             'when': 'always', 'cost': 'low', 'then': ['x.missing'], 'interactive': False, 'calls_back': False,
         })
         _, errors = flow.load_components(directory)
@@ -183,7 +183,7 @@ class ComponentDefinitionsTest(unittest.TestCase):
     def test_component_errors(self):
         good = {
             'id': 'x.y', 'stages': ['review'], 'title': {'ja': 'あ', 'en': 'a'},
-            'invoke': {'kind': 'builtin', 'doc': 'SKILL.md'}, 'where': 'main', 'memory': 'full',
+            'invoke': {'kind': 'builtin'}, 'doc': 'SKILL.md', 'where': 'main', 'memory': 'full',
             'when': 'always', 'cost': 'low', 'interactive': False, 'calls_back': False,
         }
         self.assertIsNone(flow.component_error(good, 'x.y'))
@@ -192,6 +192,8 @@ class ComponentDefinitionsTest(unittest.TestCase):
             ({'where': 'runner'}, 'a runner component cannot use memory full'),
             ({'requires': {'cli': ['dsh']}}, 'a builtin component cannot have requires'),
             ({'invoke': {'kind': 'script', 'path': 'no-such.py'}}, 'invoke points at a missing file: no-such.py'),
+            ({'doc': 'appendix/no-such.md'}, 'doc points at a missing file: appendix/no-such.md'),
+            ({'doc': None}, 'doc must name the file that holds the procedure'),
             ({'invoke': {'kind': 'read-skill', 'plugin': 'pstack'}}, 'invoke (read-skill) needs plugin, path'),
             ({'calls_back': 'no'}, 'calls_back must be true or false'),
         ]

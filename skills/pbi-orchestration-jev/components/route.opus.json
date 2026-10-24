@@ -8,9 +8,9 @@
     "en": "Send every PBI to the opus agent"
   },
   "invoke": {
-    "kind": "builtin",
-    "doc": "SKILL.md"
+    "kind": "builtin"
   },
+  "doc": "appendix/plan.md",
   "where": "main",
   "memory": "none",
   "when": "always",
