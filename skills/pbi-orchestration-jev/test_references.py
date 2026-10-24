@@ -1,6 +1,6 @@
-'''指示文の中の相対パスの参照が実在することを確かめる (PBI-002)。
+'''指示文の中の相対パスの参照が実在することと、本文の大きさの上限を確かめる (S4)。
 
-対象はスキルのディレクトリ直下の *.md と appendix/*.md と agents/*.md。
+対象はスキルのディレクトリ直下の *.md と appendix/*.md と agents/*.md と prompts/*.md。
 その中のバッククォートで囲んだ語のうち、スキルの中のファイルを指す相対パス
 (拡張子 .md .py .json .mjs .html) を取り出し、スキルのディレクトリからの
 相対として解決できることを確かめる。切れた参照があれば、指示文のファイル名・
@@ -13,6 +13,7 @@
 - URL
 - 拡張子だけの語 (.last.md など) と、拡張子を持たない語
 '''
+import json
 import re
 import unittest
 from pathlib import Path
@@ -20,16 +21,16 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 # 対象の指示文 (スキルのディレクトリからの相対パターン)
-DOC_PATTERNS = ('*.md', 'appendix/*.md', 'agents/*.md')
+DOC_PATTERNS = ('*.md', 'appendix/*.md', 'agents/*.md', 'prompts/*.md')
 
 # 実在を確かめる拡張子
 SUFFIXES = ('.md', '.py', '.json', '.mjs', '.html')
 
 # ファイル名だけの参照を探すディレクトリ (スキルのディレクトリからの相対。'' は直下)
-SEARCH_DIRS = ('', 'appendix', 'studio', 'jev', 'rtk', 'examples')
+SEARCH_DIRS = ('', 'appendix', 'prompts', 'studio', 'jev', 'rtk', 'examples')
 
 # 取り除く前置き (この順に試す)
-PREFIXES = ('<このディレクトリ>/', '<スキル>/')
+PREFIXES = ('<skill>/', '<このディレクトリ>/', '<スキル>/')
 
 BACKTICK = re.compile(r'`([^`\n]+)`')
 
@@ -47,6 +48,8 @@ OUTSIDE_SKILL_NAMES = {
     'web.json',
     # 今後、指示文がファイル名だけで指す名前
     'agents.json',
+    'workflow.json',
+    'route.json',
     'state.json',
     'STATUS.md',
     'HANDOFF.md',
@@ -175,27 +178,23 @@ def format_reference(ref):
     return f'{name}:{lineno}: {path}'
 
 
-ADAPTERS = HERE / 'appendix' / 'adapters.md'
+SKILL = HERE / 'SKILL.md'
+COMPONENTS = HERE / 'components'
+
+# 毎ターン読む本文の上限 (generic-reorg.md の段 3)。compaction のあとに付け直されるのは先頭の約 5,000 トークン
+SKILL_MAX_LINES = 120
+SKILL_MAX_TOKENS = 5000
+# トークン数の見積もり: UTF-8 のバイト数を 4 で割る (英語の文ではやや多めに出る)
+BYTES_PER_TOKEN = 4
 
 
-def known_callee_rows():
-    '''付録の「## Known callees」の表を (呼び出し名, Link 列) の一覧で返す。'''
-    lines = ADAPTERS.read_text(encoding='utf-8').splitlines()
-    start = lines.index('## Known callees')
-    header = None
+def external_components():
+    '''Skill ツールかプラグインで呼ぶ部品を (id, link) の一覧で返す。'''
     rows = []
-    for line in lines[start + 1:]:
-        if line.startswith('## '):
-            break
-        if not line.startswith('|'):
-            continue
-        cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
-        if header is None:
-            header = cells
-            continue
-        if set(line) <= set('|-: '):
-            continue
-        rows.append((cells[0], cells[header.index('Link')]))
+    for path in sorted(COMPONENTS.glob('*.json')):
+        data = json.loads(path.read_text(encoding='utf-8'))
+        if data['invoke']['kind'] in ('skill', 'read-skill'):
+            rows.append((data['id'], data.get('link', '')))
     return rows
 
 
@@ -236,16 +235,39 @@ class ReferencesTest(unittest.TestCase):
         self.assertIn('42', line)
         self.assertIn('appendix/missing.md', line)
 
-    def test_known_callee_rows_have_link_or_built_in(self):
-        '''既知の名前の表の各行に https:// のリンクか built-in があること (ネットワークには出ない)。'''
-        rows = known_callee_rows()
+    def test_external_components_have_link_or_built_in(self):
+        '''スキルを呼ぶ部品に https:// のリンクか built-in があること (ネットワークには出ない)。'''
+        rows = external_components()
         self.assertGreaterEqual(len(rows), 1)
-        for callee, link in rows:
-            link = link.strip('`')
-            self.assertTrue(
-                link.startswith('https://') or link == 'built-in',
-                f'{callee}: {link}',
-            )
+        for cid, link in rows:
+            self.assertTrue(link.startswith('https://') or link == 'built-in', f'{cid}: {link}')
+
+    def test_component_docs_are_instructions(self):
+        '''部品の doc は、参照の検査の対象になる指示文であること。'''
+        names = {document.relative_to(HERE).as_posix() for document in documents()}
+        for path in sorted(COMPONENTS.glob('*.json')):
+            doc = json.loads(path.read_text(encoding='utf-8'))['doc']
+            self.assertIn(doc, names, path.name)
+
+    def test_skill_body_stays_small(self):
+        '''本文は約 110 行・5,000 トークン未満に収める。'''
+        text = SKILL.read_text(encoding='utf-8')
+        self.assertLessEqual(len(text.splitlines()), SKILL_MAX_LINES)
+        self.assertLess(len(text.encode('utf-8')) / BYTES_PER_TOKEN, SKILL_MAX_TOKENS)
+
+    def test_headings_named_in_backticks_exist(self):
+        '''`appendix/x.md` (`## 見出し`) と `appendix/x.md`, "見出し" の形で指す見出しが、その指示文にあること。'''
+        backticked = re.compile(r'`([\w./-]+\.md)`[^`\n]{0,40}?\(`(## [^`]+)`\)')
+        quoted = re.compile(r'`([\w./-]+\.md)`, "([^"]+)"')
+        missing = []
+        for document in documents():
+            for lineno, line in enumerate(document.read_text(encoding='utf-8').splitlines(), 1):
+                found = backticked.findall(line) + [(path, f'## {name}') for path, name in quoted.findall(line)]
+                for path, heading in found:
+                    target = HERE / path
+                    if target.is_file() and heading not in target.read_text(encoding='utf-8').splitlines():
+                        missing.append(f'{document.relative_to(HERE).as_posix()}:{lineno}: {path} {heading}')
+        self.assertEqual([], missing, '\n'.join(missing))
 
 
 if __name__ == '__main__':

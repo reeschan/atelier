@@ -1,37 +1,41 @@
-# 付録: 完了報告と統計
+# Appendix: finish
 
-すべての PBI が終わったときに読む。
+Read this when the finish stage picks `finish.builtin`: every PBI has passed or stopped, and the review stage is done.
 
-## 11. 完了報告
+## Before the report
 
-すべてのPBIが終わったら、全体の `git diff --stat` を見て、PBI をまたぐ部分（共有の型・設定・呼び出し元）の diff を読み、検証コマンドを全体でもう一度実行する（出力は 8章と同じくファイルへ）。
+1. Promote refs (`appendix/memory.md`, "Finish").
+2. Collect the session's stats (read only; nothing changes). After a handoff, also collect the earlier session with `--session <ID>`.
 
-報告を書く前に、`appendix/adapters.md` の「Final review and security review」と「Findings」に従って、最終レビューとセキュリティレビューを行う（結果は `docs/pbi/reviews/final.review.md` と `docs/pbi/reviews/final.security.md`）。指摘は自分で確かめ、本物と認めたものは、そのファイルを担当した PBI の差し戻しにして 8章のレビューに戻す。差し戻した PBI がすべて合格してから、報告を書く。
+   ```bash
+   python <skill>/agent_stats.py --out docs/pbi/stats | head -n 40
+   ```
 
-報告は次の3つの見出しで、この順に書く。
+   - The summary opens with reads and turns per agent: requests, cache reads, share, average per request and the largest context, for the orchestrator and each subagent.
+   - A cache rebuild is a request that read less than half of what was cached just before and wrote anew. Past the TTL it counts as "TTL expired"; expired under a 5m TTL but within 1 hour, it counts as "a 1h TTL would have prevented it".
+   - For earlier work, use `--all` (every session, PBI subagents included) or `--session <ID>`.
+   - Per-PBI models, tokens and cost are in `runs.jsonl`. The jev-log line at the end holds only the count of cache rebuilds and the number of `runs.jsonl` rows.
+3. When rtk mode is on, run these from the repository root, then turn it off. The number covers every rtk run in this repository so far (other sessions, Codex and opencode included); say so.
 
-- **ユーザー待ち**: 上限到達、保留、品質の警告が残ったPBIと、それぞれに必要な判断
-- **変更**: 完了したPBIと変更ファイル
-- **発見**: 作業中に見つけた問題、STATUS.md の `adapter ...` の行（`appendix/adapters.md` の「Records」。`adapter review: built-in code-review run (diff 412 lines > 300) findings 0,2,1` の形）をそのまま写したもの、モデル別の結果（`python <このディレクトリ>/model_report.py` の 2 つの表をそのまま貼る。実行・結果の内訳・使えず率・トークン・実費と API 換算・時間と、仮の評価。仮の評価は後から人が調整する目安で、この報告では解釈を足さない。交互グループで等分になったかは実行の件数で見る）、保全に失敗した実行（runs.jsonl の archive.ok が false の行）、route の次へ切り替えた件数と理由、オーケストレーターが決定表を上書きしたPBIとその結果、Jev を飛ばした箇所、引き継ぎの回数、12章の統計の要約、rtk の節約量（下記）、作業メモリ（0.8: 作業キー、書いた ref の件数、昇格したメモリの id とタイトル、実装担当の memory の呼び出しが get だけだったか）
+   ```bash
+   rtk gain -p | head -n 20
+   node <skill>/rtk/rtk-mode.mjs off
+   ```
 
-報告を書く前に、0.8 の「終わるとき」の昇格を行う。
+## The completion report
 
-rtk モードを使っていたら、報告を書く前に、リポジトリのルートで次を実行してから無効にする。`rtk gain -p` の要約（節約したトークン数と率、上位のコマンド）を「発見」に書く。この数はこのリポジトリで rtk を通した全期間の累計（他のセッション・Codex・opencode を含む）なので、そう書き添える。
+Three headings, in this order:
 
-```bash
-rtk gain -p | head -n 20
-node <このディレクトリ>/rtk/rtk-mode.mjs off
-```
-
-## 12. 統計（トークンとキャッシュ）
-
-完了報告の前に、このセッションの統計を取る（読むだけで何も変えない）。引き継いだときは、引き継ぐ前のセッションも `--session <ID>` で取る。
-
-```bash
-python <このディレクトリ>/agent_stats.py --out docs/pbi/stats | head -n 40
-```
-
-- 要約の先頭の「エージェント別の読みとターン数」に、オーケストレーターとサブエージェントごとのリクエスト数・キャッシュ読み・割合・1 リクエスト平均・最大の文脈が出る。オーケストレーターの割合と、読みの多いサブエージェントの上位 3 件を「発見」に書く
-- キャッシュの作り直し: 直前までにキャッシュされた量の半分未満しか読めず、新しく書いたリクエスト。間隔が TTL を超えていれば「TTL 切れ」、5m TTL で切れて 1 時間以内なら「1h TTL なら防げた」に数える
-- 過去分の見直しは `--all`（PBI のサブエージェントを含む全セッション）や `--session <ID>` で行う
-- PBI ごとのモデル・トークン・コストは runs.jsonl にある（record_run.py）。jev-log の完了時の行には、キャッシュの作り直しの回数と、runs.jsonl の行数だけを書く
+- **Waiting on you**: PBIs at the limit, held, or left with quality warnings, and the decision each one needs.
+- **Changes**: the PBIs that passed and the files they changed.
+- **Findings**:
+  - problems found on the way
+  - the stage records from STATUS.md, as they are (`appendix/engine.md`)
+  - the two tables of `python <skill>/model_report.py`, pasted as they are: runs, outcome breakdown, unavailable rate, tokens, cost and API equivalent, time, and the provisional grades. The grades are a guide for a person to adjust later; add no reading of them here. Whether a rotate group split evenly shows in the run counts
+  - runs whose archive copy failed (`archive.ok` false in `runs.jsonl`)
+  - how many times a route moved to its next step, and why
+  - PBIs where you overrode the decision table, and how they ended
+  - where Jev was skipped, and the number of handoffs
+  - the stats summary: the orchestrator's share and the top 3 subagents by reads
+  - rtk savings (tokens and rate, top commands), or "rtk: off (context below the threshold)"
+  - working memory: the work key, the number of refs written, the promoted memory ids and titles, and whether workers only ever called `get`

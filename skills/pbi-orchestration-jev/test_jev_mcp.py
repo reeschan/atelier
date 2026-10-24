@@ -148,7 +148,8 @@ class JevMcpTest(unittest.TestCase):
                          [('PBI-001', 'queued', 'PBI-001 ログの日付を ISO 形式にする')])
         got = self.ok('claim_task', repo=str(self.repo), report='PBI-001', runner='my-client')
         self.assertEqual(got['prompt'], 'PBI-001 を実装する\n')
-        self.assertEqual(got['sections']['対象'], '- src/log.py')
+        # 旧い PBI の日本語の見出しも、英語の見出しのキーで返す
+        self.assertEqual(got['sections']['Targets'], '- src/log.py')
         self.assertEqual(got['verify_commands'], [{'n': 1, 'command': 'test -f src/log.py'},
                                                   {'n': 2, 'command': 'exit 3'}])
         self.assertEqual(got['facts'], {'files': ['src/log.py']})
@@ -171,15 +172,15 @@ class JevMcpTest(unittest.TestCase):
                       artifacts={'summary': {'score': 0.9}})
         last = (self.repo / 'docs/pbi/mcp/PBI-001.last.md').read_text(encoding='utf-8')
         self.assertEqual(last.splitlines(), [
-            '状態: DONE',
-            '結果: 受け入れ条件 pass 1/1',
-            '変更: src/log.py',
-            '未解決: なし',
-            '詳細: docs/pbi/reports/PBI-001.md',
+            'Status: DONE',
+            'Result: acceptance criteria pass 1/1',
+            'Changed: src/log.py',
+            'Open: none',
+            'Details: docs/pbi/reports/PBI-001.md',
         ])
         self.assertEqual(out['summary'], last)
         details = (self.repo / 'docs/pbi/reports/PBI-001.md').read_text(encoding='utf-8')
-        self.assertTrue(details.startswith('状態: DONE\n'))
+        self.assertTrue(details.startswith('Status: DONE\n'))
         artifacts = json.loads((self.repo / 'docs/pbi/mcp/PBI-001.artifacts.json').read_text(encoding='utf-8'))
         self.assertEqual(artifacts, {'summary': {'score': 0.9}})
         self.assertEqual(self.ok('list_tasks', repo=str(self.repo))['tasks'], [])
@@ -202,7 +203,7 @@ class JevMcpTest(unittest.TestCase):
         self.ok('fail_task', repo=str(self.repo), report='PBI-001', status='NEEDS_CONTEXT',
                 reason='ログの形式の指定が無い')
         last = (self.repo / 'docs/pbi/mcp/PBI-001.last.md').read_text(encoding='utf-8').splitlines()
-        self.assertEqual(last[:4], ['状態: NEEDS_CONTEXT', '結果: 未実施', '変更: なし', '未解決: ログの形式の指定が無い'])
+        self.assertEqual(last[:4], ['Status: NEEDS_CONTEXT', 'Result: not run', 'Changed: none', 'Open: ログの形式の指定が無い'])
         r = self.call('fail_task', repo=str(self.repo), report='PBI-001', status='DONE', reason='x')
         self.assertTrue(r['isError'])
 
@@ -573,6 +574,20 @@ sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
 LAST = '状態: DONE\n結果: 受け入れ条件 pass 1/1\n変更: a.py\n未解決: なし\n詳細: docs/pbi/reports/PBI-001.md\n'
 
 
+class PbiFormatTest(unittest.TestCase):
+    ENGLISH = (
+        '# PBI-002: Log dates\n\n- Model: agent sonnet\n\n## Goal\nISO dates.\n\n## Targets\n- src/log.py\n\n'
+        '## Do not touch\n- src/api.py\n\n## Acceptance criteria\n1. command 1 exits 0\n\n'
+        '## Verify commands\n1. `test -f src/log.py`\n2. `exit 3`\n\n## Refs\nnone\n\n## Notes\nnone\n')
+
+    def test_english_headings_are_read(self):
+        sections = jev_mcp.sections_of(self.ENGLISH)
+        self.assertEqual(sections['Targets'], '- src/log.py')
+        self.assertEqual(sections['Do not touch'], '- src/api.py')
+        self.assertEqual(jev_mcp.verify_commands(self.ENGLISH),
+                         [{'n': 1, 'command': 'test -f src/log.py'}, {'n': 2, 'command': 'exit 3'}])
+
+
 class RunTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp()).resolve()
@@ -630,7 +645,7 @@ class RunTest(unittest.TestCase):
         rec = self.recorded()
         self.assertEqual(rec['argv'], ['PBI-001', '--model', 'deepseek-official/deepseek-flash', '--effort', 'high'])
         self.assertEqual(Path(rec['cwd']).resolve(), self.repo)
-        self.assertEqual(rec['prompt'], 'PBI-001 を実装する\n\n要約の書き先: `docs/pbi/dsh/PBI-001.last.md`\n')
+        self.assertEqual(rec['prompt'], 'PBI-001 を実装する\n\nSummary file: `docs/pbi/dsh/PBI-001.last.md`\n')
         self.assertEqual(out, {
             'runner': 'dsh', 'model': 'deepseek-official/deepseek-flash', 'effort': 'high',
             'setting': 'default', 'permission': jev_mcp.DSH_PERMISSION, 'code': 0, 'last': LAST,
@@ -656,7 +671,7 @@ class RunTest(unittest.TestCase):
         self.assertEqual(Path(rec['opencode_config']), jev_mcp.HERE / 'opencode.config.json')
         self.assertEqual(Path(rec['cwd']).resolve(), self.repo)
         prompt = (self.repo / 'docs/pbi/opencode/PBI-001.prompt.md').read_text(encoding='utf-8')
-        self.assertEqual(prompt, '作業してください\n\n要約の書き先: `docs/pbi/opencode/PBI-001.last.md`\n')
+        self.assertEqual(prompt, '作業してください\n\nSummary file: `docs/pbi/opencode/PBI-001.last.md`\n')
         self.assertEqual((out['code'], out['last'], out['unusable']), (0, LAST, False))
         self.assertEqual(out['logs'], ['docs/pbi/opencode/PBI-001.jsonl', 'docs/pbi/opencode/PBI-001.err'])
         self.assertEqual((self.repo / 'docs/pbi/opencode/PBI-001.jsonl').read_text(encoding='utf-8'),

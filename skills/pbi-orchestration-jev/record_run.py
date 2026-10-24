@@ -1,8 +1,8 @@
 """1 回の実行 (PBI × 初回 / 差し戻し n 回目 × route の何番目) を docs/pbi/runs.jsonl に 1 行で記録し、
-その実行の生ログをリポジトリの外の保全先にコピーする (SKILL.md 8 章、合否を決めた直後に 1 回)。
+その実行の生ログをリポジトリの外の保全先にコピーする (appendix/verify.md、合否を決めた直後に 1 回)。
 
 使い方 (リポジトリのルートで):
-  python <このディレクトリ>/record_run.py <報告名> --attempt N --outcome 合格|差し戻し|昇格|使えず|保留
+  python <このディレクトリ>/record_run.py <報告名> --attempt N --outcome pass|rework|tier-up|unavailable|hold
       [--findings 重大,中,軽微] [--runner R --model M --effort E --tier T] [--work-key KEY] [--repo NAME]
       [--dir docs/pbi] [--projects DIR] [--prices FILE] [--home DIR]
 
@@ -46,6 +46,8 @@ import common
 HERE = Path(__file__).resolve().parent
 SCHEMA = 1
 OUTCOMES = ('合格', '差し戻し', '昇格', '使えず', '保留')
+# 指示文 (英語) が使う --outcome の値。runs.jsonl には今までどおり OUTCOMES の値で書く (model_report.py が読む)
+OUTCOME_ALIASES = {'pass': '合格', 'rework': '差し戻し', 'tier-up': '昇格', 'unavailable': '使えず', 'hold': '保留'}
 SEVERITIES = ('重大', '中', '軽微')
 REPORT_RE = re.compile(r'^(PBI-\d+)(?:\.rework-(\d+))?$')
 RUNNER_DIRS = ('opencode', 'codex', 'agy', 'dsh', 'claude')
@@ -261,7 +263,7 @@ def norm_path(s: str) -> str:
 
 
 def work_root(transcript: Path) -> str | None:
-    """依頼文 (最初の user のメッセージ) の「作業ルート: <パス>」(SKILL.md 6.1)。無ければ None。"""
+    """依頼文 (最初の user のメッセージ) の「Work root: <パス>」(旧い依頼文は「作業ルート: <パス>」)。無ければ None。"""
     try:
         with open(transcript, encoding='utf-8') as f:
             for _, line in zip(range(20), f):
@@ -274,7 +276,7 @@ def work_root(transcript: Path) -> str | None:
                 content = (row.get('message') or {}).get('content')
                 if isinstance(content, list):
                     content = ' '.join(b.get('text', '') for b in content if isinstance(b, dict))
-                m = re.search(r'作業ルート:\s*([^\s。]+)', content or '')
+                m = re.search(r'(?:Work root|作業ルート):\s*([^\s。]+)', content or '')
                 return m.group(1) if m else None
     except OSError:
         return None
@@ -351,7 +353,7 @@ def work_key(base: Path, explicit: str | None) -> str | None:
         return explicit
     status = base / 'STATUS.md'
     if status.is_file():
-        m = re.search(r'作業キー:\s*(\S+)', status.read_text(encoding='utf-8', errors='replace'))
+        m = re.search(r'(?:Work key|作業キー):\s*(\S+)', status.read_text(encoding='utf-8', errors='replace'))
         if m:
             return m.group(1)
     return None
@@ -419,7 +421,7 @@ def parse_findings(s: str | None) -> dict | None:
         return None
     parts = s.split(',')
     if len(parts) != 3 or not all(p.strip().isdigit() for p in parts):
-        fail('--findings は 重大,中,軽微 の 3 つの整数 (例 0,1,2)')
+        fail('--findings は critical,major,minor (重大,中,軽微) の 3 つの整数 (例 0,1,2)')
     return dict(zip(SEVERITIES, (int(p) for p in parts)))
 
 
@@ -441,8 +443,9 @@ def main():
     m = REPORT_RE.match(args.report)
     if not m:
         fail('報告名は PBI-<番号> か PBI-<番号>.rework-<n>')
+    args.outcome = OUTCOME_ALIASES.get(args.outcome, args.outcome)
     if args.outcome not in OUTCOMES:
-        fail(f'--outcome は {" / ".join(OUTCOMES)} のどれか')
+        fail(f'--outcome は {" / ".join(OUTCOME_ALIASES)} (または {" / ".join(OUTCOMES)}) のどれか')
     if args.attempt < 1:
         fail('--attempt は 1 以上')
     findings = parse_findings(args.findings)

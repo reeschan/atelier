@@ -8,9 +8,9 @@
     "en": "The orchestrator writes the spec and its assumptions"
   },
   "invoke": {
-    "kind": "builtin",
-    "doc": "appendix/adapters.md"
+    "kind": "builtin"
   },
+  "doc": "appendix/design.md",
   "where": "main",
   "memory": "full",
   "when": "ask-or-decide",

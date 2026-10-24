@@ -73,7 +73,8 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 | `id` | `<工程>.<名前>` の形。ファイル名と同じ |
 | `stages` | 担う工程 (複数可。関所は `gate`) |
 | `title` | `ja` と `en` |
-| `invoke` | `{"kind": "skill", "name": ..., "args"?: ...}` / `{"kind": "read-skill", "plugin": ..., "path": ...}` / `{"kind": "script", "path": ...}` / `{"kind": "builtin", "doc": ...}` |
+| `invoke` | `{"kind": "skill", "name": ..., "args"?: ...}` / `{"kind": "read-skill", "plugin": ..., "path": ...}` / `{"kind": "script", "path": ...}` / `{"kind": "builtin"}` |
+| `doc` | その部品を動かす手順を書いた、スキルの中のファイル (PR 2 で全部の部品の必須のキーにした。builtin の手順もここ) |
 | `where` | `main` (設計者のセッション) / `subagent-readonly` / `subagent` / `runner` (実装担当の実行先) |
 | `memory` | `full` / `refs-only` / `none` |
 | `requires` | `skills`・`plugins`・`cli`・`env` の名前の配列 (どれも任意) |
@@ -115,7 +116,7 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 
 ### `flow.py` (PR 1)
 
-- `python flow.py <pbi-dir> [--workflow 名前] [--home DIR]`。テンプレートを解決して検証し、工程ごとの計画をタブ区切りの表で出す (列: stage / component / invoke / where / memory / when / status)。
+- `python flow.py <pbi-dir> [--workflow 名前] [--home DIR]`。テンプレートを解決して検証し、工程ごとの計画をタブ区切りの表で出す (列: stage / component / invoke / where / memory / when / status / doc。doc は PR 2 で足した)。
 - 関所の行は stage を `gate after <工程>` にし、その工程の直後に並べる。
 - status は `builtin`・`script ok`・`cli missing <名前>`・`env missing <名前>`・`check skill list` (スキルとプラグインはスクリプトからは見えないので、設計者が自分のスキル一覧で確かめる)。
 - 検証の誤りは `error <内容>` の行で出し、終了コード 2。表は出さない。
@@ -128,6 +129,20 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 3. **pstack の部品**: `read-skill` の実行手順、関所の `coupling-high`・`deep` の判定、実装担当のメモリの強制 (`build.external_memory`)
 4. **Template Studio のフロータブ**: `workflows/` の読み書きの API と画面
 5. **改名**: スキルのディレクトリ・README・home の既定の場所 (`PBI_HOME` は別名として読む)。旧名のスキルは新しい名前へ案内するだけの中身でしばらく残す。リポジトリ名の変更は利用者が GitHub で行う
+
+### エンジン化と指示文 (PR 2)
+
+- 本文 (SKILL.md) は英語で約 110 行。止まる場面・不変条件・「事象 → 読む 1 本」の表・開始 (flow.py を動かす)・工程を順に回す規則・承認・1 PBI のチェックリスト・文脈を細く保つ規則・作業メモリの要点だけを置く。
+- 工程の手順は、部品の `doc` が指す 1 本に置く: `appendix/design.md` (理解と設計)、`appendix/plan.md` (PBI の雛形・検証コマンドの書き方・facts と brief・prepare.py と route.opus)、`runners.md` (開発)、`appendix/verify.md` (1 PBI の仕分け・検証・記録)、`appendix/review.md` (最終レビューとセキュリティ)、`appendix/rework.md`、`appendix/finish.md`。部品の選び方・when の判定・read-skill の手順・STATUS.md と工程の記録の書式は `appendix/engine.md`。
+- 既知の呼び出し先の表 (adapters.md) は components に移した。adapters.md には agents.json の `adapters` の設定と推奨セットだけが残る。verify-commands.md は plan.md に入れた。サブエージェントへの依頼文の雛形は `prompts/` に分けた。
+- 用語集はスキルの中の `CONTEXT.md` に移し、英語と日本語の対訳にした。
+- 指示文が英語になったので、スクリプトが読む書式も英語にした。進行中の作業を壊さないように、旧い日本語の書式も読む。
+  - PBI の見出し (`## Verify commands` ほか): verify.py と jev-mcp は日本語の見出しも読む。jev-mcp の sections のキーは英語の見出し。
+  - 依頼文の `Work root:` と STATUS.md の `Work key:`: record_run.py は `作業ルート:`・`作業キー:` も読む。
+  - `--outcome` は `pass` / `rework` / `tier-up` / `unavailable` / `hold`。runs.jsonl には今までどおり日本語の値で書く (model_report.py と過去の行をそのまま使うため)。
+  - 実装担当の報告は `Status:` / `Result:` / `Changed:` / `Open:` / `Details:` の 5 行。
+- 外部の実行先には、今までどおり設計者が参照欄の ref を依頼文に書き写す。`build.external_memory` は実行先が自分で ref を get してよいかだけを決める (強制は PR 3)。
+- 最終レビューの前の「全体の確認」(diff の読み直しと検証コマンドの再実行) は、どの部品が選ばれても必ず行う (今の動きのまま)。review.builtin はこの確認だけを指す。
 
 ## Testing Decisions
 

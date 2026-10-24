@@ -8,9 +8,9 @@
     "en": "Run the worker (worker.md) on the routed runners"
   },
   "invoke": {
-    "kind": "builtin",
-    "doc": "runners.md"
+    "kind": "builtin"
   },
+  "doc": "runners.md",
   "where": "runner",
   "memory": "refs-only",
   "when": "always",

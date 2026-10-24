@@ -1,10 +1,10 @@
-"""PBI の「触らない範囲」のファイルが変わっていないかを、起動前のハッシュと比べて確かめる (verify-commands.md)。
+"""PBI の「触らない範囲」のファイルが変わっていないかを、起動前のハッシュと比べて確かめる (appendix/plan.md の「Writing verify commands」)。
 
 git status --porcelain -- <files> の代わりに使う。git status は、前の波の未コミットの新しいファイル (??) や
 ほかの PBI の変更でも行を出すので、その PBI が触ったかどうかを区別できない。このスクリプトは、
 起動前に取ったハッシュと今の中身だけを比べる。
 
-opencode などはリポジトリの外を読めないので、2 章で docs/pbi/tools/unchanged.py にコピーして使う。
+opencode などはリポジトリの外を読めないので、開始時に docs/pbi/tools/unchanged.py にコピーして使う。
 使い方 (リポジトリのルートで):
   python docs/pbi/tools/unchanged.py save PBI-003 <ファイル> ...   # 設計者が PBI を起動する直前に実行
   python docs/pbi/tools/unchanged.py check PBI-003                 # 検証コマンドに書く

@@ -8,9 +8,9 @@
     "en": "Send the PBI back (limit: fix.max_rework)"
   },
   "invoke": {
-    "kind": "builtin",
-    "doc": "appendix/rework.md"
+    "kind": "builtin"
   },
+  "doc": "appendix/rework.md",
   "where": "main",
   "memory": "full",
   "when": "always",

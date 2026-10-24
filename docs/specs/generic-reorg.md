@@ -198,6 +198,8 @@ pbi-orchestration-jev は v1 から v20 まで機能を足し続けた結果、�
 
 ### 段 3: 指示文の書き直し
 
+- 状態: Atelier の PR 2 で行った (docs/specs/atelier-workflow.md の「エンジン化と指示文 (PR 2)」)。
+
 - **言語**: エージェントが読む指示文 (本文・appendix・実行先の手引き・実装担当の手引き・prompts) を英語にする。応答は利用者の言語。README は英語と日本語。用語集 (CONTEXT.md) はスキルのディレクトリの中に移し、英語と日本語の対訳にする。
 - **呼び名**:
 

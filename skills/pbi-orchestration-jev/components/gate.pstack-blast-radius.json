@@ -12,6 +12,7 @@
     "plugin": "pstack",
     "path": "skills/blast-radius/SKILL.md"
   },
+  "doc": "appendix/engine.md",
   "where": "subagent-readonly",
   "memory": "full",
   "when": "coupling-high",
@@ -22,9 +23,9 @@
     ]
   },
   "forbid": [
-    "ファイルを変えない",
-    "結果は docs/pbi/notes/PBI-<n>.blast.md に書く",
-    "根拠を確かめたスクリプトは PBI の検証コマンドに足す"
+    "do not change any file",
+    "write the result to docs/pbi/notes/PBI-<n>.blast.md",
+    "offer each script that confirmed a finding as a verify command for the PBI"
   ],
   "interactive": false,
   "calls_back": false,
