@@ -1,4 +1,4 @@
-"""component.py の add・remove・list を、偽のプラグインと自分のスキルの置き場で確かめる。
+"""component.py の add・remove・list・example を、偽のプラグインと自分のスキルの置き場で確かめる。
 
 入ったスキルの SKILL.md から部品の定義を作ること (Skill ツールで呼べるものは skill、disable-model-invocation は
 read-skill)、ライセンスとリンクを plugin.json から取ること、home に無いテンプレートは同梱のものを写して差すこと、
@@ -45,7 +45,7 @@ class ComponentCliTest(unittest.TestCase):
         self.plugin('mattpocock-skills', {'grilling': False, 'code-review': False},
                     {'license': 'MIT', 'homepage': 'https://github.com/mattpocock/skills'}, group='engineering')
         self.plugin('grouped', {'deep': True}, {'license': 'MIT'}, group='productivity')
-        self.plugin('pstack', {'how': True}, {'license': 'MIT', 'repository': {'url': 'https://github.com/cursor/plugins'}})
+        self.plugin('pstack', {'how': True, 'blast-radius': True, 'architect': True, 'interrogate': True}, {'license': 'MIT', 'repository': {'url': 'https://github.com/cursor/plugins'}})
         self.plugin('yomiyasu', {'yomiyasu': False}, {'license': 'MIT', 'repository': 'https://github.com/nanaism/yomiyasu'})
         write(os.path.join(self.skills, 'my-review', 'SKILL.md'), skill_md('my-review'))
         write(os.path.join(self.skills, 'my-hidden', 'SKILL.md'), skill_md('my-hidden', disabled=True))
@@ -215,6 +215,72 @@ class ComponentCliTest(unittest.TestCase):
         rows = {line.split('\t')[0]: line.split('\t') for line in out.splitlines()[1:]}
         self.assertEqual(rows['review.my-review'][1], 'my-review')
         self.assertEqual(rows['review.builtin'][1], 'bundled')
+
+
+    # --- example ---
+
+    def test_bundled_examples_are_valid(self):
+        for path in sorted(component.EXAMPLES.glob('*.json')):
+            data, problem = component.load_example(str(path))
+            self.assertIsNotNone(data, problem)
+            self.assertEqual(data['workflow']['name'], data['name'], path.name)
+
+    def test_example_check_lists_missing_skills_and_install_commands(self):
+        shutil.rmtree(os.path.join(self.plugins, 'cache', 'market', 'yomiyasu'))
+        code, out, err = self.run_cli('example', 'check', 'recommended')
+        self.assertEqual(code, component.MISSING, out + err)
+        self.assertIn('yomiyasu:yomiyasu\tgate after finish\tmissing', out)
+        self.assertIn('pstack:how\tunderstand\tinstalled\tnot registered', out)
+        self.assertIn('install claude plugin marketplace add nanaism/yomiyasu', out)
+        self.assertIn('install claude plugin install yomiyasu@yomiyasu --scope user', out)
+        self.assertNotIn('install claude plugin install pstack', out)
+        code, out, err = self.run_cli('example', 'use', 'recommended')
+        self.assertEqual(code, component.MISSING)
+        self.assertFalse(os.path.exists(os.path.join(self.home, 'workflows')))
+
+    def test_example_use_registers_components_and_writes_the_template(self):
+        code, out, err = self.run_cli('example', 'use', 'recommended', '--as', 'jev-routed')
+        self.assertEqual(code, 0, out + err)
+        workflow = self.load('workflows', 'jev-routed.json')
+        self.assertEqual(workflow['name'], 'jev-routed')
+        self.assertEqual(workflow['stages']['understand'][0], {'id': 'understand.pstack-how', 'when': 'clearly-complex'})
+        architect = self.load('components', 'gate.pstack-architect.json')
+        self.assertEqual(architect['invoke']['kind'], 'read-skill')
+        self.assertIn('do not run Phase D (implementation) or Phase E', architect['forbid'])
+        self.assertEqual(self.load('components', 'gate.yomiyasu.json')['doc'], 'appendix/finish.md')
+        code, out, err = self.run_cli('example', 'check', 'recommended')
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn('not registered', out)
+        # 2 回目は --replace が要り、付ければ登録済みの部品はそのまま使う
+        self.assertEqual(self.run_cli('example', 'use', 'recommended', '--as', 'jev-routed')[0], 2)
+        self.assertEqual(self.run_cli('example', 'use', 'recommended', '--as', 'jev-routed', '--replace')[0], 0)
+
+    def test_example_use_refuses_a_component_registered_with_other_settings(self):
+        self.run_cli('add', 'pstack:how', '--stage', 'understand', '--where', 'subagent')
+        code, out, err = self.run_cli('example', 'use', 'recommended')
+        self.assertEqual(code, 2)
+        self.assertIn('understand.pstack-how', err)
+        self.assertIn('pstack:how\tunderstand\tinstalled\tdiffers', out)
+        self.assertFalse(os.path.exists(os.path.join(self.home, 'workflows', 'recommended.json')))
+
+    def test_example_use_rolls_back_on_a_workflow_error(self):
+        bad = component.load_example('recommended')[0]
+        bad['workflow']['stages']['review'] = ['review.pstack-interrogate']
+        path = os.path.join(self.dir, 'bad.json')
+        write(path, json.dumps(bad))
+        code, out, err = self.run_cli('example', 'use', path)
+        self.assertEqual(code, 2)
+        self.assertIn('the last component must be builtin', out)
+        self.assertEqual(os.listdir(os.path.join(self.home, 'components')), [])
+        self.assertFalse(os.path.exists(os.path.join(self.home, 'workflows', 'recommended.json')))
+
+    def test_example_shape_errors(self):
+        path = os.path.join(self.dir, 'shape.json')
+        write(path, json.dumps({'name': 'x', 'workflow': {}, 'skills': [{'skill': 'a:b', 'stage': 'gate'}]}))
+        code, _out, err = self.run_cli('example', 'check', path)
+        self.assertEqual(code, 2)
+        self.assertIn('after (a stage) goes with stage gate only', err)
+        self.assertEqual(self.run_cli('example', 'check', 'no-such-example')[0], 2)
 
 
 if __name__ == '__main__':

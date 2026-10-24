@@ -209,19 +209,26 @@ python $S/component.py add yomiyasu:yomiyasu --stage gate --after finish
 
 別のテンプレートに差すときは `--workflow high-model` を足します。スキルが入っていない、`when` がその場所に合わない、同梱の部品と id が重なる、のどれかなら終了コード 2 で止まり、何も残しません。
 
-### おすすめ: mattpocock-skills
+### おすすめ: 作者のテンプレート
 
-既定では、このスキルと Claude Code の外にあるものは使いません。`/atelier setup --recommended` が、推奨のセットを 1 つだけ案内します。はいと答えるまで何も入れません。
+既定では、このスキルと Claude Code の外にあるものは使いません。作者が実際に使っている構成は、テンプレートの見本 `examples/workflows/recommended.json` として置いてあります。jev-routed に、[pstack](https://github.com/cursor/plugins) (理解の `how`、振り分けのあとの `blast-radius` と `architect`、深いレビューの `interrogate`)、[mattpocock-skills](https://github.com/mattpocock/skills) (設計の `grilling`、最終レビューの `code-review`)、[yomiyasu](https://github.com/nanaism/yomiyasu) (日本語の完了報告の推敲) を足したものです。どれも MIT です。見本が持つのはテンプレートと、スキルごとの入れ方・登録のしかただけで、スキルの中身はこのリポジトリに入れていません。
 
 ```sh
-/atelier setup --recommended
-claude plugin install mattpocock-skills@claude-plugins-official --scope user
+/atelier setup --recommended          # 確かめ、1 回だけ聞き、足りないものを入れ、登録し、テンプレートを書く
 ```
 
-- [mattpocock/skills](https://github.com/mattpocock/skills) — MIT (Copyright (c) 2026 Matt Pocock)。設計に grilling、最終レビューに code-review が加わります。
-- `setup --recommended` は、名前・使うフェーズ・リンク・ライセンス・入れるコマンドを見せます。1 回承認すると、設計者が install のコマンドを実行し、grilling と code-review を外部部品として登録します。同梱のスクリプトは何もインストールしません (パッケージのインストールは、パッケージのスキャンで危険なコマンドとして検出されるためです)。
-- 「いいえ」と答えたときや、`claude` コマンドが PATH に無いときは、コマンドを表示するだけです。
-- 入れたあとに `/reload-plugins` か Claude Code の再起動が要ります。それまではプラグインのスキルが一覧に出ず、アダプターは組み込みの手順のまま動きます。
+手でやるときは次のとおりです。
+
+```sh
+python $S/component.py example check recommended   # 足りないスキルと、入れるコマンド (足りないあいだは終了コード 3)
+claude plugin marketplace add cursor/plugins        # check が出したコマンド
+claude plugin install pstack@cursor-plugins --scope user
+python $S/component.py example use recommended --as jev-routed --replace   # 既定のテンプレートにする
+```
+
+- `check` は何も入れません。足りないコマンドを `install <コマンド>` の行で出すだけです。`setup --recommended` はスキルをライセンスとリンク付きで見せ、「はい」と答えたときだけそのコマンドを実行します。
+- `use` はすべてのスキルを外部部品として登録し、テンプレートを home の `workflows/` に書きます。そのままの名前 (`recommended`。使うときは名前で頼む) か、`--as jev-routed --replace` で既定のテンプレートにします。同じ id の部品がほかの設定で登録済みなら止まり、誤りがあれば何も残しません。
+- 同梱の見本の一覧は `component.py example list` で見られます。入れたあとは `/reload-plugins` か Claude Code の再起動が要ります。
 
 ## 優先テンプレート
 
@@ -265,7 +272,7 @@ cp skills/atelier/examples/templates/cheap-all-tiers.json ~/.config/atelier/temp
 ## 導入
 
 ```sh
-git clone https://github.com/reeschan/pbi-orchestration-jev.git atelier
+git clone https://github.com/reeschan/atelier.git
 cp -r atelier/skills/atelier ~/.claude/skills/
 mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/pbi-worker.md ~/.claude/agents/
 ```
@@ -402,6 +409,7 @@ skills/atelier/
 ├── web/priority-templates.html # 優先テンプレートを見て設定する Web ページ (Artifact)
 ├── examples/routing/           # 外部の実行先を使う振り分けの見本 (multi-runner.json)
 ├── examples/templates/         # 優先テンプレートの例 (home の templates/ にコピーして使う)
+├── examples/workflows/         # 外部部品を使うテンプレートの見本と、要るスキルの入れ方 (component.py example)
 ├── unchanged.py                # PBI が触ってはいけないファイルをハッシュで確かめる
 ├── jev_mcp.py                  # jev-mcp: PBI を MCP クライアントに渡す MCP サーバー (stdio / HTTP)
 ├── agent_stats.py              # 会話記録からトークン・キャッシュ・文脈の大きさを集計

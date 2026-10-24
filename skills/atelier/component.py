@@ -4,6 +4,9 @@
                           [--memory M] [--forbid TEXT ...] [--home DIR]
   python component.py remove <id> [--workflow NAME] [--home DIR]
   python component.py list [--home DIR]
+  python component.py example list
+  python component.py example check <name|path> [--home DIR]
+  python component.py example use <name|path> [--as NAME] [--replace] [--home DIR]
 
 このスキルは他の人のスキルも、その部品の定義も同梱しない。スキル自体は Claude Code のプラグインのコマンド
 (`/plugin marketplace add ...`・`/plugin install ...`) で利用者が入れ、このコマンドが入ったスキルの SKILL.md を
@@ -20,8 +23,18 @@ add は <home>/components/<stage>.<plugin>-<name>.json (関所は gate.…、自
 (既定 jev-routed) に差す。home にそのテンプレートが無ければ同梱のものを写してから変える。工程では先頭
 (足した部品をいちばん先に試す) に、関所では --after の工程の関所の最後に入れる。書いたあと flow.py と同じ検証をして、誤りがあれば
 何も残さず終了コード 2 で止める。remove は部品を home とテンプレートから外す。同梱の部品は消せない。
+
+example は、外部部品を使うテンプレートの見本 (examples/workflows/<name>.json) を扱う。見本はテンプレート (workflow) と、
+それが使うスキルの入れ方と登録のしかた (skills) だけを持ち、スキルの中身も部品の定義も持たない。
+check は skills ごとに、入っているか (installed / missing) と home に登録済みか (registered / not registered /
+differs) を表で出し、足りないスキルを入れるコマンドを `install <コマンド>` の行で出す。足りなければ終了コード 3。
+このスクリプトは何も入れない (入れるのは利用者か、利用者が承認したあとのオーケストレーター)。
+use はすべてのスキルが入っていれば、各スキルを部品として home に登録し、見本のテンプレートを
+<home>/workflows/<--as か見本の名前>.json に書く。足りなければ check と同じ行を出して終了コード 3。
+home に同じ名前のテンプレートがあれば --replace が要る。誤りがあれば書いたものを元に戻して終了コード 2。
 """
 import argparse
+import json
 import os
 import re
 import sys
@@ -51,6 +64,9 @@ REVIEW_FORBID = ['--fix', '--comment', 'ultra', '--max-findings']
 COMPONENT_ID = re.compile(r'^(?:' + '|'.join(flow.STAGES + (flow.GATE,)) + r')\.[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$')
 # read-skill の部品はサブエージェントで動かし、出力のファイルだけを書かせる (appendix/engine.md)
 READ_SKILL_FORBID = ['do not change any file except the output file named in the prompt']
+EXAMPLES = HERE / 'examples' / 'workflows'
+# 見本のスキルが足りないときの終了コード (2 は誤り)
+MISSING = 3
 SKILL_NAME = re.compile(r'^(?:([A-Za-z0-9][A-Za-z0-9_.-]{0,63}):)?([A-Za-z0-9][A-Za-z0-9_.-]{0,63})$')
 
 
@@ -365,6 +381,177 @@ def cmd_list(home: Path) -> int:
     return 2 if errors else 0
 
 
+def load_example(ref: str) -> tuple[dict | None, str]:
+    """見本 (同梱の名前かファイルのパス) を読む。(見本, 誤り)。"""
+    path = Path(ref) if ref.endswith('.json') else EXAMPLES / f'{ref}.json'
+    data = common.load_json(path)
+    if not isinstance(data, dict):
+        return None, f'{ref}: example not found or not readable'
+    problem = example_error(data)
+    return (None, f'{ref}: {problem}') if problem else (data, '')
+
+
+def example_error(data: dict) -> str | None:
+    """見本の形の誤り (1 つ目だけ)。"""
+    if not isinstance(data.get('name'), str) or not flow_name_ok(data['name']):
+        return 'name must be lowercase letters, digits and hyphens'
+    if not isinstance(data.get('workflow'), dict):
+        return 'workflow must be an object'
+    skills = data.get('skills')
+    if not isinstance(skills, list):
+        return 'skills must be a list'
+    for item in skills:
+        if not isinstance(item, dict) or not isinstance(item.get('skill'), str) or not SKILL_NAME.match(item['skill']):
+            return 'each skill needs skill (<plugin>:<name> or <name>)'
+        if item.get('stage') not in list(STAGE_DOCS) + ['gate']:
+            return f'{item["skill"]}: stage must be one of {", ".join(sorted(STAGE_DOCS))} or gate'
+        if (item['stage'] == 'gate') != (item.get('after') in flow.STAGES):
+            return f'{item["skill"]}: after (a stage) goes with stage gate only'
+        for key, allowed in (('where', flow.WHERE), ('memory', flow.MEMORY)):
+            if item.get(key) is not None and item[key] not in allowed:
+                return f'{item["skill"]}: {key} must be one of {", ".join(allowed)}'
+        if not isinstance(item.get('forbid', []), list):
+            return f'{item["skill"]}: forbid must be a list'
+        install = item.get('install', {})
+        if not isinstance(install, dict) or not all(isinstance(v, str) for v in install.values()):
+            return f'{item["skill"]}: install takes marketplace and plugin strings'
+    return None
+
+
+def flow_name_ok(name: str) -> bool:
+    return bool(re.fullmatch(r'[a-z0-9][a-z0-9-]{0,62}', name))
+
+
+def example_args(item: dict):
+    return argparse.Namespace(stage=item['stage'], after=item.get('after'), where=item.get('where'),
+                              memory=item.get('memory'), forbid=item.get('forbid', []))
+
+
+def install_commands(item: dict) -> list[str]:
+    """入っていないスキルを入れるコマンド。プラグインは marketplace add と plugin install、自分のスキルは案内だけ。"""
+    plugin, _name = SKILL_NAME.match(item['skill']).groups()
+    install = item.get('install', {})
+    if not plugin:
+        return [f'# put the skill in ~/.claude/skills/{item["skill"]}/ ({install.get("note", "your own skill")})']
+    commands = []
+    if install.get('marketplace_source'):
+        commands.append(f'claude plugin marketplace add {install["marketplace_source"]}')
+    marketplace = install.get('marketplace', 'claude-plugins-official')
+    commands.append(f'claude plugin install {plugin}@{marketplace} --scope user')
+    return commands
+
+
+def example_rows(example: dict, home: Path) -> list[dict]:
+    """スキルごとの状態。installed なら作る部品の定義 (component) と、home の登録の状態を持つ。"""
+    rows = []
+    for item in example['skills']:
+        skill_md, plugin, name, rel = find_skill(item['skill'], os.environ)
+        row = {'item': item, 'installed': skill_md is not None, 'component': None, 'registered': '-',
+               'error': None}
+        if skill_md is not None:
+            try:
+                row['component'] = build_component(item['skill'], skill_md, plugin, name, rel, example_args(item))
+            except ValueError as e:
+                row['error'] = str(e)
+            if row['component'] is not None:
+                path = home / 'components' / f'{row["component"]["id"]}.json'
+                existing = common.load_json(path)
+                row['registered'] = ('registered' if existing == row['component'] else
+                                     'differs' if path.exists() else 'not registered')
+        rows.append(row)
+    return rows
+
+
+def print_rows(rows: list[dict]) -> list[str]:
+    """表を出し、足りないスキルを入れるコマンドを (重複なく) 返す。"""
+    print('skill	stage	installed	registered	license	link')
+    commands = []
+    for row in rows:
+        item = row['item']
+        place = f'gate after {item["after"]}' if item['stage'] == 'gate' else item['stage']
+        print('\t'.join([item['skill'], place, 'installed' if row['installed'] else 'missing', row['registered'],
+                         item.get('license', ''), item.get('link', '')]))
+        if not row['installed']:
+            commands += [c for c in install_commands(item) if c not in commands]
+        if row['error']:
+            print(f'error {row["error"]}')
+    return commands
+
+
+def cmd_example(args, home: Path) -> int:
+    if args.action == 'list':
+        print('name\tskills\tdescription')
+        for path in sorted(EXAMPLES.glob('*.json')):
+            data, problem = load_example(str(path))
+            if data is None:
+                print(f'error {problem}')
+                continue
+            description = data.get('description', {})
+            text = description.get('en', '') if isinstance(description, dict) else ''
+            print('\t'.join([data['name'], str(len(data['skills'])), text]))
+        return 0
+    example, problem = load_example(args.example)
+    if example is None:
+        print(problem, file=sys.stderr)
+        return 2
+    rows = example_rows(example, home)
+    commands = print_rows(rows)
+    for command in commands:
+        print(f'install {command}')
+    if any(row['error'] for row in rows):
+        return 2
+    if args.action == 'check':
+        return MISSING if commands else 0
+    if commands:
+        print('some skills are missing; install them (the install lines above), then run use again', file=sys.stderr)
+        return MISSING
+    return use_example(example, rows, home, args.as_name or example['name'], args.replace)
+
+
+def use_example(example: dict, rows: list[dict], home: Path, name: str, replace: bool) -> int:
+    """部品を登録し、見本のテンプレートを home に書く。誤りがあれば全部元に戻す。"""
+    if not flow_name_ok(name):
+        print(f'{name}: not a valid workflow name', file=sys.stderr)
+        return 2
+    bundled, _ = flow.load_components()
+    clash = [row['component']['id'] for row in rows if row['component']['id'] in bundled]
+    if clash:
+        print(f'{", ".join(clash)}: a bundled component already has this id', file=sys.stderr)
+        return 2
+    differs = [row['component']['id'] for row in rows if row['registered'] == 'differs']
+    if differs:
+        print(f'{", ".join(differs)}: already registered with other settings; '
+              'remove them (component.py remove <id> --workflow <name>) first', file=sys.stderr)
+        return 2
+    wf_path = home / 'workflows' / f'{name}.json'
+    if wf_path.exists() and not replace:
+        print(f'{common.shown(wf_path)} exists; pass --replace to overwrite it', file=sys.stderr)
+        return 2
+    workflow = json.loads(json.dumps(example['workflow']))
+    workflow['name'] = name
+    written = {wf_path: wf_path.read_bytes() if wf_path.is_file() else None}
+    for row in rows:
+        path = home / 'components' / f'{row["component"]["id"]}.json'
+        if row['registered'] != 'registered':
+            written[path] = None
+            common.write_json(path, row['component'])
+    common.write_json(wf_path, workflow)
+    errors = check(home, workflow)
+    if errors:
+        for path, data in written.items():
+            if data is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(data)
+        for error in errors:
+            print(f'error {error}')
+        return 2
+    print(f'workflow {name} written to {common.shown(wf_path)}')
+    for row in rows:
+        print(f'component {row["component"]["id"]} ({row["registered"] if row["registered"] == "registered" else "added"})')
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--home', help='components/ と workflows/ を置く home (common.resolve_home)')
@@ -382,6 +569,16 @@ def main(argv=None) -> int:
     remove.add_argument('id')
     remove.add_argument('--workflow', default=flow.DEFAULT_WORKFLOW)
     sub.add_parser('list', help='同梱と home の部品の一覧')
+    example = sub.add_parser('example', help='外部部品を使うテンプレートの見本を確かめる・使う')
+    example_sub = example.add_subparsers(dest='action', required=True)
+    example_sub.add_parser('list', help='同梱の見本の一覧')
+    for action, text in (('check', '見本が使うスキルが入っているかと、足りないスキルを入れるコマンド'),
+                         ('use', '見本のスキルを部品として登録し、テンプレートを home に書く')):
+        one = example_sub.add_parser(action, help=text)
+        one.add_argument('example', help='同梱の見本の名前か、見本のファイルのパス')
+        if action == 'use':
+            one.add_argument('--as', dest='as_name', help='home に書くテンプレートの名前 (既定は見本の名前)')
+            one.add_argument('--replace', action='store_true', help='home の同じ名前のテンプレートを上書きする')
     args = ap.parse_args(argv)
     common.utf8_stdout()
     home = common.resolve_home(args.home)
@@ -389,6 +586,8 @@ def main(argv=None) -> int:
         return cmd_add(args, home)
     if args.command == 'remove':
         return cmd_remove(args, home)
+    if args.command == 'example':
+        return cmd_example(args, home)
     return cmd_list(home)
 
 
