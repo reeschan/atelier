@@ -34,7 +34,7 @@ try {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      permissionDecisionReason: "rtk モード (pbi-orchestration-jev)",
+      permissionDecisionReason: "rtk モード (atelier)",
       updatedInput: { ...input.tool_input, command: cmd },
     },
   }));

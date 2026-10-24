@@ -13,7 +13,7 @@ SCRIPT = os.path.join(HERE, 'templates.py')
 sys.path.insert(0, HERE)
 import templates  # noqa: E402
 
-HOME_KEYS = ('PBI_HOME', 'PBI_TEMPLATES_HOME', 'XDG_CONFIG_HOME')
+HOME_KEYS = ('ATELIER_HOME', 'PBI_HOME', 'PBI_TEMPLATES_HOME', 'XDG_CONFIG_HOME')
 
 NOW = datetime.datetime.fromisoformat('2026-10-22T09:00:00+09:00')
 UNTIL = '2026-10-22T23:59:00+09:00'
@@ -238,11 +238,11 @@ class ResolveHomeTest(unittest.TestCase):
 
     def test_xdg_config_home(self):
         self.assertEqual(self.resolve(None, XDG_CONFIG_HOME='xdg'),
-                         Path('xdg') / 'pbi-orchestration-jev')
+                         Path('xdg') / 'atelier')
 
     def test_default_is_config_under_home(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(Path, 'home', return_value=Path(d)):
-            self.assertEqual(self.resolve(None), Path(d) / '.config' / 'pbi-orchestration-jev')
+            self.assertEqual(self.resolve(None), Path(d) / '.config' / 'atelier')
 
     def test_home_option_end_to_end(self):
         with tempfile.TemporaryDirectory() as d:

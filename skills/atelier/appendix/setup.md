@@ -82,7 +82,7 @@ These steps come last in setup. Each one is optional; the skill runs with none o
     "PreToolUse": [
       {
         "matcher": "Bash|PowerShell",
-        "hooks": [{ "type": "command", "command": "node \"<HOME>/.claude/skills/pbi-orchestration-jev/rtk/rtk-gate.mjs\"", "timeout": 10 }]
+        "hooks": [{ "type": "command", "command": "node \"<HOME>/.claude/skills/atelier/rtk/rtk-gate.mjs\"", "timeout": 10 }]
       }
     ]
   }
@@ -97,7 +97,7 @@ The argument `setup --recommended` installs nothing by itself: it shows the one 
 
 ## home
 
-home is the directory for per-user settings, outside the skill. The resolution order is `--home DIR`, then `PBI_HOME`, then `XDG_CONFIG_HOME/pbi-orchestration-jev`, then `~/.config/pbi-orchestration-jev`. The old `PBI_TEMPLATES_HOME` is still read for compatibility.
+home is the directory for per-user settings, outside the skill. The resolution order is `--home DIR`, then `ATELIER_HOME`, then the old names `PBI_HOME` and `PBI_TEMPLATES_HOME`, then `XDG_CONFIG_HOME/atelier`, then `~/.config/atelier`. Under `XDG_CONFIG_HOME` or `~/.config`, the old folder `pbi-orchestration-jev` is used while `atelier` does not exist, so a home from before the rename keeps working.
 
 home is optional; a missing file means "not set", and the skill creates a file only when a save needs it.
 

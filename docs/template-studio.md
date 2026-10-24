@@ -77,7 +77,7 @@ flowchart LR
 - それも無く、`models/<実行先>.json` の項目に `price_in` / `price_out` があればそれを使う (`quality` は null、`sample` は false、source は `cli`)。
 - どれも無ければ null で、画面には参考が無いものとして出る。
 
-カタログの更新は `python skills/pbi-orchestration-jev/studio/update_catalog.py` で行う。価格と新しいモデルは OpenRouter の `GET /api/v1/models` から、品質は Artificial Analysis のコーディング指標から取る (`AA_API_KEY` があるときだけ)。取れなかった値は `sample: true` のままで、画面に仮の値と出る。
+カタログの更新は `python skills/atelier/studio/update_catalog.py` で行う。価格と新しいモデルは OpenRouter の `GET /api/v1/models` から、品質は Artificial Analysis のコーディング指標から取る (`AA_API_KEY` があるときだけ)。取れなかった値は `sample: true` のままで、画面に仮の値と出る。
 
 ## HTTP API
 

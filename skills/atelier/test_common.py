@@ -11,7 +11,7 @@ from unittest import mock
 import agent_stats
 import common
 
-HOME_KEYS = ('PBI_HOME', 'PBI_TEMPLATES_HOME', 'XDG_CONFIG_HOME')
+HOME_KEYS = ('ATELIER_HOME', 'PBI_HOME', 'PBI_TEMPLATES_HOME', 'XDG_CONFIG_HOME')
 
 
 def clean_env(**extra):
@@ -26,7 +26,7 @@ def env_of(**extra):
 
 
 class ResolveHomeTest(unittest.TestCase):
-    """引数 → PBI_HOME → PBI_TEMPLATES_HOME → XDG_CONFIG_HOME → ~/.config。"""
+    """引数 → ATELIER_HOME → PBI_HOME → PBI_TEMPLATES_HOME → XDG_CONFIG_HOME → ~/.config。"""
 
     def test_arg_wins_over_env(self):
         with env_of(PBI_HOME='pbi-home', PBI_TEMPLATES_HOME='old-home', XDG_CONFIG_HOME='xdg'):
@@ -49,7 +49,7 @@ class ResolveHomeTest(unittest.TestCase):
             self.assertEqual(common.resolve_home(None), Path.home() / 'pbi-home')
             self.assertEqual(common.resolve_home('~/arg-home'), Path.home() / 'arg-home')
         with env_of(XDG_CONFIG_HOME='~/xdg'):
-            self.assertEqual(common.resolve_home(None), Path.home() / 'xdg' / 'pbi-orchestration-jev')
+            self.assertEqual(common.resolve_home(None), Path.home() / 'xdg' / 'atelier')
 
     def test_empty_value_falls_through(self):
         with env_of(PBI_HOME='', PBI_TEMPLATES_HOME='old-home'):
@@ -57,7 +57,7 @@ class ResolveHomeTest(unittest.TestCase):
 
     def test_xdg_config_home(self):
         with env_of(XDG_CONFIG_HOME='xdg'):
-            self.assertEqual(common.resolve_home(None), Path('xdg') / 'pbi-orchestration-jev')
+            self.assertEqual(common.resolve_home(None), Path('xdg') / 'atelier')
 
     def test_pbi_home_wins_over_xdg(self):
         with env_of(PBI_HOME='pbi-home', XDG_CONFIG_HOME='xdg'):
@@ -65,7 +65,22 @@ class ResolveHomeTest(unittest.TestCase):
 
     def test_default_is_config_under_home(self):
         with env_of(), tempfile.TemporaryDirectory() as d, mock.patch.object(Path, 'home', return_value=Path(d)):
-            self.assertEqual(common.resolve_home(None), Path(d) / '.config' / 'pbi-orchestration-jev')
+            self.assertEqual(common.resolve_home(None), Path(d) / '.config' / 'atelier')
+
+    def test_atelier_home_wins_over_the_old_names(self):
+        with env_of(ATELIER_HOME='new-home', PBI_HOME='pbi-home', PBI_TEMPLATES_HOME='old-home'):
+            self.assertEqual(common.resolve_home(None), Path('new-home'))
+
+    def test_old_home_directory_is_used_while_the_new_one_is_missing(self):
+        with env_of(), tempfile.TemporaryDirectory() as d, mock.patch.object(Path, 'home', return_value=Path(d)):
+            old = Path(d) / '.config' / 'pbi-orchestration-jev'
+            old.mkdir(parents=True)
+            self.assertEqual(common.resolve_home(None), old)
+            (Path(d) / '.config' / 'atelier').mkdir()
+            self.assertEqual(common.resolve_home(None), Path(d) / '.config' / 'atelier')
+        with tempfile.TemporaryDirectory() as d, env_of(XDG_CONFIG_HOME=d):
+            (Path(d) / 'pbi-orchestration-jev').mkdir()
+            self.assertEqual(common.resolve_home(None), Path(d) / 'pbi-orchestration-jev')
 
     def test_does_not_create_the_directory(self):
         with env_of(), tempfile.TemporaryDirectory() as d, mock.patch.object(Path, 'home', return_value=Path(d)):
