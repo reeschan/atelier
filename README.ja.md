@@ -107,20 +107,21 @@ home に置く `agents.json` の最小の例:
 
 取れなかった実行先は前の一覧のまま (無ければ空) でエラーを残し、編集画面の「エージェントとモデル」タブか `python setup_agents.py add-model --runner <実行先> --id <モデル>` で手で足せます。ほかの実行先には波及しません。
 
-編集画面は手元の 1 ページで、タブは 3 つです。
+編集画面は手元の 1 ページで、タブは 4 つです。
 
 1. **エージェントとモデル**: 実行先と使うモデルにチェックを付け、手入力でモデルを足し、品質・価格の参考を横に読みます。
 2. **振り分けテンプレート**: 1 で選んだモデルだけから、段ごとの手順を組みます。
 3. **優先テンプレートと適用**: 優先テンプレートを作って直し (交互グループを含む)、期限と期限切れの扱いを付けて適用します。
+4. **開発フロー**: 開発フローのテンプレートを選び、工程と関所ごとに部品を並べます (順番・候補ごとの `when`・足す・外す)。差し戻しの上限と外部の実行先の共有メモリも決めます。保存の前に `flow.py` と同じ検証をして home の `workflows/<名前>.json` に書き、home の版を消すと同梱の版に戻ります。
 
-保存先はすべて home (`agents.json`・`models/<実行先>.json`・`routing.json`・`templates/<名前>.json`・`overrides.json`) で、対象リポジトリには書きません。スキルを通さずに開くときは次を実行します。
+保存先はすべて home (`agents.json`・`models/<実行先>.json`・`routing.json`・`templates/<名前>.json`・`overrides.json`・`workflows/<名前>.json`) で、対象リポジトリには書きません。スキルを通さずに開くときは次を実行します。
 
 ```sh
 python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 ```
 
 - 画面は日本語と英語に対応しています。ブラウザの言語に合わせて開き、右上の「EN / 日本語」ボタンで切り替えられます (選んだ言語は次回も使います)。URL に `?lang=ja` か `?lang=en` を付けても切り替えられます。
-- サーバーは 127.0.0.1 だけで待ち受けます。`/api/*` は画面に埋め込んだ起動ごとの合言葉と、`127.0.0.1` か `localhost` の Host が合わなければ断り、書き込みは 1 回 64 KB までの JSON です。保存のたびに `SAVED <種類> <パス>`、終わるときに `CLOSED` か `TIMEOUT` を出します。`--tab agents|routing|priority` で開くタブ、`--home DIR` で別の home、`--timeout 0` で時間切れなしにできます。
+- サーバーは 127.0.0.1 だけで待ち受けます。`/api/*` は画面に埋め込んだ起動ごとの合言葉と、`127.0.0.1` か `localhost` の Host が合わなければ断り、書き込みは 1 回 64 KB までの JSON です。保存のたびに `SAVED <種類> <パス>`、終わるときに `CLOSED` か `TIMEOUT` を出します。`--tab agents|routing|priority|flow` で開くタブ、`--home DIR` で別の home、`--timeout 0` で時間切れなしにできます。
 - 品質・価格の参考は `studio/catalog.json` から出します (`python studio/update_catalog.py` で更新。価格と新しいモデルは OpenRouter、品質は `AA_API_KEY` があるとき Artificial Analysis のコーディング指標)。参考情報だけで、選べるモデルは home の `models/<実行先>.json` の一覧で決まります。
 - 設計の詳細は [docs/template-studio.md](docs/template-studio.md) にあります。
 

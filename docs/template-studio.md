@@ -86,7 +86,7 @@ flowchart LR
 | エンドポイント | 用途 |
 |---|---|
 | `GET /` | `index.html` に起動ごとの合言葉と home を埋め込んで返す |
-| `GET /api/state` | home の今の中身 (runners・routing・templates・examples・application・status・warnings) を返す |
+| `GET /api/state` | home の今の中身 (runners・routing・templates・examples・application・status・flow・warnings) を返す |
 | `PUT /api/agents/<runner>` | その実行先の enabled・選んだモデル・課金の種類を変える (`selected: null` はモデルの指定を消す) |
 | `POST /api/models/<runner>` | 手入力のモデルを `models/<runner>.json` に足す |
 | `PUT /api/routing` | 振り分けテンプレートを検査して `routing.json` に書く (前の版は `routing.prev.json`) |
@@ -95,10 +95,14 @@ flowchart LR
 | `POST /api/examples/<name>/copy` | 同梱の例を home の `templates/` に名前を変えてコピーする |
 | `PUT /api/application` | 優先テンプレートの適用を始める (期限と期限切れの扱いを付ける) |
 | `POST /api/application/answer` | 期限切れへの答え (延長 / やめる / 期限なし) |
+| `PUT /api/workflows/<name>` | 開発フローのテンプレートを flow.py と同じ検証にかけて `workflows/<name>.json` に書く |
+| `DELETE /api/workflows/<name>` | home の開発フローのテンプレートを消す (同梱の同名があればそれに戻る。応答の `fallback`) |
 | `POST /api/close` | 応答を返してからサーバーを終える |
 
-- 起動は `python studio/serve.py [--home DIR] [--port 0] [--no-open] [--timeout 1800] [--tab agents|routing|priority]`。起動すると `OPEN <url>` を出し (`--tab` は URL の `#<tab>`)、保存のたびに `SAVED <kind> <path>`、`POST /api/close` で `CLOSED`、`--timeout` 秒何も保存されなければ `TIMEOUT` を出して終わる。保存のたびに数え直し、0 以下は無制限。
+- 起動は `python studio/serve.py [--home DIR] [--port 0] [--no-open] [--timeout 1800] [--tab agents|routing|priority|flow]`。起動すると `OPEN <url>` を出し (`--tab` は URL の `#<tab>`)、保存のたびに `SAVED <kind> <path>`、`POST /api/close` で `CLOSED`、`--timeout` 秒何も保存されなければ `TIMEOUT` を出して終わる。保存のたびに数え直し、0 以下は無制限。
 - `PUT /api/routing` の検査は、形 (`select_model.routing_error`) に加えて `agents.json` との照合も行う。agent 以外の手順は実行先が enabled で、`agents.json` のその実行先に選んだモデル (`models`) があれば、モデルがその中にあること。取得した一覧 (`models/<runner>.json`) にあっても、選んでいなければ通さない。
+- `GET /api/state` の `flow` は、工程・when の値・部品の一覧 (title・stages・when・kind・where・memory・cost・後ろ盾か・出どころ home / bundled) と、同梱と home のテンプレート (home の同名が同梱を隠す。`source`・`bundled`・`path`・`data`・`errors`)、部品の定義の誤り (`errors`) を返す。
+- `PUT /api/workflows/<name>` は、本文の `name` が無ければ URL の名前を入れ、違えば 400。`flow.load_components(home=home)` の誤りと `flow.workflow_errors` の誤りが 1 つでもあれば 400 で何も書かない (壊れた home の部品があるあいだは保存できない。component.py と同じ)。名前は `templates.NAME_RE`。
 - `PUT /api/application` の応答には `opus_override` が入る。テンプレートが opus の段を上書きしていれば true で、画面は設計判断が要る PBI まで安いモデルに回しているおそれがあると注意を出す。
 
 ## セキュリティ

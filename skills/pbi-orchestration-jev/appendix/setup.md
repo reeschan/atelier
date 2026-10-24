@@ -44,7 +44,7 @@ Checked on 2026-10-21 with opencode 2.0.29, codex-cli 0.153.4, agy 1.4.4 and dsh
 
 ## templates
 
-The editor is one local page with three tabs. Every save goes to home.
+The editor is one local page with four tabs (agents, routing, priority, flow). Every save goes to home.
 
 Start it in the background from the repository root with Bash's `run_in_background`:
 
@@ -52,10 +52,10 @@ Start it in the background from the repository root with Bash's `run_in_backgrou
 python <skill>/studio/serve.py
 ```
 
-The editor listens on 127.0.0.1 only and opens the browser itself. Add `--tab agents|routing|priority` to start on a tab, and `--home DIR` to use a home other than the default.
+The editor listens on 127.0.0.1 only and opens the browser itself. Add `--tab agents|routing|priority|flow` to start on a tab, and `--home DIR` to use a home other than the default.
 
 1. Read the first output line, `OPEN <url>`, and give the URL to the user. Then wait; the background command notifies you when it ends.
-2. Each save prints `SAVED <kind> <path>`. kind is one of agents, models, routing, template, application. Summarize the lines for the user as they arrive, so the user knows what was written.
+2. Each save prints `SAVED <kind> <path>`. kind is one of agents, models, routing, template, application, workflow. Summarize the lines for the user as they arrive, so the user knows what was written.
 3. The run ends with `CLOSED` (the user pressed Close) or `TIMEOUT` (nothing was saved for 1800 seconds; the 30-minute default closes an editor that was left open, and every save restarts the count. `--timeout 0` waits without a limit).
 
 The tabs:
