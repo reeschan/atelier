@@ -126,12 +126,12 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 
 ## フェーズ・アダプター
 
-**アダプター**は、作業の決まった場面で、すでに入っているスキルを呼ぶための取り決めです。スキルは何も同梱しません。下の表にある名前だけを使い、どれも入っていなければ自分の手順で進みます。
+**アダプター**は、作業の決まった場面で、すでに入っているスキルを呼ぶための取り決めです。同梱のテンプレートが呼ぶのは、このスキル自身の手順と Claude Code の built-in のレビューだけです。他の人のスキル (mattpocock-skills・pstack・yomiyasu) を呼ぶ部品は `examples/components/` に、それを使うテンプレートの例は `examples/workflows/` に置いてあり、home の `components/` と `workflows/` に写すと使えます。
 
 | フェーズ | いつ | 呼び出し先 (優先順) | 補足 |
 |---|---|---|---|
-| 設計 | PBI に分解する前 | `mattpocock-skills:grilling`、続いて `mattpocock-skills:domain-modeling` | domain-modeling は、対象のリポジトリにもう `GLOSSARY.md` か `CONTEXT.md` があるときだけ。どちらも質問をするのでメインのセッションで呼びます |
-| 最終レビュー | 最後の PBI のあと | `mattpocock-skills:code-review`、続いて built-in の `/code-review` | built-in はレベル `medium`・フラグなし。どちらにも merge-base・head・仕様のパスを渡します |
+| 設計 | PBI に分解する前 | 設計者自身の手順。`setup --recommended` のあとは `mattpocock-skills:grilling`、続いて `mattpocock-skills:domain-modeling` | domain-modeling は、対象のリポジトリにもう `GLOSSARY.md` か `CONTEXT.md` があるときだけ。どちらも質問をするのでメインのセッションで呼びます |
+| 最終レビュー | 最後の PBI のあと | built-in の `/code-review` (`setup --recommended` のあとは、その前に `mattpocock-skills:code-review`) | built-in はレベル `medium`・フラグなし。どれにも merge-base・head・仕様のパスを渡します |
 | セキュリティレビュー | 同じ時点で、sensitive か deep な PBI があるとき | built-in の `/security-review` | 引数なし |
 
 レビューの呼び出し先には、報告だけをさせます。渡すのは merge-base・head・仕様のパスと「直さない・投稿しない」で、`--fix`・`--comment`・`ultra`・`--max-findings` は渡しません。呼ぶ前と後で `git rev-parse HEAD` と `git status --porcelain` を比べ、何か変わっていたら結果を捨てて自分の手順に戻ります。呼び出し先がユーザーに質問しようとしたときも `BLOCKED` で戻ります。指摘はそのまま信じず、設計者が確かめます。本物の指摘はそのファイルを担当した PBI の差し戻し (上限 2 回に数えます) にし、どの PBI のものでもない指摘は完了報告の「発見」に書き、好みや書き方だけの指摘では差し戻しません。
@@ -156,7 +156,7 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 
 ### おすすめ: mattpocock-skills
 
-`/pbi-orchestration-jev setup --recommended` が、推奨のセットを 1 つだけ案内します。はいと答えるまで何も入れません。
+既定では、このスキルと Claude Code の外にあるものは使いません。`/pbi-orchestration-jev setup --recommended` が、推奨のセットを 1 つだけ案内します。はいと答えるまで何も入れません。
 
 ```sh
 /pbi-orchestration-jev setup --recommended
@@ -164,10 +164,9 @@ claude plugin install mattpocock-skills@claude-plugins-official --scope user
 ```
 
 - [mattpocock/skills](https://github.com/mattpocock/skills) — MIT (Copyright (c) 2026 Matt Pocock)。設計に grilling と domain-modeling、最終レビューに code-review が加わります。
-- `setup --recommended` は、名前・使うフェーズ・リンク・ライセンス・入れるコマンドを見せます。1 回承認すると、設計者が install のコマンドを実行します。同梱のスクリプトは何もインストールしません (パッケージのインストールは、パッケージのスキャンで危険なコマンドとして検出されるためです)。
+- `setup --recommended` は、名前・使うフェーズ・リンク・ライセンス・入れるコマンドを見せます。1 回承認すると、設計者が install のコマンドを実行し、`examples/components/` の 3 つの部品を home に写して、それを使う `workflows/jev-routed.json` を home に書きます。同梱のスクリプトは何もインストールしません (パッケージのインストールは、パッケージのスキャンで危険なコマンドとして検出されるためです)。
 - 「いいえ」と答えたときや、`claude` コマンドが PATH に無いときは、コマンドを表示するだけです。
 - 入れたあとに `/reload-plugins` か Claude Code の再起動が要ります。それまではプラグインのスキルが一覧に出ず、アダプターは組み込みの手順のまま動きます。
-- 設計の呼び出し先が無いまま複雑な作業を進めたときは、承認の一覧に「`setup --recommended` で mattpocock-skills を入れられます」と 1 回だけ出ます。出したことは home に残り、以後は出しません。
 
 ## 優先テンプレート
 
@@ -314,8 +313,8 @@ skills/pbi-orchestration-jev/
 ├── SKILL.md                    # スキル本文 (オーケストレーターが従うワークフローのエンジン)
 ├── CONTEXT.md                  # 用語集 (英語と日本語の対訳)
 ├── flow.py                     # 開発フローのテンプレートを解決・検証し、工程ごとの計画を表で出す
-├── workflows/                  # 同梱のテンプレート (jev-routed・high-model・jev-routed-pstack)
-├── components/                 # コンポーネントの定義 (各工程に差す部品と、その手順の doc)
+├── workflows/                  # 同梱のテンプレート (jev-routed・high-model)
+├── components/                 # コンポーネントの定義 (各工程に差す部品と、その手順の doc。このスキルと Claude Code の built-in だけ)
 ├── runners.md                  # opencode / Codex / Antigravity / dsh への渡し方
 ├── dsh_run.py                  # DeepSeek Harness の headless で PBI を 1 件動かす
 ├── claude_run.py               # Claude Code の headless で PBI を 1 件動かす
@@ -338,6 +337,8 @@ skills/pbi-orchestration-jev/
 ├── web/priority-templates.html # 優先テンプレートを見て設定する Web ページ (Artifact)
 ├── examples/routing/           # 外部の実行先を使う振り分けの見本 (multi-runner.json)
 ├── examples/templates/         # 優先テンプレートの例 (home の templates/ にコピーして使う)
+├── examples/components/        # 他の人のスキル (mattpocock-skills・pstack・yomiyasu) を呼ぶ部品 (home の components/ にコピーして使う)
+├── examples/workflows/         # それを使うテンプレートの例 (jev-routed-pstack・high-model-pstack)
 ├── unchanged.py                # PBI が触ってはいけないファイルをハッシュで確かめる
 ├── jev_mcp.py                  # jev-mcp: PBI を MCP クライアントに渡す MCP サーバー (stdio / HTTP)
 ├── agent_stats.py              # 会話記録からトークン・キャッシュ・文脈の大きさを集計

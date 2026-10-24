@@ -24,7 +24,7 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
 
 ## The completion report
 
-Write it to `docs/pbi/REPORT.md` first, in the user's language. The gates after finish run on that file (`gate.yomiyasu` polishes a Japanese report's wording when the yomiyasu skill is installed: call it on the file, apply its wording fixes, and keep numbers, ids, paths, commands and pasted tables as they are). Then send the file's text to the user.
+Write it to `docs/pbi/REPORT.md` first, in the user's language. The gates after finish run on that file. The bundled templates have none; a template that adds `gate.yomiyasu` from `examples/components/` polishes a Japanese report's wording when the yomiyasu skill is installed: call it on the file, apply its wording fixes, and keep numbers, ids, paths, commands and pasted tables as they are. Then send the file's text to the user.
 
 Three headings, in this order:
 

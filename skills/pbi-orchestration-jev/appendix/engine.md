@@ -1,6 +1,6 @@
 # Appendix: the workflow engine
 
-Read this when you pick a component, cannot decide a `when`, run a `read-skill` component, or write STATUS.md. Templates live in `workflows/`, components in `components/`; the contract is `docs/specs/atelier-workflow.md` in the repository.
+Read this when you pick a component, cannot decide a `when`, run a `read-skill` component, or write STATUS.md. Templates live in `workflows/`, components in `components/` and `<home>/components/`; the contract is `docs/specs/atelier-workflow.md` in the repository.
 
 ## The flow table
 
@@ -9,7 +9,7 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 | Column | Meaning |
 |---|---|
 | stage | the stage, or `gate after <stage>` |
-| component | the component id (`components/<id>.json`) |
+| component | the component id (`components/<id>.json`, or `<home>/components/<id>.json`) |
 | invoke | `skill` (Skill tool), `read-skill` (read a plugin's SKILL.md and follow it), `script` (a bundled Python script), `builtin` (a procedure in this skill) |
 | where | `main` (your session), `subagent-readonly`, `subagent`, `runner` (a worker on its route) |
 | memory | how much shared memory the component may use: `full`, `refs-only`, `none` |
@@ -57,9 +57,17 @@ The per-PBI values are decided by a script. Once every `route.json` exists, run 
 - The template's `build.external_memory` says whether external runners may `get` refs themselves (`refs-only`) or not (`none`, the default). Either way you copy the listed refs into their prompt (`runners.md`).
 - `record_run.py` checks every attempt against this: it counts the worker's memory calls (from the agent's transcript, or by scanning an external runner's logs) and marks a search, a write, a `get` under `none`, or a `get` of a ref not in the PBI's Refs as `memory.violation` in `runs.jsonl`.
 
+## Other people's skills
+
+The bundled components cover only this skill and the skills built into Claude Code (`code-review`, `security-review`). Components that call other people's skills (mattpocock-skills, pstack, yomiyasu) are not bundled: they sit in `examples/components/`, with example templates in `examples/workflows/` (`jev-routed-pstack`, `high-model-pstack`).
+
+- To use them, the user copies the components to `<home>/components/` and a template to `<home>/workflows/` (or the work's `docs/pbi/workflow.json`). `flow.py` reads home components after the bundled ones.
+- A home component cannot reuse a bundled id; `flow.py` reports it as an error, so every stage keeps its fallback.
+- Never copy them for the user unless asked (`setup --recommended`, `appendix/adapters.md`).
+
 ## read-skill components
 
-A `read-skill` component points at a skill that the model cannot invoke (all pstack skills). Run it like this:
+A `read-skill` component points at a skill that the model cannot invoke (all pstack skills, in `examples/components/`). Run it like this:
 
 1. The status column gives the SKILL.md path (`plugin ok <path>`); `flow.py` looked under `~/.claude/plugins/` (or `PBI_PLUGINS_DIR`). With `plugin missing`, record `fallback (plugin not installed)` and take the next row.
 2. Start a subagent of the row's `where` type. In its prompt: the SKILL.md path to read and follow, the harness notes to read first when the plugin has them (pstack: `docs/harness/claude-code.md`, two levels above `skills/`), the component's `forbid` items, the request or the PBI path, and the output file below.

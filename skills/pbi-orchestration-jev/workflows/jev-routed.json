@@ -9,7 +9,6 @@
       "understand.builtin"
     ],
     "design": [
-      "design.grilling",
       "design.builtin"
     ],
     "plan": [
@@ -25,7 +24,6 @@
       "verify.builtin"
     ],
     "review": [
-      "review.mattpocock-code-review",
       "review.code-review",
       "review.builtin"
     ],
@@ -47,12 +45,6 @@
       "after": "review",
       "components": [
         "gate.security-review"
-      ]
-    },
-    {
-      "after": "finish",
-      "components": [
-        "gate.yomiyasu"
       ]
     }
   ],

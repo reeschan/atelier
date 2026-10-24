@@ -5,7 +5,9 @@
 テンプレートの解決順は、--workflow を省くと <pbi-dir>/workflow.json → <home>/workflows/jev-routed.json →
 同梱の workflows/jev-routed.json。--workflow NAME を渡すと <home>/workflows/NAME.json → 同梱の workflows/NAME.json
 (<pbi-dir>/workflow.json は読まない)。home は common.resolve_home で解決する。
-コンポーネントの定義は同梱の components/<id>.json だけを読み、then に書いた部品が実在することも確かめる。
+コンポーネントの定義は同梱の components/<id>.json と <home>/components/<id>.json を読み、then に書いた部品が実在することも
+確かめる。同梱するのはこのスキルの部品と Claude Code の built-in だけで、他の人のスキルを呼ぶ部品は examples/components/ に
+置いてあり、使う人が home に写す。home の部品は同梱の id を上書きできない (後ろ盾を守るため)。
 
 検証すること: 9 つの工程がすべてあること・知らない工程が無いこと、各工程の候補が 1 つ以上で、どれも実在し、
 その工程を担う部品であること、最後の候補が後ろ盾 (builtin か、requires の無い script) であること、
@@ -62,19 +64,26 @@ DECIDE_HEADER = 'place\tcomponent\tpbi\tdecision\treason'
 PLUGIN_SEARCH_DEPTH = 5
 
 
-def load_components(base=COMPONENTS) -> tuple[dict, list[str]]:
-    """components/*.json を読み、{id: 定義} と誤りの一覧を返す。"""
+def load_components(base=COMPONENTS, home: Path | None = None) -> tuple[dict, list[str]]:
+    """同梱の components/*.json と <home>/components/*.json を読み、{id: 定義} と誤りの一覧を返す。"""
     found, errors = {}, []
-    for path in sorted(Path(base).glob('*.json')):
-        data = common.load_json(path)
-        if not isinstance(data, dict):
-            errors.append(f'component {path.name}: not a JSON object')
-            continue
-        problem = component_error(data, path.stem)
-        if problem:
-            errors.append(f'component {path.name}: {problem}')
-            continue
-        found[data['id']] = data
+    sources = [(Path(base), 'component')]
+    if home is not None:
+        sources.append((Path(home) / 'components', 'home component'))
+    for directory, label in sources:
+        for path in sorted(directory.glob('*.json')):
+            data = common.load_json(path)
+            if not isinstance(data, dict):
+                errors.append(f'{label} {path.name}: not a JSON object')
+                continue
+            problem = component_error(data, path.stem)
+            if problem:
+                errors.append(f'{label} {path.name}: {problem}')
+                continue
+            if data['id'] in found:
+                errors.append(f'{label} {path.name}: a bundled component already has this id')
+                continue
+            found[data['id']] = data
     for cid, data in found.items():
         for following in data.get('then', []):
             if following not in found:
@@ -331,7 +340,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('pbi_dir', help='作業の docs/pbi (workflow.json を探す場所)')
     ap.add_argument('--workflow', help='テンプレートの名前 (home か同梱の workflows/<名前>.json)')
-    ap.add_argument('--home', help='workflows/ と agents.json を置く home (common.resolve_home)')
+    ap.add_argument('--home', help='workflows/・components/・agents.json を置く home (common.resolve_home)')
     ap.add_argument('--decide', action='store_true', help='route.json から PBI ごとの when を判定して表で出す')
     args = ap.parse_args(argv)
     common.utf8_stdout()
@@ -350,7 +359,7 @@ def main(argv=None) -> int:
         print(f'{common.shown(path)}: not readable JSON', file=sys.stderr)
         return 2
 
-    components, errors = load_components()
+    components, errors = load_components(home=home)
     errors += workflow_errors(workflow, components)
     if errors:
         for error in errors:

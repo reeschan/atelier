@@ -180,6 +180,8 @@ def format_reference(ref):
 
 SKILL = HERE / 'SKILL.md'
 COMPONENTS = HERE / 'components'
+# 他の人のスキルを呼ぶ部品の例 (同梱しない。使う人が home の components/ に写す)
+EXAMPLE_COMPONENTS = HERE / 'examples' / 'components'
 
 # 毎ターン読む本文の上限 (generic-reorg.md の段 3)。compaction のあとに付け直されるのは先頭の約 5,000 トークン
 SKILL_MAX_LINES = 120
@@ -191,7 +193,7 @@ BYTES_PER_TOKEN = 4
 def external_components():
     '''Skill ツールかプラグインで呼ぶ部品を (id, link) の一覧で返す。'''
     rows = []
-    for path in sorted(COMPONENTS.glob('*.json')):
+    for path in sorted(COMPONENTS.glob('*.json')) + sorted(EXAMPLE_COMPONENTS.glob('*.json')):
         data = json.loads(path.read_text(encoding='utf-8'))
         if data['invoke']['kind'] in ('skill', 'read-skill'):
             rows.append((data['id'], data.get('link', '')))
@@ -245,7 +247,7 @@ class ReferencesTest(unittest.TestCase):
     def test_component_docs_are_instructions(self):
         '''部品の doc は、参照の検査の対象になる指示文であること。'''
         names = {document.relative_to(HERE).as_posix() for document in documents()}
-        for path in sorted(COMPONENTS.glob('*.json')):
+        for path in sorted(COMPONENTS.glob('*.json')) + sorted(EXAMPLE_COMPONENTS.glob('*.json')):
             doc = json.loads(path.read_text(encoding='utf-8'))['doc']
             self.assertIn(doc, names, path.name)
 

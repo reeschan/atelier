@@ -1,6 +1,6 @@
 # Appendix: final review and security review
 
-Read this when every PBI has passed, and the review stage or its gate picks `review.mattpocock-code-review`, `review.code-review`, `review.builtin` or `gate.security-review`. A `read-skill` review component (`review.pstack-interrogate`) runs as in `appendix/engine.md` and writes the same result file.
+Read this when every PBI has passed, and the review stage or its gate picks `review.code-review`, `review.builtin`, `gate.security-review`, or a review skill a template adds from `examples/components/` (such as `review.mattpocock-code-review`). A `read-skill` review component (such as `review.pstack-interrogate`) runs as in `appendix/engine.md` and writes the same result file.
 
 ## Whole check (always first)
 
