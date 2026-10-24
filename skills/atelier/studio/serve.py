@@ -663,7 +663,7 @@ class Parser(argparse.ArgumentParser):
 def build_parser() -> argparse.ArgumentParser:
     parser = Parser(prog='serve.py', description='Open the Template Studio in a local browser.')
     parser.add_argument('--home', metavar='DIR',
-                        help='home directory (default: PBI_HOME, then ~/.config/pbi-orchestration-jev)')
+                        help='home directory (default: ATELIER_HOME, then ~/.config/atelier)')
     parser.add_argument('--port', type=int, default=0, help='port to listen on (0 picks a free one)')
     parser.add_argument('--no-open', action='store_true', help='do not open a browser')
     parser.add_argument('--timeout', type=int, default=1800,

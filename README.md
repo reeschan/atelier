@@ -1,16 +1,16 @@
-# pbi-orchestration-jev
+# Atelier
 
 English | [日本語](README.ja.md)
 
-A [Claude Code](https://claude.com/claude-code) skill that splits multi-file implementation work into **PBIs (Product Backlog Items) and hands them to sub-agents**. The main session acts as the orchestrator: it writes the PBIs, picks a model for each, reviews the results and sends work back. The sub-agents (the opencode CLI with DeepSeek, Codex CLI, Claude via the Antigravity CLI, DeepSeek Harness (`dsh`), or Claude Code's Agent tool) do the implementation.
+Atelier (formerly **pbi-orchestration-jev**) is a [Claude Code](https://claude.com/claude-code) skill that runs development as a **workflow template**: nine stages (understand, design, plan, route, build, verify, review, fix, finish), each filled by a component you can swap. Its default template splits multi-file implementation work into **PBIs (Product Backlog Items) and hands them to sub-agents**. The main session acts as the orchestrator: it writes the PBIs, picks a model for each, reviews the results and sends work back. The sub-agents (the opencode CLI with DeepSeek, Codex CLI, Claude via the Antigravity CLI, DeepSeek Harness (`dsh`), or Claude Code's Agent tool) do the implementation.
 
 Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe.ai)), a judgment API, as short text. Pass/fail is still decided by actually running verification commands, and counts are kept in a status file.
 
-> The skill text itself (`SKILL.md`) is written in Japanese. Claude reads it fine either way.
+> Coming from pbi-orchestration-jev? See [Moving from pbi-orchestration-jev](#moving-from-pbi-orchestration-jev).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator passes facts to prepare.py, which asks Jev for gate 1 (brief and PBI quality), picks a tier and a route with select_model.py, reads the routing, overrides and agents.json from your home (~/.config/pbi-orchestration-jev) and docs/pbi/routing.json, and drops steps whose runner is unusable. PBIs go to pbi-worker (the Agent tool), the default runner for every tier, or to external runners (opencode, Codex, Antigravity, DeepSeek Harness, Claude Code headless) chosen in setup and named in routing.json; they change the source code of the target repository. The orchestrator verifies each PBI with verify.py and unchanged.py, asks Jev in plain text only when a report and the verification disagree and to check rework notes, and records status and HANDOFF in docs/pbi/. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. setup_agents.py and model_fetch.py detect the runner CLIs and fetch each runner's model list into agents.json and models/ in your home. The developer uses the local editor (studio/serve.py, with tabs for agents and models, routing, priority templates and application, and workflow templates) to read and save those files in home only. templates.py keeps priority templates and the local overrides.json, which is the source of truth; the optional priority templates web page (a claude.ai artifact) only syncs with it. Phase adapters use optional callee skills when they are installed: the orchestrator runs mattpocock-skills grilling for design, and after all PBIs adapter_gate.py reads the PBIs and the adapters setting in agents.json to decide whether the final and security reviews run; a general-purpose review wrapper then calls mattpocock-skills code-review or the built-in /code-review and /security-review, and writes the findings to docs/pbi/reviews/. An optional jev-mcp server (jev_mcp.py, on 127.0.0.1) lets an MCP client claim and submit tasks and use Jev's own steps: route (select_model.py), run (one try on a runner, as runners.md describes) and record (record_run.py); it reads the routing and agents.json from your home and writes prompts, reports and runs in docs/pbi/.">
+  <img src="assets/architecture-light.svg" alt="Atelier architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator passes facts to prepare.py, which asks Jev for gate 1 (brief and PBI quality), picks a tier and a route with select_model.py, reads the routing, overrides and agents.json from your home (~/.config/atelier) and docs/pbi/routing.json, and drops steps whose runner is unusable. PBIs go to pbi-worker (the Agent tool), the default runner for every tier, or to external runners (opencode, Codex, Antigravity, DeepSeek Harness, Claude Code headless) chosen in setup and named in routing.json; they change the source code of the target repository. The orchestrator verifies each PBI with verify.py and unchanged.py, asks Jev in plain text only when a report and the verification disagree and to check rework notes, and records status and HANDOFF in docs/pbi/. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. setup_agents.py and model_fetch.py detect the runner CLIs and fetch each runner's model list into agents.json and models/ in your home. The developer uses the local editor (studio/serve.py, with tabs for agents and models, routing, priority templates and application, and workflow templates) to read and save those files in home only. templates.py keeps priority templates and the local overrides.json, which is the source of truth; the optional priority templates web page (a claude.ai artifact) only syncs with it. Phase adapters use optional callee skills when they are installed: the orchestrator runs mattpocock-skills grilling for design, and after all PBIs adapter_gate.py reads the PBIs and the adapters setting in agents.json to decide whether the final and security reviews run; a general-purpose review wrapper then calls mattpocock-skills code-review or the built-in /code-review and /security-review, and writes the findings to docs/pbi/reviews/. An optional jev-mcp server (jev_mcp.py, on 127.0.0.1) lets an MCP client claim and submit tasks and use Jev's own steps: route (select_model.py), run (one try on a runner, as runners.md describes) and record (record_run.py); it reads the routing and agents.json from your home and writes prompts, reports and runs in docs/pbi/.">
 </picture>
 
 The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lang.com)).
@@ -23,7 +23,7 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - **At most two rounds of rework, and an optional tier up.** A failed PBI goes back with the review notes, twice at most. The orchestrator can raise a PBI's tier (for example haiku to sonnet) with `prepare.py --only PBI-<n> --tier <tier>`, which rewrites that PBI's route from the routing in effect at that moment. If the design needs rethinking, or a PBI still fails after two rounds, the orchestrator stops and asks the user.
 - **Only prose goes to Jev.** PBI text, briefs, excerpts from reports and rework notes. Never source code, diffs, environment variables or credentials.
 - **The orchestrator's context stays small.** Every token in the orchestrator's context is re-read on every later turn. Workers end with a 5-line report that starts with a status line and put the details in a file, long command output goes to log files, and PBI text is written once and passed by path (`worker.md`, and "Keep the context small" in `SKILL.md`).
-- **Hand-off when the context grows.** Between waves of PBIs the orchestrator measures its context with `agent_stats.py --ctx`. Above 250,000 tokens it writes `docs/pbi/HANDOFF.md` (plus a hand-off memory when shared memory is available) and asks you to `/clear` and resume with `/pbi-orchestration-jev resume`. From a session started without a project folder, run `/pbi-orchestration-jev resume <repository path>`; without the path, the skill finds the repository from the hand-off memory.
+- **Hand-off when the context grows.** Between waves of PBIs the orchestrator measures its context with `agent_stats.py --ctx`. Above 250,000 tokens it writes `docs/pbi/HANDOFF.md` (plus a hand-off memory when shared memory is available) and asks you to `/clear` and resume with `/atelier resume`. From a session started without a project folder, run `/atelier resume <repository path>`; without the path, the skill finds the repository from the hand-off memory.
 - **Opus designs and reviews; cheaper models implement.** Only PBIs that need design decisions are implemented by Opus. Sensitive or tightly coupled PBIs are implemented by Sonnet and get a deep review from the Opus orchestrator.
 - **Optional output compression with [rtk](https://github.com/rtk-ai/rtk).** A bundled hook rewrites Bash / PowerShell commands to `rtk <cmd>` only in sessions where the skill switched it on.
 - **Mechanical steps run as scripts.** `prepare.py` runs Jev gate 1 (brief and PBI quality) plus the decision table in one call, and `verify.py` runs a PBI's verification commands; both return only a table to the orchestrator. Files a PBI must not touch are checked by `unchanged.py`, which hashes them before the worker starts. The skill body is split into a core and `appendix/` files that are read only when needed. In the author's measurements (2026-10, 6 tasks) these two changes cut cost by 15%.
@@ -68,7 +68,7 @@ flowchart TD
 | any score ≥ 1, or files changed ≥ 4, or modules ≥ 2 | sonnet | normal |
 | none of the above | haiku | normal |
 
-The bundled default routes every tier to the Agent tool: `haiku` at effort `max`, `sonnet` at effort `high`, and `opus` at its default effort. The default lives in `routing.default.json`; `select_model.py` keeps no table of its own. To use external runners, write your own routing template in `routing.json` in `docs/pbi/` of the target repository or in your home (see [Priority templates](#priority-templates)). The bundled example is `skills/pbi-orchestration-jev/examples/routing/multi-runner.json`.
+The bundled default routes every tier to the Agent tool: `haiku` at effort `max`, `sonnet` at effort `high`, and `opus` at its default effort. The default lives in `routing.default.json`; `select_model.py` keeps no table of its own. To use external runners, write your own routing template in `routing.json` in `docs/pbi/` of the target repository or in your home (see [Priority templates](#priority-templates)). The bundled example is `skills/atelier/examples/routing/multi-runner.json`.
 
 After the route is built (from `routing.json` or a priority template), the skill checks each step against `agents.json` in your home and against the CLIs it can find. It drops a step whose runner is disabled there, whose CLI is missing, or whose model is not in that runner's model list, and the approval list shows each dropped step with its reason. The last Agent step is never dropped.
 
@@ -88,9 +88,9 @@ A minimal `agents.json` in your home:
 The setup and the editor have three entry points:
 
 ```
-/pbi-orchestration-jev setup      # detect, fetch the model lists, open the editor, optional integrations
-/pbi-orchestration-jev models     # fetch the model lists again
-/pbi-orchestration-jev templates  # open the editor
+/atelier setup      # detect, fetch the model lists, open the editor, optional integrations
+/atelier models     # fetch the model lists again
+/atelier templates  # open the editor
 ```
 
 When you run it without an argument and home has no `agents.json`, it asks one question first: **set up now** or **start with agent only**. The answer is written to `agents.json`, so later runs ask nothing.
@@ -119,7 +119,7 @@ The editor is one local page with four tabs:
 Every save goes to your home: `agents.json`, `models/<runner>.json`, `routing.json`, `templates/<name>.json`, `overrides.json` and `workflows/<name>.json`. No target repository is involved. To open the editor without the skill:
 
 ```sh
-python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
+python ~/.claude/skills/atelier/studio/serve.py
 ```
 
 - The page is in English or Japanese. It follows your browser language, and the 日本語 / EN button in the header switches it (the choice is remembered). `?lang=en` or `?lang=ja` in the URL also works.
@@ -162,7 +162,7 @@ Naming a skill here is the only way to use a callee outside the table; a name th
 This skill bundles no one else's skill and no component for one. Install a skill with Claude Code's plugin commands, then register it with `component.py add`: it reads the installed `SKILL.md`, writes the component to `components/` in your home, and puts it into a template in your home's `workflows/` (default `jev-routed`, copied from the bundled one the first time). `component.py remove <id>` takes it out, and `component.py list` shows what you have. Your own skills in `~/.claude/skills/<name>/` work the same way (`add <name>`).
 
 ```sh
-S=skills/pbi-orchestration-jev   # or wherever the skill is installed
+S=skills/atelier   # or wherever the skill is installed
 
 # mattpocock-skills (MIT): grilling for design, code-review for the final review
 /plugin install mattpocock-skills@claude-plugins-official
@@ -187,10 +187,10 @@ Add `--workflow high-model` to put a component into another template. A skill th
 
 ### Recommended: mattpocock-skills
 
-Nothing outside this skill and Claude Code is used by default. `/pbi-orchestration-jev setup --recommended` offers one set, and installs nothing without your yes:
+Nothing outside this skill and Claude Code is used by default. `/atelier setup --recommended` offers one set, and installs nothing without your yes:
 
 ```sh
-/pbi-orchestration-jev setup --recommended
+/atelier setup --recommended
 claude plugin install mattpocock-skills@claude-plugins-official --scope user
 ```
 
@@ -208,16 +208,16 @@ Two things a template cannot change:
 - `sensitive` PBIs never go to an external runner, whatever the template says.
 - Design reassessment and review duties stay with the decision table.
 
-Templates are personal settings and live in your home. The default home is `~/.config/pbi-orchestration-jev` (`$XDG_CONFIG_HOME/pbi-orchestration-jev` when `XDG_CONFIG_HOME` is set), and `PBI_HOME` points it somewhere else. The home holds `agents.json` (the runners, their CLI path and version, the selected models, the billing kind), `models/<runner>.json` (the last model list fetched for each runner), `routing.json` (try order), `templates/<name>.json` (priority templates), `overrides.json` (the current application; the source of truth), `history.jsonl` (one line per finished application), the web page URL `web.json` and `prices.json` (price overrides). None of them is required; setup and the editor create the directory and a file only when a save needs it. To try the bundled example, copy it into `templates/` there:
+Templates are personal settings and live in your home. The default home is `~/.config/atelier` (`$XDG_CONFIG_HOME/atelier` when `XDG_CONFIG_HOME` is set), and `ATELIER_HOME` (or the old `PBI_HOME`) points it somewhere else. The home holds `agents.json` (the runners, their CLI path and version, the selected models, the billing kind), `models/<runner>.json` (the last model list fetched for each runner), `routing.json` (try order), `templates/<name>.json` (priority templates), `overrides.json` (the current application; the source of truth), `history.jsonl` (one line per finished application), the web page URL `web.json` and `prices.json` (price overrides). None of them is required; setup and the editor create the directory and a file only when a save needs it. To try the bundled example, copy it into `templates/` there:
 
 ```sh
-mkdir -p ~/.config/pbi-orchestration-jev/templates
-cp skills/pbi-orchestration-jev/examples/templates/cheap-all-tiers.json ~/.config/pbi-orchestration-jev/templates/
+mkdir -p ~/.config/atelier/templates
+cp skills/atelier/examples/templates/cheap-all-tiers.json ~/.config/atelier/templates/
 ```
 
-Replace `~/.config/pbi-orchestration-jev` with your home if you set `XDG_CONFIG_HOME` or `PBI_HOME`.
+Replace `~/.config/atelier` with your home if you set `XDG_CONFIG_HOME` or `ATELIER_HOME`.
 
-The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `max`. A step in a priority template can also be a rotate group, `{"rotate": [step, step, ...]}`: the PBI number picks which member goes first, and the other members follow as that PBI's fallbacks, so PBIs are spread evenly across the members (for example, alternating between two free-tier models before two paid ones). For the file format, the home rules and the full walkthrough, see `skills/pbi-orchestration-jev/appendix/priority-templates.md`.
+The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `max`. A step in a priority template can also be a rotate group, `{"rotate": [step, step, ...]}`: the PBI number picks which member goes first, and the other members follow as that PBI's fallbacks, so PBIs are spread evenly across the members (for example, alternating between two free-tier models before two paid ones). For the file format, the home rules and the full walkthrough, see `skills/atelier/appendix/priority-templates.md`.
 
 ## Requirements
 
@@ -241,10 +241,19 @@ Only Claude Code is required. Jev, shared-memory, the external CLIs, the web pag
 ## Install
 
 ```sh
-git clone https://github.com/reeschan/pbi-orchestration-jev.git
-cp -r pbi-orchestration-jev/skills/pbi-orchestration-jev ~/.claude/skills/
-mkdir -p ~/.claude/agents && cp pbi-orchestration-jev/skills/pbi-orchestration-jev/agents/pbi-worker.md ~/.claude/agents/
+git clone https://github.com/reeschan/pbi-orchestration-jev.git atelier
+cp -r atelier/skills/atelier ~/.claude/skills/
+mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/pbi-worker.md ~/.claude/agents/
 ```
+
+### Moving from pbi-orchestration-jev
+
+The skill was renamed from `pbi-orchestration-jev` to `atelier`. Nothing you set up is lost:
+
+- **Home.** The default home is now `~/.config/atelier` (`$XDG_CONFIG_HOME/atelier`). While that folder does not exist and `~/.config/pbi-orchestration-jev` does, the old folder keeps being used. To move, rename the folder. `ATELIER_HOME` is the new variable; `PBI_HOME` (and the older `PBI_TEMPLATES_HOME`) are still read.
+- **Skill.** Copy `skills/atelier` as above. `skills/pbi-orchestration-jev` is now a small stub that only points to `/atelier`; copy it over the old skill so `/pbi-orchestration-jev` keeps working, or delete the old folder.
+- **rtk hook.** If you added the rtk hook, change its path in `settings.json` to `skills/atelier/rtk/rtk-gate.mjs`.
+- **Work in progress.** `docs/pbi/` in your repositories is unchanged; `/atelier resume` picks it up.
 
 `pbi-worker` defines the worker and reviewer sub-agent. Restart Claude Code to load it. Without it the skill falls back to general-purpose (you only lose the guard that stops workers from searching memory).
 
@@ -268,7 +277,7 @@ Never commit the key. Consider adding the credentials file to `permissions.deny`
        "PreToolUse": [
          {
            "matcher": "Bash|PowerShell",
-           "hooks": [{ "type": "command", "command": "node \"<HOME>/.claude/skills/pbi-orchestration-jev/rtk/rtk-gate.mjs\"", "timeout": 10 }]
+           "hooks": [{ "type": "command", "command": "node \"<HOME>/.claude/skills/atelier/rtk/rtk-gate.mjs\"", "timeout": 10 }]
          }
        ]
      }
@@ -304,10 +313,10 @@ Without the flag file (`~/.claude/state/rtk/<session_id>.on`), or without `rtk` 
 In Claude Code, invoke it for work that spans several files:
 
 ```
-/pbi-orchestration-jev <what you want built>
+/atelier <what you want built>
 ```
 
-To set up the runners and the model lists, run `/pbi-orchestration-jev setup`. `/pbi-orchestration-jev models` fetches the lists again, and `/pbi-orchestration-jev templates` opens the editor (see Setup and the editor above).
+To set up the runners and the model lists, run `/atelier setup`. `/atelier models` fetches the lists again, and `/atelier templates` opens the editor (see Setup and the editor above).
 
 Everything is recorded under `docs/pbi/` in the target repository.
 
@@ -327,11 +336,11 @@ Everything is recorded under `docs/pbi/` in the target repository.
 | `docs/pbi/opencode/`, `docs/pbi/codex/`, `docs/pbi/agy/`, `docs/pbi/dsh/` | prompts and outputs for each runner |
 | `docs/pbi/stats/` | token and cache stats |
 
-The orchestrator only stops to wait for the user in four cases: approving the PBI list, hitting the rework limit (or needing a redesign), before destructive operations, and when it hands off a large context. After a hand-off, run `/clear` and then `/pbi-orchestration-jev resume`.
+The orchestrator only stops to wait for the user in four cases: approving the PBI list, hitting the rework limit (or needing a redesign), before destructive operations, and when it hands off a large context. After a hand-off, run `/clear` and then `/atelier resume`.
 
 A session started without a project folder (the Claude desktop app runs it in an empty folder it creates) has no `docs/pbi/STATUS.md` in its working directory. The skill then picks the repository in this order:
 
-1. the path in `/pbi-orchestration-jev resume <repository path>`
+1. the path in `/atelier resume <repository path>`
 2. without a path, the path in the hand-off memory (tag `handoff`) in shared memory; if several tasks are mid hand-off, it asks which one to resume
 3. otherwise, it asks you
 
@@ -340,7 +349,7 @@ It then checks that `STATUS.md` and the branch match, and either moves the sessi
 ## Files
 
 ```
-skills/pbi-orchestration-jev/
+skills/atelier/
 ├── SKILL.md                    # the skill: the workflow engine the orchestrator follows
 ├── CONTEXT.md                  # glossary (English and Japanese terms)
 ├── flow.py                     # resolves and checks a workflow template; prints the plan per stage
@@ -407,8 +416,8 @@ On success it prints the response JSON and exits 0. A Jev failure prints `{"erro
 `jev_mcp.py` is the interface through which an outside MCP client uses Jev's routing, execution and recording unchanged. The orchestrator writes the prompt to `docs/pbi/mcp/<report>.prompt.md` as for any external runner. The client claims it, works, and reports back in the usual shape: details in `docs/pbi/reports/<report>.md` and the 5-line summary in `docs/pbi/mcp/<report>.last.md`. Approval, verification, review and rework stay with the orchestrator.
 
 ```sh
-python skills/pbi-orchestration-jev/jev_mcp.py --root /path/to/repo                      # stdio
-python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/to/repo   # http://127.0.0.1:7830/mcp
+python skills/atelier/jev_mcp.py --root /path/to/repo                      # stdio
+python skills/atelier/jev_mcp.py --http --port 7830 --root /path/to/repo   # http://127.0.0.1:7830/mcp
 ```
 
 | Tool | What it does |
@@ -437,7 +446,7 @@ Only repositories under `--root` (or `PBI_MCP_ROOTS`) are served. HTTP listens o
 ## Tests
 
 ```sh
-cd skills/pbi-orchestration-jev
+cd skills/atelier
 python -m unittest discover -p 'test_*.py'
 python -m unittest discover -s studio -p 'test_*.py'
 cd jev

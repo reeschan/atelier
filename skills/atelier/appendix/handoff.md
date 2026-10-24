@@ -34,7 +34,7 @@ node <skill>/rtk/rtk-mode.mjs on
 3. Append `{"event": "handoff", "context": <value>, "done": <done>, "remaining": <remaining>}` to jev-log.
 4. Tell the user only these two lines, in their language, and stop (rtk mode stays on; put the real absolute path in place of `<path>`):
    - "The context reached <value> tokens, so I am handing off."
-   - "After `/clear`, `/pbi-orchestration-jev resume` continues from here. In a session started without a folder, type `/pbi-orchestration-jev resume <path>`."
+   - "After `/clear`, `/atelier resume` continues from here. In a session started without a folder, type `/atelier resume <path>`."
 
 ## Resume
 
