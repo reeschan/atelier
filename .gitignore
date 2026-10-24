@@ -2,6 +2,6 @@ __pycache__/
 *.pyc
 docs/pbi/
 .DS_Store
-skills/pbi-orchestration-jev/templates/
-skills/pbi-orchestration-jev/overrides.json
-skills/pbi-orchestration-jev/web.json
+skills/atelier/templates/
+skills/atelier/overrides.json
+skills/atelier/web.json

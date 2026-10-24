@@ -167,6 +167,13 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - API は `GET /api/state` の `flow`、`PUT /api/workflows/<name>` (flow.py と同じ検証。home に書く)、`DELETE /api/workflows/<name>` (home の版だけ。同梱の同名があればそれに戻る)。同梱のテンプレートは書き換えない。
 - 部品そのもの (components/) の登録と削除は画面では扱わず、`component.py` のまま。
 
+### 改名 (PR 5)
+
+- スキルのディレクトリを `skills/atelier` に、`SKILL.md` の name を `atelier` にした。README・アーキテクチャ図・CI・`.gitignore`・appendix のパスとコマンド (`/atelier ...`) も変えた。工程の部品やプリセットの名前 (`jev-routed`・`gate.jev`・jev-mcp など、判定 API の Jev を指すもの) は変えない。
+- home の既定は `XDG_CONFIG_HOME/atelier` か `~/.config/atelier`。その場所が無く、同じ親の下に旧名の `pbi-orchestration-jev` があれば旧名を使う (改名前の設定・外部部品・テンプレートをそのまま読む。勝手には動かさない)。環境変数は `ATELIER_HOME` を先に読み、`PBI_HOME`・`PBI_TEMPLATES_HOME` も別名として読む。
+- `skills/pbi-orchestration-jev/SKILL.md` は案内だけの中身にした。atelier がスキル一覧にあれば同じ引数で atelier を動かし、無ければ入れ方を伝えて止まる。
+- リポジトリ名の変更は利用者が GitHub で行う。README の clone は旧い URL のまま (GitHub は改名後も旧い URL から転送する) で、置き場を `atelier` にする。
+
 ## Testing Decisions
 
 - generic-reorg.md と同じく、スクリプトを CLI として一時ディレクトリ (docs/pbi と home) で動かし、出力だけを見る。

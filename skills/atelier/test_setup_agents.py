@@ -96,7 +96,7 @@ class Base(unittest.TestCase):
         if system_root:
             parts.append(str(Path(system_root) / 'System32'))
         env['PATH'] = os.pathsep.join(parts)
-        for key in ('FNM_DIR', 'NVM_DIR', 'NVM_HOME', 'PBI_DSH_BIN', 'PBI_HOME', 'PBI_TEMPLATES_HOME'):
+        for key in ('FNM_DIR', 'NVM_DIR', 'NVM_HOME', 'PBI_DSH_BIN', 'ATELIER_HOME', 'PBI_HOME', 'PBI_TEMPLATES_HOME'):
             env.pop(key, None)
         for key, name in (('APPDATA', 'appdata'), ('LOCALAPPDATA', 'localappdata'),
                           ('HOME', 'home'), ('USERPROFILE', 'userprofile'),

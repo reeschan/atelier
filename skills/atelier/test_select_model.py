@@ -68,7 +68,7 @@ def multi_runner_routing(name='multi-runner', until=DEADLINE.isoformat()):
 
 def home_env(d):
     """PBI_TEMPLATES_HOME を d にした環境 (PBI_HOME と XDG_CONFIG_HOME は消す)。"""
-    env = {k: v for k, v in os.environ.items() if k not in ('PBI_HOME', 'XDG_CONFIG_HOME')}
+    env = {k: v for k, v in os.environ.items() if k not in ('ATELIER_HOME', 'PBI_HOME', 'XDG_CONFIG_HOME')}
     env['PBI_TEMPLATES_HOME'] = d
     return env
 
@@ -726,7 +726,7 @@ class RoutingHomeTest(unittest.TestCase):
         with open(fp, 'w', encoding='utf-8') as f:
             json.dump({**SMALL, 'files_changed': 4}, f)
         copied_env = {k: v for k, v in os.environ.items()
-                      if k not in ('PBI_HOME', 'PBI_TEMPLATES_HOME', 'XDG_CONFIG_HOME')}
+                      if k not in ('ATELIER_HOME', 'PBI_HOME', 'PBI_TEMPLATES_HOME', 'XDG_CONFIG_HOME')}
         copied_env.update(env or {})
         out = subprocess.run([sys.executable, os.path.join(script_dir, 'select_model.py'), fp, '--today', BEFORE],
                              capture_output=True, text=True, encoding='utf-8', env=copied_env)
@@ -737,8 +737,8 @@ class RoutingHomeTest(unittest.TestCase):
         """スクリプトの置き場所 (版の有無) で home は変わらず、XDG_CONFIG_HOME の下を読む。"""
         with temp_dir() as d:
             config = os.path.join(d, 'config')
-            self.write(os.path.join(config, 'pbi-orchestration-jev'), PERF)
-            write_agents(os.path.join(config, 'pbi-orchestration-jev'))
+            self.write(os.path.join(config, 'atelier'), PERF)
+            write_agents(os.path.join(config, 'atelier'))
             for layout in ('flat', 'versioned'):
                 root = os.path.join(d, 'skill-' + layout)
                 script_dir = os.path.join(root, 'versions', 'v1') if layout == 'versioned' else root

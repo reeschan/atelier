@@ -9,9 +9,10 @@
   python templates.py push [--existing NAME,...] [--home DIR] [--now ISO]
 
 home は templates/ ディレクトリ・overrides.json・history.jsonl・web.json を置く
-ディレクトリ。解決順は (1) --home (2) 環境変数 PBI_HOME (3) 環境変数
+ディレクトリ。解決順は (1) --home (2) 環境変数 ATELIER_HOME (3) PBI_HOME・
 PBI_TEMPLATES_HOME (旧名。互換のためだけに読む) (4) 環境変数 XDG_CONFIG_HOME が
-あればその下の pbi-orchestration-jev、無ければ ~/.config/pbi-orchestration-jev。
+あればその下の atelier、無ければ ~/.config/atelier (どちらも、atelier が無く旧名の
+pbi-orchestration-jev があれば旧名を使う)。
 
 check は 1 件 1 行で ok <name> / ng <name>: <問題> を出し、1 件でも ng なら終了コード 1。
 sync は Web の state/current とローカルの overrides.json を updated_at で比べ、新しい方を

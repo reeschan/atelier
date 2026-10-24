@@ -358,7 +358,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = Parser(prog='setup_agents.py', description='Detect runners and fetch their models.')
     sub = parser.add_subparsers(dest='sub', required=True, metavar='<command>')
     shared = argparse.ArgumentParser(add_help=False)
-    shared.add_argument('--home', metavar='DIR', help='home directory (default: PBI_HOME, then ~/.config/pbi-orchestration-jev)')
+    shared.add_argument('--home', metavar='DIR', help='home directory (default: ATELIER_HOME, then ~/.config/atelier)')
     shared.add_argument('--now', metavar='ISO', help='time to record (default: now)')
 
     detect_cmd = sub.add_parser('detect', parents=[shared], help='show which runner CLIs are found')

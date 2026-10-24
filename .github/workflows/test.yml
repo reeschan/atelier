@@ -17,7 +17,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: skills/pbi-orchestration-jev
+        working-directory: skills/atelier
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,8 +31,8 @@ jobs:
       - name: Python tests (studio)
         run: python -m unittest discover -s studio -p 'test_*.py'
       - name: Python tests (jev)
-        working-directory: skills/pbi-orchestration-jev/jev
+        working-directory: skills/atelier/jev
         run: python -m unittest test_jev
       - name: Node tests (jev)
-        working-directory: skills/pbi-orchestration-jev/jev
+        working-directory: skills/atelier/jev
         run: node --test jev.test.mjs

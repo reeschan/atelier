@@ -1,39 +1,65 @@
-# pbi-orchestration-jev
+# Atelier
 
 [English](README.md) | 日本語
 
-複数ファイルにまたがる実装を、**PBI (Product Backlog Item) に分けてサブエージェントに渡す**ための [Claude Code](https://claude.com/claude-code) のスキルです。メインのセッションがオーケストレーターになり、PBI の起票・担当モデルの決定・レビュー・差し戻しを受け持ちます。実装はサブエージェント (opencode CLI の DeepSeek / Codex CLI / Antigravity CLI の Claude / DeepSeek Harness (`dsh`) / Claude Code の Agent ツール) が行います。
+Atelier (旧名 **pbi-orchestration-jev**) は、開発を**ワークフローのテンプレート**として回す [Claude Code](https://claude.com/claude-code) のスキルです。9 つの工程 (理解・設計・計画・振り分け・実装・検証・レビュー・差し戻し・仕上げ) それぞれに、差し替えられる部品を置きます。既定のテンプレートは、複数ファイルにまたがる実装を **PBI (Product Backlog Item) に分けてサブエージェントに渡します**。メインのセッションがオーケストレーターになり、PBI の起票・担当モデルの決定・レビュー・差し戻しを受け持ちます。実装はサブエージェント (opencode CLI の DeepSeek / Codex CLI / Antigravity CLI の Claude / DeepSeek Harness (`dsh`) / Claude Code の Agent ツール) が行います。
 
 途中の判断の一部は、判定 API の **Jev** ([TypeSafe](https://api.typesafe.ai)) に短い文章で聞きます。ただし合否は検証コマンドの実行結果で決め、回数は状態ファイルで数えます。
 
+> pbi-orchestration-jev から移る方は [pbi-orchestration-jev からの移行](#pbi-orchestration-jev-からの移行) を見てください。
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="pbi-orchestration-jev のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎのあとに再開する。オーケストレーターは facts を prepare.py に渡し、prepare.py は Jev にゲート 1 (brief と PBI の品質) を聞き、select_model.py で段と route を決める。そのとき home (~/.config/pbi-orchestration-jev) の振り分け・適用・agents.json と docs/pbi/routing.json を読み、使えない実行先の手順を外す。PBI は、全段の既定の実行先である pbi-worker (Agent ツール) か、setup で選び routing.json に書いた外部の実行先 (opencode・Codex・Antigravity・DeepSeek Harness・Claude Code の headless) に渡り、対象リポジトリのソースコードを変える。オーケストレーターは verify.py と unchanged.py で検証し、Jev には文章だけで、報告と検証が食い違うときの仕分けと差し戻し文の点検を聞き、状態と HANDOFF を docs/pbi/ に記録する。任意の shared-memory の MCP が作業ごとの ref と引き継ぎのメモリを持ち、pbi-worker は ref を get するだけ。setup_agents.py と model_fetch.py が実行先の CLI を検出し、実行先ごとのモデルの一覧を home の agents.json と models/ に控える。開発者は手元の編集画面 (studio/serve.py。エージェントとモデル・振り分け・優先テンプレートと適用の 3 タブ) で、それらを home の中だけで読み書きする。templates.py は優先テンプレートと、正本であるローカルの overrides.json を持ち、任意の優先テンプレートの Web ページ (claude.ai の Artifact) はそれと同期するだけ。フェーズ・アダプターは、任意の呼び出し先のスキルが入っていれば使う。設計では、オーケストレーターが mattpocock-skills の grilling を呼ぶ。全 PBI のあとは adapter_gate.py が PBI と agents.json の adapters の設定を読んで、最終レビューとセキュリティレビューを使うかを決め、general-purpose のレビュー用のサブエージェントが mattpocock-skills の code-review か built-in の /code-review・/security-review を呼んで、指摘を docs/pbi/reviews/ に書く。任意の jev-mcp (jev_mcp.py、127.0.0.1) を使うと、MCP クライアントがタスクを受け取って返し、Jev の手順の route (select_model.py)・run (runners.md の渡し方で実行先を 1 回動かす)・record (record_run.py) を使える。jev-mcp は home の振り分けと agents.json を読み、docs/pbi/ に依頼文・報告・runs を書く。">
+  <img src="assets/architecture-light.svg" alt="Atelier のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎのあとに再開する。オーケストレーターは facts を prepare.py に渡し、prepare.py は Jev にゲート 1 (brief と PBI の品質) を聞き、select_model.py で段と route を決める。そのとき home (~/.config/atelier) の振り分け・適用・agents.json と docs/pbi/routing.json を読み、使えない実行先の手順を外す。PBI は、全段の既定の実行先である pbi-worker (Agent ツール) か、setup で選び routing.json に書いた外部の実行先 (opencode・Codex・Antigravity・DeepSeek Harness・Claude Code の headless) に渡り、対象リポジトリのソースコードを変える。オーケストレーターは verify.py と unchanged.py で検証し、Jev には文章だけで、報告と検証が食い違うときの仕分けと差し戻し文の点検を聞き、状態と HANDOFF を docs/pbi/ に記録する。任意の shared-memory の MCP が作業ごとの ref と引き継ぎのメモリを持ち、pbi-worker は ref を get するだけ。setup_agents.py と model_fetch.py が実行先の CLI を検出し、実行先ごとのモデルの一覧を home の agents.json と models/ に控える。開発者は手元の編集画面 (studio/serve.py。エージェントとモデル・振り分け・優先テンプレートと適用・開発フローの 4 タブ) で、それらを home の中だけで読み書きする。templates.py は優先テンプレートと、正本であるローカルの overrides.json を持ち、任意の優先テンプレートの Web ページ (claude.ai の Artifact) はそれと同期するだけ。フェーズ・アダプターは、任意の呼び出し先のスキルが入っていれば使う。設計では、オーケストレーターが mattpocock-skills の grilling を呼ぶ。全 PBI のあとは adapter_gate.py が PBI と agents.json の adapters の設定を読んで、最終レビューとセキュリティレビューを使うかを決め、general-purpose のレビュー用のサブエージェントが mattpocock-skills の code-review か built-in の /code-review・/security-review を呼んで、指摘を docs/pbi/reviews/ に書く。任意の jev-mcp (jev_mcp.py、127.0.0.1) を使うと、MCP クライアントがタスクを受け取って返し、Jev の手順の route (select_model.py)・run (runners.md の渡し方で実行先を 1 回動かす)・record (record_run.py) を使える。jev-mcp は home の振り分けと agents.json を読み、docs/pbi/ に依頼文・報告・runs を書く。">
 </picture>
 
 図のソースは `assets/architecture.d2` です ([D2](https://d2lang.com) で描いています)。
 
 ## 特徴
 
+- **流れそのものがテンプレート**: 各工程を何が受け持つかは、スキルの本文ではなく `workflows/` と `components/` のデータです。スキルを書き換えずに、部品を差し替え、自分のスキルを足し、別のテンプレートを選べます ([工程・部品・テンプレート](#工程部品テンプレート))。
 - **モデルは決定表で決める**: オーケストレーターが数えた事実 (変更ファイル数・モジュール数・機密性) と、Jev による要約の判定 (新規性・結合度・あいまいさ) から、`select_model.py` が段 (haiku / sonnet / opus) を決めます。勘では決めません。
 - **実行先を順に試す**: 段ごとに「上から試す実行先の並び (`route`)」を出します。利用上限やエラーで使えなければ、次の実行先へ移ります。
 - **合否は検証コマンドで決める**: サブエージェントの報告も Jev の答えも、そのまま信じません。実装担当は報告の先頭に状態の 1 行 (`DONE` / `DONE_WITH_CONCERNS` / `NEEDS_CONTEXT` / `BLOCKED`) を書き、オーケストレーターはその状態と検証の結果で仕分けます。食い違うときだけ Jev に仕分けを聞きます。オーケストレーターが検証コマンドを自分で実行し、受け入れ条件を 1 つずつ判定します。
 - **差し戻しは 2 回まで、段上げは任意**: 差し戻しはレビューの指摘を付けて 2 回まで行います。段を上げるときは `prepare.py --only PBI-<n> --tier <tier>` でその PBI の route を書き直します (上げた先の route はその時点の振り分けから引きます)。設計から見直す必要があるときや、2 回差し戻しても通らないときは止めて、ユーザーの判断を待ちます。
 - **Jev に送るのは文章だけ**: PBI 本文、要約、報告の抜粋、差し戻し文だけを送ります。ソースコード、diff、環境変数、認証情報は送りません。
 - **オーケストレーターの文脈を細く保つ**: オーケストレーターの文脈に入ったものは、以後の全ターンで読み直されます。実装担当は最後に状態の行から始まる 5 行の報告だけを返して詳細はファイルに書き、長いコマンドの出力はログファイルに書き、PBI 本文は 1 回だけ書いてパスで渡します (`worker.md`、`SKILL.md` の「Keep the context small」)。
-- **文脈が大きくなったら引き継ぐ**: PBI の波の区切りで `agent_stats.py --ctx` で文脈の大きさを測り、250,000 トークン以上なら `docs/pbi/HANDOFF.md` (と、共有メモリがあれば引き継ぎのメモリ) を書いて止まります。`/clear` のあと `/pbi-orchestration-jev resume` で続きから再開します。フォルダを選ばずに始めたセッションからは `/pbi-orchestration-jev resume <リポジトリのパス>` で再開でき、パスを省くと引き継ぎのメモリから作業リポジトリを探します。
+- **文脈が大きくなったら引き継ぐ**: PBI の波の区切りで `agent_stats.py --ctx` で文脈の大きさを測り、250,000 トークン以上なら `docs/pbi/HANDOFF.md` (と、共有メモリがあれば引き継ぎのメモリ) を書いて止まります。`/clear` のあと `/atelier resume` で続きから再開します。フォルダを選ばずに始めたセッションからは `/atelier resume <リポジトリのパス>` で再開でき、パスを省くと引き継ぎのメモリから作業リポジトリを探します。
 - **Opus は設計とレビュー、実装は安いモデル**: Opus で実装するのは設計判断が要る PBI だけです。機密に触れる PBI や結合度の高い PBI は Sonnet で実装し、Opus のオーケストレーターが重点的にレビューします。
 - **[rtk](https://github.com/rtk-ai/rtk) でコマンド出力を圧縮 (任意)**: 同梱のフックが、スキルが有効にしたセッションだけ Bash / PowerShell のコマンドを `rtk <cmd>` に書き換えます。
 - **機械的な手順はスクリプトで**: Jev のゲート 1 (要約の判定・PBI の品質) と決定表の判定は `prepare.py`、検証コマンドの実行は `verify.py` が 1 回で行い、オーケストレーターには表だけを返します。PBI が触ってはいけないファイルは、`unchanged.py` が起動前にハッシュを取って確かめます。スキル本文も、毎回要る中核と、場面ごとに読む `appendix/` に分けてあります。作者の実測 (2026-10、6 タスク) では、この 2 つで費用が 15% 下がりました。
 - **実装担当には必要十分な情報だけ (任意)**: 共有メモリの MCP (`mcp__shared-memory__*`) があるとき、オーケストレーターだけが作業ごとの空間に「ref」(1 件 1 事実) を書き、PBI の参照欄に id を並べます。実装担当用の `pbi-worker` はメモリの `get` だけを持ち、search と write はできません。
 - **CLAUDE.md を前提にする**: リポジトリの安定した知識 (規約・コマンド・落とし穴) は、階層化した CLAUDE.md にあるものとして扱い、オーケストレーターの検索は補助にとどめます。
-- **最初に 1 回セットアップし、あとは 1 つの編集画面で組む**: セットアップが実行先の CLI を見つけて使うものを記録し、実行先ごとのモデル一覧を取ります。編集画面には「エージェントとモデル」「振り分け」「優先テンプレートと適用」の 3 つのタブがあり、保存先はすべて home です (下の「セットアップと編集画面」)。
+- **最初に 1 回セットアップし、あとは 1 つの編集画面で組む**: セットアップが実行先の CLI を見つけて使うものを記録し、実行先ごとのモデル一覧を取ります。編集画面には「エージェントとモデル」「振り分け」「優先テンプレートと適用」「開発フロー」の 4 つのタブがあり、保存先はすべて home です (下の「セットアップと編集画面」)。
 - **期限付きで振り分けを上書きする**: 優先テンプレートをオンにすると、期限までのあいだ段ごとの route を差し替えます。期限が来たら続けるかを聞きます。設定は Web ページ (Artifact) からもできます (下の「優先テンプレート」)。
 - **統計を取る**: `agent_stats.py` が、Claude Code の会話記録からモデル別・エージェント別のトークン数、プロンプトキャッシュの作り直しの回数、今の文脈の大きさを集計します。
 - **実行ごとに記録する**: 実行の合否 (合格・差し戻し・昇格・使えず・保留) を決めるたびに、`record_run.py` が `docs/pbi/runs.jsonl` に 1 行を足します。実行先・モデル・effort・トークン・コスト・ステップ数・時間・検証の結果はログから読み、オーケストレーターが渡すのは結果とレビュー指摘の件数だけです。読めない値は null のままにします。その実行の生ログはリポジトリの外の保全先にコピーします。保全先は環境変数 `PBI_RUNS_ARCHIVE` (同期するフォルダを指せば、ほかの場所にも残せます)、無ければ `~/.claude/pbi-runs` です。`model_report.py` はモデル別に集計し (`--archive` でリポジトリをまたいで)、後から人が調整する目安として仮の評価 A〜D を付けます。振り分けは変えません。
 - **費用は参考値**: 同梱の `prices.json` は見本の単価表で、home の `prices.json` で上書き・追加できます。`agent_stats.py --cost` は設計者の費用を API 換算の USD で出し、`model_report.py` は費用の分からない実行の件数を出します (合計には足しません)。
 
-## 流れ
+## 工程・部品・テンプレート
+
+1 回の実行は **ワークフローのテンプレート** (`workflows/<名前>.json`) に従います。決まった順の 9 つの工程それぞれに **部品** (コンポーネント) を順に並べ、工程のあとに **関所** を置けます。工程は、使えて `when` が成り立つ最初の部品を 1 つ動かします。各工程の最後は必ず built-in かスクリプトなので、どの工程にも後ろ盾があります。関所は、`when` が成り立つ部品をすべて動かします。オーケストレーターが従う計画は `python skills/atelier/flow.py docs/pbi` で見られます。
+
+| 工程 | すること | 同梱の部品 (既定のテンプレート `jev-routed`) |
+|---|---|---|
+| understand (理解) | コードと CLAUDE.md を読む | `understand.builtin` |
+| design (設計) | 仕様と残った前提を書く (必要なときだけ) | `design.builtin` |
+| plan (計画) | 作業を PBI に分ける | `plan.builtin`、そのあと関所 `gate.jev` (Jev ゲート 1: brief と PBI の品質) |
+| route (振り分け) | PBI ごとに段と試す順番を決める | `route.jev` (判定表と振り分けテンプレート)。`high-model` では `route.opus` |
+| build (実装) | 実装担当 (`worker.md`) が振り分け先で PBI を作る | `build.runners` |
+| verify (検証) | PBI ごとの検証コマンドを実行する | `verify.builtin` |
+| review (レビュー) | 全体の diff の最終レビュー | `review.code-review` (built-in の `/code-review`)、次に `review.builtin`。そのあと関所 `gate.security-review` |
+| fix (差し戻し) | 落ちた PBI を `fix.max_rework` 回まで差し戻す | `fix.rework` |
+| finish (仕上げ) | 完了報告 | `finish.builtin` |
+
+- **テンプレート**: 同梱は 2 つです。`jev-routed` (既定。判定表が許す PBI は安いモデルへ) と `high-model` (すべての PBI を agent の opus へ)。対象リポジトリの `docs/pbi/workflow.json`、次に home の `workflows/<名前>.json` が同梱より優先されます。テンプレートは `fix.max_rework` (0〜5) と `build.external_memory` (外部の実行先が PBI に書かれた ref を読めるか) も決めます。
+- **自分の部品**: どのスキルも Claude Code のプラグインのコマンドで入れ、`component.py add` で登録できます ([外部部品](#外部部品))。同梱のテンプレートが使うのは、このスキルと Claude Code の built-in だけです。
+- **JSON を書かずに組む**: 編集画面の「開発フロー」タブで、工程と関所ごとに部品を並べて home に保存できます ([セットアップと編集画面](#セットアップと編集画面))。
+- 契約は [docs/specs/atelier-workflow.md](docs/specs/atelier-workflow.md)、オーケストレーターの手順は `skills/atelier/appendix/engine.md` にあります。
+
+## 既定の流れ (jev-routed)
+
+既定のテンプレートは、このスキルの元になった PBI の振り分けそのものです。
 
 ```mermaid
 flowchart TD
@@ -66,7 +92,7 @@ flowchart TD
 | どれかの score が 1 以上、または変更ファイル ≥ 4、またはモジュール ≥ 2 | sonnet | normal |
 | 上のどれでもない | haiku | normal |
 
-同梱の既定は、全段を Agent ツールで実行します (haiku は effort `max`、sonnet は effort `high`、opus は effort の指定なし)。既定は `routing.default.json` にあり、`select_model.py` の中に表は持ちません。外部の実行先を使うときは、対象リポジトリの `docs/pbi/` か home の `routing.json` に自分の振り分けテンプレートを書きます (下の[優先テンプレート](#優先テンプレート))。見本は `skills/pbi-orchestration-jev/examples/routing/multi-runner.json` です。
+同梱の既定は、全段を Agent ツールで実行します (haiku は effort `max`、sonnet は effort `high`、opus は effort の指定なし)。既定は `routing.default.json` にあり、`select_model.py` の中に表は持ちません。外部の実行先を使うときは、対象リポジトリの `docs/pbi/` か home の `routing.json` に自分の振り分けテンプレートを書きます (下の[優先テンプレート](#優先テンプレート))。見本は `skills/atelier/examples/routing/multi-runner.json` です。
 
 route を組んだあと (`routing.json` からでも優先テンプレートからでも)、スキルは各手順を home の `agents.json` と見つかった CLI に照合します。その実行先が無効になっている手順、CLI が見つからない手順、モデルがその実行先の一覧に無い手順は外し、承認一覧に理由とともに出します。最後の Agent の手順は外しません。
 
@@ -86,9 +112,9 @@ home に置く `agents.json` の最小の例:
 セットアップと編集画面には 3 つの入口があります。
 
 ```
-/pbi-orchestration-jev setup      # 検出 → モデルの取得 → 編集画面 → 任意の連携の案内
-/pbi-orchestration-jev models     # モデルの一覧だけを取り直す
-/pbi-orchestration-jev templates  # 編集画面を開く
+/atelier setup      # 検出 → モデルの取得 → 編集画面 → 任意の連携の案内
+/atelier models     # モデルの一覧だけを取り直す
+/atelier templates  # 編集画面を開く
 ```
 
 引数なしで、home に `agents.json` が無いときは、最初に「今セットアップ」か「agent だけで始める」を 1 問だけ聞きます。答えは `agents.json` に残るので、次の回からは聞きません。
@@ -117,7 +143,7 @@ home に置く `agents.json` の最小の例:
 保存先はすべて home (`agents.json`・`models/<実行先>.json`・`routing.json`・`templates/<名前>.json`・`overrides.json`・`workflows/<名前>.json`) で、対象リポジトリには書きません。スキルを通さずに開くときは次を実行します。
 
 ```sh
-python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
+python ~/.claude/skills/atelier/studio/serve.py
 ```
 
 - 画面は日本語と英語に対応しています。ブラウザの言語に合わせて開き、右上の「EN / 日本語」ボタンで切り替えられます (選んだ言語は次回も使います)。URL に `?lang=ja` か `?lang=en` を付けても切り替えられます。
@@ -127,7 +153,7 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 
 ## フェーズ・アダプター
 
-**アダプター**は、作業の決まった場面で、すでに入っているスキルを呼ぶための取り決めです。同梱のテンプレートが呼ぶのは、このスキル自身の手順と Claude Code の built-in のレビューだけです。mattpocock-skills・pstack・yomiyasu などほかのスキルは、利用者が入れて外部部品として足します (下の「外部部品」)。
+設計・最終レビュー・セキュリティレビューの工程には、動かすかどうかの決まりと、`agents.json` の `adapters` で止めたりスキルを指定したりする切り替えがあります。**アダプター**は、その場面で、すでに入っているスキルを呼ぶための取り決めです。同梱のテンプレートが呼ぶのは、このスキル自身の手順と Claude Code の built-in のレビューだけです。mattpocock-skills・pstack・yomiyasu などほかのスキルは、利用者が入れて外部部品として足します (下の「外部部品」)。
 
 | フェーズ | いつ | 呼び出し先 (優先順) | 補足 |
 |---|---|---|---|
@@ -153,14 +179,14 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 {"adapters": {"design": "off", "review": "mattpocock-skills:code-review", "security": "auto"}}
 ```
 
-表に無い呼び出し先を使えるのは、ここに名前を書いたときだけです。名前が似ているだけのスキルが勝手に使われることはなく、モデルから呼べないスキル (`disable-model-invocation`) も使いません。
+表に無い呼び出し先を使えるのは、ここに名前を書いたときだけです。名前が似ているだけのスキルが勝手に使われることはなく、モデルから呼べないスキル (`disable-model-invocation`) もここでは使いません (外部部品として登録すれば `read-skill` として動きます)。
 
 ### 外部部品
 
 このスキルは、他の人のスキルも、その部品の定義も同梱しません。スキルは Claude Code のプラグインのコマンドで入れ、`component.py add` で登録します。入ったスキルの `SKILL.md` を読んで部品を home の `components/` に書き、home の `workflows/` のテンプレート (既定 `jev-routed`。初回は同梱のものを写します) に差します。`component.py remove <id>` で外し、`component.py list` で一覧を見られます。`~/.claude/skills/<name>/` にある自分のスキルも同じ形で使えます (`add <name>`)。
 
 ```sh
-S=skills/pbi-orchestration-jev   # スキルを入れた場所
+S=skills/atelier   # スキルを入れた場所
 
 # mattpocock-skills (MIT): 設計に grilling、最終レビューに code-review
 /plugin install mattpocock-skills@claude-plugins-official
@@ -185,10 +211,10 @@ python $S/component.py add yomiyasu:yomiyasu --stage gate --after finish
 
 ### おすすめ: mattpocock-skills
 
-既定では、このスキルと Claude Code の外にあるものは使いません。`/pbi-orchestration-jev setup --recommended` が、推奨のセットを 1 つだけ案内します。はいと答えるまで何も入れません。
+既定では、このスキルと Claude Code の外にあるものは使いません。`/atelier setup --recommended` が、推奨のセットを 1 つだけ案内します。はいと答えるまで何も入れません。
 
 ```sh
-/pbi-orchestration-jev setup --recommended
+/atelier setup --recommended
 claude plugin install mattpocock-skills@claude-plugins-official --scope user
 ```
 
@@ -206,16 +232,16 @@ claude plugin install mattpocock-skills@claude-plugins-official --scope user
 - `sensitive` な PBI は、テンプレートが何を言っても外部の実行先に出ません。
 - 設計判断の見直しとレビューの担当は、決定表のままです。
 
-テンプレートは個人の設定で、home に置きます。home の既定は `~/.config/pbi-orchestration-jev` (`XDG_CONFIG_HOME` があれば `$XDG_CONFIG_HOME/pbi-orchestration-jev`)、`PBI_HOME` で変えられます。home には `agents.json` (実行先・CLI の場所と版・確認した時刻・選んだモデル・課金の種類)・`models/<実行先>.json` (実行先ごとに最後に取ったモデルの一覧)・`routing.json` (振り分けテンプレート)・`templates/<name>.json` (優先テンプレート)・`overrides.json` (今の適用。正本)・`history.jsonl` (終わった適用を 1 行ずつ)・Web ページの URL (`web.json`)・`prices.json` (単価の上書き) を置けます。どれも任意で、セットアップと編集画面は、保存が要るときだけディレクトリとファイルを作ります。同梱の例を試すには、home の `templates/` にコピーします。
+テンプレートは個人の設定で、home に置きます。home の既定は `~/.config/atelier` (`XDG_CONFIG_HOME` があれば `$XDG_CONFIG_HOME/atelier`)、`ATELIER_HOME` (旧名の `PBI_HOME` も可) で変えられます。home には `agents.json` (実行先・CLI の場所と版・確認した時刻・選んだモデル・課金の種類)・`models/<実行先>.json` (実行先ごとに最後に取ったモデルの一覧)・`routing.json` (振り分けテンプレート)・`templates/<name>.json` (優先テンプレート)・`overrides.json` (今の適用。正本)・`history.jsonl` (終わった適用を 1 行ずつ)・Web ページの URL (`web.json`)・`prices.json` (単価の上書き) を置けます。どれも任意で、セットアップと編集画面は、保存が要るときだけディレクトリとファイルを作ります。同梱の例を試すには、home の `templates/` にコピーします。
 
 ```sh
-mkdir -p ~/.config/pbi-orchestration-jev/templates
-cp skills/pbi-orchestration-jev/examples/templates/cheap-all-tiers.json ~/.config/pbi-orchestration-jev/templates/
+mkdir -p ~/.config/atelier/templates
+cp skills/atelier/examples/templates/cheap-all-tiers.json ~/.config/atelier/templates/
 ```
 
-`XDG_CONFIG_HOME` か `PBI_HOME` を設定したときは、`~/.config/pbi-orchestration-jev` を自分の home に読み替えてください。
+`XDG_CONFIG_HOME` か `ATELIER_HOME` を設定したときは、`~/.config/atelier` を自分の home に読み替えてください。
 
-この例は全段の route を `opencode-go/deepseek-v4.1-flash` の effort `max` にします。優先テンプレートの手順には交互グループ `{"rotate": [手順, 手順, ...]}` も書けます。PBI の番号で先頭のメンバーが決まり、残りのメンバーはその PBI の控えとして後ろに続くので、PBI がメンバーに等分に配られます (例: 2 つの無料枠のモデルを交互に使い、だめなら 2 つの有料のモデルを交互に使う)。ファイルの形・置き場所の決め方・手順の全部は `skills/pbi-orchestration-jev/appendix/priority-templates.md` にあります。
+この例は全段の route を `opencode-go/deepseek-v4.1-flash` の effort `max` にします。優先テンプレートの手順には交互グループ `{"rotate": [手順, 手順, ...]}` も書けます。PBI の番号で先頭のメンバーが決まり、残りのメンバーはその PBI の控えとして後ろに続くので、PBI がメンバーに等分に配られます (例: 2 つの無料枠のモデルを交互に使い、だめなら 2 つの有料のモデルを交互に使う)。ファイルの形・置き場所の決め方・手順の全部は `skills/atelier/appendix/priority-templates.md` にあります。
 
 ## 必要なもの
 
@@ -239,10 +265,19 @@ cp skills/pbi-orchestration-jev/examples/templates/cheap-all-tiers.json ~/.confi
 ## 導入
 
 ```sh
-git clone https://github.com/reeschan/pbi-orchestration-jev.git
-cp -r pbi-orchestration-jev/skills/pbi-orchestration-jev ~/.claude/skills/
-mkdir -p ~/.claude/agents && cp pbi-orchestration-jev/skills/pbi-orchestration-jev/agents/pbi-worker.md ~/.claude/agents/
+git clone https://github.com/reeschan/pbi-orchestration-jev.git atelier
+cp -r atelier/skills/atelier ~/.claude/skills/
+mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/pbi-worker.md ~/.claude/agents/
 ```
+
+### pbi-orchestration-jev からの移行
+
+スキルの名前を `pbi-orchestration-jev` から `atelier` に変えました。今までの設定はそのまま使えます。
+
+- **home**: 既定の home は `~/.config/atelier` (`$XDG_CONFIG_HOME/atelier`) になりました。このフォルダが無く `~/.config/pbi-orchestration-jev` があるあいだは、旧いフォルダをそのまま使います。移すときはフォルダの名前を変えてください。新しい環境変数は `ATELIER_HOME` で、`PBI_HOME` (とさらに旧い `PBI_TEMPLATES_HOME`) も引き続き読みます。
+- **スキル**: 上のとおり `skills/atelier` をコピーします。`skills/pbi-orchestration-jev` は `/atelier` へ案内するだけの小さな中身になりました。旧いスキルに上書きすれば `/pbi-orchestration-jev` からも案内され、要らなければ旧いフォルダを消してかまいません。
+- **rtk のフック**: rtk のフックを入れている場合は、`settings.json` のパスを `skills/atelier/rtk/rtk-gate.mjs` に変えてください。
+- **作業中のもの**: 各リポジトリの `docs/pbi/` は変わりません。`/atelier resume` で続きから再開できます。
 
 `pbi-worker` は実装担当とレビュー用のサブエージェントの定義です。Claude Code を再起動すると使えるようになります。置かないときは general-purpose で動きます (メモリの search を止める仕組みが無くなるだけです)。
 
@@ -266,7 +301,7 @@ Jev の API キーは、次のどちらかに置きます (クライアントは
        "PreToolUse": [
          {
            "matcher": "Bash|PowerShell",
-           "hooks": [{ "type": "command", "command": "node \"<HOME>/.claude/skills/pbi-orchestration-jev/rtk/rtk-gate.mjs\"", "timeout": 10 }]
+           "hooks": [{ "type": "command", "command": "node \"<HOME>/.claude/skills/atelier/rtk/rtk-gate.mjs\"", "timeout": 10 }]
          }
        ]
      }
@@ -302,10 +337,10 @@ Jev の API キーは、次のどちらかに置きます (クライアントは
 Claude Code で、複数ファイルにまたがる実装を頼むときに呼びます。
 
 ```
-/pbi-orchestration-jev <やりたいこと>
+/atelier <やりたいこと>
 ```
 
-実行先のセットアップとモデルの一覧は `/pbi-orchestration-jev setup` で行います。モデルの一覧だけを取り直すときは `/pbi-orchestration-jev models`、編集画面を開くときは `/pbi-orchestration-jev templates` です (上の「セットアップと編集画面」)。
+実行先のセットアップとモデルの一覧は `/atelier setup` で行います。モデルの一覧だけを取り直すときは `/atelier models`、編集画面を開くときは `/atelier templates` です (上の「セットアップと編集画面」)。
 
 作業の記録は、対象リポジトリの `docs/pbi/` に残ります。
 
@@ -325,11 +360,11 @@ Claude Code で、複数ファイルにまたがる実装を頼むときに呼�
 | `docs/pbi/opencode/`、`docs/pbi/codex/`、`docs/pbi/agy/`、`docs/pbi/dsh/` | 各実行先に渡した文章と出力 |
 | `docs/pbi/stats/` | トークンとキャッシュの統計 |
 
-止まってユーザーを待つのは、PBI 一覧の承認、差し戻しの上限 (または設計の見直し)、破壊的な操作の前、文脈が大きくなったときの引き継ぎの 4 つだけです。引き継いだら `/clear` のあと `/pbi-orchestration-jev resume` を実行します。
+止まってユーザーを待つのは、PBI 一覧の承認、差し戻しの上限 (または設計の見直し)、破壊的な操作の前、文脈が大きくなったときの引き継ぎの 4 つだけです。引き継いだら `/clear` のあと `/atelier resume` を実行します。
 
 フォルダを選ばずに始めたセッション (Claude のデスクトップアプリが空のフォルダを作って動かすもの) では、作業ディレクトリに `docs/pbi/STATUS.md` がありません。そのときは次の順で作業リポジトリを決めます。
 
-1. `/pbi-orchestration-jev resume <リポジトリのパス>` のパス
+1. `/atelier resume <リポジトリのパス>` のパス
 2. パスが無ければ、共有メモリの引き継ぎのメモリ (タグ `handoff`) にあるパス。複数の作業が引き継ぎ中なら、どれを再開するかを聞きます
 3. それでも決まらなければ、ユーザーに聞きます
 
@@ -338,7 +373,7 @@ Claude Code で、複数ファイルにまたがる実装を頼むときに呼�
 ## ファイル
 
 ```
-skills/pbi-orchestration-jev/
+skills/atelier/
 ├── SKILL.md                    # スキル本文 (オーケストレーターが従うワークフローのエンジン)
 ├── CONTEXT.md                  # 用語集 (英語と日本語の対訳)
 ├── flow.py                     # 開発フローのテンプレートを解決・検証し、工程ごとの計画を表で出す
@@ -362,7 +397,7 @@ skills/pbi-orchestration-jev/
 ├── agents.py                   # agents.json を読み、実行先の CLI を探す (PATH・fnm・nvm)
 ├── common.py                   # 共通の処理: home の解決・単価・パス・表記
 ├── routing.default.json        # 振り分けの既定: 全段 Agent ツール (docs/pbi/ か home の routing.json で差し替え)
-├── studio/                     # 編集画面: home を 3 つのタブで読み書きする (index.html・serve.py・catalog.json・update_catalog.py)
+├── studio/                     # 編集画面: home を 4 つのタブで読み書きする (index.html・serve.py・catalog.json・update_catalog.py)
 ├── templates.py                # 優先テンプレート: 検査、Web ページからの同期、適用・回答・写しの書き込み
 ├── web/priority-templates.html # 優先テンプレートを見て設定する Web ページ (Artifact)
 ├── examples/routing/           # 外部の実行先を使う振り分けの見本 (multi-runner.json)
@@ -405,8 +440,8 @@ python jev/jev.py --request <request.json>                 # リクエストを�
 `jev_mcp.py` は、外の MCP クライアントが、Jev の振り分け・実行・記録をそのまま使うための口です。設計者は他の外部の実行先と同じく `docs/pbi/mcp/<報告名>.prompt.md` に依頼文を書きます。クライアントはそれを取得して作業し、いつもの形で報告します (詳細は `docs/pbi/reports/<報告名>.md`、5 行の要約は `docs/pbi/mcp/<報告名>.last.md`)。承認・検証・レビュー・差し戻しは設計者のままです。
 
 ```sh
-python skills/pbi-orchestration-jev/jev_mcp.py --root /path/to/repo                      # stdio
-python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/to/repo   # http://127.0.0.1:7830/mcp
+python skills/atelier/jev_mcp.py --root /path/to/repo                      # stdio
+python skills/atelier/jev_mcp.py --http --port 7830 --root /path/to/repo   # http://127.0.0.1:7830/mcp
 ```
 
 | ツール | すること |
@@ -435,7 +470,7 @@ python skills/pbi-orchestration-jev/jev_mcp.py --http --port 7830 --root /path/t
 ## テスト
 
 ```sh
-cd skills/pbi-orchestration-jev
+cd skills/atelier
 python -m unittest discover -p 'test_*.py'
 python -m unittest discover -s studio -p 'test_*.py'
 cd jev
