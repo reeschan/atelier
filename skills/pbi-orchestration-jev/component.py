@@ -10,8 +10,8 @@
 読んで部品の定義を home に書く。
 
 <skill> は `<plugin>:<name>` (プラグインのスキル) か `<name>` (~/.claude/skills/<name>/ の自分のスキル)。
-プラグインは PBI_PLUGINS_DIR、無ければ ~/.claude/plugins の下で <plugin>/skills/<name>/SKILL.md を探す
-(flow.find_plugin_file)。自分のスキルは PBI_SKILLS_DIR、無ければ ~/.claude/skills の下を見る。
+プラグインは PBI_PLUGINS_DIR、無ければ ~/.claude/plugins の下で <plugin>/ (か <plugin>/<版>/) の skills/ から
+<name>/SKILL.md を探す (分類のフォルダを挟んでもよい)。自分のスキルは PBI_SKILLS_DIR、無ければ ~/.claude/skills の下を見る。
 SKILL.md の frontmatter が disable-model-invocation: true なら read-skill の部品 (サブエージェントに SKILL.md を
 読ませて従わせる)、そうでなければ skill の部品 (Skill ツールで呼ぶ)。ライセンスとリンクはプラグインの
 .claude-plugin/plugin.json (license・repository か homepage) から取る。
@@ -56,16 +56,42 @@ def skills_root(env) -> Path:
     return Path(env['PBI_SKILLS_DIR']) if env.get('PBI_SKILLS_DIR') else Path.home() / '.claude' / 'skills'
 
 
-def find_skill(skill: str, env) -> tuple[Path | None, str | None, str]:
-    """(SKILL.md の場所, プラグイン名か None, スキル名)。見つからなければ場所は None。"""
+def find_plugin_skill(plugin: str, name: str, root: Path) -> tuple[Path | None, str]:
+    """root の下の <plugin>/ か <plugin>/<版>/ の skills/ から、<name>/SKILL.md をいちばん新しいものから探す。
+
+    (SKILL.md の場所, プラグインの根からの相対パス)。分類のフォルダを挟む構成 (mattpocock-skills の
+    skills/productivity/grilling/SKILL.md など) もあるので、skills/ の下を深さを問わず見る。無ければ (None, '')。
+    """
+    found = []
+    root = Path(root)
+    if not root.is_dir():
+        return None, ''
+    for current, dirs, _files in os.walk(root):
+        if len(Path(current).relative_to(root).parts) >= flow.PLUGIN_SEARCH_DEPTH:
+            dirs[:] = []
+        here = Path(current)
+        if here.name != plugin:
+            continue
+        for base in [here, *(d for d in here.iterdir() if d.is_dir())]:
+            if (base / 'skills').is_dir():
+                found += [(p, base) for p in (base / 'skills').rglob('SKILL.md') if p.parent.name == name]
+    if not found:
+        return None, ''
+    path, base = max(found, key=lambda pair: pair[0].stat().st_mtime)
+    return path, path.relative_to(base).as_posix()
+
+
+def find_skill(skill: str, env) -> tuple[Path | None, str | None, str, str]:
+    """(SKILL.md の場所, プラグイン名か None, スキル名, プラグインの根からの相対パス)。見つからなければ場所は None。"""
     m = SKILL_NAME.match(skill)
     if not m:
-        return None, None, ''
+        return None, None, '', ''
     plugin, name = m.groups()
     if plugin:
-        return flow.find_plugin_file(plugin, f'skills/{name}/SKILL.md', flow.plugins_root(env)), plugin, name
+        path, rel = find_plugin_skill(plugin, name, flow.plugins_root(env))
+        return path, plugin, name, rel
     path = skills_root(env) / name / 'SKILL.md'
-    return (path if path.is_file() else None), None, name
+    return (path if path.is_file() else None), None, name, ''
 
 
 def frontmatter(text: str) -> dict:
@@ -112,7 +138,7 @@ def component_name(plugin: str | None, name: str) -> str:
     return f'{plugin}-{name}'
 
 
-def build_component(skill: str, skill_md: Path, plugin: str | None, name: str, args) -> dict:
+def build_component(skill: str, skill_md: Path, plugin: str | None, name: str, rel: str, args) -> dict:
     """入ったスキルから部品の定義を作る。"""
     front = frontmatter(skill_md.read_text(encoding='utf-8', errors='replace'))
     read_skill = front.get('disable-model-invocation', '').lower() == 'true'
@@ -130,7 +156,7 @@ def build_component(skill: str, skill_md: Path, plugin: str | None, name: str, a
         'id': f'{role}.{component_name(plugin, name)}',
         'stages': [role],
         'title': {'ja': title, 'en': title},
-        'invoke': {'kind': 'read-skill', 'plugin': plugin, 'path': f'skills/{name}/SKILL.md'} if read_skill
+        'invoke': {'kind': 'read-skill', 'plugin': plugin, 'path': rel} if read_skill
         else {'kind': 'skill', 'name': skill},
         'doc': doc,
         'where': where,
@@ -218,14 +244,14 @@ def cmd_add(args, home: Path) -> int:
     if args.stage != 'gate' and args.after:
         print('--after is only for --stage gate', file=sys.stderr)
         return 2
-    skill_md, plugin, name = find_skill(args.skill, os.environ)
+    skill_md, plugin, name, rel = find_skill(args.skill, os.environ)
     if skill_md is None:
         hint = f'install the plugin first (/plugin install {plugin}@<marketplace>)' if plugin else \
             'put it in ~/.claude/skills/<name>/ or use <plugin>:<name>'
         print(f'{args.skill}: skill not found; {hint}', file=sys.stderr)
         return 2
     try:
-        component = build_component(args.skill, skill_md, plugin, name, args)
+        component = build_component(args.skill, skill_md, plugin, name, rel, args)
         wf_path, workflow = load_workflow(home, args.workflow)
     except ValueError as e:
         print(str(e), file=sys.stderr)
