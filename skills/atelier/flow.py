@@ -65,6 +65,8 @@ WHEN = ('always', 'clearly-complex', 'ask-or-decide', 'adapter-gate', 'tier-opus
         'ui-change', 'user-facing', 'ask-user')
 # PBI ごとに決まる条件。段と brief の値が出そろう振り分けのあと (after: route の関所) でしか判定できない
 PER_PBI_WHEN = ('tier-opus', 'coupling-high')
+# 利用者に毎回聞く条件。聞く時点を決めてあるのはオプションの工程だけ (appendix/optional.md)
+OPTIONAL_ONLY_WHEN = ('ask-user',)
 COST = ('low', 'mid', 'high')
 EXTERNAL_MEMORY = ('none', 'refs-only')
 # 差し戻しの上限の範囲 (今の上限は 2。5 を超える回数は設計の見直しに回すべき規模)
@@ -263,6 +265,8 @@ def check_item(item, role: str, place: str, components: dict, errors: list, afte
         errors.append(f'{place}: {cid} has an unknown when: {when}')
     elif effective in PER_PBI_WHEN and (role != GATE or after != 'route'):
         errors.append(f'{place}: {cid} uses when {effective}, which only a gate after route can decide')
+    elif effective in OPTIONAL_ONLY_WHEN and role not in OPTIONAL:
+        errors.append(f'{place}: {cid} uses when {effective}, which only an optional stage can use')
     return component
 
 

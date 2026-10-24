@@ -73,7 +73,7 @@ After route and its gates, show the user the PBI list and wait for approval. Per
 - one line per stage from the flow table: the component picked, or the fallback with its reason
 - the priority-template line from `prepare.py`, and the warning when a template overrides the opus tier
 - open assumptions from the design stage, and expired priority applications (`appendix/priority-templates.md`)
-- the question for each optional stage with an `ask-user` row placed after plan or later (security, by default): whether to run it this time (`appendix/optional.md`)
+- the question for each optional stage with an `ask-user` row placed after route or later (security, by default): whether to run it this time (`appendix/optional.md`)
 
 ## One PBI
 
