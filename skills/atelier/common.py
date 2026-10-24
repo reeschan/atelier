@@ -19,21 +19,28 @@ RUNNERS = EXTERNAL_RUNNERS + (AGENT,)
 PROJECTS = Path.home() / '.claude' / 'projects'
 
 
-def resolve_home(arg: str | None) -> Path:
-    """home のディレクトリ。引数 → PBI_HOME → PBI_TEMPLATES_HOME → XDG_CONFIG_HOME → ~/.config。
+# home のディレクトリ名。旧名 (改名前) の home しか無ければそちらを使う
+HOME_NAME = 'atelier'
+OLD_HOME_NAME = 'pbi-orchestration-jev'
 
+
+def resolve_home(arg: str | None) -> Path:
+    """home のディレクトリ。引数 → ATELIER_HOME → PBI_HOME → PBI_TEMPLATES_HOME → XDG_CONFIG_HOME → ~/.config。
+
+    PBI_HOME と PBI_TEMPLATES_HOME は旧名 (互換のためだけに読む)。XDG_CONFIG_HOME・~/.config の下は atelier だが、
+    それが無く旧名の pbi-orchestration-jev があれば旧名を使う (改名前の設定をそのまま読むため)。
     先頭の ~ は展開する (引用符の中や settings.json の env ではシェルが展開しないため)。
     """
     if arg:
         return Path(arg).expanduser()
-    for name in ('PBI_HOME', 'PBI_TEMPLATES_HOME'):  # PBI_TEMPLATES_HOME は旧名 (互換のためだけに読む)
+    for name in ('ATELIER_HOME', 'PBI_HOME', 'PBI_TEMPLATES_HOME'):
         value = os.environ.get(name)
         if value:
             return Path(value).expanduser()
     base = os.environ.get('XDG_CONFIG_HOME')
-    if base:
-        return Path(base).expanduser() / 'pbi-orchestration-jev'
-    return Path.home() / '.config' / 'pbi-orchestration-jev'
+    root = Path(base).expanduser() if base else Path.home() / '.config'
+    new, old = root / HOME_NAME, root / OLD_HOME_NAME
+    return old if not new.exists() and old.is_dir() else new
 
 
 def long_path(p):
