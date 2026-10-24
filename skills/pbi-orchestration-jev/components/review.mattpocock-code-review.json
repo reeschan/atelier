@@ -1,0 +1,33 @@
+{
+  "id": "review.mattpocock-code-review",
+  "stages": [
+    "review"
+  ],
+  "title": {
+    "ja": "mattpocock-skills の code-review",
+    "en": "mattpocock-skills code-review"
+  },
+  "invoke": {
+    "kind": "skill",
+    "name": "mattpocock-skills:code-review"
+  },
+  "where": "subagent",
+  "memory": "none",
+  "when": "adapter-gate",
+  "cost": "mid",
+  "requires": {
+    "skills": [
+      "mattpocock-skills:code-review"
+    ]
+  },
+  "forbid": [
+    "--fix",
+    "--comment",
+    "ultra",
+    "--max-findings"
+  ],
+  "interactive": false,
+  "calls_back": false,
+  "license": "MIT",
+  "link": "https://github.com/mattpocock/skills"
+}
