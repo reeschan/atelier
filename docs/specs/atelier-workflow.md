@@ -185,7 +185,7 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 ### オプションの工程 (UI デザイン・マーケティング)
 
 - 利用者の求めで、9 つの工程とは別に、テンプレートで入れたときだけ動く**オプションの工程**を 2 つ足した。`ui-design` (画面の方向性・テーマ・モックアップ・操作の動画。成果物は `docs/pbi/ui/<slug>/`) と `marketing` (誰のための作業で、どう受け取られるか。成果物は `docs/pbi/marketing/<slug>.md`)。手順は `appendix/optional.md`。
-- テンプレートの `optional` に `{"stage", "after", "components"}` で置く。`after` は 9 つの工程のどれか (既定は ui-design が design、marketing が understand)。1 つのオプションの工程は 1 テンプレートに 1 回だけ。表の行は `<工程> after <工程>` で、after の工程の直後、関所より先に並ぶ。
+- テンプレートの `optional` に `{"stage", "after", "components"}` で置く。`after` は finish 以外の工程のどれか (既定は ui-design が design、marketing が understand。finish のあとは完了報告に成果物が載らないので置けない)。1 つのオプションの工程は 1 テンプレートに 1 回だけ。表の行は `<工程> after <工程>` で、after の工程の直後、関所より先に並ぶ。
 - 関所と同じく、使えて `when` が成り立つ部品をすべて動かす (デザインのスキルのあとに動画のスキル、のように)。後ろ盾は要らず、使える部品が無ければ飛ばす。後ろ盾を必須にしないのは、入れない限り動かない工程で、無くても開発は終わるため。
 - when に `ui-change` (画面を足す・見た目や操作の流れを変える) と `user-facing` (利用者に見える・お金を払う部分を足す・変える) を足した。どちらもオーケストレーターが依頼から判断し、迷えば設計の判断と同じときに 1 回だけ聞く。PBI ごとの when はオプションの工程でも使えない。
 - 部品は `stages` にオプションの工程の名前を持つ。`component.py add <スキル> --stage ui-design|marketing [--after <工程>]` で登録し、doc は `appendix/optional.md` (read-skill は engine.md)。モデルから呼べるスキルは main で動く (画面の確認や質問があるため)。テンプレートにもう置いてあれば違う `--after` は断る。`remove` で最後の部品を外すと、そのオプションの工程ごとテンプレートから消す。

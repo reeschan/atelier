@@ -153,9 +153,12 @@ class ComponentCliTest(unittest.TestCase):
         code, _, err = self.run_cli('add', 'yomiyasu:yomiyasu', '--stage', 'ui-design', '--after', 'plan')
         self.assertEqual(code, 2)
         self.assertIn('ui-design is already placed after design', err)
-        code, out, err = self.run_cli('add', 'yomiyasu:yomiyasu', '--stage', 'marketing', '--after', 'finish')
+        code, _, err = self.run_cli('add', 'yomiyasu:yomiyasu', '--stage', 'marketing', '--after', 'finish')
+        self.assertEqual(code, 2)
+        self.assertIn('cannot run after finish', err)
+        code, out, err = self.run_cli('add', 'yomiyasu:yomiyasu', '--stage', 'marketing', '--after', 'review')
         self.assertEqual(code, 0, out + err)
-        self.assertEqual(self.load('workflows', 'jev-routed.json')['optional'][-1]['after'], 'finish')
+        self.assertEqual(self.load('workflows', 'jev-routed.json')['optional'][-1]['after'], 'review')
         # remove は最後の部品を外すとその工程ごと消す
         self.assertEqual(self.run_cli('remove', 'marketing.yomiyasu')[0], 0)
         self.assertEqual([s['stage'] for s in self.load('workflows', 'jev-routed.json')['optional']], ['ui-design'])
@@ -268,7 +271,7 @@ class ComponentCliTest(unittest.TestCase):
         shutil.rmtree(os.path.join(self.skills, 'ui-video'))
         _code, out, _err = self.run_cli('example', 'check', 'recommended')
         self.assertIn('install git clone https://github.com/reeschan/atelier.git ~/dev/atelier && '
-                      'cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/', out)
+                      'mkdir -p ~/.claude/skills && cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/', out)
         code, out, err = self.run_cli('example', 'use', 'recommended')
         self.assertEqual(code, component.MISSING)
         self.assertFalse(os.path.exists(os.path.join(self.home, 'workflows')))

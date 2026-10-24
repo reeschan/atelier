@@ -410,6 +410,7 @@ class ServeTest(unittest.TestCase):
         self.assertIn('deep', flow_state['when'])
         self.assertEqual(flow_state['optional'], ['ui-design', 'marketing'])
         self.assertEqual(flow_state['optional_after'], {'ui-design': 'design', 'marketing': 'understand'})
+        self.assertNotIn('finish', flow_state['optional_places'])
         self.assertEqual(flow_state['default'], 'jev-routed')
         self.assertEqual(flow_state['errors'], [])
         review = flow_state['components']['review.code-review']

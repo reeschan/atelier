@@ -9,7 +9,7 @@ Read this when the template has an `optional` list and one of its rows is picked
 | `ui-design` | `design` | the look of the screens the work adds or changes: direction, theme, page and component mockups, a walkthrough video | `docs/pbi/ui/<slug>/` |
 | `marketing` | `understand` | who the work is for and how they react: a simulated user panel, objections, positioning, a launch note | `docs/pbi/marketing/<slug>.md` |
 
-- The template says where each one runs (`{"stage", "after", "components"}`). Each optional stage appears at most once.
+- The template says where each one runs (`{"stage", "after", "components"}`, `after` any stage but `finish`, so its files are ready for the completion report). Each optional stage appears at most once.
 - Optional stages need no fallback. When no row is usable or no `when` holds, skip the stage and record why.
 - Like a gate, an optional stage runs every row that is usable and whose `when` holds, in order. A UI design can take a design skill and then a video skill.
 
@@ -20,7 +20,7 @@ Read this when the template has an `optional` list and one of its rows is picked
 | `ui-change` | the request adds a screen, changes how one looks, or changes a user flow |
 | `user-facing` | the request adds or changes something end users see or pay for |
 
-You decide both from the request, like `clearly-complex`. When you cannot tell, ask once with AskUserQuestion at the same time as the design decision (`appendix/design.md`), and save the answer in `docs/pbi/adapters.json` as `{"<stage>": {"decision": "run|skip", "asked": true}}`.
+You decide both from the request, like `clearly-complex`. When you cannot tell, ask once with AskUserQuestion before the first row of that stage runs, and save the answer in `docs/pbi/adapters.json` as `{"<stage>": {"decision": "run|skip", "asked": true}}`. When the design decision (`appendix/design.md`) also needs asking at that point, put both in the same AskUserQuestion. An optional stage placed before design (marketing, by default) is asked about on its own.
 
 ## Run
 

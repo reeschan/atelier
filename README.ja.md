@@ -240,7 +240,7 @@ claude plugin install yomiyasu@yomiyasu --scope user
 claude plugin marketplace add Jakeschincariol/founder-skill
 claude plugin install founder-skill@founder-skill --scope user
 git clone https://github.com/reeschan/claude-skill-design-studio.git ~/dev/claude-skill-design-studio && node ~/dev/claude-skill-design-studio/scripts/install-self.ts
-git clone https://github.com/reeschan/atelier.git ~/dev/atelier && cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/
+git clone https://github.com/reeschan/atelier.git ~/dev/atelier && mkdir -p ~/.claude/skills && cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/
 python $S/component.py example use recommended --as jev-routed --replace   # 既定のテンプレートにする
 ```
 

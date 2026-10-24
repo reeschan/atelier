@@ -65,20 +65,26 @@ export function pageUrl(page, baseDir) {
   return pathToFileURL(isAbsolute(page) ? page : resolve(baseDir, page)).href;
 }
 
+// The output file: --out, then the storyboard's out, then walkthrough.mp4. Only .mp4 and .webm are written.
 export function outputPath(board, args, baseDir) {
   const out = args.out ?? board.out ?? 'walkthrough.mp4';
+  if (!['.mp4', '.webm'].includes(extname(out).toLowerCase())) throw new Error(`${out}: the output must end in .mp4 or .webm`);
   return isAbsolute(out) ? out : resolve(baseDir, out);
 }
 
 function parseArgs(argv) {
   const args = { file: null, out: undefined, dryRun: false };
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === '--out') args.out = argv[++i];
+    if (argv[i] === '--out') {
+      const value = argv[++i];
+      if (!value || value.startsWith('--')) return null;
+      args.out = value;
+    }
     else if (argv[i] === '--dry-run') args.dryRun = true;
     else if (!args.file) args.file = argv[i];
     else return null;
   }
-  return args.file && args.out !== null ? args : null;
+  return args.file ? args : null;
 }
 
 // Playwright from the current project, then from the global npm folder.
@@ -132,7 +138,8 @@ async function main(argv) {
   const errors = storyboardErrors(board);
   if (errors.length) { errors.forEach((e) => console.log(`error ${e}`)); return 2; }
   const baseDir = dirname(resolve(args.file));
-  const out = outputPath(board, args, baseDir);
+  let out;
+  try { out = outputPath(board, args, baseDir); } catch (e) { console.log(`error ${e.message}`); return 2; }
   const missing = board.scenes.map((s) => s.page).filter((p) => !/^(https?|file):\/\//i.test(p))
     .filter((p) => !existsSync(isAbsolute(p) ? p : resolve(baseDir, p)));
   if (missing.length) { missing.forEach((p) => console.log(`error page not found: ${p}`)); return 2; }
@@ -156,7 +163,11 @@ async function main(argv) {
       await page.goto(pageUrl(scene.page, baseDir), { waitUntil: 'load', timeout: 30000 });
       await page.waitForTimeout(300);
       await showCaption(page, scene.caption);
-      for (const step of scene.steps ?? []) await runStep(page, step);
+      for (const step of scene.steps ?? []) {
+        await runStep(page, step);
+        // a click can open another page, which drops the caption; put it back
+        await showCaption(page, scene.caption);
+      }
       await page.waitForTimeout(scene.hold ?? 1500);
     }
     await context.close();

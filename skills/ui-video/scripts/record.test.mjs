@@ -45,6 +45,8 @@ test('pages and the output resolve from the storyboard folder', () => {
   assert.ok(pageUrl('mock.html', base).endsWith('/work/docs/pbi/ui/settings/mock.html'));
   assert.equal(outputPath({}, {}, base), resolve(base, 'walkthrough.mp4'));
   assert.equal(outputPath({ out: 'a.mp4' }, { out: 'b.webm' }, base), resolve(base, 'b.webm'));
+  assert.throws(() => outputPath({ out: 'a.gif' }, {}, base), /must end in .mp4 or .webm/);
+  assert.throws(() => outputPath({}, { out: 'clip' }, base), /must end in .mp4 or .webm/);
 });
 
 test('the CLI checks the storyboard and pages without launching a browser', () => {
@@ -60,4 +62,9 @@ test('the CLI checks the storyboard and pages without launching a browser', () =
   assert.match(missing.stdout, /error page not found: nope.html/);
   const usage = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8' });
   assert.equal(usage.status, 2);
+  // --out needs a value, and never takes the next option as one
+  for (const extra of [['--out'], ['--out', '--dry-run'], ['--out', '']]) {
+    const bad = spawnSync(process.execPath, [SCRIPT, join(dir, 'ok.json'), ...extra], { encoding: 'utf8' });
+    assert.equal(bad.status, 2, extra.join(' '));
+  }
 });

@@ -320,6 +320,9 @@ def cmd_add(args, home: Path) -> int:
     if args.stage == 'gate' and args.after not in flow.STAGES:
         print('--stage gate needs --after <stage>', file=sys.stderr)
         return 2
+    if args.stage in flow.OPTIONAL and args.after == 'finish':
+        print('an optional stage cannot run after finish (its files would miss the completion report)', file=sys.stderr)
+        return 2
     if args.stage not in ('gate',) + flow.OPTIONAL and args.after:
         print('--after is only for --stage gate or an optional stage', file=sys.stderr)
         return 2
@@ -456,8 +459,8 @@ def example_error(data: dict) -> str | None:
             return f'{item["skill"]}: stage must be one of {", ".join(ADD_STAGES)}'
         if item['stage'] == 'gate' and item.get('after') not in flow.STAGES:
             return f'{item["skill"]}: stage gate needs after (a stage)'
-        if item['stage'] in flow.OPTIONAL and item.get('after') not in (None,) + flow.STAGES:
-            return f'{item["skill"]}: after must be a stage'
+        if item['stage'] in flow.OPTIONAL and item.get('after') not in (None,) + flow.OPTIONAL_PLACES:
+            return f'{item["skill"]}: after must be a stage before finish'
         if item['stage'] not in ('gate',) + flow.OPTIONAL and 'after' in item:
             return f'{item["skill"]}: after goes with stage gate or an optional stage only'
         for key, allowed in (('where', flow.WHERE), ('memory', flow.MEMORY)):

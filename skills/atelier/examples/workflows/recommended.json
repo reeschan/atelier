@@ -53,7 +53,7 @@
     },
     {
       "skill": "ui-video", "stage": "ui-design", "after": "design",
-      "install": {"command": "git clone https://github.com/reeschan/atelier.git ~/dev/atelier && cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/"},
+      "install": {"command": "git clone https://github.com/reeschan/atelier.git ~/dev/atelier && mkdir -p ~/.claude/skills && cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/"},
       "license": "MIT", "link": "https://github.com/reeschan/atelier/tree/main/skills/ui-video"
     }
   ],
