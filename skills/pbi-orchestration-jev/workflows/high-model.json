@@ -1,22 +1,14 @@
 {
   "name": "high-model",
   "description": {
-    "ja": "強いモデル中心 (pstack 風)。pstack で調べて設計し、すべての PBI を agent の opus に回す。実装担当は worker.md のまま。",
-    "en": "High-model centric (pstack style). pstack explains and sketches; every PBI goes to the opus agent. The worker stays worker.md."
+    "ja": "強いモデル中心。すべての PBI を agent の opus に回す。実装担当は worker.md のまま。pstack などは component.py add で外部部品として足す (appendix/engine.md)。",
+    "en": "High-model centric: every PBI goes to the opus agent. The worker stays worker.md. Add pstack and others as external components with component.py add (appendix/engine.md)."
   },
   "stages": {
     "understand": [
-      {
-        "id": "understand.pstack-how",
-        "when": "always"
-      },
       "understand.builtin"
     ],
     "design": [
-      {
-        "id": "design.pstack-architect",
-        "when": "clearly-complex"
-      },
       "design.builtin"
     ],
     "plan": [
@@ -32,10 +24,6 @@
       "verify.builtin"
     ],
     "review": [
-      {
-        "id": "review.pstack-interrogate",
-        "when": "always"
-      },
       "review.code-review",
       "review.builtin"
     ],

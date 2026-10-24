@@ -128,12 +128,12 @@ python ~/.claude/skills/pbi-orchestration-jev/studio/serve.py
 
 ## Phase adapters
 
-An **adapter** calls a skill you already have at fixed phases of a run. Nothing is bundled: the skill uses only the names in the table below, and falls back to its own procedure when none of them is installed.
+An **adapter** calls a skill you already have at fixed phases of a run. The bundled templates call only this skill's own procedures and the reviews built into Claude Code. Other skills, such as mattpocock-skills, pstack and yomiyasu, are installed by you and added as external components (see [External components](#external-components)).
 
 | Phase | When | Callees, in priority order | Notes |
 |---|---|---|---|
-| design | before the split into PBIs | `mattpocock-skills:grilling`, then `mattpocock-skills:domain-modeling` | domain-modeling only when the target repository already has `GLOSSARY.md` or `CONTEXT.md`; both run in the main session, because they ask you questions |
-| final review | after the last PBI | `mattpocock-skills:code-review`, then the built-in `/code-review` | the built-in one runs at level `medium` with no flags; both get the merge-base, the head and the spec path |
+| design | before the split into PBIs | the orchestrator's own procedure; with `setup --recommended`, `mattpocock-skills:grilling` | it runs in the main session, because it asks you questions |
+| final review | after the last PBI | the built-in `/code-review` (with `setup --recommended`, `mattpocock-skills:code-review` first) | the built-in one runs at level `medium` with no flags; each gets the merge-base, the head and the spec path |
 | security review | at the same time, when a PBI is sensitive or deep | the built-in `/security-review` | no arguments |
 
 A review callee only reports. It gets the merge-base, the head, the spec path and "report, do not fix, do not post", and never sees `--fix`, `--comment`, `ultra` or `--max-findings`. The orchestrator compares `git rev-parse HEAD` and `git status --porcelain` before and after the call; if anything changed, it throws the result away and goes back to its own procedure, and a callee that tries to ask you something ends the wrapper with `BLOCKED`, which means the same fallback. Findings are checked, not taken at face value: a real one becomes a rework of the PBI that owns the file and counts towards the limit of two, a finding outside every PBI goes to the "found" list of the final report, and style preferences cause no rework.
@@ -156,20 +156,47 @@ To stop a phase or name a callee, add `adapters` to `agents.json` in your home. 
 
 Naming a skill here is the only way to use a callee outside the table; a name that merely looks like one of the above is never picked up on its own, and skills marked `disable-model-invocation` are never used.
 
+### External components
+
+This skill bundles no one else's skill and no component for one. Install a skill with Claude Code's plugin commands, then register it with `component.py add`: it reads the installed `SKILL.md`, writes the component to `components/` in your home, and puts it into a template in your home's `workflows/` (default `jev-routed`, copied from the bundled one the first time). `component.py remove <id>` takes it out, and `component.py list` shows what you have. Your own skills in `~/.claude/skills/<name>/` work the same way (`add <name>`).
+
+```sh
+S=skills/pbi-orchestration-jev   # or wherever the skill is installed
+
+# mattpocock-skills (MIT): grilling for design, code-review for the final review
+/plugin install mattpocock-skills@claude-plugins-official
+python $S/component.py add mattpocock-skills:grilling --stage design --when ask-or-decide
+python $S/component.py add mattpocock-skills:code-review --stage review --when adapter-gate
+
+# pstack (MIT, cursor/plugins): read-skill components, since its skills cannot be invoked by the model
+/plugin marketplace add cursor/plugins
+/plugin install pstack@cursor-plugins
+python $S/component.py add pstack:how --stage understand --when clearly-complex
+python $S/component.py add pstack:blast-radius --stage gate --after route --when coupling-high
+python $S/component.py add pstack:architect --stage gate --after route --when tier-opus --forbid "do not run Phase D (implementation) or Phase E"
+python $S/component.py add pstack:interrogate --stage review --when deep
+
+# yomiyasu (MIT): polishes the wording of a Japanese completion report
+/plugin marketplace add nanaism/yomiyasu
+/plugin install yomiyasu@yomiyasu
+python $S/component.py add yomiyasu:yomiyasu --stage gate --after finish
+```
+
+Add `--workflow high-model` to put a component into another template. A skill that is not installed, a component whose `when` does not fit its place, or an id that a bundled component already uses stops with exit code 2 and leaves nothing behind.
+
 ### Recommended: mattpocock-skills
 
-`/pbi-orchestration-jev setup --recommended` offers one set, and installs nothing without your yes:
+Nothing outside this skill and Claude Code is used by default. `/pbi-orchestration-jev setup --recommended` offers one set, and installs nothing without your yes:
 
 ```sh
 /pbi-orchestration-jev setup --recommended
 claude plugin install mattpocock-skills@claude-plugins-official --scope user
 ```
 
-- [mattpocock/skills](https://github.com/mattpocock/skills) — MIT, Copyright (c) 2026 Matt Pocock. It brings grilling and domain-modeling for design, and code-review for the final review.
-- `setup --recommended` shows the name, the phases it fills, the link, the licence and the command. After you approve once, the orchestrator runs the install command itself; the bundled scripts never install anything (package installation is exactly what package scanners flag).
+- [mattpocock/skills](https://github.com/mattpocock/skills) — MIT, Copyright (c) 2026 Matt Pocock. It brings grilling for design, and code-review for the final review.
+- `setup --recommended` shows the name, the phases it fills, the link, the licence and the command. After you approve once, the orchestrator runs the install command itself, and registers grilling and code-review as external components; the bundled scripts never install anything (package installation is exactly what package scanners flag).
 - If you answer no, or `claude` is not on the PATH, you only get the command to run yourself.
 - Run `/reload-plugins` or restart Claude Code afterwards. Until then the plugin's skills are not listed, and the adapters keep using the built-in procedures.
-- When a complex task runs without a design callee, the approval list says once that `setup --recommended` can add one; the note stays in your home and is not shown again.
 
 ## Priority templates
 
@@ -316,8 +343,9 @@ skills/pbi-orchestration-jev/
 ├── SKILL.md                    # the skill: the workflow engine the orchestrator follows
 ├── CONTEXT.md                  # glossary (English and Japanese terms)
 ├── flow.py                     # resolves and checks a workflow template; prints the plan per stage
-├── workflows/                  # bundled workflow templates (jev-routed, high-model, jev-routed-pstack)
-├── components/                 # component definitions: what fills each stage, and the doc that runs it
+├── component.py                # registers an installed skill as an external component in your home
+├── workflows/                  # bundled workflow templates (jev-routed, high-model)
+├── components/                 # component definitions: what fills each stage, and the doc that runs it (this skill and Claude Code built-ins only)
 ├── runners.md                  # how to hand PBIs to opencode / Codex / Antigravity / dsh
 ├── dsh_run.py                  # runs one PBI on DeepSeek Harness headless
 ├── claude_run.py               # runs one PBI on Claude Code headless
