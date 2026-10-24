@@ -1,0 +1,34 @@
+{
+  "id": "review.code-review",
+  "stages": [
+    "review"
+  ],
+  "title": {
+    "ja": "built-in の code-review",
+    "en": "Built-in code-review"
+  },
+  "invoke": {
+    "kind": "skill",
+    "name": "code-review",
+    "args": "medium"
+  },
+  "where": "subagent",
+  "memory": "none",
+  "when": "adapter-gate",
+  "cost": "mid",
+  "requires": {
+    "skills": [
+      "code-review"
+    ]
+  },
+  "forbid": [
+    "--fix",
+    "--comment",
+    "ultra",
+    "--max-findings"
+  ],
+  "interactive": false,
+  "calls_back": false,
+  "license": "n/a",
+  "link": "built-in"
+}

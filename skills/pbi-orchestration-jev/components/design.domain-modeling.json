@@ -1,0 +1,34 @@
+{
+  "id": "design.domain-modeling",
+  "stages": [
+    "design"
+  ],
+  "title": {
+    "ja": "mattpocock-skills の domain-modeling で用語をそろえる",
+    "en": "Align terms with mattpocock-skills domain-modeling"
+  },
+  "invoke": {
+    "kind": "skill",
+    "name": "mattpocock-skills:domain-modeling"
+  },
+  "where": "main",
+  "memory": "full",
+  "when": "ask-or-decide",
+  "cost": "mid",
+  "requires": {
+    "skills": [
+      "mattpocock-skills:domain-modeling"
+    ]
+  },
+  "forbid": [
+    "--fix",
+    "--comment",
+    "ultra",
+    "--max-findings",
+    "GLOSSARY.md か CONTEXT.md が作業リポジトリに無ければ動かさない"
+  ],
+  "interactive": true,
+  "calls_back": false,
+  "license": "MIT",
+  "link": "https://github.com/mattpocock/skills"
+}

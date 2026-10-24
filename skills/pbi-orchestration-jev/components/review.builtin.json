@@ -1,0 +1,20 @@
+{
+  "id": "review.builtin",
+  "stages": [
+    "review"
+  ],
+  "title": {
+    "ja": "設計者が全体の diff を確かめる",
+    "en": "The orchestrator checks the whole diff"
+  },
+  "invoke": {
+    "kind": "builtin",
+    "doc": "appendix/finish.md"
+  },
+  "where": "main",
+  "memory": "full",
+  "when": "always",
+  "cost": "low",
+  "interactive": false,
+  "calls_back": false
+}

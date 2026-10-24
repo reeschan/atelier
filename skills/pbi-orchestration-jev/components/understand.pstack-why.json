@@ -1,0 +1,32 @@
+{
+  "id": "understand.pstack-why",
+  "stages": [
+    "understand"
+  ],
+  "title": {
+    "ja": "pstack の why で今の形の理由を調べる",
+    "en": "Find why the code is shaped this way with pstack why"
+  },
+  "invoke": {
+    "kind": "read-skill",
+    "plugin": "pstack",
+    "path": "skills/why/SKILL.md"
+  },
+  "where": "subagent-readonly",
+  "memory": "full",
+  "when": "clearly-complex",
+  "cost": "high",
+  "requires": {
+    "plugins": [
+      "pstack"
+    ]
+  },
+  "forbid": [
+    "ファイルを変えない",
+    "結論は docs/pbi/notes/<slug>.why.md に書き、5 行以内の要約とパスだけを返す"
+  ],
+  "interactive": false,
+  "calls_back": false,
+  "license": "MIT",
+  "link": "https://github.com/cursor/plugins/tree/main/pstack"
+}

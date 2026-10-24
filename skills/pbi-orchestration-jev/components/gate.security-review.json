@@ -1,0 +1,33 @@
+{
+  "id": "gate.security-review",
+  "stages": [
+    "gate"
+  ],
+  "title": {
+    "ja": "built-in の security-review",
+    "en": "Built-in security-review"
+  },
+  "invoke": {
+    "kind": "skill",
+    "name": "security-review"
+  },
+  "where": "subagent",
+  "memory": "none",
+  "when": "adapter-gate",
+  "cost": "mid",
+  "requires": {
+    "skills": [
+      "security-review"
+    ]
+  },
+  "forbid": [
+    "--fix",
+    "--comment",
+    "ultra",
+    "--max-findings"
+  ],
+  "interactive": false,
+  "calls_back": false,
+  "license": "n/a",
+  "link": "built-in"
+}

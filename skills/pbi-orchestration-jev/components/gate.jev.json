@@ -1,0 +1,20 @@
+{
+  "id": "gate.jev",
+  "stages": [
+    "gate"
+  ],
+  "title": {
+    "ja": "Jev ゲート 1 (brief と PBI の品質)",
+    "en": "Jev gate 1 (brief and PBI quality)"
+  },
+  "invoke": {
+    "kind": "script",
+    "path": "prepare.py"
+  },
+  "where": "main",
+  "memory": "none",
+  "when": "always",
+  "cost": "low",
+  "interactive": false,
+  "calls_back": false
+}

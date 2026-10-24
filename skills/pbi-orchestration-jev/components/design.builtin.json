@@ -1,0 +1,20 @@
+{
+  "id": "design.builtin",
+  "stages": [
+    "design"
+  ],
+  "title": {
+    "ja": "設計者が仕様と前提を書く",
+    "en": "The orchestrator writes the spec and its assumptions"
+  },
+  "invoke": {
+    "kind": "builtin",
+    "doc": "appendix/adapters.md"
+  },
+  "where": "main",
+  "memory": "full",
+  "when": "ask-or-decide",
+  "cost": "low",
+  "interactive": false,
+  "calls_back": false
+}

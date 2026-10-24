@@ -1,0 +1,59 @@
+{
+  "name": "jev-routed",
+  "description": {
+    "ja": "今の動きそのもの (既定)。振り分けは振り分けテンプレートと優先テンプレートに従い、同梱の既定のままなら全段 agent で動く。",
+    "en": "Current behavior (default). Routing follows the routing and priority templates; with the bundled default every tier runs on the agent."
+  },
+  "stages": {
+    "understand": [
+      "understand.builtin"
+    ],
+    "design": [
+      "design.grilling",
+      "design.builtin"
+    ],
+    "plan": [
+      "plan.builtin"
+    ],
+    "route": [
+      "route.jev"
+    ],
+    "build": [
+      "build.runners"
+    ],
+    "verify": [
+      "verify.builtin"
+    ],
+    "review": [
+      "review.mattpocock-code-review",
+      "review.code-review",
+      "review.builtin"
+    ],
+    "fix": [
+      "fix.rework"
+    ],
+    "finish": [
+      "finish.builtin"
+    ]
+  },
+  "gates": [
+    {
+      "after": "plan",
+      "components": [
+        "gate.jev"
+      ]
+    },
+    {
+      "after": "review",
+      "components": [
+        "gate.security-review"
+      ]
+    }
+  ],
+  "fix": {
+    "max_rework": 2
+  },
+  "build": {
+    "external_memory": "none"
+  }
+}
