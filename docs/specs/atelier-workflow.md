@@ -79,7 +79,7 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 | `memory` | `full` / `refs-only` / `none` |
 | `requires` | `skills`・`plugins`・`cli`・`env` の名前の配列 (どれも任意) |
 | `when` | `always` / `clearly-complex` / `ask-or-decide` (設計のアダプターの判定) / `adapter-gate` (adapter_gate.py の判定) / `tier-opus` / `coupling-high` / `deep`。`tier-opus` と `coupling-high` は PBI ごとに決まるので、`after: route` の関所でだけ使える |
-| `then` | 選ばれたときに続けて動かす部品の id (例: grilling のあとの domain-modeling) |
+| `then` | 選ばれたときに続けて動かす部品の id |
 | `cost` | `low` / `mid` / `high` |
 | `forbid` | 渡してはいけない引数や、飛ばす手順の短い文の配列 |
 | `interactive`・`calls_back` | 真偽値。`calls_back` が真のものは使わない (呼び合いになる) |
@@ -147,15 +147,15 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 ### pstack の部品・when の判定・メモリの点検 (PR 3)
 
 - **read-skill の実行**: `flow.py` が read-skill の部品の status を、プラグインの置き場 (`PBI_PLUGINS_DIR`、無ければ `~/.claude/plugins`) の下の `<プラグイン名>/` か `<プラグイン名>/<版>/` の直下に `invoke.path` があるかで決める (`plugin ok <SKILL.md の場所>` / `plugin missing <名前>`)。設計者はその SKILL.md を、部品の `where` のサブエージェントに読ませて従わせる (`appendix/engine.md`)。
-- **PBI ごとの when の判定**: `flow.py <pbi-dir> --decide` が route.json から判定する。`tier-opus` は tier が opus、`coupling-high` は scores.coupling が 2、`deep` は review が deep。after: route の関所の部品は PBI ごとに 1 行、review の工程の deep の部品は「どれかの PBI が deep なら run」の 1 行。設計者は自分で判定しない。
-- **メモリの点検**: 実行先に道具を渡さない仕組みは実行先ごとにまちまちなので、強制は「毎回の記録で確かめる」形にした。`record_run.py` が試行ごとに実装担当の shared-memory の呼び出しを調べ、`runs.jsonl` の `memory` に残す。agent は会話記録の tool_use を数え、get した id が PBI の Refs に無ければ `unlisted_refs` に入れる。外部の実行先はログに道具の名前が出たかだけを見る。許す使い方は agent が refs-only、外部の実行先がテンプレートの `build.external_memory`。search・write、none での get、Refs に無い id の get を `violation` にして、標準出力に `memory violation` の 1 行を出す。設計者は STATUS.md に書き、同じ実行先が繰り返したら `--skip` で外し、完了報告に並べる。
+- **PBI ごとの when の判定**: `flow.py <pbi-dir> --decide` が route.json から判定する。読めない route.json や型の違う欄 (tier・scores・review) があれば、表を出さずに終了コード 2。`tier-opus` は tier が opus、`coupling-high` は scores.coupling が 2、`deep` は review が deep。after: route の関所の部品は PBI ごとに 1 行、review の工程の deep の部品は「どれかの PBI が deep なら run」の 1 行。設計者は自分で判定しない。
+- **メモリの点検**: 実行先に道具を渡さない仕組みは実行先ごとにまちまちなので、強制は「毎回の記録で確かめる」形にした。`record_run.py` が試行ごとに実装担当の shared-memory の呼び出しを調べ、`runs.jsonl` の `memory` に残す。agent は会話記録の tool_use を数え、get した id が PBI の Refs に無ければ `unlisted_refs` に入れる。外部の実行先は JSON / JSONL のログを読み、道具の名前の欄 (tool・name など) が shared-memory の道具の名前と完全に一致する呼び出しだけを数え、引数から get の id を取る (文中に名前が出ただけでは数えない)。Refs の id は語ごとに比べる。読めるログが無いとき、id の分からない get があるときは `violation` を null (確かめられない) にする。許す使い方は agent が refs-only、外部の実行先がテンプレートの `build.external_memory`。search・write、none での get、Refs に無い id の get を `violation` にして、標準出力に `memory violation` の 1 行を出す。設計者は STATUS.md に書き、同じ実行先が繰り返したら (モデルを問わず) `--skip <実行先>` で外し、完了報告に並べる。
 - **yomiyasu**: `gate.yomiyasu` (Skill ツールの `yomiyasu:yomiyasu`、MIT、https://github.com/nanaism/yomiyasu) を `after: finish` の関所に足した (下の「外部部品」で、同梱から外し、利用者が登録する形にした)。完了報告を `docs/pbi/REPORT.md` に書いてから、日本語の報告の言い回しだけを整え、数値・id・パス・コマンド・貼った表は変えない。入っていなければ飛ばす。
 
 ### 外部部品 (PR 3)
 
 - 利用者の求めで、同梱する部品とプリセットを、このスキルの部品と Claude Code の built-in (`code-review`・`security-review`) だけにした。他の人のスキルは、その部品の定義 (名前・リンク・ライセンスだけの JSON) も含めてリポジトリに置かない。
-- スキルは利用者が Claude Code のプラグインのコマンド (`/plugin marketplace add`・`/plugin install`) で入れる。`component.py add <plugin>:<name> --stage <工程>` (関所は `--stage gate --after <工程>`) が、入った SKILL.md を読んで `<home>/components/<工程>.<plugin>-<name>.json` を書き、home のテンプレート (既定 jev-routed。無ければ同梱のものを写す) の工程の先頭か、関所の最後に差す。`disable-model-invocation: true` なら read-skill、ほかは skill。ライセンスとリンクはプラグインの `.claude-plugin/plugin.json` から取る。`--when`・`--where`・`--memory`・`--forbid` で上書きできる。`~/.claude/skills/<name>/` の自分のスキルも `add <name>` で同じように使える。
-- 書いたあと flow.py と同じ検証をし、誤りなら書いたものを元に戻して終了コード 2。`remove <id>` で外し、`list` で同梱と外部の部品を並べる。同梱の部品は消せず、同じ id の外部部品も作れない (どの工程も後ろ盾を失わないため)。プラグインのスキルの id に plugin 名を入れるのは、built-in の code-review と同じ名前のスキル (mattpocock-skills の code-review) とぶつからないようにするため。
+- スキルは利用者が Claude Code のプラグインのコマンド (`/plugin marketplace add`・`/plugin install`) で入れる。`component.py add <plugin>:<name> --stage <工程>` (関所は `--stage gate --after <工程>`) が、入った SKILL.md を読んで `<home>/components/<工程>.<plugin>-<name>.json` を書き、home のテンプレート (既定 jev-routed。無ければ同梱のものを写す) の工程の先頭か、関所の最後に差す。`disable-model-invocation: true` なら read-skill (プラグインのスキルだけ。自分のスキルはモデルから呼べるものに限る)、ほかは skill。ライセンスとリンクはプラグインの `.claude-plugin/plugin.json` から取る。`--where`・`--memory`・`--forbid` で上書きできる。`--when` は共有の部品の定義ではなくテンプレートの候補 (`{"id", "when"}`) に書き、別のテンプレートの動きを変えない。同じ部品をほかの設定で登録し直すのは断る。`~/.claude/skills/<name>/` の自分のスキルも `add <name>` で同じように使える。
+- 書いたあと flow.py と同じ検証をし、誤りなら書いたものを元に戻して終了コード 2。`remove <id>` で外す (id の形と components/ の直下であることを確かめ、ほかの home のテンプレートが使っていれば何も変えずに止める)。`list` で同梱と外部の部品を並べる。同梱の部品は消せず、同じ id の外部部品も作れない (どの工程も後ろ盾を失わないため)。プラグインのスキルの id に plugin 名を入れるのは、built-in の code-review と同じ名前のスキル (mattpocock-skills の code-review) とぶつからないようにするため。
 - `flow.py` は同梱の `components/` のあとに `<home>/components/` も読む。
 - `setup --recommended` は、承認されたら mattpocock-skills を入れ、grilling と code-review を `component.py add` で登録する。設計の呼び出し先が無いときに `setup --recommended` を勧める 1 行は出さない。README の「External components」に、mattpocock-skills・pstack・yomiyasu を入れて登録するコマンドを並べた。
 - `test_component.py` が偽のプラグインと自分のスキルの置き場で add・remove・list を、`test_flow.py` が add で差した pstack の部品での `--decide` と plugin の status、同梱の部品が他の人のスキルを呼ばないことを確かめる。

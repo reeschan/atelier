@@ -40,6 +40,6 @@ python <skill>/record_run.py <report> --attempt <position in the route> --outcom
 - Pass only the outcome and the finding counts; the script reads everything else from the logs.
 - To tier up, first rewrite the route with `prepare.py --only PBI-<n> --tier <tier>`; `record_run.py` reads the new `route.json`.
 - When its output says the archive copy failed, keep working and mention it in the completion report.
-- When it prints `memory violation`, the worker used shared memory beyond what the template allows. The result still counts as judged; write the runner and model in the PBI's STATUS.md note, and when the same runner does it again, route the rest with `--skip <model>`.
+- When it prints `memory violation`, the worker used shared memory beyond what the template allows. The result still counts as judged; write the runner and model in the PBI's STATUS.md note, and when the same runner does it again (with any model), route the rest with `--skip <runner>`. `violation` null means it could not be checked (no readable log, or a `get` whose id the log does not show); note that too.
 - A verify command that fails because the PBI was written wrong is your mistake: fix the command and record, without rework.
 - Rework only for a failing acceptance criterion, a change in the "Do not touch" list, or a bug you can reproduce. Never for taste or wording (`appendix/rework.md`).

@@ -168,7 +168,7 @@ class FlowCliTest(unittest.TestCase):
         case('error review: the last component must be builtin or a script with no requires (review.code-review)',
              lambda d: d['stages'].update(review=['review.code-review']))
         case('error gate after plan: gate.pstack-blast-radius uses when coupling-high, which only a gate after route can decide',
-             lambda d: d.update(gates=[{'after': 'plan', 'components': ['gate.pstack-blast-radius']}]))
+             lambda d: d.update(gates=[{'after': 'plan', 'components': [{'id': 'gate.pstack-blast-radius', 'when': 'coupling-high'}]}]))
         case('error understand: understand.pstack-how has an unknown when: sometimes',
              lambda d: d['stages'].update(understand=[{'id': 'understand.pstack-how', 'when': 'sometimes'}, 'understand.builtin']))
         case('error fix.max_rework must be an integer from 0 to 5', lambda d: d.update(fix={'max_rework': 6}))
@@ -199,6 +199,17 @@ class FlowCliTest(unittest.TestCase):
             ['gate after route', 'gate.pstack-architect', 'PBI-002', 'skip', 'tier sonnet'],
             ['review', 'review.pstack-interrogate', 'all', 'run', 'review deep: PBI-002'],
         ])
+
+    def test_decide_rejects_bad_routes(self):
+        self.write_route('PBI-001', 'opus', 1, 'normal')
+        with open(os.path.join(self.base, 'PBI-002.route.json'), 'w', encoding='utf-8') as f:
+            f.write('{broken')
+        write_json(os.path.join(self.base, 'PBI-003.route.json'), {'tier': 'opus', 'scores': 2})
+        result = self.run_flow('--decide')
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn(flow.DECIDE_HEADER, result.stdout)
+        self.assertIn('error PBI-002.route.json: not a readable JSON object', result.stderr)
+        self.assertIn('error PBI-003.route.json: scores must be an object', result.stderr)
 
     def test_decide_needs_routes(self):
         result = self.run_flow('--decide')

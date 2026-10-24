@@ -155,6 +155,49 @@ class ComponentCliTest(unittest.TestCase):
         _, out, _ = self.run_cli('add', 'my-review', '--stage', 'review', '--when', 'tier-opus')
         self.assertIn('error review: review.my-review uses when tier-opus, which only a gate after route can decide', out)
 
+    def test_when_lives_on_the_workflow_entry(self):
+        self.run_cli('add', 'pstack:how', '--stage', 'understand', '--when', 'clearly-complex')
+        code, out, err = self.run_cli('add', 'pstack:how', '--stage', 'understand', '--workflow', 'high-model')
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['understand'][0],
+                         {'id': 'understand.pstack-how', 'when': 'clearly-complex'})
+        self.assertEqual(self.load('workflows', 'high-model.json')['stages']['understand'][0], 'understand.pstack-how')
+        self.assertEqual(self.load('components', 'understand.pstack-how.json')['when'], 'always')
+
+    def test_other_settings_for_a_registered_component_are_refused(self):
+        self.run_cli('add', 'my-review', '--stage', 'review')
+        code, _, err = self.run_cli('add', 'my-review', '--stage', 'review', '--where', 'main', '--workflow', 'high-model')
+        self.assertEqual(code, 2)
+        self.assertIn('already registered with other settings', err)
+        self.assertFalse(os.path.exists(os.path.join(self.home, 'workflows', 'high-model.json')))
+
+    def test_unreadable_home_workflow_is_not_replaced(self):
+        path = os.path.join(self.home, 'workflows', 'jev-routed.json')
+        write(path, '{broken')
+        code, _, err = self.run_cli('add', 'my-review', '--stage', 'review')
+        self.assertEqual(code, 2)
+        self.assertIn('not a readable workflow', err)
+        with open(path, encoding='utf-8') as f:
+            self.assertEqual(f.read(), '{broken')
+
+    def test_remove_rejects_ids_that_leave_components(self):
+        self.run_cli('add', 'my-review', '--stage', 'review')
+        for bad in ('../workflows/jev-routed', 'review/../x', 'nothing'):
+            with self.subTest(bad=bad):
+                code, _, err = self.run_cli('remove', bad)
+                self.assertEqual(code, 2)
+                self.assertIn('not a component id', err)
+        self.assertTrue(os.path.exists(os.path.join(self.home, 'workflows', 'jev-routed.json')))
+
+    def test_remove_keeps_everything_while_another_workflow_uses_it(self):
+        self.run_cli('add', 'my-review', '--stage', 'review')
+        self.run_cli('add', 'my-review', '--stage', 'review', '--workflow', 'high-model')
+        code, _, err = self.run_cli('remove', 'review.my-review')
+        self.assertEqual(code, 2)
+        self.assertIn('still used by workflows high-model', err)
+        self.assertTrue(os.path.exists(os.path.join(self.home, 'components', 'review.my-review.json')))
+        self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['review'][0], 'review.my-review')
+
     def test_remove(self):
         self.run_cli('add', 'my-review', '--stage', 'review')
         code, out, err = self.run_cli('remove', 'review.my-review')
