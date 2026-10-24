@@ -17,6 +17,7 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 
 ## Highlights
 
+- **The workflow is a template.** Which skill or procedure fills each stage is data in `workflows/` and `components/`, not prose in the skill. Swap a component, add your own skill, or pick another template, without editing the skill (see [Stages, components and templates](#stages-components-and-templates)).
 - **Models are chosen by a decision table, not by gut feeling.** `select_model.py` combines facts the orchestrator counts (files changed, modules touched, sensitivity) with Jev's reading of a short brief (novelty, coupling, ambiguity) and picks a tier: haiku, sonnet or opus.
 - **Runners are tried in order.** Each tier comes with a `route`, an ordered list of runners. If one is out of quota or fails, the next one takes over.
 - **Pass/fail comes from verification commands.** Neither the sub-agent's report nor Jev's answer is taken at face value. The worker starts its report with a status line (`DONE` / `DONE_WITH_CONCERNS` / `NEEDS_CONTEXT` / `BLOCKED`); the orchestrator sorts the report by that status and the verification results, and asks Jev to triage only when the two disagree. The orchestrator runs the commands itself and checks each acceptance criterion.
@@ -29,13 +30,36 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - **Mechanical steps run as scripts.** `prepare.py` runs Jev gate 1 (brief and PBI quality) plus the decision table in one call, and `verify.py` runs a PBI's verification commands; both return only a table to the orchestrator. Files a PBI must not touch are checked by `unchanged.py`, which hashes them before the worker starts. The skill body is split into a core and `appendix/` files that are read only when needed. In the author's measurements (2026-10, 6 tasks) these two changes cut cost by 15%.
 - **Workers get just what they need (optional).** With a shared-memory MCP (`mcp__shared-memory__*`), only the orchestrator writes per-task "refs" (one fact each) and lists their ids in the PBI. The `pbi-worker` sub-agent can only `get` memories, never search or write.
 - **CLAUDE.md first.** Stable repository knowledge (conventions, commands, pitfalls) is expected to live in layered CLAUDE.md files; the orchestrator searches memory only as a supplement.
-- **Set up once, then build the routing in one editor.** Setup finds the runner CLIs on your machine, records which ones you use and fetches each runner's model list. The editor then has three tabs — agents and models, routing, priority templates and application — and saves everything to your home (see Setup and the editor below).
+- **Set up once, then build the routing in one editor.** Setup finds the runner CLIs on your machine, records which ones you use and fetches each runner's model list. The editor then has four tabs — agents and models, routing, priority templates and application, workflow — and saves everything to your home (see Setup and the editor below).
 - **Override routing for a while.** Turn on a priority template and it replaces per-tier routes until its deadline, then asks whether to continue. You can also set it from a web page (an artifact); see Priority templates below.
 - **Usage stats.** `agent_stats.py` reads Claude Code transcripts and reports tokens per model and per agent, how often the prompt cache had to be rebuilt, and the current context size.
 - **A record per run.** Each time the orchestrator decides a run (pass, rework, promotion, unavailable, on hold), `record_run.py` appends one line to `docs/pbi/runs.jsonl`: runner, model, effort, tokens, cost, steps, time and verification results are read from the logs, and only the outcome and the review finding counts come from the orchestrator. Values it cannot read stay null. It also copies that run's raw logs to an archive outside the repository: `$PBI_RUNS_ARCHIVE` if set (point it at a synced folder to keep logs off the machine), otherwise `~/.claude/pbi-runs`. `model_report.py` sums the runs per model, across repositories with `--archive`, and adds a provisional A–D grade for people to adjust later; it never changes routing.
 - **Costs are estimates.** The bundled `prices.json` is a sample price list; a `prices.json` in your home overrides and extends it. `agent_stats.py --cost` reports the designer's cost in API-equivalent USD, and `model_report.py` reports how many runs have no known cost (it leaves them out of the sums).
 
-## Flow
+## Stages, components and templates
+
+A run is a **workflow template** (`workflows/<name>.json`): nine stages in a fixed order, each with an ordered list of **components**, plus optional **gates** after a stage. A stage runs the first component that is usable and whose `when` holds; the last one in each stage is always a built-in or a script, so every stage has a fallback. A gate runs every component whose `when` holds. `python skills/atelier/flow.py docs/pbi` prints the plan the orchestrator will follow.
+
+| Stage | What happens | Bundled components (default template `jev-routed`) |
+|---|---|---|
+| understand | read the code and the CLAUDE.md files | `understand.builtin` |
+| design | write the spec and its open assumptions (only when the work calls for it) | `design.builtin` |
+| plan | split the work into PBIs | `plan.builtin`, then the gate `gate.jev` (Jev gate 1: brief and PBI quality) |
+| route | pick a tier and a try order per PBI | `route.jev` (decision table + routing templates); `route.opus` in `high-model` |
+| build | the worker (`worker.md`) builds each PBI on its routed runner | `build.runners` |
+| verify | run each PBI's verification commands | `verify.builtin` |
+| review | the final review of the whole diff | `review.code-review` (built-in `/code-review`), then `review.builtin`; the gate `gate.security-review` follows |
+| fix | send failed PBIs back, up to `fix.max_rework` times | `fix.rework` |
+| finish | the completion report | `finish.builtin` |
+
+- **Templates.** Two are bundled: `jev-routed` (the default; cheap models where the decision table allows) and `high-model` (every PBI goes to the opus agent). A `docs/pbi/workflow.json` in the target repository, then `workflows/<name>.json` in your home, take precedence over the bundled ones. Each template also sets `fix.max_rework` (0-5) and `build.external_memory` (whether external runners may read the refs listed in a PBI).
+- **Your own components.** Install any skill with Claude Code's plugin commands and register it with `component.py add`; see [External components](#external-components). The bundled templates use only this skill and Claude Code's built-ins.
+- **Edit without JSON.** The Workflow tab of the editor arranges components per stage and gate and saves the template to your home (see [Setup and the editor](#setup-and-the-editor)).
+- The contract is [docs/specs/atelier-workflow.md](docs/specs/atelier-workflow.md) (Japanese); the orchestrator's procedure is `skills/atelier/appendix/engine.md`.
+
+## The default flow (jev-routed)
+
+The default template is the PBI orchestration this skill grew out of:
 
 ```mermaid
 flowchart TD
@@ -129,7 +153,7 @@ python ~/.claude/skills/atelier/studio/serve.py
 
 ## Phase adapters
 
-An **adapter** calls a skill you already have at fixed phases of a run. The bundled templates call only this skill's own procedures and the reviews built into Claude Code. Other skills, such as mattpocock-skills, pstack and yomiyasu, are installed by you and added as external components (see [External components](#external-components)).
+The design, final review and security review stages have extra rules on whether they run, and a switch in `agents.json` (`adapters`) to turn them off or name a skill for them. An **adapter** calls a skill you already have at those phases. The bundled templates call only this skill's own procedures and the reviews built into Claude Code. Other skills, such as mattpocock-skills, pstack and yomiyasu, are installed by you and added as external components (see [External components](#external-components)).
 
 | Phase | When | Callees, in priority order | Notes |
 |---|---|---|---|
@@ -155,7 +179,7 @@ To stop a phase or name a callee, add `adapters` to `agents.json` in your home. 
 {"adapters": {"design": "off", "review": "mattpocock-skills:code-review", "security": "auto"}}
 ```
 
-Naming a skill here is the only way to use a callee outside the table; a name that merely looks like one of the above is never picked up on its own, and skills marked `disable-model-invocation` are never used.
+Naming a skill here is the only way to use a callee outside the table; a name that merely looks like one of the above is never picked up on its own, and skills marked `disable-model-invocation` are never used here (register them as external components instead; they then run as `read-skill`).
 
 ### External components
 
@@ -376,7 +400,7 @@ skills/atelier/
 ├── agents.py                   # reads agents.json and finds runner CLIs (PATH, fnm, nvm)
 ├── common.py                   # shared helpers: home resolution, prices, paths, labels
 ├── routing.default.json        # default routing: every tier on the Agent tool (override with routing.json in docs/pbi/ or your home)
-├── studio/                     # the editor: three tabs over home (index.html, serve.py, catalog.json, update_catalog.py)
+├── studio/                     # the editor: four tabs over home (index.html, serve.py, catalog.json, update_catalog.py)
 ├── templates.py                # priority templates: validate, sync from the web page, apply / answer / push writes
 ├── web/priority-templates.html # web page (artifact) to view and set priority templates
 ├── examples/routing/           # example routing template with external runners (multi-runner.json)
