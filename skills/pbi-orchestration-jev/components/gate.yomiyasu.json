@@ -1,0 +1,32 @@
+{
+  "id": "gate.yomiyasu",
+  "stages": [
+    "gate"
+  ],
+  "title": {
+    "ja": "yomiyasu で日本語の完了報告を読みやすく整える",
+    "en": "Polish a Japanese completion report with yomiyasu"
+  },
+  "invoke": {
+    "kind": "skill",
+    "name": "yomiyasu:yomiyasu"
+  },
+  "doc": "appendix/finish.md",
+  "where": "main",
+  "memory": "none",
+  "when": "always",
+  "cost": "low",
+  "requires": {
+    "skills": [
+      "yomiyasu:yomiyasu"
+    ]
+  },
+  "forbid": [
+    "change only the wording of docs/pbi/REPORT.md",
+    "keep numbers, ids, paths, commands and pasted tables as they are"
+  ],
+  "interactive": false,
+  "calls_back": false,
+  "license": "MIT",
+  "link": "https://github.com/nanaism/yomiyasu"
+}
