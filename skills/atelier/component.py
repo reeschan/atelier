@@ -1,6 +1,6 @@
 """入れたスキルを外部部品 (home の components/) として登録し、テンプレートに差す (docs/specs/atelier-workflow.md)。
 
-  python component.py add <skill> --stage <stage|gate|ui-design|marketing> [--after <stage>] [--workflow NAME] [--when W] [--where W]
+  python component.py add <skill> --stage <stage|gate|ui-design|marketing|security> [--after <stage>] [--workflow NAME] [--when W] [--where W]
                           [--memory M] [--forbid TEXT ...] [--home DIR]
   python component.py remove <id> [--workflow NAME] [--home DIR]
   python component.py list [--home DIR]
@@ -21,7 +21,7 @@ SKILL.md の frontmatter が disable-model-invocation: true なら read-skill �
 
 add は <home>/components/<stage>.<plugin>-<name>.json (関所は gate.…、自分のスキルは <stage>.<name>.json) を書き、--workflow のテンプレート
 (既定 jev-routed) に差す。home にそのテンプレートが無ければ同梱のものを写してから変える。工程では先頭
-(足した部品をいちばん先に試す) に、関所では --after の工程の関所の最後に、オプションの工程 (ui-design・marketing) では
+(足した部品をいちばん先に試す) に、関所では --after の工程の関所の最後に、オプションの工程 (ui-design・marketing・security) では
 その工程の最後に入れる (テンプレートにまだ無ければ --after か既定の場所に置く)。書いたあと flow.py と同じ検証をして、誤りがあれば
 何も残さず終了コード 2 で止める。remove は部品を home とテンプレートから外す。同梱の部品は消せない。
 
