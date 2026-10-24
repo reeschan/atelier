@@ -8,9 +8,9 @@
     "en": "Completion report and promotion"
   },
   "invoke": {
-    "kind": "builtin",
-    "doc": "appendix/finish.md"
+    "kind": "builtin"
   },
+  "doc": "appendix/finish.md",
   "where": "main",
   "memory": "full",
   "when": "always",

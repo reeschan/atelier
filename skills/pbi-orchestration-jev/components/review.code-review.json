@@ -12,6 +12,7 @@
     "name": "code-review",
     "args": "medium"
   },
+  "doc": "appendix/review.md",
   "where": "subagent",
   "memory": "none",
   "when": "adapter-gate",

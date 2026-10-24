@@ -20,7 +20,7 @@
 - **合否は検証コマンドで決める**: サブエージェントの報告も Jev の答えも、そのまま信じません。実装担当は報告の先頭に状態の 1 行 (`DONE` / `DONE_WITH_CONCERNS` / `NEEDS_CONTEXT` / `BLOCKED`) を書き、オーケストレーターはその状態と検証の結果で仕分けます。食い違うときだけ Jev に仕分けを聞きます。オーケストレーターが検証コマンドを自分で実行し、受け入れ条件を 1 つずつ判定します。
 - **差し戻しは 2 回まで、段上げは任意**: 差し戻しはレビューの指摘を付けて 2 回まで行います。段を上げるときは `prepare.py --only PBI-<n> --tier <tier>` でその PBI の route を書き直します (上げた先の route はその時点の振り分けから引きます)。設計から見直す必要があるときや、2 回差し戻しても通らないときは止めて、ユーザーの判断を待ちます。
 - **Jev に送るのは文章だけ**: PBI 本文、要約、報告の抜粋、差し戻し文だけを送ります。ソースコード、diff、環境変数、認証情報は送りません。
-- **オーケストレーターの文脈を細く保つ**: オーケストレーターの文脈に入ったものは、以後の全ターンで読み直されます。実装担当は最後に状態の行から始まる 5 行の報告だけを返して詳細はファイルに書き、長いコマンドの出力はログファイルに書き、PBI 本文は 1 回だけ書いてパスで渡します (`worker.md`、`SKILL.md` の 0.7)。
+- **オーケストレーターの文脈を細く保つ**: オーケストレーターの文脈に入ったものは、以後の全ターンで読み直されます。実装担当は最後に状態の行から始まる 5 行の報告だけを返して詳細はファイルに書き、長いコマンドの出力はログファイルに書き、PBI 本文は 1 回だけ書いてパスで渡します (`worker.md`、`SKILL.md` の「Keep the context small」)。
 - **文脈が大きくなったら引き継ぐ**: PBI の波の区切りで `agent_stats.py --ctx` で文脈の大きさを測り、250,000 トークン以上なら `docs/pbi/HANDOFF.md` (と、共有メモリがあれば引き継ぎのメモリ) を書いて止まります。`/clear` のあと `/pbi-orchestration-jev resume` で続きから再開します。フォルダを選ばずに始めたセッションからは `/pbi-orchestration-jev resume <リポジトリのパス>` で再開でき、パスを省くと引き継ぎのメモリから作業リポジトリを探します。
 - **Opus は設計とレビュー、実装は安いモデル**: Opus で実装するのは設計判断が要る PBI だけです。機密に触れる PBI や結合度の高い PBI は Sonnet で実装し、Opus のオーケストレーターが重点的にレビューします。
 - **[rtk](https://github.com/rtk-ai/rtk) でコマンド出力を圧縮 (任意)**: 同梱のフックが、スキルが有効にしたセッションだけ Bash / PowerShell のコマンドを `rtk <cmd>` に書き換えます。
@@ -311,13 +311,17 @@ Claude Code で、複数ファイルにまたがる実装を頼むときに呼�
 
 ```
 skills/pbi-orchestration-jev/
-├── SKILL.md                    # スキル本文 (オーケストレーターへの指示)
+├── SKILL.md                    # スキル本文 (オーケストレーターが従うワークフローのエンジン)
+├── CONTEXT.md                  # 用語集 (英語と日本語の対訳)
+├── flow.py                     # 開発フローのテンプレートを解決・検証し、工程ごとの計画を表で出す
+├── workflows/                  # 同梱のテンプレート (jev-routed・high-model・jev-routed-pstack)
+├── components/                 # コンポーネントの定義 (各工程に差す部品と、その手順の doc)
 ├── runners.md                  # opencode / Codex / Antigravity / dsh への渡し方
 ├── dsh_run.py                  # DeepSeek Harness の headless で PBI を 1 件動かす
 ├── claude_run.py               # Claude Code の headless で PBI を 1 件動かす
-├── verify-commands.md          # 検証コマンドを書くときの注意
 ├── worker.md                   # 実装担当の進め方と報告の形
-├── appendix/                   # 場面ごとに読む付録 (memory・rework・handoff・finish・jev・setup・adapters・priority-templates)
+├── appendix/                   # 場面ごとに読む付録: engine、工程の手順 (design・plan・verify・review・rework・finish)、handoff・memory・jev・setup・adapters・priority-templates
+├── prompts/                    # サブエージェントへの依頼文 (設計の見直し・PBI のレビュー・最終レビュー)
 ├── agents/pbi-worker.md        # 実装担当・レビュー用のサブエージェントの定義 (~/.claude/agents に置く)
 ├── prepare.py                  # Jev のゲート 1 と決定表を 1 回で実行し、表だけを出す
 ├── verify.py                   # PBI の検証コマンドを実行し、終了コードと末尾だけを表で出す

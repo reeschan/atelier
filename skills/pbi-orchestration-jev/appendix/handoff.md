@@ -1,50 +1,49 @@
-# 付録: rtk モードと、波の区切りでの引き継ぎ
+# Appendix: rtk mode, handoff and resume
 
-SKILL.md 6.3 で文脈が 150,000 以上になったとき、または引数が resume（`resume <リポジトリのパス>` を含む）のときに読む。
+Read this at every wave boundary, and when the argument is `resume` (or `resume <repository path>`).
 
-## 0.5 rtk モード（コマンド出力の圧縮）
+## Measure at a wave boundary
 
-[rtk](https://github.com/rtk-ai/rtk) と同梱のフック `rtk/rtk-gate.mjs` を入れているとき（入れ方は README）だけ行う。入れていなければこの節は飛ばす。最初からは有効にしない。6.3 で測った文脈（`agent_stats.py --ctx`）が 150,000 以上になったときに有効にする。作者の実測 (2026-10) では、長い出力をファイルに書く進め方（0.7）のおかげで、rtk の節約は 1 本あたり 300〜2,000 トークン（全体の 0.03%）しかなかった。
-
-```bash
-node <このディレクトリ>/rtk/rtk-mode.mjs on
-```
-
-- 有効なあいだ、このセッションの Bash / PowerShell のコマンド（Agent ツールのサブエージェントを含む）が 同梱の `rtk/rtk-gate.mjs` で `rtk <コマンド>` に書き換わり、出力が圧縮される。Read / Grep / Glob は対象外
-- 出力に「rtk: PATH に見つからない」と出たら圧縮は起きない。止まらずに続け、完了報告の「発見」に書く
-- 圧縮された出力は完全な結果として扱う。出力が空なのにあるはず、終了コードと食い違う、壊れている、のどれかのときだけ `rtk proxy <コマンド>` で圧縮なしに再実行する
-- Codex と opencode は、rtk の全体設定（`rtk init -g --codex`・`rtk init -g --opencode`）を入れていれば常に圧縮される。Antigravity（`agy`）は圧縮されない
-- 一度有効にしたら、無効にするのは 11章の完了報告のときだけ。10章・6.3 で止まっているあいだは有効のままにする
-- 有効にしなかったセッションでは、11章の rtk の節約量の記録は「rtk: 無効（文脈がしきい値未満）」とだけ書く
-
-### 6.3 波の区切りと引き継ぎ
-
-波の全 PBI のレビュー（8章）と STATUS.md の更新が終わったら、次の波を起動する前に文脈の大きさを測る。
+When every PBI of the wave is reviewed and STATUS.md is up to date, measure the context before starting the next wave:
 
 ```bash
-python <このディレクトリ>/agent_stats.py --ctx
+python <skill>/agent_stats.py --ctx
 ```
 
-`context` が 150,000 以上で rtk モードが無効なら、有効にする（0.5）。
+- `context` 150,000 or more and rtk mode is off: turn it on (`## rtk mode`).
+- `context` 250,000 or more and PBIs remain: hand off (`## Hand off`). A new session starts at about 70,000 to 90,000; everything above that is re-read on every later turn.
 
-`context` が 250,000 以上で、未完了の PBI が残っていれば、引き継ぐ（新しいセッションの起動直後は 7〜9 万。それを超えた分は、以後の全ターンで読み直される）。
+## rtk mode
 
-1. `docs/pbi/HANDOFF.md` を 40 行以内で書く。先頭の 2 行は必ず「リポジトリ: <リポジトリの絶対パス（ワークツリーならその作業ルート）>」と「ブランチ: <ブランチ名>」にする。続けて、次に起動する波（PBI と route の先頭）、外した実行先と理由、オーケストレーターが上書きした判断、PBI ファイルに書いていない設計上の決定（あれば先に PBI か設計文書に書き足す）、レビューで気付いた後続の PBI への注意
-   - STATUS.md の `adapter ...` の行と、`docs/pbi/adapters.json` の有無も写す（`appendix/adapters.md` の「Records」）。
-2. 作業空間に引き継ぎのメモリを書く（0.8 の「引き継ぐとき」。中身は HANDOFF.md の要点と、作業キー・作業空間の scope・リポジトリの絶対パス・ブランチ）
-3. jev-log に `{"event": "handoff", "context": <値>, "done": <完了数>, "remaining": <残り>}` を 1 行追記する
-4. ユーザーに次の 2 行だけを伝えて止まる（rtk モードは有効のまま。`<パス>` は実際の絶対パスに置き換える）:
-   - 「文脈が <値> トークンになったので引き継ぎます。」
-   - 「`/clear` のあと `/pbi-orchestration-jev resume` で続きから再開します。フォルダを選ばずに始めたセッションでは `/pbi-orchestration-jev resume <パス>` と打ってください。」
+Only when [rtk](https://github.com/rtk-ai/rtk) and the bundled hook `rtk/rtk-gate.mjs` are installed (see the README). It starts off: writing long output to files already keeps the savings small (300 to 2,000 tokens per run in the author's measurements).
 
-### 再開（引数 `resume`）
+```bash
+node <skill>/rtk/rtk-mode.mjs on
+```
 
-1. **作業リポジトリを決める**。作業ディレクトリに `docs/pbi/STATUS.md` があれば、そこが作業リポジトリ。無ければ（フォルダを選ばずに始めたセッションは、アプリが作った空のフォルダで動く）次の順で探す。
-   1. 引数にパスがあれば（`resume <リポジトリのパス>`）それを使う
-   2. 無ければ shared-memory を `tags: ["handoff"]`・`kind: "episodic"` で search する（scope は付けない。0.8 の「scope なしの search はしない」の例外で、作業空間の scope がまだ分からないため。この 1 回だけ）。ヒットを作業キーごとにまとめ、各作業キーの最新（`created_at` が最も新しいもの）を候補にする
-      - 候補が 1 件なら、`get` で本文を読み、リポジトリの絶対パスとブランチを取る
-      - 候補が 2 件以上なら（ほかの作業も引き継ぎ中のことがある）、作業キー・タイトル・`created_at` を並べてユーザーに選んでもらう。最新の 1 件を勝手に選ばない
-   3. それでも決まらなければ（MCP が無い、ヒットが無い、本文にパスが無い）、ユーザーにリポジトリのパスを聞く
-   
-   決めたパスに `docs/pbi/STATUS.md` があることと、今のブランチ（`git -C <パス> branch --show-current`）が STATUS.md・引き継ぎのメモリのブランチと同じことを確かめる。違えば止まってユーザーに聞く。確かめたら、アプリの change_directory（`mcp__ccd_directory__change_directory`。ToolSearch で読み込む）が使えればセッションをそこへ移す。移るのはそのターンの終わりなので、それまでと、change_directory が使えないときは以後ずっと、絶対パスで作業する（Read・Write は絶対パス、Bash・PowerShell は `git -C <パス>` やパスを付けたコマンド）。決めたパスと、どの方法（作業ディレクトリ / 引数 / メモリ / ユーザー）で決めたかを、再開したときの最初の応答に 1 行で書く
-2. `docs/pbi/STATUS.md` と `docs/pbi/HANDOFF.md` を読み、ほかは要るときに要る部分だけ読む。0.5・1〜5 章はやり直さない。読み終えたら 6 章の次の波から続ける。
+- While it is on, this session's Bash and PowerShell commands, subagents included, are rewritten to `rtk <command>` and their output is compressed. Read, Grep and Glob are not affected.
+- When the output says rtk is not on the PATH, nothing is compressed. Keep going, and mention it in the completion report.
+- Treat compressed output as the full result. Run `rtk proxy <command>` for the uncompressed output only when the output is empty but should not be, disagrees with the exit code, or is broken.
+- Codex and opencode are always compressed when rtk's global setup is installed (`rtk init -g --codex`, `rtk init -g --opencode`). Antigravity (`agy`) is never compressed.
+- Once on, it stays on until the completion report (`appendix/finish.md`), including while you are stopped.
+
+## Hand off
+
+1. Write `docs/pbi/HANDOFF.md` in at most 40 lines. The first two lines are always `Repository: <absolute path of the repository, or the worktree's work root>` and `Branch: <branch>`. Then: the next wave (PBIs and route heads), skipped runners and why, decisions you overrode, design decisions not yet in a PBI (add them to a PBI or the spec first), warnings for later PBIs found in review, the stage records from STATUS.md, and whether `docs/pbi/adapters.json` exists.
+2. Write the handoff memory in the workspace (`appendix/memory.md`, "Hand off"): the gist of HANDOFF.md, the work key, the workspace scope, the absolute repository path and the branch.
+3. Append `{"event": "handoff", "context": <value>, "done": <done>, "remaining": <remaining>}` to jev-log.
+4. Tell the user only these two lines, in their language, and stop (rtk mode stays on; put the real absolute path in place of `<path>`):
+   - "The context reached <value> tokens, so I am handing off."
+   - "After `/clear`, `/pbi-orchestration-jev resume` continues from here. In a session started without a folder, type `/pbi-orchestration-jev resume <path>`."
+
+## Resume
+
+1. **Find the repository.** When the working directory has `docs/pbi/STATUS.md`, that is it. Otherwise (a session started without a folder runs in an empty folder the app made), try in order:
+   1. the path in the argument (`resume <repository path>`)
+   2. one search of shared memory with tags `handoff` and kind `episodic`, without a scope (the one exception to the scope rule, since the workspace is not known yet). Group the hits by work key and take the newest (`created_at`) of each.
+      - One candidate: `get` it and take the absolute path and the branch.
+      - Two or more (other work may be mid-handoff too): list the work keys, titles and `created_at`, and let the user pick. Never pick the newest yourself.
+   3. When that still finds nothing (no MCP, no hits, no path in the body): ask the user for the path.
+
+   Confirm that the path has `docs/pbi/STATUS.md` and that its current branch (`git -C <path> branch --show-current`) matches STATUS.md and the handoff memory. When it does not, stop and ask. Then, when the app's change_directory (`mcp__ccd_directory__change_directory`, loaded with ToolSearch) is available, move the session there. The move takes effect at the end of the turn, so until then, and for good when it is not available, work with absolute paths (Read and Write with absolute paths, Bash and PowerShell with `git -C <path>` or explicit paths). Say in one line of your first reply which path you chose and how (working directory, argument, memory, or the user).
+2. Read `docs/pbi/STATUS.md` and `docs/pbi/HANDOFF.md`, and other files only in the parts you need. Do not redo the stages before build. Continue with the next wave.

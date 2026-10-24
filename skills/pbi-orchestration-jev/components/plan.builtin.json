@@ -8,9 +8,9 @@
     "en": "Split the work into PBIs"
   },
   "invoke": {
-    "kind": "builtin",
-    "doc": "SKILL.md"
+    "kind": "builtin"
   },
+  "doc": "appendix/plan.md",
   "where": "main",
   "memory": "full",
   "when": "always",

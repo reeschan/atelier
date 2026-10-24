@@ -1,4 +1,4 @@
-"""PBI の検証コマンドを番号順に実行し、番号ごとの終了コードと末尾だけを表で出す (SKILL.md 8 章)。
+"""PBI の検証コマンドを番号順に実行し、番号ごとの終了コードと末尾だけを表で出す (appendix/verify.md)。
 
 出力は docs/pbi/verify/<PBI>.<番号>.log に全部書き、設計者の文脈には表だけが入る。
 番号ごとのコマンドと終了コードは docs/pbi/verify/<名前>.json にも書く (record_run.py が読む)。
@@ -9,7 +9,8 @@
 使い方 (リポジトリのルートで):
   python <このディレクトリ>/verify.py PBI-003 [--dir docs/pbi] [--only 2,4] [--tail 3] [--timeout 900] [--name PBI-003.final]
 
-PBI の「## 検証コマンド」節から、次のどちらかの形の行をコマンドとして読む (2 章のテンプレート):
+PBI の「## Verify commands」節 (旧い PBI は「## 検証コマンド」) から、次のどちらかの形の行をコマンドとして読む
+(appendix/plan.md の PBI の雛形):
   1. `pnpm test`
   2: pnpm lint
 コマンドは bash (Git Bash) でリポジトリのルートから実行する。読めた行が 0 件なら、そう出して終了コード 2 で終わる。
@@ -35,7 +36,7 @@ def strip_code(rest):
 
 
 def commands(pbi_text):
-    m = re.search(r"^## 検証コマンド\s*\n(.*?)(?=^## |\Z)", pbi_text, re.S | re.M)
+    m = re.search(r"^## (?:Verify commands|検証コマンド)\s*\n(.*?)(?=^## |\Z)", pbi_text, re.S | re.M)
     if not m:
         return []
     out = []
@@ -67,7 +68,7 @@ def main():
     if only:
         cmds = [c for c in cmds if c[0] in only]
     if not cmds:
-        print(f"{args.pbi}: 「## 検証コマンド」から番号付きのコマンドを読めなかった。PBI の書式を直すか、手で実行する")
+        print(f"{args.pbi}: 「## Verify commands」から番号付きのコマンドを読めなかった。PBI の書式を直すか、手で実行する")
         sys.exit(2)
     bash = shutil.which("bash") or "bash"
     logdir = base / "verify"

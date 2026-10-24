@@ -11,6 +11,7 @@
     "kind": "skill",
     "name": "mattpocock-skills:code-review"
   },
+  "doc": "appendix/review.md",
   "where": "subagent",
   "memory": "none",
   "when": "adapter-gate",

@@ -13,7 +13,8 @@
 after: route の関所だけにあること、where が runner の部品が memory full でないこと、calls_back が真の部品を
 使っていないこと、fix.max_rework が 0〜5 の整数、build.external_memory が none か refs-only。
 
-標準出力はタブ区切りの表 (stage / component / invoke / where / memory / when / status。1 行目は見出し)。
+標準出力はタブ区切りの表 (stage / component / invoke / where / memory / when / status / doc。1 行目は見出し)。
+doc は、その部品を動かす手順が書いてあるスキルの中のファイル (設計者はそこを読んで動かす)。
 関所の行の stage は `gate after <工程>`。status は builtin・script ok・cli missing <名前>・env missing <名前>・
 check skill list (スキルとプラグインはスクリプトからは見えないので、設計者が自分のスキル一覧で確かめる)。
 表の前に `workflow <名前> (<読んだファイル>)` の 1 行を出す。
@@ -47,7 +48,7 @@ EXTERNAL_MEMORY = ('none', 'refs-only')
 # 差し戻しの上限の範囲 (今の上限は 2。5 を超える回数は設計の見直しに回すべき規模)
 MAX_REWORK_RANGE = (0, 5)
 
-HEADER = 'stage\tcomponent\tinvoke\twhere\tmemory\twhen\tstatus'
+HEADER = 'stage\tcomponent\tinvoke\twhere\tmemory\twhen\tstatus\tdoc'
 
 
 def load_components(base=COMPONENTS) -> tuple[dict, list[str]]:
@@ -83,13 +84,16 @@ def component_error(data: dict, stem: str) -> str | None:
     invoke = data.get('invoke')
     if not isinstance(invoke, dict) or invoke.get('kind') not in INVOKE_KINDS:
         return f'invoke.kind must be one of {", ".join(INVOKE_KINDS)}'
-    needed = {'skill': ('name',), 'read-skill': ('plugin', 'path'), 'script': ('path',), 'builtin': ('doc',)}[invoke['kind']]
+    needed = {'skill': ('name',), 'read-skill': ('plugin', 'path'), 'script': ('path',), 'builtin': ()}[invoke['kind']]
     if not all(isinstance(invoke.get(k), str) and invoke[k] for k in needed):
         return f'invoke ({invoke["kind"]}) needs {", ".join(needed)}'
-    if invoke['kind'] in ('script', 'builtin'):
-        target = invoke.get('path') or invoke.get('doc')
-        if not (HERE / target).is_file():
-            return f'invoke points at a missing file: {target}'
+    if invoke['kind'] == 'script' and not (HERE / invoke['path']).is_file():
+        return f'invoke points at a missing file: {invoke["path"]}'
+    doc = data.get('doc')
+    if not isinstance(doc, str) or not doc:
+        return 'doc must name the file that holds the procedure'
+    if not (HERE / doc).is_file():
+        return f'doc points at a missing file: {doc}'
     if data.get('where') not in WHERE:
         return f'where must be one of {", ".join(WHERE)}'
     if data.get('memory') not in MEMORY:
@@ -238,7 +242,7 @@ def plan_rows(workflow: dict, components: dict, agents, env) -> list[tuple]:
         cid, when = entry(item)
         component = components[cid]
         rows.append((place, cid, component['invoke']['kind'], component['where'], component['memory'],
-                     when or component['when'], status(component, agents, env)))
+                     when or component['when'], status(component, agents, env), component['doc']))
 
     for stage in STAGES:
         for item in workflow['stages'][stage]:

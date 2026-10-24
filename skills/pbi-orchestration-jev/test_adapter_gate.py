@@ -19,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, 'adapter_gate.py')
 
 HEADER = 'phase\tsetting\tdecision\treason'
-DESIGN_REASON = 'decided by the orchestrator (appendix/adapters.md)'
+DESIGN_REASON = 'decided by the orchestrator (appendix/design.md)'
 OFF_REASON = 'turned off in agents.json'
 
 

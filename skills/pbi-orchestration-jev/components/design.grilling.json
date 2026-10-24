@@ -11,6 +11,7 @@
     "kind": "skill",
     "name": "mattpocock-skills:grilling"
   },
+  "doc": "appendix/design.md",
   "where": "main",
   "memory": "full",
   "when": "ask-or-decide",
