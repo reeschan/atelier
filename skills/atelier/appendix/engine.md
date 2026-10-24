@@ -4,11 +4,11 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 
 ## The flow table
 
-`flow.py` prints the template it resolved, then one row per candidate, in stage order. Gate rows say `gate after <stage>` and follow their stage.
+`flow.py` prints the template it resolved, then one row per candidate, in stage order. Optional stage rows say `<optional stage> after <stage>` (`ui-design after design`) and gate rows `gate after <stage>`; both follow their stage, optional stages first.
 
 | Column | Meaning |
 |---|---|
-| stage | the stage, or `gate after <stage>` |
+| stage | the stage, `<optional stage> after <stage>`, or `gate after <stage>` |
 | component | the component id (`components/<id>.json`, or `<home>/components/<id>.json`) |
 | invoke | `skill` (Skill tool), `read-skill` (read a plugin's SKILL.md and follow it), `script` (a bundled Python script), `builtin` (a procedure in this skill) |
 | where | `main` (your session), `subagent-readonly`, `subagent`, `runner` (a worker on its route) |
@@ -20,7 +20,7 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 ## Picking
 
 1. A stage takes the first row that is usable and whose `when` holds. The rows after it are not run.
-2. A gate runs every row that is usable and whose `when` holds.
+2. A gate, and an optional stage (`appendix/optional.md`), runs every row that is usable and whose `when` holds.
 3. Usable:
    - `builtin` and `script ok`: always.
    - `plugin ok`: always; run it as in `## read-skill components`.
@@ -42,6 +42,8 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 | `tier-opus` | the PBI's `route.json` has tier `opus`. Per PBI, so only in a gate after route |
 | `coupling-high` | the PBI's `route.json` has `scores.coupling` 2. Per PBI, so only in a gate after route |
 | `deep` | in a gate after route: the PBI's `route.json` has review `deep`. In the review stage: any PBI does |
+| `ui-change` | the request adds a screen, changes how one looks, or changes a user flow (`appendix/optional.md`) |
+| `user-facing` | the request adds or changes something end users see or pay for (`appendix/optional.md`) |
 
 A template entry `{"id", "when"}` replaces the component's own `when` in that template only.
 
@@ -62,7 +64,7 @@ The per-PBI values are decided by a script. Once every `route.json` exists, run 
 The bundled components cover only this skill and the skills built into Claude Code (`code-review`, `security-review`). This skill ships no one else's skill and no component for one. Any other skill, the user's own included, becomes an **external component**:
 
 1. The user installs the skill with Claude Code's plugin commands (`/plugin marketplace add <repo>`, `/plugin install <plugin>@<marketplace>`), or keeps their own in `~/.claude/skills/<name>/`.
-2. `python <skill>/component.py add <plugin>:<name> --stage <stage> [--after <stage>] [--when W] [--forbid TEXT]` reads the installed SKILL.md and writes `<home>/components/<stage>.<plugin>-<name>.json`: `skill` when the model can invoke it, `read-skill` when it has `disable-model-invocation` (plugin skills only; a personal skill must be model-invocable), with the license and link from the plugin's `plugin.json`. `--when` goes on the template's entry (`{"id", "when"}`), not into the shared component file, so one template's condition never changes another's; registering the same component again with other settings is refused. It puts the component first in that stage of `<home>/workflows/<workflow>.json` (default `jev-routed`, copied from the bundled one when missing), or last in the gate after `--after`. It checks the result like `flow.py` and leaves nothing on an error.
+2. `python <skill>/component.py add <plugin>:<name> --stage <stage> [--after <stage>] [--when W] [--forbid TEXT]` (`--stage` is a stage, `gate`, or an optional stage: `ui-design`, `marketing`) reads the installed SKILL.md and writes `<home>/components/<stage>.<plugin>-<name>.json`: `skill` when the model can invoke it, `read-skill` when it has `disable-model-invocation` (plugin skills only; a personal skill must be model-invocable), with the license and link from the plugin's `plugin.json`. `--when` goes on the template's entry (`{"id", "when"}`), not into the shared component file, so one template's condition never changes another's; registering the same component again with other settings is refused. It puts the component first in that stage of `<home>/workflows/<workflow>.json` (default `jev-routed`, copied from the bundled one when missing), last in the gate after `--after`, or last in the optional stage (placed after `--after`, or its default place, the first time). It checks the result like `flow.py` and leaves nothing on an error.
 3. `component.py remove <id>` takes it out of that template and deletes the component, refusing while another home template still uses it; `component.py list` shows bundled and external components.
 4. An example template (`examples/workflows/<name>.json`) carries a whole template plus, for each skill it uses, how to install and register it. `component.py example check <name>` shows which skills are missing and prints the install commands (exit 3 while some are missing; the script installs nothing). `component.py example use <name> [--as NAME] [--replace]` registers every skill and writes the template to home. `setup --recommended` drives this (`appendix/adapters.md`).
 

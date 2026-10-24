@@ -432,12 +432,15 @@ footer { font-size: 12px; color: var(--ink-soft); }
       flowAdd: '部品を足す', flowNoAdd: '足せる部品が無い', flowLastFallback: '最後の部品が builtin か script ではない。',
       flowEmptyStage: '部品が 1 つも無い。', flowGates: '関所', flowGatesIntro: '工程のあとに、成り立つ部品をすべて動かす。',
       flowGateAfter: 'この工程のあと', flowAddGate: '関所を足す', flowRemoveGate: '関所を消す',
+      flowOptional: 'オプションの工程', flowOptionalIntro: '入れたときだけ、選んだ工程のあとに動く。成り立つ部品をすべて動かし、後ろ盾は要らない (無ければ飛ばす)。',
+      flowOptionalOn: '入れる',
       flowSettings: '設定', flowMaxRework: '差し戻しの上限 (fix.max_rework)',
       flowExternalMemory: '外部の実行先の共有メモリ (build.external_memory)',
       flowSourceTagHome: 'home の部品', flowNone: 'テンプレートが無い。', flowNeedName: '名前は英小文字・数字・- で 1〜63 文字。',
       flowExists: '{0} はもうある。',
       stage_understand: '理解', stage_design: '設計', stage_plan: '計画', stage_route: '振り分け', stage_build: '実装',
       stage_verify: '検証', stage_review: 'レビュー', stage_fix: '差し戻し', stage_finish: '仕上げ',
+      'stage_ui-design': 'UI デザイン', stage_marketing: 'マーケティング',
     },
     en: {
       tagline: 'Set up runners and models, routing and priority templates on one screen',
@@ -510,12 +513,15 @@ footer { font-size: 12px; color: var(--ink-soft); }
       flowAdd: 'Add component', flowNoAdd: 'No component to add', flowLastFallback: 'The last component is not builtin or a script.',
       flowEmptyStage: 'No components yet.', flowGates: 'Gates', flowGatesIntro: 'After a stage, every component whose when holds runs.',
       flowGateAfter: 'After stage', flowAddGate: 'Add gate', flowRemoveGate: 'Remove gate',
+      flowOptional: 'Optional stages', flowOptionalIntro: 'Run only when turned on, right after the stage you pick. Every component whose when holds runs; no fallback is needed (skipped when none is usable).',
+      flowOptionalOn: 'Turn on',
       flowSettings: 'Settings', flowMaxRework: 'Rework limit (fix.max_rework)',
       flowExternalMemory: 'Shared memory for external runners (build.external_memory)',
       flowSourceTagHome: 'home component', flowNone: 'No templates.', flowNeedName: 'The name must be 1-63 lowercase letters, digits or hyphens.',
       flowExists: '{0} already exists.',
       stage_understand: 'Understand', stage_design: 'Design', stage_plan: 'Plan', stage_route: 'Route', stage_build: 'Build',
       stage_verify: 'Verify', stage_review: 'Review', stage_fix: 'Fix', stage_finish: 'Finish',
+      'stage_ui-design': 'UI design', stage_marketing: 'Marketing',
     },
   };
 
@@ -1282,6 +1288,7 @@ footer { font-size: 12px; color: var(--ink-soft); }
     if (!isObject(draft.stages)) draft.stages = {};
     for (const stage of info.stages) if (!Array.isArray(draft.stages[stage])) draft.stages[stage] = [];
     if (!Array.isArray(draft.gates)) draft.gates = [];
+    if (!Array.isArray(draft.optional)) draft.optional = [];
     if (!isObject(draft.fix)) draft.fix = { max_rework: 2 };
     if (!isObject(draft.build)) draft.build = { external_memory: 'none' };
     if (!isObject(draft.description)) draft.description = { ja: '', en: '' };
@@ -1334,7 +1341,35 @@ footer { font-size: 12px; color: var(--ink-soft); }
       const gate = draft.gates[Number(place.slice(5))];
       return gate ? gate.components : null;
     }
+    if (place.indexOf('opt:') === 0) {
+      const step = optionalStep(place.slice(4));
+      return step ? step.components : null;
+    }
     return draft.stages[place] || null;
+  }
+
+  function optionalStep(stage) {
+    return state.flow.draft.optional.find((step) => isObject(step) && step.stage === stage) || null;
+  }
+
+  function renderFlowOptional(stage) {
+    const info = flowInfo();
+    const step = optionalStep(stage);
+    const on = '<label class="field-row"><span>' + esc(t('flowOptionalOn')) + '</span><input type="checkbox" data-role="flow-opt-on" data-stage="' + esc(stage) + '"' + (step ? ' checked' : '') + '></label>';
+    let body = '';
+    if (step) {
+      const place = 'opt:' + stage;
+      const items = Array.isArray(step.components) ? step.components : (step.components = []);
+      body = '<label class="field-row"><span>' + esc(t('flowGateAfter')) + '</span><select data-role="flow-opt-after" data-stage="' + esc(stage) + '">' +
+        info.stages.map((s) => '<option value="' + esc(s) + '"' + (s === step.after ? ' selected' : '') + '>' + esc(t('stage_' + s)) + ' (' + esc(s) + ')</option>').join('') +
+        '</select></label>' +
+        '<div class="steps">' + items.map((item, i) => flowRow(item, i, items.length, place, false)).join('') + '</div>' +
+        (items.length ? '' : '<p class="warn-text">' + esc(t('flowEmptyStage')) + '</p>') +
+        flowAddRow(place, stage, items);
+    }
+    return '<section class="glass tier-col">' +
+      '<div class="tier-head"><span class="tier-name">' + esc(t('stage_' + stage)) + '</span><code>' + esc(stage) + '</code></div>' +
+      '<div class="gate-head">' + on + '</div>' + body + '</section>';
   }
 
   function renderFlowStage(stage) {
@@ -1402,6 +1437,9 @@ footer { font-size: 12px; color: var(--ink-soft); }
       '<button class="btn small" type="button" data-act="flow-add-gate">' + esc(t('flowAddGate')) + '</button></div>' +
       '<p class="muted">' + esc(t('flowGatesIntro')) + '</p></section>';
     html += '<div class="flow-grid">' + draft.gates.map(renderFlowGate).join('') + '</div>';
+    html += '<section class="glass card"><h3>' + esc(t('flowOptional')) + '</h3>' +
+      '<p class="muted">' + esc(t('flowOptionalIntro')) + '</p></section>';
+    html += '<div class="flow-grid">' + info.optional.map(renderFlowOptional).join('') + '</div>';
     const [low, high] = info.max_rework;
     const rework = [];
     for (let n = low; n <= high; n += 1) rework.push('<option value="' + n + '"' + (n === draft.fix.max_rework ? ' selected' : '') + '>' + n + '</option>');
@@ -1419,6 +1457,9 @@ footer { font-size: 12px; color: var(--ink-soft); }
       if (!flow.draft || !flow.name) return;
       const body = clone(flow.draft);
       body.name = flow.name;
+      // 入れていないオプションの工程は書かない (空の optional も残さない)
+      body.optional = (body.optional || []).filter((step) => isObject(step) && Array.isArray(step.components) && step.components.length);
+      if (!body.optional.length) delete body.optional;
       try {
         await request('PUT', '/api/workflows/' + encodeURIComponent(flow.name), body);
       } catch (error) {
@@ -1770,7 +1811,7 @@ footer { font-size: 12px; color: var(--ink-soft); }
         const component = flowInfo().components[cid];
         const last = list.length ? flowInfo().components[entryId(list[list.length - 1])] : null;
         // 工程では後ろ盾を最後に保つため、後ろ盾でない部品は最後の後ろ盾の手前に入れる
-        const isGate = button.dataset.place.indexOf('gate:') === 0;
+        const isGate = button.dataset.place.indexOf('gate:') === 0 || button.dataset.place.indexOf('opt:') === 0;
         const at = !isGate && last && last.fallback && !(component && component.fallback) ? list.length - 1 : list.length;
         list.splice(at, 0, cid);
       } else if (act === 'flow-up' || act === 'flow-down') {
@@ -1806,6 +1847,15 @@ footer { font-size: 12px; color: var(--ink-soft); }
       } else if (role === 'flow-gate-after') {
         const gate = flow.draft.gates[Number(el.dataset.index)];
         if (gate) gate.after = el.value;
+        renderFlow();
+      } else if (role === 'flow-opt-on') {
+        const stage = el.dataset.stage;
+        flow.draft.optional = flow.draft.optional.filter((step) => !(isObject(step) && step.stage === stage));
+        if (el.checked) flow.draft.optional.push({ stage, after: flowInfo().optional_after[stage], components: [] });
+        renderFlow();
+      } else if (role === 'flow-opt-after') {
+        const step = optionalStep(el.dataset.stage);
+        if (step) step.after = el.value;
         renderFlow();
       } else if (role === 'flow-rework') {
         flow.draft.fix.max_rework = Number(el.value);

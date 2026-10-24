@@ -140,6 +140,58 @@ class FlowCliTest(unittest.TestCase):
         route_gates = [row[1] for row in rows if row[0] == 'gate after route']
         self.assertEqual(route_gates, ['gate.pstack-blast-radius', 'gate.pstack-architect'])
 
+    def add_optional(self):
+        """自分のスキルを 2 つ、オプションの工程 (ui-design と marketing) に component.py add で差す。"""
+        skills = os.path.join(self.dir, 'skills')
+        for name in ('my-ui', 'my-fb'):
+            path = os.path.join(skills, name, 'SKILL.md')
+            os.makedirs(os.path.dirname(path))
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(f'---\nname: {name}\ndescription: {name}\n---\n')
+        adds = [['my-ui', '--stage', 'ui-design', '--when', 'ui-change'],
+                ['my-fb', '--stage', 'marketing', '--after', 'design', '--when', 'user-facing']]
+        with mock.patch.dict(os.environ, {'PBI_SKILLS_DIR': skills}), contextlib.redirect_stdout(io.StringIO()):
+            for args in adds:
+                self.assertEqual(component.main(['--home', self.home, 'add', *args]), 0, args)
+
+    def home_workflow(self):
+        with open(os.path.join(self.home, 'workflows', 'jev-routed.json'), encoding='utf-8') as f:
+            return json.load(f)
+
+    def test_optional_stages_follow_their_stage_before_gates(self):
+        self.add_optional()
+        workflow = self.home_workflow()
+        self.assertEqual(workflow['optional'], [
+            {'stage': 'ui-design', 'after': 'design', 'components': [{'id': 'ui-design.my-ui', 'when': 'ui-change'}]},
+            {'stage': 'marketing', 'after': 'design', 'components': [{'id': 'marketing.my-fb', 'when': 'user-facing'}]},
+        ])
+        result = self.run_flow()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        places = [row[0] for row in self.rows(result.stdout)]
+        design = places.index('design')
+        self.assertEqual(places[design + 1:design + 3], ['ui-design after design', 'marketing after design'])
+        self.assertEqual(places[places.index('plan') + 1], 'gate after plan')
+
+    def test_optional_validation_errors(self):
+        self.add_optional()
+        good = self.home_workflow()
+        cases = [
+            ('error each optional step needs stage (ui-design, marketing), after (a stage) and a non-empty components list',
+             [{'stage': 'deploy', 'after': 'finish', 'components': ['ui-design.my-ui']}]),
+            ('error optional: ui-design appears more than once',
+             [{'stage': 'ui-design', 'after': 'design', 'components': ['ui-design.my-ui']},
+              {'stage': 'ui-design', 'after': 'plan', 'components': ['ui-design.my-ui']}]),
+            ('error marketing after design: ui-design.my-ui does not serve marketing',
+             [{'stage': 'marketing', 'after': 'design', 'components': ['ui-design.my-ui']}]),
+            ('error ui-design after route: ui-design.my-ui uses when tier-opus, which only a gate after route can decide',
+             [{'stage': 'ui-design', 'after': 'route', 'components': [{'id': 'ui-design.my-ui', 'when': 'tier-opus'}]}]),
+        ]
+        for expected, optional in cases:
+            with self.subTest(expected=expected):
+                data = copy.deepcopy(good)
+                data['optional'] = optional
+                self.assertIn(expected, self.errors_for(data))
+
     def test_resolution_order(self):
         custom = bundled('jev-routed')
         custom['name'] = 'from-home'

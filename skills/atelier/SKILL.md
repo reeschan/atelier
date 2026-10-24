@@ -33,6 +33,7 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 | Argument `resume`, or the end of a wave | `appendix/handoff.md` |
 | Argument `setup`, `setup --recommended`, `models` or `templates`, or home has no `agents.json` | `appendix/setup.md` |
 | Picking a component, a `when` you cannot decide, a `read-skill` component, writing a stage record, the user asks to add a skill to the workflow | `appendix/engine.md` |
+| The template has an `optional` list (`ui-design`, `marketing` rows in the flow table) | `appendix/optional.md` |
 | A component is picked | its `doc` column in the flow table |
 | Choosing the work key, writing refs, handing off, promoting at the end | `appendix/memory.md` |
 | Priority templates: the start-time sync, applying or editing one in chat, an expired application | `appendix/priority-templates.md` |
@@ -49,7 +50,7 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 
 ## Run the stages
 
-Go through the stages in this order. For each stage, take the first row that is usable and whose `when` holds (`appendix/engine.md`), follow its `doc`, and write its stage record. Then run every usable row of the gates after that stage; after route, `flow.py docs/pbi --decide` says which PBIs each gate row runs for.
+Go through the stages in this order. For each stage, take the first row that is usable and whose `when` holds (`appendix/engine.md`), follow its `doc`, and write its stage record. Then run every usable row of the optional stages placed after it (`<stage> after <stage>` rows, `appendix/optional.md`), then of the gates after it; after route, `flow.py docs/pbi --decide` says which PBIs each gate row runs for.
 
 | Stage | Default component does | Artifact |
 |---|---|---|
