@@ -1,6 +1,6 @@
 # Appendix: understand and design
 
-Read this when the understand or design stage picks `understand.builtin`, `design.grilling`, `design.domain-modeling` or `design.builtin`.
+Read this when the understand or design stage picks `understand.builtin`, `design.builtin`, or an external understand or design component (`appendix/engine.md`).
 
 ## Understand
 
@@ -22,7 +22,6 @@ Read this when the understand or design stage picks `understand.builtin`, `desig
 
 ## Design: run
 
-1. Run the picked component in your session: the skill named in the setting, or `design.grilling` when it is in the skill list. Its `then` runs `design.domain-modeling` after it, only when GLOSSARY.md or CONTEXT.md exists in the target repository.
+1. Run the picked component in your session: the skill named in the setting, or the template's design skill when it is in the skill list. The bundled templates have none; the user adds one as an external component (`appendix/engine.md`, `## External components`).
 2. Then write `docs/specs/<slug>.md` yourself, where `<slug>` is a short lowercase name for the work. Headings, in this order: Problem Statement, Solution, User Stories, Implementation Decisions, Testing Decisions, Out of Scope, Further Notes. The design skills decide; they do not write the spec.
-3. When `design.builtin` is the one picked (no design skill in the skill list), write the decisions you made and the assumptions you put in, in the same file. Record `fallback (grilling not in the skill list)`. List the assumptions in the approval list under "Open assumptions", a few lines each, so the user can correct them there.
-4. When step 3 applies and the work is clearly complex, add one line to the approval list, in the user's language: "To deepen the design, run `setup --recommended` to install mattpocock-skills." Then write `<home>/notices.json` as `{"recommended_hint_shown": "<ISO datetime>"}`. When that key is already there, do not show the line again.
+3. When `design.builtin` is the one picked (no design skill in the skill list), write the decisions you made and the assumptions you put in, in the same file. Record `run` when the template has no design skill, or `fallback (<skill> not in the skill list)`. List the assumptions in the approval list under "Open assumptions", a few lines each, so the user can correct them there.

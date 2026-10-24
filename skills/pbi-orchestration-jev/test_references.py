@@ -58,6 +58,8 @@ OUTSIDE_SKILL_NAMES = {
     # home と作業の記録 (アダプター・通知)
     'notices.json',
     'adapters.json',
+    # 利用者が入れたプラグインの定義 (component.py が license と link を読む)
+    'plugin.json',
 }
 
 

@@ -39,6 +39,14 @@ def assistant(ts, rid, model, inp, out, read, w5, w1):
                                                      'ephemeral_1h_input_tokens': w1}}}}
 
 
+def memory_call(ts, rid, tool, tool_id, ref=None):
+    """shared-memory の道具を 1 回呼んだ assistant の行。"""
+    row = assistant(ts, rid, 'claude-sonnet-5-5', 1, 1, 0, 0, 0)
+    row['message']['content'] = [{'type': 'tool_use', 'id': tool_id, 'name': f'mcp__shared-memory__{tool}',
+                                  'input': {'id': ref} if ref else {'query': 'x'}}]
+    return row
+
+
 class RecordRunTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -520,6 +528,93 @@ class RecordRunTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         [row] = self.rows()
         self.assertEqual((row['tokens']['input'], row['tokens']['output']), (5, 6))
+
+    def write_refs(self, *ids):
+        (self.pbi / 'PBI-007.md').write_text('# PBI-007\n\n## Refs\n' + ''.join(f'- {i}: fact\n' for i in ids)
+                                             + '\n## Notes\nnone\n', encoding='utf-8')
+
+    def test_agent_get_of_listed_refs_is_allowed(self):
+        self.write_refs('mem-1')
+        self.write_route('PBI-007', [AGENT], tier='sonnet')
+        call = memory_call('2026-10-16T10:00:00Z', 'r1', 'get', 'tu1', 'mem-1')
+        self.write_agent('PBI-007 build', [call, call])
+        r = self.record('PBI-007', 1, 'pass')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        self.assertEqual(row['memory']['calls'], {'get': 1, 'search': 0, 'write': 0})
+        self.assertEqual((row['memory']['allowed'], row['memory']['violation']), ('refs-only', False))
+        self.assertNotIn('memory violation', r.stdout)
+
+    def test_agent_search_and_unlisted_get_are_violations(self):
+        self.write_refs('mem-1')
+        self.write_route('PBI-007', [AGENT], tier='sonnet')
+        self.write_agent('PBI-007 build', [memory_call('2026-10-16T10:00:00Z', 'r1', 'search', 'tu1'),
+                                           memory_call('2026-10-16T10:00:01Z', 'r2', 'get', 'tu2', 'mem-9')])
+        r = self.record('PBI-007', 1, 'pass')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        self.assertTrue(row['memory']['violation'])
+        self.assertEqual(row['memory']['unlisted_refs'], ['mem-9'])
+        self.assertIn('memory violation: allowed refs-only, used get, search, unlisted refs mem-9', r.stdout)
+
+    def opencode_get(self, ref=None):
+        state = {'input': {'id': ref}} if ref else {}
+        return {'type': 'tool', 'part': {'tool': 'shared-memory_get', 'state': state}}
+
+    def use_refs_only(self):
+        workflow = json.loads((Path(HERE) / 'workflows' / 'jev-routed.json').read_text(encoding='utf-8'))
+        workflow['build'] = {'external_memory': 'refs-only'}
+        (self.pbi / 'workflow.json').write_text(json.dumps(workflow), encoding='utf-8')
+
+    def test_external_runner_memory_follows_the_template(self):
+        self.write_refs('mem-1')
+        self.write_route('PBI-007', [DS_FREE, DS_FREE], tier='haiku')
+        self.write_opencode('PBI-007', [self.opencode_get('mem-1')])
+        self.assertEqual(self.record('PBI-007', 1, 'unavailable').returncode, 0)
+        self.use_refs_only()
+        self.assertEqual(self.record('PBI-007', 2, 'pass').returncode, 0)
+        first, second = self.rows()
+        self.assertEqual((first['memory']['allowed'], first['memory']['violation']), ('none', True))
+        self.assertEqual((second['memory']['allowed'], second['memory']['violation']), ('refs-only', False))
+        self.assertEqual(second['memory']['used'], ['get'])
+
+    def test_external_get_ids_are_checked_against_the_refs(self):
+        # mem-1 だけを書いた PBI で mem-10 を get したら、語の一部が重なっても違反
+        self.write_refs('mem-1')
+        self.use_refs_only()
+        self.write_route('PBI-007', [DS_FREE, DS_FREE, DS_FREE], tier='haiku')
+        self.write_opencode('PBI-007', [self.opencode_get('mem-10')])
+        self.assertEqual(self.record('PBI-007', 1, 'unavailable').returncode, 0)
+        # id の分からない get は、守ったとも破ったとも言えない
+        self.write_opencode('PBI-007', [self.opencode_get()])
+        self.assertEqual(self.record('PBI-007', 2, 'unavailable').returncode, 0)
+        first, second = self.rows()
+        self.assertEqual((first['memory']['violation'], first['memory']['unlisted_refs']), (True, ['mem-10']))
+        self.assertIsNone(second['memory']['violation'])
+
+    def test_tool_names_in_log_text_are_not_calls(self):
+        # 依頼文や worker.md を読んだ結果がログに出ても、道具の呼び出しではない
+        self.write_route('PBI-007', [DS_FREE], tier='haiku')
+        text = {'type': 'text', 'part': {'text': 'get them with `mcp__shared-memory__get`', 'tool': 'read'}}
+        self.write_opencode('PBI-007', [text])
+        self.assertEqual(self.record('PBI-007', 1, 'pass').returncode, 0)
+        [row] = self.rows()
+        self.assertEqual((row['memory']['used'], row['memory']['violation']), ([], False))
+
+    def test_missing_external_log_is_unknown(self):
+        self.write_route('PBI-007', [DS_FREE], tier='haiku')
+        self.assertEqual(self.record('PBI-007', 1, 'unavailable').returncode, 0)
+        [row] = self.rows()
+        self.assertEqual((row['memory']['used'], row['memory']['violation'], row['memory']['source']),
+                         (None, None, None))
+
+    def test_external_runner_without_memory_is_clean(self):
+        self.write_route('PBI-007', [DS_FREE], tier='haiku')
+        self.write_opencode('PBI-007', [step_finish(1792117901000, 1, 1, 0, 0, 0, 0.0)])
+        self.assertEqual(self.record('PBI-007', 1, 'pass').returncode, 0)
+        [row] = self.rows()
+        self.assertEqual(row['memory'], {'allowed': 'none', 'calls': {'get': 0, 'search': 0, 'write': 0}, 'used': [],
+                                         'unlisted_refs': [], 'violation': False, 'source': 'log scan'})
 
     def test_bad_outcome_is_rejected(self):
         r = self.record('PBI-007', 1, 'よかった')

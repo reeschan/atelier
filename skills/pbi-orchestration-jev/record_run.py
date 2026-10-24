@@ -20,6 +20,11 @@
   claude:   docs/pbi/claude/<報告名>.json (--output-format json) の usage のトークン、total_cost_usd (cost_reported)、
             num_turns (ステップ数) と <報告名>.run.json の開始・終了時刻 (claude_run.py が書く)
   検証:     docs/pbi/verify/<報告名>.json (verify.py が書く)。unchanged.py check の行の終了コードを触らない範囲とする
+  メモリ:   実装担当の shared-memory の呼び出し。agent は会話記録の tool_use (mcp__shared-memory__get/search/write) を
+            数え、get した id が PBI の Refs (旧い PBI は 参照) の節に無ければ unlisted_refs に入れる。外部の実行先は
+            ログ (.jsonl・.json・.log) に shared-memory の get/search/write の名前が出たかだけを見る (数は出さない)。
+            許される使い方は agent が refs-only、外部の実行先がテンプレートの build.external_memory (flow.py と同じ
+            解決順。無ければ none)。search・write、none での get、Refs に無い id の get を violation にする
 取れない値は 0 ではなく null にする。cost_reported は実行先が出した USD (opencode の cost)、cost_api_equiv は
 トークン × 単価表の API 換算 (参考値で請求額ではない)。単価表は同梱の --prices に home の --home/prices.json を
 重ねたもの。トークン数と単価が分かる実行先ならどれでも出す。prices_checked_at (同梱の単価表の日付) と
@@ -42,6 +47,7 @@ from pathlib import Path
 
 import agent_stats
 import common
+import flow
 
 HERE = Path(__file__).resolve().parent
 SCHEMA = 1
@@ -50,6 +56,17 @@ OUTCOMES = ('合格', '差し戻し', '昇格', '使えず', '保留')
 OUTCOME_ALIASES = {'pass': '合格', 'rework': '差し戻し', 'tier-up': '昇格', 'unavailable': '使えず', 'hold': '保留'}
 SEVERITIES = ('重大', '中', '軽微')
 REPORT_RE = re.compile(r'^(PBI-\d+)(?:\.rework-(\d+))?$')
+MEMORY_TOOLS = ('get', 'search', 'write')
+AGENT_MEMORY_TOOL = re.compile(r'^mcp__shared-memory__(get|search|write)$')
+# 外部の実行先のログの道具の呼び出しの名前 (mcp__shared-memory__get・shared-memory_get・shared_memory.search など)。
+# 名前の欄の値と完全に一致したときだけ呼び出しとみなす (依頼文や worker.md の文中に名前が出ても数えない)
+LOG_MEMORY_TOOL = re.compile(r'^(?:mcp__)?shared[-_]memory(?:__|[_.:])(get|search|write)$')
+LOG_SUFFIXES = ('.jsonl', '.json', '.log')
+# 道具の呼び出しの JSON で、道具の名前と引数を入れる欄 (opencode の part.tool / part.state.input、Codex・dsh の name / arguments)
+LOG_NAME_KEYS = ('tool', 'name', 'tool_name', 'toolName')
+LOG_ARG_KEYS = ('input', 'arguments', 'args', 'params')
+# Refs の欄から id を拾う
+REF_ID = re.compile(r'[\w.-]+')
 RUNNER_DIRS = ('opencode', 'codex', 'agy', 'dsh', 'claude')
 RUNNER_SUFFIXES = ('.prompt.md', '.jsonl', '.err', '.log', '.last.md', '.json', '.patch.yml', '.run.json', '.final.md')
 TOKEN_FIELDS = ('input', 'output', 'reasoning', 'cache_read', 'cache_write', 'cache_write_5m', 'cache_write_1h')
@@ -334,6 +351,129 @@ def read_agent(transcript: Path | None, prices: dict) -> dict:
             'models_seen': sorted({r['model'] for r in reqs}), 'transcript': transcript}
 
 
+def agent_memory_calls(transcript: Path) -> list[tuple[str, str | None]]:
+    """会話記録の shared-memory の呼び出しを (道具, get した id) の一覧で返す。同じ tool_use の id は 1 回だけ数える。"""
+    calls, seen = [], set()
+    with open(transcript, encoding='utf-8', errors='replace') as f:
+        for line in f:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            content = (row.get('message') or {}).get('content') if row.get('type') == 'assistant' else None
+            for block in content if isinstance(content, list) else []:
+                if not isinstance(block, dict) or block.get('type') != 'tool_use':
+                    continue
+                m = AGENT_MEMORY_TOOL.match(str(block.get('name', '')))
+                if not m or block.get('id') in seen:
+                    continue
+                seen.add(block.get('id'))
+                ref = (block.get('input') or {}).get('id')
+                calls.append((m.group(1), str(ref) if ref is not None else None))
+    return calls
+
+
+def call_ref(event: dict):
+    """道具の呼び出しの JSON から get の id を取る。取れなければ None。"""
+    holders = [event, event.get('state') if isinstance(event.get('state'), dict) else {}]
+    for holder in holders:
+        for key in LOG_ARG_KEYS:
+            args = holder.get(key)
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    continue
+            if isinstance(args, dict) and args.get('id') is not None:
+                return str(args['id'])
+    return None
+
+
+def json_memory_calls(node, calls: list) -> None:
+    """JSON の中の、名前の欄が shared-memory の道具の名前と一致する呼び出しを (道具, id) で calls に足す。"""
+    if isinstance(node, list):
+        for item in node:
+            json_memory_calls(item, calls)
+        return
+    if not isinstance(node, dict):
+        return
+    for key in LOG_NAME_KEYS:
+        m = LOG_MEMORY_TOOL.match(node[key]) if isinstance(node.get(key), str) else None
+        if m:
+            calls.append((m.group(1), call_ref(node)))
+            break
+    for value in node.values():
+        if isinstance(value, (dict, list)):
+            json_memory_calls(value, calls)
+
+
+def log_memory_calls(paths: list[Path]) -> list[tuple[str, str | None]] | None:
+    """外部の実行先の JSON / JSONL のログにある shared-memory の呼び出し。読めるログが 1 つも無ければ None。
+
+    テキストのログ (.log) は呼び出しと文中の名前を見分けられないので読まない。
+    """
+    calls, readable = [], False
+    for path in paths:
+        if path.suffix not in ('.jsonl', '.json') or not path.is_file():
+            continue
+        text = path.read_text(encoding='utf-8', errors='replace')
+        lines = text.splitlines() if path.suffix == '.jsonl' else [text]
+        for line in lines:
+            try:
+                node = json.loads(line)
+            except ValueError:
+                continue
+            readable = True
+            json_memory_calls(node, calls)
+    return calls if readable else None
+
+
+def listed_refs(pbi_text: str) -> set[str]:
+    """PBI の Refs の欄に書いた id (語ごとに区切る。mem-1 と mem-10 を取り違えない)。"""
+    return set(REF_ID.findall(refs_section(pbi_text)))
+
+
+def refs_section(pbi_text: str) -> str:
+    m = re.search(r'^## (?:Refs|参照)\s*\n(.*?)(?=^## |\Z)', pbi_text, re.S | re.M)
+    return m.group(1) if m else ''
+
+
+def allowed_memory(runner: str, base: Path, home: Path) -> str:
+    """その実行先に許すメモリの使い方。agent は pbi-worker の定義どおり refs-only。"""
+    if runner == 'agent':
+        return 'refs-only'
+    path, _ = flow.find_workflow(base, None, home)
+    workflow = common.load_json(path) if path else None
+    build = workflow.get('build') if isinstance(workflow, dict) else None
+    value = build.get('external_memory') if isinstance(build, dict) else None
+    return value if value in flow.EXTERNAL_MEMORY else 'none'
+
+
+def read_memory(runner: str, transcript: Path | None, logs: list[Path], pbi_text: str, allowed: str) -> dict:
+    unknown = {'allowed': allowed, 'calls': None, 'used': None, 'unlisted_refs': None, 'violation': None,
+               'source': None}
+    if runner == 'agent':
+        if transcript is None:
+            return unknown
+        calls, source = agent_memory_calls(transcript), 'transcript'
+    else:
+        calls, source = log_memory_calls(logs), 'log scan'
+        # 読めるログが無いのは「使っていない」ではなく「確かめられない」
+        if calls is None:
+            return unknown
+    counts = {tool: sum(1 for t, _ in calls if t == tool) for tool in MEMORY_TOOLS}
+    used = {tool for tool, n in counts.items() if n}
+    refs = listed_refs(pbi_text)
+    gets = [ref for tool, ref in calls if tool == 'get']
+    unlisted = sorted({ref for ref in gets if ref and ref not in refs})
+    violation = bool(used & {'search', 'write'}) or (bool(gets) and allowed == 'none') or bool(unlisted)
+    # refs-only で id の分からない get があれば、守ったとは言えない
+    if not violation and any(ref is None for ref in gets):
+        violation = None
+    return {'allowed': allowed, 'calls': counts, 'used': sorted(used), 'unlisted_refs': unlisted,
+            'violation': violation, 'source': source}
+
+
 def read_verify(path: Path) -> tuple[dict | None, dict]:
     if not path.is_file():
         return None, {'checked': False, 'violation': None}
@@ -493,6 +633,13 @@ def main():
     else:
         cost_api = tokens_cost(got['tokens'], common.price_for(prices, model))
     verify, unchanged = read_verify(base / 'verify' / f'{args.report}.json')
+    try:
+        pbi_text = (base / f'{pbi}.md').read_text(encoding='utf-8')
+    except OSError:
+        pbi_text = ''
+    logs = [base / runner / f'{args.report}{suffix}' for suffix in LOG_SUFFIXES]
+    memory = read_memory(runner, transcript, logs, pbi_text,
+                         allowed_memory(runner, base, common.resolve_home(args.home)))
 
     key = work_key(base, args.work_key)
     repo = args.repo or cwd.name
@@ -514,7 +661,7 @@ def main():
         'cost_reported': cost_reported, 'cost_api_equiv': cost_api,
         'prices_checked_at': prices.get('checked_at') if cost_api is not None else None,
         'prices_home_checked_at': prices.get('home_checked_at') if cost_api is not None else None,
-        'verify': verify, 'unchanged': unchanged,
+        'verify': verify, 'unchanged': unchanged, 'memory': memory,
         'judged': {'outcome': args.outcome, 'findings': findings},
         'archive': archive_info,
     }
@@ -536,6 +683,9 @@ def main():
     print(f"記録: {args.report} attempt {args.attempt} {runner} {model} {args.outcome} "
           f"tokens={total if total is not None else '不明'} "
           f"cost={'不明' if cost is None else f'{cost:.4f}'} {saved}")
+    if memory['violation']:
+        print(f"memory violation: allowed {memory['allowed']}, used {', '.join(memory['used']) or 'none'}"
+              + (f", unlisted refs {', '.join(memory['unlisted_refs'])}" if memory['unlisted_refs'] else ''))
 
 
 if __name__ == '__main__':

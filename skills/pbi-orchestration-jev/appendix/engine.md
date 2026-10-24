@@ -1,6 +1,6 @@
 # Appendix: the workflow engine
 
-Read this when you pick a component, cannot decide a `when`, run a `read-skill` component, or write STATUS.md. Templates live in `workflows/`, components in `components/`; the contract is `docs/specs/atelier-workflow.md` in the repository.
+Read this when you pick a component, cannot decide a `when`, run a `read-skill` component, or write STATUS.md. Templates live in `workflows/`, components in `components/` and `<home>/components/` (`## External components`); the contract is `docs/specs/atelier-workflow.md` in the repository.
 
 ## The flow table
 
@@ -9,12 +9,12 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 | Column | Meaning |
 |---|---|
 | stage | the stage, or `gate after <stage>` |
-| component | the component id (`components/<id>.json`) |
+| component | the component id (`components/<id>.json`, or `<home>/components/<id>.json`) |
 | invoke | `skill` (Skill tool), `read-skill` (read a plugin's SKILL.md and follow it), `script` (a bundled Python script), `builtin` (a procedure in this skill) |
 | where | `main` (your session), `subagent-readonly`, `subagent`, `runner` (a worker on its route) |
 | memory | how much shared memory the component may use: `full`, `refs-only`, `none` |
 | when | the condition under which it runs (below) |
-| status | `builtin`, `script ok`, `cli missing <name>`, `env missing <name>`, or `check skill list` |
+| status | `builtin`, `script ok`, `cli missing <name>`, `env missing <name>`, `plugin ok <SKILL.md path>`, `plugin missing <name>`, or `check skill list` |
 | doc | the file in this skill that holds the procedure; read it when the component is picked |
 
 ## Picking
@@ -23,11 +23,12 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 2. A gate runs every row that is usable and whose `when` holds.
 3. Usable:
    - `builtin` and `script ok`: always.
-   - `cli missing` and `env missing`: never.
-   - `check skill list`: for `skill`, the skill's name is in the skill list in your context. For `read-skill`, the plugin's file is found (`## read-skill components`). Do not scan the disk for skills.
+   - `plugin ok`: always; run it as in `## read-skill components`.
+   - `cli missing`, `env missing` and `plugin missing`: never.
+   - `check skill list`: the skill's name is in the skill list in your context. Do not scan the disk for skills.
    - `adapters` in agents.json can turn a design, review or security stage off, or name a skill for it (`appendix/adapters.md`).
 4. Never use a skill that the model cannot invoke through the Skill tool; those run as `read-skill`.
-5. A component's `then` lists components to run right after it, when each one is usable and its own `when` holds (grilling, then domain-modeling).
+5. A component's `then` lists components to run right after it, when each one is usable and its own `when` holds.
 6. A component's `forbid` lists arguments never to pass and steps to skip. Put each item in the prompt when the component runs in a subagent.
 
 ## when
@@ -44,6 +45,8 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 
 A template entry `{"id", "when"}` replaces the component's own `when` in that template only.
 
+The per-PBI values are decided by a script. Once every `route.json` exists, run `python <skill>/flow.py docs/pbi --decide`: it prints place, component, PBI, decision (`run`, `skip`, or `orchestrator` for a `when` you decide) and reason, for each row of the gates after route (one per PBI) and for each review row whose `when` is `deep` (PBI `all`). Follow it; do not judge these values yourself.
+
 ## where and memory
 
 - `main`: run it yourself, in this session.
@@ -52,13 +55,25 @@ A template entry `{"id", "when"}` replaces the component's own `when` in that te
 - `runner`: the worker on the PBI's route (`runners.md`).
 - `full`: the component may search and read shared memory like you do. `refs-only`: it may `get` only the refs listed in the PBI. `none`: no memory tools.
 - The template's `build.external_memory` says whether external runners may `get` refs themselves (`refs-only`) or not (`none`, the default). Either way you copy the listed refs into their prompt (`runners.md`).
+- `record_run.py` checks every attempt against this: it counts the worker's memory calls (from the agent's transcript, or from the tool-call events in an external runner's JSON logs; `violation` is null when it cannot tell) and marks a search, a write, a `get` under `none`, or a `get` of a ref not in the PBI's Refs as `memory.violation` in `runs.jsonl`.
+
+## External components
+
+The bundled components cover only this skill and the skills built into Claude Code (`code-review`, `security-review`). This skill ships no one else's skill and no component for one. Any other skill, the user's own included, becomes an **external component**:
+
+1. The user installs the skill with Claude Code's plugin commands (`/plugin marketplace add <repo>`, `/plugin install <plugin>@<marketplace>`), or keeps their own in `~/.claude/skills/<name>/`.
+2. `python <skill>/component.py add <plugin>:<name> --stage <stage> [--after <stage>] [--when W] [--forbid TEXT]` reads the installed SKILL.md and writes `<home>/components/<stage>.<plugin>-<name>.json`: `skill` when the model can invoke it, `read-skill` when it has `disable-model-invocation` (plugin skills only; a personal skill must be model-invocable), with the license and link from the plugin's `plugin.json`. `--when` goes on the template's entry (`{"id", "when"}`), not into the shared component file, so one template's condition never changes another's; registering the same component again with other settings is refused. It puts the component first in that stage of `<home>/workflows/<workflow>.json` (default `jev-routed`, copied from the bundled one when missing), or last in the gate after `--after`. It checks the result like `flow.py` and leaves nothing on an error.
+3. `component.py remove <id>` takes it out of that template and deletes the component, refusing while another home template still uses it; `component.py list` shows bundled and external components.
+
+- A home component cannot reuse a bundled id; `flow.py` reports it as an error, so every stage keeps its fallback.
+- Run `component.py` only when the user asks for that skill (or `setup --recommended`, `appendix/adapters.md`). The commands for the skills this skill was built around are in the README ("External components").
 
 ## read-skill components
 
 A `read-skill` component points at a skill that the model cannot invoke (all pstack skills). Run it like this:
 
-1. Find the plugin's install directory: the directory under `~/.claude/plugins/` whose path ends with the plugin name and holds the component's `path` (for pstack, `skills/<name>/SKILL.md`). Look only for that path. When it is not there, the component is not usable: record `fallback (plugin not installed)` and take the next row.
-2. Start a subagent of the row's `where` type. In its prompt: the SKILL.md path to read and follow, the harness notes to read first when the plugin has them (pstack: `docs/harness/claude-code.md`), the component's `forbid` items, the request or the PBI path, and the output file below.
+1. The status column gives the SKILL.md path (`plugin ok <path>`); `flow.py` looked under `~/.claude/plugins/` (or `PBI_PLUGINS_DIR`). With `plugin missing`, record `fallback (plugin not installed)` and take the next row.
+2. Start a subagent of the row's `where` type. In its prompt: the SKILL.md path to read and follow, the harness notes to read first when the plugin has them (pstack: `docs/harness/claude-code.md`, two levels above `skills/`), the component's `forbid` items, the request or the PBI path, and the output file below.
 3. Output: a note in `docs/pbi/notes/` (`<slug>.<name>.md`, or `PBI-<n>.<name>.md` per PBI), or the result file its `forbid` names. The subagent returns at most 5 lines and the path.
 4. Link per-PBI notes from that PBI's Notes section, so its worker reads them. Workers never run plugin skills themselves.
 
