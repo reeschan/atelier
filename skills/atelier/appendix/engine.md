@@ -45,7 +45,7 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 
 A template entry `{"id", "when"}` replaces the component's own `when` in that template only.
 
-The per-PBI values are decided by a script. Once every `route.json` exists, run `python <skill>/flow.py docs/pbi --decide`: it prints place, component, PBI, decision (`run`, `skip`, or `orchestrator` for a `when` you decide) and reason, for each row of the gates after route (one per PBI) and for each review row whose `when` is `deep` (PBI `all`). Follow it; do not judge these values yourself.
+The per-PBI values are decided by a script. Once every `route.json` exists, run `python <skill>/flow.py docs/pbi --decide` (with the same `--workflow <name>` as at the start, if any): it prints place, component, PBI, decision (`run`, `skip`, or `orchestrator` for a `when` you decide) and reason, for each row of the gates after route (one per PBI) and for each review row whose `when` is `deep` (PBI `all`). Follow it; do not judge these values yourself.
 
 ## where and memory
 

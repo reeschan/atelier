@@ -221,8 +221,12 @@ python $S/component.py add yomiyasu:yomiyasu --stage gate --after finish
 
 ```sh
 python $S/component.py example check recommended   # 足りないスキルと、入れるコマンド (足りないあいだは終了コード 3)
-claude plugin marketplace add cursor/plugins        # check が出したコマンド
+# check が出した install の行をすべて実行する。何も入っていない PC では次のとおり
+claude plugin marketplace add cursor/plugins
 claude plugin install pstack@cursor-plugins --scope user
+claude plugin install mattpocock-skills@claude-plugins-official --scope user
+claude plugin marketplace add nanaism/yomiyasu
+claude plugin install yomiyasu@yomiyasu --scope user
 python $S/component.py example use recommended --as jev-routed --replace   # 既定のテンプレートにする
 ```
 

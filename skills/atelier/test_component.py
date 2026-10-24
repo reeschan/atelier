@@ -280,6 +280,10 @@ class ComponentCliTest(unittest.TestCase):
         code, _out, err = self.run_cli('example', 'check', path)
         self.assertEqual(code, 2)
         self.assertIn('after (a stage) goes with stage gate only', err)
+        write(path, json.dumps({'name': 'x', 'workflow': {}, 'skills': [{'skill': 'a:b', 'stage': 'review', 'link': None}]}))
+        code, _out, err = self.run_cli('example', 'check', path)
+        self.assertEqual(code, 2)
+        self.assertIn('link must be a string', err)
         self.assertEqual(self.run_cli('example', 'check', 'no-such-example')[0], 2)
 
 

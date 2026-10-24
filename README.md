@@ -221,8 +221,12 @@ The same steps by hand:
 
 ```sh
 python $S/component.py example check recommended   # which skills are missing, and the install commands (exit 3 while missing)
-claude plugin marketplace add cursor/plugins        # the commands check printed
+# run every install line that check printed; on a fresh machine they are:
+claude plugin marketplace add cursor/plugins
 claude plugin install pstack@cursor-plugins --scope user
+claude plugin install mattpocock-skills@claude-plugins-official --scope user
+claude plugin marketplace add nanaism/yomiyasu
+claude plugin install yomiyasu@yomiyasu --scope user
 python $S/component.py example use recommended --as jev-routed --replace   # make it your default template
 ```
 

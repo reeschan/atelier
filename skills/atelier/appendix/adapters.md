@@ -24,16 +24,16 @@ The skills a stage may call are the components in `components/` and `<home>/comp
 
 ## Recommended set
 
-The bundled templates call no one else's skills (`appendix/engine.md`, `## External components`). `setup --recommended` is the opt-in for the author's own setup, the example template `examples/workflows/recommended.json`: jev-routed plus pstack (MIT, https://github.com/cursor/plugins), mattpocock-skills (MIT, https://github.com/mattpocock/skills) and yomiyasu (MIT, https://github.com/nanaism/yomiyasu). The example holds only the template and how to install and register each skill; this skill ships none of them. `setup --recommended <name>` uses another example from `component.py example list`.
+The bundled templates call no one else's skills (`appendix/engine.md`, `## External components`). `setup --recommended` is the opt-in for the author's own setup, the example template `examples/workflows/recommended.json`: jev-routed plus pstack (MIT, https://github.com/cursor/plugins), mattpocock-skills (MIT, https://github.com/mattpocock/skills) and yomiyasu (MIT, https://github.com/nanaism/yomiyasu). The example holds only the template and how to install and register each skill; this skill ships none of them. `setup --recommended <name>` uses another example from `component.py example list`. Below, `<name>` is that name, or `recommended` when none was given.
 
 For `setup --recommended`:
 
-1. Run `python <skill>/component.py example check recommended`. It prints one row per skill (skill, stage, installed or missing, registered or not, license, link) and one `install <command>` line per command still needed. Show the table to the user.
+1. Run `python <skill>/component.py example check <name>`. It prints one row per skill (skill, stage, installed or missing, registered or not, license, link) and one `install <command>` line per command still needed. Show the table to the user.
 2. If there are `install` lines, ask once with AskUserQuestion: install the missing skills now, or not. Name each plugin with its license and link.
    - On yes, run each `install` command yourself, in order, and wait for each to end. On a failure, show it and stop.
    - On no, or when the `claude` command is missing, show the commands and stop.
 3. Ask once with AskUserQuestion how to use the template:
-   - make it the default: `python <skill>/component.py example use recommended --as jev-routed --replace`;
-   - keep it as its own template: `python <skill>/component.py example use recommended` (then the user asks for it by name; `## Start` in SKILL.md passes `--workflow recommended`).
+   - make it the default: `python <skill>/component.py example use <name> --as jev-routed --replace`;
+   - keep it as its own template: `python <skill>/component.py example use <name>` (then the user asks for it by name; `## Start` in SKILL.md passes `--workflow <name>`).
    Run the choice and show any `error` line. A row with `differs` means a component of that id was registered with other settings: show the `component.py remove <id> --workflow <name>` command for each and stop.
 4. After it succeeds, tell the user to run `/reload-plugins` or restart Claude Code when anything was installed. Until then the new skills are not listed.

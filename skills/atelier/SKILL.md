@@ -41,7 +41,7 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 
 ## Start
 
-1. Run `python <skill>/flow.py docs/pbi` (create `docs/pbi/` first). It resolves the template (`docs/pbi/workflow.json`, then home, then bundled; the default is `jev-routed`) and prints one row per candidate: stage, component, invoke, where, memory, when, status, doc. When the user names a template (for example "use recommended"), add `--workflow <name>`.
+1. Run `python <skill>/flow.py docs/pbi` (create `docs/pbi/` first). It resolves the template (`docs/pbi/workflow.json`, then home, then bundled; the default is `jev-routed`) and prints one row per candidate: stage, component, invoke, where, memory, when, status, doc. When the user names a template (for example "use recommended"), add `--workflow <name>` here and to every later `flow.py` call (`--decide` too), and write it in STATUS.md.
    - On `error` lines, show them to the user in one line each, run again with `--workflow jev-routed`, and note the fallback in the approval list.
 2. Write `docs/pbi/STATUS.md` (format in `appendix/engine.md`). Update one line with Edit each time a state changes.
 3. Copy `<skill>/worker.md` to `docs/pbi/worker.md` and `<skill>/unchanged.py` to `docs/pbi/tools/unchanged.py`. External runners cannot read outside the repository.

@@ -410,6 +410,9 @@ def example_error(data: dict) -> str | None:
         for key, allowed in (('where', flow.WHERE), ('memory', flow.MEMORY)):
             if item.get(key) is not None and item[key] not in allowed:
                 return f'{item["skill"]}: {key} must be one of {", ".join(allowed)}'
+        for key in ('license', 'link'):
+            if not isinstance(item.get(key, ''), str):
+                return f'{item["skill"]}: {key} must be a string'
         if not isinstance(item.get('forbid', []), list):
             return f'{item["skill"]}: forbid must be a list'
         install = item.get('install', {})
