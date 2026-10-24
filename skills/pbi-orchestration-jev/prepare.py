@@ -1,7 +1,7 @@
 """起票した PBI に Jev のゲート (brief・pbi_quality) をかけ、select_model.py で担当を決め、表だけを出す。
 
 設計者 (オーケストレーター) が Jev の呼び出し・応答の読み取り・jev-log の記録・決定表の判定を 1 回のコマンドで済ませ、
-文脈にはテンプレートの 1 行と最後の表だけが入るようにする (SKILL.md 3〜4 章)。
+文脈にはテンプレートの 1 行と最後の表だけが入るようにする (appendix/plan.md)。
 
 使い方 (リポジトリのルートで):
   python <このディレクトリ>/prepare.py [docs/pbi] [--skip opencode,codex,agy,dsh] [--today YYYY-MM-DD] [--only PBI-003,PBI-004] [--tier haiku|sonnet|opus] [--home DIR] [--now ISO]

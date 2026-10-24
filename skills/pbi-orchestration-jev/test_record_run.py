@@ -80,7 +80,7 @@ class RecordRunTest(unittest.TestCase):
         for r in results:
             (self.pbi / 'verify' / f"{name}.{r['n']}.log").write_text('$ x\n', encoding='utf-8')
 
-    def write_agent(self, description, rows, agent_id='a1', project=None, root=None):
+    def write_agent(self, description, rows, agent_id='a1', project=None, root=None, root_label='作業ルート'):
         """project を渡すと別のプロジェクト (フォルダを選ばずに始めたセッションなど) の下に置く。
         root を渡すと、依頼文の先頭に「作業ルート: <root>」を書く。"""
         proj = self.projects / (project or project_dir_name(self.repo.resolve()))
@@ -90,7 +90,7 @@ class RecordRunTest(unittest.TestCase):
         with open(sub / f'agent-{agent_id}.jsonl', 'w', encoding='utf-8') as f:
             if root is not None:
                 f.write(json.dumps({'type': 'user', 'timestamp': '2026-10-16T09:59:00Z', 'message': {
-                    'role': 'user', 'content': f'作業ルート: {root}。ここをルートとして作業し、外には書き込まない\n'
+                    'role': 'user', 'content': f'{root_label}: {root}。ここをルートとして作業し、外には書き込まない\n'
                                                'PBI: docs/pbi/PBI-007.md'}}, ensure_ascii=False) + '\n')
             for r in rows:
                 f.write(json.dumps(r) + '\n')
@@ -495,6 +495,31 @@ class RecordRunTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         [row] = self.rows()
         self.assertEqual((row['runner'], row['model'], row['tier']), ('agent', 'sonnet', 'sonnet'))
+
+    def test_english_outcome_is_stored_as_the_canonical_value(self):
+        self.write_opencode('PBI-007', [])
+        self.assertEqual(self.record('PBI-007', 1, 'unavailable').returncode, 0)
+        r = self.record('PBI-007', 2, 'pass', '--findings', '0,0,1')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([row['judged']['outcome'] for row in self.rows()], ['使えず', '合格'])
+
+    def test_english_work_key_line_is_read(self):
+        (self.pbi / 'STATUS.md').write_text('Work key: myrepo:feature/x:W-004 / Workspace: project:work\n',
+                                            encoding='utf-8')
+        self.write_opencode('PBI-007', [])
+        self.assertEqual(self.record('PBI-007', 1, 'unavailable').returncode, 0)
+        [row] = self.rows()
+        self.assertEqual(row['work_key'], 'myrepo:feature/x:W-004')
+
+    def test_english_work_root_line_matches_the_agent(self):
+        self.write_route('PBI-007', [AGENT], tier='sonnet')
+        self.write_agent('PBI-007 build', [assistant('2026-10-16T10:00:00Z', 'r1', 'claude-sonnet-5-5',
+                                                     5, 6, 0, 0, 0)], agent_id='mine', project='C--scratch-a',
+                         root=str(self.repo.resolve()), root_label='Work root')
+        r = self.record('PBI-007', 1, 'pass')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        self.assertEqual((row['tokens']['input'], row['tokens']['output']), (5, 6))
 
     def test_bad_outcome_is_rejected(self):
         r = self.record('PBI-007', 1, 'よかった')

@@ -8,9 +8,9 @@
     "en": "The orchestrator reads the code and CLAUDE.md"
   },
   "invoke": {
-    "kind": "builtin",
-    "doc": "SKILL.md"
+    "kind": "builtin"
   },
+  "doc": "appendix/design.md",
   "where": "main",
   "memory": "full",
   "when": "always",

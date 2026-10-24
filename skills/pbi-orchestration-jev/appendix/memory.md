@@ -1,52 +1,55 @@
-# 付録: 作業メモリ (shared-memory) の詳細
+# Appendix: working memory (shared-memory)
 
-SKILL.md 0.8 の詳細。作業キーを決めるとき、ref を書くとき、引き継ぐとき、終わるときに読む。見出しの番号は SKILL.md v12.1 のもの。
+Read this when you choose the work key, write refs, hand off, or finish. It applies only when the shared-memory MCP (`mcp__shared-memory__*`) is connected. Without it, skip it all: Refs stay empty and nothing is promoted. When `write` is not allowed (in a check run, for example), skip refs and promotion and put the facts in the PBI's Notes. Either way, say so in the completion report.
 
-## 0.8 作業メモリ（shared-memory）
+You search widely to design; a worker reads only its PBI and the refs it lists. In the author's runs, 15 of 32 memory calls were worker searches that found nothing beyond the PBI.
 
-設計者（オーケストレーター）は全体のメモリを幅広く見て PBI を作る。実装担当は PBI とその参照欄の ref だけを見て、PBI どおりに成果物を出す。作者の実測 (2026-10) では memory の呼び出し 32 回のうち 15 回が実装担当の search で、PBI 以上の情報は得られていなかった。
-
-shared-memory の MCP（`mcp__shared-memory__*`）が使えないセッションでは、この節を飛ばす（参照欄は空、昇格もしない）。`write` が禁止されているセッション（検証など）では、ref の書き込みと昇格を飛ばし、PBI の「補足」に必要な事実を書く。どちらも完了報告の「発見」に書く。
-
-| 用語 | 意味 |
+| Term | Meaning |
 |---|---|
-| work | ユーザーの 1 つの依頼。引き継ぎでセッションが変わっても同じ work。番号はリポジトリごとの連番 `W-001` |
-| 作業キー | `<repo>:<branch>:<work-num>` |
-| 作業空間 | 作業専用の scope `project:work.<repo>.<branch>.<work-num>`。ブランチ名の `/` は `-` に、英数字と `. _ -` 以外も `-` に置き換える |
-| ref | 設計者が作業空間に書く、1 件 1 事実のメモリ |
+| work | one request from the user; it stays the same work across handoffs. Numbered per repository: `W-001` |
+| work key | `<repo>:<branch>:<work number>` |
+| workspace | the scope `project:work.<repo>.<branch>.<work number>`. In the branch, `/` and every character other than letters, digits and `. _ -` become `-` |
+| ref | one fact you write in the workspace |
 
-**始めるとき**
-1. 作業キーを決める。repo はリポジトリのディレクトリ名、branch は今のブランチ。番号は、`repo:<repo>` と作業空間の命名から既存の `W-` を探し、無ければ `W-001`。引き継ぎから再開するときは STATUS.md の作業キーをそのまま使う
-2. 作業キーと作業空間の scope を STATUS.md の先頭に書く（1章）
+## Start
 
-**リポジトリの知識は CLAUDE.md から**
-- リポジトリの安定した知識（構成・規約・コマンド・落とし穴）は、階層化した CLAUDE.md にあるものとして扱う。直下の CLAUDE.md は起動時に読み込まれ、フォルダの CLAUDE.md はそのフォルダのファイルを読むときに読み込まれる（実装担当にも同じく読み込まれる）
-- CLAUDE.md にある事実は、ref にも PBI の補足にも書き写さない
-- リポジトリに CLAUDE.md が無いときは、下の search を v12 と同じく広めに使ってよい
+1. Choose the work key. repo is the repository's directory name and branch the current branch. For the number, look for existing `W-` numbers in `repo:<repo>` and the workspace names; with none, `W-001`. When resuming, keep the work key in STATUS.md.
+2. Put the work key and the workspace scope at the top of STATUS.md (`appendix/engine.md`).
 
-**設計者が search するとき**
-- search は CLAUDE.md に無いもの（過去の判断の理由、ほかのリポジトリで分かった落とし穴）を探す補助にとどめる。`repo:<repo>` と `global` を、scope を付けて 1 回ずつまで。scope を付けない search はしない（ほかの作業・ほかのブランチの ref が混ざる）
-- 作業空間の scope の search は、引き継ぎから再開するときだけにする
-- 例外: 引き継ぎから再開するときに作業ディレクトリに `docs/pbi/STATUS.md` が無く、引数にパスも無ければ、`tags: ["handoff"]`・`kind: "episodic"` を付けて scope なしで 1 回だけ search してよい（作業空間の scope がまだ分からないため。手順は `appendix/handoff.md` の「再開」）
+## What CLAUDE.md already holds
 
-**ref を書くとき（設計者だけ）**
-- ref にするのは、2 つ以上の PBI・引き継ぎ・レビューの注意で使う事実だけ。1 つの PBI にしか関わらない事実は ref にせず、その PBI の「補足」に書く
-- 書き込みは並列のツール呼び出しで 1 ターンにまとめる（PBI の起票の前に 1 回。レビューで分かった注意は波ごとに 1 回）。write の直後に `get` で読み直さない。返ってきた id をそのまま参照欄に載せる
-- 1 件 1 事実。`write` の `scope` は作業空間、`tags` に種類（`ref:decision` 設計判断 / `ref:convention` 規約・落とし穴の抜粋 / `ref:summary` 前の PBI の成果の要約 / `ref:review` レビューで分かった注意）と `work:<branch>/<work-num>` を付ける。kind は semantic、provenance は確かめた事実なら agent_verified、推測なら agent_inferred
-- 規約・落とし穴の抜粋には、出典（元の memory id・ファイル）を本文に書く
-- 作業中に決めたこと（`ref:decision`）と、レビューで後続の PBI に効く注意（`ref:review`）も、後続の PBI に効くものだけを波ごとにまとめて書き足し、後続の PBI の参照欄に載せる
-- 書いた ref の id は、PBI の「参照」欄（2章）に載せる。ref の中身は PBI 本文に書き写さない（外部の実行先は例外。`runners.md`）
+- Treat the stable knowledge of the repository (layout, conventions, commands, pitfalls) as being in its layered CLAUDE.md files. The root one loads at start; a folder's one loads when a file in that folder is read, for workers too.
+- Never copy a CLAUDE.md fact into a ref or a PBI's Notes.
+- When the repository has no CLAUDE.md, you may search more widely.
 
-**実装担当とレビュー**
-- Agent ツールの実装担当とレビューは `subagent_type: "pbi-worker"` で起動する（6章・8章）。この定義は memory のツールのうち `get` だけを持ち、`search` と `write` を持たない（定義は `agents/pbi-worker.md`。`~/.claude/agents/pbi-worker.md` に置く）
-- `pbi-worker` が見つからないセッションでは general-purpose で起動し、STATUS.md の上に「pbi-worker なし（理由）」と書く。`worker.md` の禁止の指示だけで動かす
+## Search
 
-**引き継ぐとき（6.3）**
-- HANDOFF.md に加えて、作業空間に引き継ぎのメモリ（kind episodic、tags `handoff` と `work:<branch>/<work-num>`）を書く。2 回目以降は前の引き継ぎのメモリを `supersedes` に指定し、常に最新の 1 件にする
-- 引き継ぎのメモリには、タイトルにリポジトリ名と作業キーの番号を入れ、本文の先頭に必ず次の 3 つを書く: 作業キー、リポジトリの絶対パス（ワークツリーならその作業ルート）、ブランチ。フォルダを選ばずに始めたセッションの `resume` は、このパスを頼りに作業リポジトリを探す（`appendix/handoff.md` の「再開」）
+- Search only for what CLAUDE.md does not hold: reasons behind past decisions, pitfalls found in other repositories. At most once in `repo:<repo>` and once in `global`, always with a scope; an unscoped search mixes in other work and other branches.
+- Search the workspace scope only when resuming.
+- The one unscoped search is the resume lookup with tags `handoff` (`appendix/handoff.md`).
 
-**終わるとき（11章）**
-- 次の 3 つをすべて満たす ref を最大 3 件選んで昇格させる: 次の作業でも使える、コードを読んでも分からない、検証済み
-- 昇格先はリポジトリに固有なら `repo:<repo>`、依らなければ `global`。新しいメモリとして書き、元の ref を `supersedes` に指定し、`work:<branch>/<work-num>` のタグを付ける。provenance は agent_verified
-- 承認のためには止まらない。完了報告の「発見」に、昇格したメモリの id とタイトルを並べる
-- 作業空間は閉じない（ほかの作業からは見えず、30 日アクセスがなければ search に出なくなる。id の `get` では後から辿れる）
+## Write refs
+
+- A ref is a fact used by two or more PBIs, a handoff, or a review warning. A fact for one PBI goes in that PBI's Notes.
+- Write them in one parallel turn: once before the PBIs are written, and once per wave for warnings found in review. Do not `get` right after `write`; put the returned id straight into Refs.
+- One fact per ref. Scope: the workspace. Tags: the kind (`ref:decision` a design decision, `ref:convention` an excerpt of a convention or pitfall, `ref:summary` a summary of an earlier PBI's result, `ref:review` a warning from review) and `work:<branch>/<work number>`. kind `semantic`; provenance `agent_verified` for a checked fact, `agent_inferred` for an inference.
+- For an excerpt, name its source (the original memory id or file) in the body.
+- Decisions made on the way and review warnings that matter to later PBIs are added per wave and listed in those PBIs' Refs.
+- Put ref ids in Refs (`appendix/plan.md`) and never copy their bodies into the PBI. External runners are the exception: `runners.md` copies the bodies into the prompt.
+
+## Workers and reviewers
+
+- Agent tool workers and reviewers run as `subagent_type: "pbi-worker"`. That definition has only `get` among the memory tools (`agents/pbi-worker.md`, placed in `~/.claude/agents/pbi-worker.md`).
+- When `pbi-worker` is missing, start `general-purpose` instead and write "no pbi-worker (reason)" at the top of STATUS.md. The rules of `worker.md` are then all that holds it back.
+
+## Hand off
+
+- Besides HANDOFF.md, write a handoff memory in the workspace: kind `episodic`, tags `handoff` and `work:<branch>/<work number>`. From the second handoff on, set the previous one in `supersedes`, so only the newest is live.
+- Its title names the repository and the work number. Its body starts with the work key, the absolute repository path (the worktree's work root for a worktree) and the branch. A `resume` in a session started without a folder finds the repository through this path.
+
+## Finish
+
+- Promote at most 3 refs that meet all three: useful for the next work, not visible from the code, and checked.
+- Promote to `repo:<repo>` when the fact is specific to the repository, to `global` otherwise. Write it as a new memory with the ref in `supersedes`, the tag `work:<branch>/<work number>`, and provenance `agent_verified`.
+- Do not stop for approval. List the promoted ids and titles in the completion report.
+- Leave the workspace open. Other work cannot see it, it drops out of search after 30 days without access, and `get` by id still reaches it.

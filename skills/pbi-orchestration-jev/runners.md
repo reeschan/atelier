@@ -1,126 +1,203 @@
-# 実行先ごとの渡し方（opencode / Codex / Antigravity / dsh / claude / mcp）
+# Runners: launching a worker
 
-route に出た実行先を初めて使う前に、その節だけを読む。依頼文（SKILL.md 6 章）は `docs/pbi/<実行先>/<報告名>.prompt.md` に書き、末尾に「要約の書き先: `docs/pbi/<実行先>/<報告名>.last.md`」を足す。リポジトリのルートで Bash から `run_in_background` で 1 件ずつ起動する。cd はリテラルの絶対パスで行う（変数で cd すると Claude Code の権限確認で止まる）。route に出る外部の実行先は、prepare.py が agents.json と CLI の検出で照合済み。見つからない・使わない・選んでいないモデルの手順は、承認一覧の「外した手順」に出て route に入らない。
+Read this when the build stage picks `build.runners`: `## Common rules` first, then only the section of each runner that appears in a route, before its first use.
 
-外部の実行先は shared-memory の `get` を使えないものとして扱う。PBI の「参照」欄に ref があれば、設計者がその本文を `get` して、依頼文のファイルの末尾に「## 参照（作業空間の ref）」として id ごとに書き写す。依頼文には「参照欄の ref は下に写してある。memory は使わない」と書き足す（SKILL.md 0.8）。
+## Common rules
 
-報告は `.last.md`（5 行）だけを読む。`.jsonl`・`.log`・`.json` は丸ごと読まず、下に書いた項目を `grep -m` や `tail -n` で取り出す。
+**Order.** Try each PBI's `route` from its head. A runner that is unusable (its "Unusable when" below) is not a failed PBI: record it with `record_run.py <report> --attempt <position> --outcome unavailable` before moving on (the next run overwrites the raw logs), take the next step, and update the PBI's model and note in STATUS.md. `prepare.py` has already matched external runners against agents.json and the CLIs it found; steps for a missing runner, an unused runner or an unselected model are listed as dropped and never enter a route.
 
-差し戻しは新しく起動し直す（`<報告名>` を `PBI-<連番>.rework-<n>` にする）。前回の会話を続ける `opencode run -c`・`codex exec resume`・`dsh --session-id` は使わない。前回の文脈は報告ファイルと差し戻し文で渡す。
+**One worker per attempt.** Every attempt starts a new worker, reworks included. Never continue an earlier conversation (`opencode run -c`, `codex exec resume`, `dsh --session-id`); the report file and the rework note carry what is needed. The only message to a running worker is a continue after `NEEDS_CONTEXT` (`appendix/verify.md`).
 
-## opencode（haiku・sonnet の段の第一候補）
+**The prompt.** Every runner gets the same prompt. Never copy the PBI into it; pass paths.
 
-opencode CLI（`npm i -g opencode-ai`）で OpenCode Go のサブスクの `opencode-go/deepseek-v4.1-flash` を使う。DeepSeek は Go のワークスペースの Privacy 設定が Global でないと 400 エラーになる（Global にしておく）。
-
-優先テンプレートは無料枠のモデル（OpenCode Zen。model ID が `opencode/` で始まる。例 `opencode/deepseek-v4.1-flash-free`）も route に入れられる。渡し方は Go のモデルと同じ。無料枠は提供元が入力を記録・利用することがあるので、sensitive の PBI には当たらない（優先テンプレートは sensitive に当たらない）。
-
-**最初に opencode の場所を確かめる。** opencode を fnm や nvm で入れた Node のグローバルに入れていると、Claude Code のシェルの PATH には出ないことがある。`which opencode` で見つからなくても「入っていない」と判断しない。次のように探し、見つかったディレクトリ（`<OC_DIR>`）を起動のたびに PATH の先頭に足す。
-
-```bash
-# Windows で fnm を使っている例。見つかった opencode.cmd のディレクトリを <OC_DIR> にする
-command -v opencode || ls -d "$(cygpath "$APPDATA")"/fnm/node-versions/*/installation/opencode.cmd 2>/dev/null
-"<OC_DIR>/node_modules/opencode-ai/bin/opencode.exe" --version   # 動くか
+```
+Work root: <absolute path of the repository or worktree>. Work here and write nothing outside it.
+PBI: docs/pbi/PBI-<n>.md
+Rework: docs/pbi/PBI-<n>.rework-<k>.md (previous report: docs/pbi/reports/<previous report>.md)   <- reworks only
+Report name: <PBI-<n> or PBI-<n>.rework-<k>>
+Files that parallel PBIs touch: <none / paths>
+How to work and report: read docs/pbi/worker.md first and follow it.
 ```
 
-それでも見つからなければ、使えないときとして `route` の次へ進み、STATUS.md に書く（インストールはユーザーに頼む）。
+**External runners** (all but `agent`):
+
+- Write the prompt to `docs/pbi/<runner>/<report>.prompt.md` and end it with `Summary file: docs/pbi/<runner>/<report>.last.md`.
+- Launch one per background Bash call (`run_in_background`) from the repository root, never several joined with `&`. cd with a literal absolute path; a cd through a variable stops at Claude Code's permission check.
+- Treat them as unable to use shared memory. When the PBI lists refs, `get` each one yourself and append them to the prompt file under `## Refs (workspace)`, by id, adding "The refs are copied below. Do not use memory." The template's `build.external_memory` stays `none` unless the user chose `refs-only` for a runner that has a memory `get` tool.
+- They read AGENTS.md or nothing, never CLAUDE.md. Put the conventions a PBI needs in the PBI.
+- Read only `.last.md` (5 lines). Never read `.jsonl`, `.log` or `.json` whole; take the items named below with `grep -m` or `tail -n`.
+- `record_run.py` reads tokens, cost, steps and time from each runner's logs. Never add them by hand.
+- After one unusable run, retry once; then take the next step. When a usage limit is the cause, write "<runner> <model>: limit reached (<time>)" at the top of STATUS.md and, for the rest of the session, route again with `--skip <model>` (several models joined by commas). Only that model's steps drop out. When the runner itself is broken (authentication, connection), use `--skip <runner>`.
+- Two or more at once: start each one 30 seconds after the previous (`sleep 30;`, `sleep 60;` ... in front), because opencode and dsh share local state.
+
+## agent (Agent tool)
+
+- Launch the Agent tool with `subagent_type: "pbi-worker"`, and the route's `model` and `effort` (leave effort out when it is null). When `pbi-worker` is missing, use `general-purpose` and say so in STATUS.md.
+- The description starts with the report name and a space: `PBI-007 <short text>`, `PBI-007.rework-1 <short text>`. `record_run.py` and `agent_stats.py` link the transcript to the run through it. Your own reviews are `PBI-<n>.review` and `PBI-<n>.design`.
+- The prompt is the one above, given directly.
+
+## opencode
+
+**Prerequisites.** The opencode CLI (`npm i -g opencode-ai`) and a provider account. A provider that needs a privacy setting (DeepSeek through OpenCode Go needs Global) fails with 400 without it. Free models (ids starting with `opencode/`) may log inputs on the provider's side; priority templates never route a sensitive PBI to them.
+
+**Find it first.** opencode installed into a Node from fnm or nvm may not be on Claude Code's PATH, so `which opencode` failing does not prove it is missing. Look it up and put its directory (`<OC_DIR>`) in front of PATH on every launch:
+
+```bash
+command -v opencode || ls -d "$(cygpath "$APPDATA")"/fnm/node-versions/*/installation/opencode.cmd 2>/dev/null
+"<OC_DIR>/node_modules/opencode-ai/bin/opencode.exe" --version
+```
+
+When it is still not found, treat it as unusable and ask the user to install it.
+
+**Launch.**
 
 ```bash
 mkdir -p docs/pbi/opencode
-PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<このディレクトリ>/opencode.config.json" opencode run -m <route の model>[#<route の effort>] --format json   "docs/pbi/opencode/<報告名>.prompt.md を読み、その指示どおりに作業してください。"   < /dev/null > docs/pbi/opencode/<報告名>.jsonl 2> docs/pbi/opencode/<報告名>.err
+PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<skill>/opencode.config.json" opencode run -m <model>[#<effort>] --format json "Read docs/pbi/opencode/<report>.prompt.md and follow it." < /dev/null > docs/pbi/opencode/<report>.jsonl 2> docs/pbi/opencode/<report>.err
 ```
 
-- effort: route の effort が null でなければ `#<effort>` を付ける (例 `opencode-go/deepseek-v4.1-flash#max`)。null なら付けない。無い effort 名は `provider.no-route` の `Variant unavailable` で落ちる
-- **同時に起動するときは 30 秒ずつずらす**: opencode はデータベース（SQLite）を共有するので、同時に起動すると `.err` に `database is locked` が出て、起動直後に落ちる（`.jsonl` は 0 行、作業ツリーは無変更）。2 件目以降は、コマンドの先頭に `sleep 30;`・`sleep 60;` … を付けて起動する。5 件までなら、これで落ちなかった
-- **`database is locked` で落ちたら**: PBI の失敗とは数えない。下の「使えないとき」として 1 回だけ、単独で再実行する
-- **権限**: `opencode.config.json`（このディレクトリ）を `OPENCODE_CONFIG` で渡す。編集とコマンドは許可し、`git push`・`git reset --hard`・`git clean`・`rm -rf`・`rm -r` とリポジトリ外への操作を拒否する。`--auto` は付けない。ユーザー全体の設定（`~/.config/opencode/`）は変えない（rtk のプラグインを入れていれば、それはそのまま使う）
-- **拒否は成功扱いで返る**: 拒否されても終了コードは 0。`grep -c 'rule which prevents' <報告名>.jsonl` が 1 以上なら拒否がある（`"tool"` イベントの `"status":"error"`）。検証コマンドだけの拒否なら 8 章で自分で実行すれば足りる。作業が進んでいなければ `route` の次へ進む
-- **使えないとき**（終了コードが 0 以外、`grep -m 3 '"type":"error"'` に当たる（利用上限・認証・リージョン・接続のエラー）、または `.last.md` が無いか空）: 1 回だけ再実行し、だめなら `route` の次へ進む。利用上限で落ちたときは STATUS.md の上に「opencode <model>: 上限到達（日時）」と書き、このセッションの残りの PBI では `--skip <model>`（例 `--skip opencode/deepseek-v4.1-flash-free`）を付けて route を出し直す。外れるのはそのモデルの手順だけで、同じ opencode の別のモデル（交互グループの相方や有料のモデル）は使い続ける。複数のモデルが上限なら、カンマでつなぐ。opencode そのものが動かない（認証・接続のエラー）ときは `--skip opencode` で opencode の手順を全部外す
-- **読む・書くだけの設定**: コマンドを実行せず、ファイルの読み書きだけをさせるときは、`OPENCODE_CONFIG` に `opencode.edit-only.config.json`（このディレクトリ）を渡す（既定は今の `opencode.config.json`）。編集は許可し、コマンド（`bash` は `*` を deny）・サブエージェント（`task`）・スキル（`skill`）・人への質問（`question`）・外への道具（`webfetch`・`websearch`）・リポジトリ外への操作を拒否する。検証コマンドは設計者が 8 章で自分で実行する。jev-mcp の `run` では `setting: "edit-only"` で選ぶ
-- opencode は AGENTS.md を読むが CLAUDE.md は読まない。PBI に要る規約は PBI 本文に書く
-- トークン数・cost・ステップ数・時間は、合否を決めたときの `record_run.py`（SKILL.md 8 章）が `.jsonl` の `step_finish` から読んで runs.jsonl に書く。手で足さない。無料枠（`opencode/…-free`）の cost は 0 で出る
+- Add `#<effort>` when the route's effort is not null. An unknown effort fails with `provider.no-route` (`Variant unavailable`).
+- `opencode.config.json` allows edits and commands, and denies `git push`, `git reset --hard`, `git clean`, `rm -rf`, `rm -r` and anything outside the repository. Never pass `--auto`, and never change the user's own settings in `~/.config/opencode/`.
+- `opencode.edit-only.config.json` allows only reading and writing files: no commands, subagents, skills, questions or web tools. You run the verify commands yourself. jev-mcp's `run` picks it with `setting: "edit-only"`.
 
-## Codex（haiku・sonnet の段）
+**Unusable when.**
 
-期限を付けたいときは、振り分けテンプレートの手順に until を書く。
+| Sign | Note |
+|---|---|
+| exit code other than 0 | |
+| `grep -m 3 '"type":"error"'` matches | usage limit, authentication, region, connection |
+| `.last.md` missing or empty | |
+| `.err` says `database is locked` | two launches too close; retry once alone. Not a failed PBI |
+
+**Known issues** (checked 2026-10 with opencode 2.0.x).
+
+- A denial still exits 0. `grep -c 'rule which prevents' <report>.jsonl` of 1 or more means something was denied (a `"tool"` event with `"status":"error"`). When only verify commands were denied, run them yourself; when the work did not progress, take the next step.
+- Free models report cost 0.
+
+## codex
+
+**Prerequisites.** The Codex CLI, signed in.
+
+**Launch.**
 
 ```bash
 mkdir -p docs/pbi/codex
-codex exec -m <route の model> -c model_reasoning_effort='"<route の effort>"' -s workspace-write   -o docs/pbi/codex/<報告名>.last.md - < docs/pbi/codex/<報告名>.prompt.md   > docs/pbi/codex/<報告名>.log 2>&1
+codex exec -m <model> -c model_reasoning_effort='"<effort>"' -s workspace-write -o docs/pbi/codex/<report>.last.md - < docs/pbi/codex/<report>.prompt.md > docs/pbi/codex/<report>.log 2>&1
 ```
 
-- `-o` の `.last.md` には最後のメッセージ（worker.md の 5 行）が入る。トークン数は `record_run.py` が `<報告名>.log` の `tokens used` の合計から読む（内訳は取れないので null になる。12 章の統計は Codex を数えない）
-- effort は route の値（haiku 相当 `medium`、sonnet 相当 `high`）。high より上（xhigh / max）は使わない
-- **使えないとき**（終了コードが 0 以外で、利用上限・認証・接続のエラー、または `.last.md` が空）: 1 回だけ再実行し、だめなら `route` の次へ進む
-- Codex は CLAUDE.md を読まず、リポジトリの AGENTS.md を読む。PBI に要る規約は PBI 本文に書く
+- `-o` writes the last message (the 5 lines of `worker.md`) to `.last.md`.
+- Use the route's effort, never above `high` (no xhigh or max).
 
-## Antigravity（haiku・sonnet の段の Codex の次）
+**Unusable when.**
 
-**2026-10-13 時点では、ヘッドレス（`-p`）でコマンドの実行が `RunCommand` の auto-denied になり、作業が進まない**（作者の環境で 2 回、`denied_actions: [{action: command}]`、`.last.md` なし）。1 件目で同じ拒否が出たら、STATUS.md の上に「Antigravity: ヘッドレスで command が拒否（日時）」と書き、このセッションの残りの PBI では `--skip agy` を付けて route を出し直す。許可ルール（`~/.gemini/antigravity-cli/settings.json`）を足せば使える見込みだが、リポジトリ外の設定なのでユーザーに確認してから行う。
+| Sign | Note |
+|---|---|
+| exit code other than 0 with a usage-limit, authentication or connection error | |
+| `.last.md` empty | |
 
-Antigravity CLI（`agy`、Windows では `%LOCALAPPDATA%\agy\bin\agy.exe`）は Google AI のサブスク特典の Claude を使う。
+**Known issues** (checked 2026-10 with codex-cli 0.153).
+
+- Only the token total is reported (`tokens used` in the log), so the breakdown is null and the session stats leave Codex out.
+
+## agy (Antigravity)
+
+**Prerequisites.** The Antigravity CLI (`agy`; on Windows `%LOCALAPPDATA%\agy\bin\agy.exe`), signed in.
+
+**Launch.**
 
 ```bash
 mkdir -p docs/pbi/agy
-agy -p "docs/pbi/agy/<報告名>.prompt.md を読み、その指示どおりに作業してください。"   --model <route の model> --mode accept-edits --output-format json --print-timeout 3600s   < /dev/null > docs/pbi/agy/<報告名>.json 2> docs/pbi/agy/<報告名>.err
+agy -p "Read docs/pbi/agy/<report>.prompt.md and follow it." --model <model> --mode accept-edits --output-format json --print-timeout 3600s < /dev/null > docs/pbi/agy/<report>.json 2> docs/pbi/agy/<report>.err
 ```
 
-- **拒否は成功扱いで返る**: 許可の無いコマンドは黙って拒否され、終了コード 0・status SUCCESS のまま。`grep -o '"denied_actions":\[[^]]*\]' <報告名>.json` と `tail -n 5 <報告名>.err` を見る。検証コマンドが拒否されただけなら 8 章で自分で実行すれば足りる。ファイルの編集や作業に要るコマンドが拒否されて作業が進んでいなければ、`route` の次（Agent ツール）へ進む
-- **使えないとき**（終了コードが 0 以外、出力に利用上限・quota・rate limit・`RESOURCE_EXHAUSTED`・認証のエラー、または `.last.md` が無いか空）: 1 回だけ再実行し、だめなら `route` の次（Agent ツール）へ進む。利用上限で落ちたときは STATUS.md の上に「Antigravity: 上限到達（日時）」と書き、以後 `--skip agy`
-- agy の会話には CLAUDE.md も AGENTS.md も効くとは限らない。PBI に要る規約は PBI 本文に書く
-- トークン数は 12 章の統計に入らない。完了時の jev-log の行に「agy / モデル名」とだけ書く
+**Unusable when.**
 
-## dsh（DeepSeek Harness の headless。優先テンプレートから使う）
+| Sign | Note |
+|---|---|
+| exit code other than 0 | |
+| output mentions a usage limit, quota, rate limit, `RESOURCE_EXHAUSTED` or authentication | |
+| `.last.md` missing or empty | |
 
-DeepSeek Harness（`@deepseek-ai/dsh`）の headless で、DeepSeek 公式 API などのモデルを直接呼ぶ。route の model は `<provider>/<model>`（dsh の provider 名とモデル ID）で、例えば DeepSeek 公式の V4.1 Flash 1017 は `deepseek-official/deepseek-flash`。effort は dsh の reasoningEffort として渡す。使える値は provider と入れた dsh の版で変わる（2026-10 の手元では DeepSeek 公式の Flash で `high` が通った）。null なら reasoningEffort を付けず、dsh がその provider の既定を使うことがある。provider と既定の設定は `DSH_HOME` の `cordis.patch.yml` に書く（DeepSeek 公式の `deepseek-official` は dsh に組み込まれている）。
+**Known issues** (checked 2026-10-13 with agy 1.4).
+
+- Headless runs auto-deny commands (`RunCommand`; `denied_actions: [{action: command}]`, no `.last.md`). When the first PBI shows this, write "Antigravity: commands denied headless (<time>)" at the top of STATUS.md and route the rest with `--skip agy`. A permission rule in `~/.gemini/antigravity-cli/settings.json` may fix it; that file is outside the repository, so ask the user first.
+- A denial still exits 0 with status SUCCESS. Check `grep -o '"denied_actions":\[[^]]*\]' <report>.json` and `tail -n 5 <report>.err`.
+- Tokens are not reported; the session stats leave agy out.
+
+## dsh (DeepSeek Harness)
+
+**Prerequisites.** The dsh CLI (`npm i -g @deepseek-ai/dsh`) and a key for the route's provider. The route's model is `<provider>/<model>` in dsh's names; effort becomes dsh's reasoningEffort, whose valid values depend on the provider and the dsh version. Providers and defaults live in `cordis.patch.yml` under `DSH_HOME`.
+
+**Launch.**
 
 ```bash
 mkdir -p docs/pbi/dsh
-python <このディレクトリ>/dsh_run.py <報告名> --model <route の model> [--effort <route の effort>]
+python <skill>/dsh_run.py <report> --model <model> [--effort <effort>]
 ```
 
-- `dsh_run.py` が、実行ごとの上書き設定 `docs/pbi/dsh/<報告名>.patch.yml`（provider・model・reasoningEffort）を書いて `--patch` で渡し、`--json` のイベントを `<報告名>.jsonl`、診断を `<報告名>.err`、final の本文を `<報告名>.final.md`、開始・終了の時刻と終了コードを `<報告名>.run.json` に書く。effort が null なら `--effort` を付けない
-- **キー**: `dsh_run.py` が環境変数を優先し、無ければ `~/.config/deepseek/deepseek.key`（DeepSeek 公式）・`~/.config/opencode/opencode-go.key`（OpenCode Go）から読む。値は表示しない。route の provider のキーが無ければ終了コード 2 で止まる（使えないときとして次へ進み、ユーザーにキーの置き場を伝える）
-- **場所**: 既定は PATH の `dsh`（`npm i -g @deepseek-ai/dsh`）。PATH に無ければ `PBI_DSH_BIN`（`@deepseek-ai/dsh/lib/bin.js`）と `PBI_DSH_NODE`（省略時は PATH の node）で渡す。provider の設定を置いた `DSH_HOME` もここで渡す。`dsh_run: dsh が見つかりません` などで止まったら、使えないときとして次へ進み、STATUS.md に書く
-- **権限**: `DSH_PERMISSION_MODE=workspace-write`（書き込みはリポジトリの中だけ、コマンドは Windows では PowerShell のサンドボックス）。headless では昇格の確認に答える人がいないので、サンドボックスの外が要るコマンドは拒否される（`tool_result` の `status` が成功以外）。`npm run build` などが named pipe で落ちることがある。検証コマンドだけの失敗なら 8 章で自分で実行すれば足りる。作業が進んでいなければ `route` の次へ進む
-- **同時に起動するときは 30 秒ずつずらす**（dsh はセッションの記録を DSH_HOME に書く。opencode と同じ扱いにしておく）
-- **使えないとき**（終了コードが 0 以外、`.err` に `dsh: <code>:`（`MISSING_CREDENTIAL`・`TRANSPORT`・`INVALID_REQUEST`・利用上限など）が出る、または `.last.md` が無いか空）: 1 回だけ再実行し、だめなら `route` の次へ進む。利用上限・残高不足で落ちたときは STATUS.md の上に「dsh <model>: 上限到達（日時）」と書き、以後 `--skip <model>`（例 `--skip deepseek-official/deepseek-flash`）。dsh そのものが動かないときは `--skip dsh`
-- 差し戻しは新しく起動し直す（`--session-id` で前の会話は続けない）
-- dsh は AGENTS.md・CLAUDE.md を読むとは限らない。PBI に要る規約は PBI 本文に書く
-- トークン数・ステップ数・時間は `record_run.py` が `.jsonl` の `status` イベントの usage と `.run.json` から読む。cost は出ない（null）。DeepSeek 公式の料金は DeepSeek のアカウントの従量課金
+- `dsh_run.py` writes a per-run patch (`<report>.patch.yml`: provider, model, reasoningEffort) and passes it with `--patch`. It writes the events to `.jsonl`, diagnostics to `.err`, the final text to `.final.md`, and start, end and exit code to `.run.json`. Leave out `--effort` when it is null.
+- Keys: environment variables first, then `~/.config/deepseek/deepseek.key` (DeepSeek official) and `~/.config/opencode/opencode-go.key` (OpenCode Go). Values are never shown. A missing key exits 2: treat it as unusable and tell the user where the key goes.
+- Location: `dsh` on the PATH, or `PBI_DSH_BIN` (`@deepseek-ai/dsh/lib/bin.js`) with `PBI_DSH_NODE` (default: node on the PATH). `DSH_HOME` is passed the same way.
+- Permissions: `DSH_PERMISSION_MODE=workspace-write`. Writes stay in the repository; commands run in a sandbox (PowerShell on Windows). Headless runs have nobody to approve an escalation, so commands that need more are denied.
 
-## claude（Claude Code の headless）
+**Unusable when.**
 
-Claude Code を `claude -p` で動かす外部の実行先。Agent ツールの `agent` とは別で、ほかの外部の実行先と同じく依頼文のファイルを渡して 1 件ずつ起動する。既定の振り分けには入らず、agents.json で有効にして、routing.json か優先テンプレートに `claude` の手順を書いたときだけ route に出る。route の model は `haiku`・`sonnet`・`opus` の別名か、モデル ID。effort は `--effort` で渡す（null なら付けない）。
+| Sign | Note |
+|---|---|
+| exit code other than 0 | `dsh_run: dsh が見つかりません` means dsh is not found |
+| `.err` has `dsh: <code>:` | `MISSING_CREDENTIAL`, `TRANSPORT`, `INVALID_REQUEST`, usage limit, low balance |
+| `.last.md` missing or empty | |
+
+**Known issues** (checked 2026-10 with dsh 0.2.0-rc).
+
+- Builds that use named pipes (`npm run build`) can fail inside the sandbox. When only verify commands fail, run them yourself.
+- Cost is not reported (null); the provider bills the account directly.
+
+## claude (Claude Code headless)
+
+Claude Code run as `claude -p`, separate from the `agent` runner. It is in no default route: it appears only when enabled in agents.json and named in `routing.json` or a priority template. The model is an alias (`haiku`, `sonnet`, `opus`) or a model id.
+
+**Prerequisites.** The `claude` CLI, signed in. Location: `PBI_CLAUDE_BIN`, then `claude` on the PATH (agents.json's path also works).
+
+**Launch.**
 
 ```bash
 mkdir -p docs/pbi/claude
-python <このディレクトリ>/claude_run.py <報告名> --model <route の model> [--effort <route の effort>] [--setting default|edit-only]
+python <skill>/claude_run.py <report> --model <model> [--effort <effort>] [--setting default|edit-only]
 ```
 
-- 依頼文は `docs/pbi/claude/<報告名>.prompt.md`。`claude_run.py` が `claude -p --output-format json --model <model> [--effort <effort>] --tools <設定の道具> --permission-mode acceptEdits --permission-prompts none --strict-mcp-config` を起動し、依頼文は標準入力で「依頼文のファイルを読み、その指示どおりに作業してください」の 1 文と一緒に渡す（`--add-dir` は付けない）。結果は `<報告名>.json`、診断は `<報告名>.err`、開始・終了の時刻・終了コード・使った設定は `<報告名>.run.json` に書く
-- **2 つの設定**（`--setting`）:
-  - `default`（既定）: pbi-worker と同じ道具のうち headless で使えるもの（Read・Write・Edit・Glob・Grep・Bash・PowerShell）。MCP の道具は使わない（`--strict-mcp-config`）ので、PBI の参照欄の ref は依頼文に写してあるものだけが材料
-  - `edit-only`: 道具を Read・Edit・Write・Glob・Grep だけにし、コマンドの道具を持たない。`--restricted` も付く。検証コマンドは設計者が 8 章で自分で実行する
-- **権限**: `--permission-mode acceptEdits --permission-prompts none`。headless では確認に答える人がいないので、許可されない操作は拒否される。書き込みは作業ルート（カレント）の中だけ。子の環境から `ANTHROPIC_API_KEY`・`ANTHROPIC_AUTH_TOKEN`・`ANTHROPIC_BASE_URL`・`ANTHROPIC_BEDROCK_BASE_URL`・`CLAUDE_CODE_USE_BEDROCK` を外すので、認証は Claude Code のログインのまま
-- **場所**: 環境変数 `PBI_CLAUDE_BIN`、無ければ PATH の `claude`（agents.json の path でも指せる）。見つからなければ終了コード 2（`claude_run: claude が見つかりません`）で止まる。使えないときとして次へ進み、STATUS.md に書く
-- **使えないとき**（終了コードが 0 以外、`<報告名>.json` の `is_error` が true、`.err` か `.json` の `result` に利用上限・認証のエラーの文言（`usage limit`・`rate limit`・`not logged in`・`Invalid API key`・`/login` など）が出る、または `.last.md` が無いか空）: 1 回だけ再実行し、だめなら `route` の次へ進む。利用上限で落ちたときは STATUS.md の上に「claude <model>: 上限到達（日時）」と書き、以後 `--skip <model>`。claude そのものが動かないときは `--skip claude`
-- 差し戻しは新しく起動し直す（前の会話は続けない）
-- トークン数・cost・ステップ数・時間は `record_run.py` が `<報告名>.json` の `usage`（input・output・cache の読み・書き）・`total_cost_usd`（cost_reported）・`num_turns` と `.run.json` から読む。取れない値は null。サブスクのログインで動かしたときの `total_cost_usd` は API 換算の目安で、請求額ではない
+- `claude_run.py` runs `claude -p --output-format json` with the model, effort, the setting's tools, `--permission-mode acceptEdits --permission-prompts none` and `--strict-mcp-config`, and passes the prompt file through stdin. Results go to `<report>.json`, diagnostics to `.err`, and times, exit code and setting to `.run.json`.
+- `default`: Read, Write, Edit, Glob, Grep, Bash, PowerShell; no MCP tools, so refs reach it only when copied into the prompt. `edit-only`: Read, Edit, Write, Glob, Grep and `--restricted`; you run the verify commands yourself.
+- It drops `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_BEDROCK_BASE_URL` and `CLAUDE_CODE_USE_BEDROCK` from the child's environment, so it runs on the Claude Code sign-in.
 
-## mcp（MCP クライアントの実行先。jev-mcp で受け渡す）
+**Unusable when.**
 
-外の MCP クライアント（実装担当）が、MCP サーバー jev-mcp（`jev_mcp.py`）から PBI を受け取る。jev-mcp は、外の MCP クライアントが Jev の振り分け・実行・記録をそのまま使うための口。設計者は起動しない。依頼文を `docs/pbi/mcp/<報告名>.prompt.md` に書き（要約の書き先は `docs/pbi/mcp/<報告名>.last.md`）、`.last.md` ができるのを待つ。2026-10 時点では route には出ない（routing.json の実行先に mcp は無い）。ユーザーが mcp に渡すと決めた PBI だけをこの形で置く。
+| Sign | Note |
+|---|---|
+| exit code other than 0 | `claude_run: claude が見つかりません` (exit 2) means claude is not found |
+| `is_error` true in `<report>.json` | |
+| `.err` or `result` mentions `usage limit`, `rate limit`, `not logged in`, `Invalid API key` or `/login` | |
+| `.last.md` missing or empty | |
+
+**Known issues.**
+
+- With a subscription sign-in, `total_cost_usd` is an API-price estimate, not a charge.
+
+## mcp (jev-mcp)
+
+An outside MCP client acts as the worker and takes the PBI from the jev-mcp server (`jev_mcp.py`). It is in no route; place a PBI here only when the user decides to. You do not launch the worker: write the prompt to `docs/pbi/mcp/<report>.prompt.md` (summary file `docs/pbi/mcp/<report>.last.md`) and wait for `.last.md`.
 
 ```bash
-python <このディレクトリ>/jev_mcp.py --root <作業リポジトリの絶対パス>                  # stdio
-python <このディレクトリ>/jev_mcp.py --http --port 7830 --root <作業リポジトリの絶対パス>  # http://127.0.0.1:7830/mcp
+python <skill>/jev_mcp.py --root <absolute repository path>                  # stdio
+python <skill>/jev_mcp.py --http --port 7830 --root <absolute repository path>  # http://127.0.0.1:7830/mcp
 ```
 
-- ツールは `list_tasks`・`claim_task`・`submit_result`・`fail_task`・`verify`・`jev_gate`・`route`・`run`・`record`。`claim_task` は `docs/pbi/mcp/<報告名>.claim.json` を排他的に作り、同じ報告名を 2 回は渡さない
-- `route` は `select_model.py` の 1 件の判定（`repo`・`report`・`tier`・`skip`）をそのまま返す。`tier` は `--tier`、`skip` は `--skip` と同じ値で、`docs/pbi/PBI-<n>.route.json` は書かない
-- `run` は `runners.md` の渡し方で 1 件の報告名を 1 回動かす。扱う実行先は `dsh`・`opencode`・`claude`。`runner`・`model`・`effort`・`setting`（`default` か `edit-only`。省けば `default`。`dsh` は `default` だけ）・`prompt`・`workdir`（`--root` の下だけ。省けば `repo`）・`timeout` を取り、依頼文を `docs/pbi/<実行先>/<報告名>.prompt.md` に書いて起動し、終了コード・`.last.md`・報告ファイル・ログのパスと、使えないときの判定、使った `setting` とその `permission`（`commands`・`tools`・`outside_workdir`）を返す
-- `record` は `record_run.py` を 1 回呼び、試行 1 回の結果を `docs/pbi/runs.jsonl` に 1 行足す。`repo`・`report`・`attempt`・`outcome`・`findings`・`runner`・`model`・`effort`・`tier` を取り、`record_run.py` と同じ列になる
-- `submit_result` / `fail_task` は `docs/pbi/reports/<報告名>.md`（詳細）と `.last.md`（worker.md の 5 行）を書く。`.last.md` は最後に書く。実行先の出力（クライアントの summary など）は `<報告名>.artifacts.json` に残る。設計者は他の実行先と同じく `.last.md` だけを読み、8 章の検証は自分で行う（`verify` ツールの結果は実行先の自己申告として扱う）
-- `jev_gate` は jev-mcp の側で `jev/jev.py` を呼ぶ。API キーはサーバーの環境変数だけが持ち、クライアントには渡らない。送るのは文章だけ
-- HTTP は 127.0.0.1 だけで待ち受け、Host が 127.0.0.1・localhost・[::1] でない要求と、自分以外の Origin を持つ要求は 403、Content-Type が `application/json` でない POST は 415 で断る。認証は無いので、ほかの機械には公開しない
-- **使えないとき**（`.last.md` が来ない、状態が NEEDS_CONTEXT / BLOCKED）: 他の実行先と同じく `route` の次へ進むか、差し戻しの手順に従う。取得済みのまま止まった `.claim.json` は、実行先が止まったことを確かめてから消す
+- Tools: `list_tasks`, `claim_task`, `submit_result`, `fail_task`, `verify`, `jev_gate`, `route`, `run`, `record`. `claim_task` creates `docs/pbi/mcp/<report>.claim.json` exclusively, so a report is handed out once.
+- `route` returns one `select_model.py` judgment (`repo`, `report`, `tier`, `skip`) without writing `route.json`.
+- `run` launches one report once on `dsh`, `opencode` or `claude` as described above, with `setting` `default` or `edit-only` (dsh: default only), and returns the exit code, `.last.md`, the report and log paths, the unusable verdict, and the setting's permissions.
+- `record` calls `record_run.py` once, with the same columns.
+- `submit_result` and `fail_task` write `docs/pbi/reports/<report>.md` and then `.last.md` (the 5 lines of `worker.md`). You read only `.last.md` and verify yourself; the client's `verify` result is its own claim.
+- `jev_gate` calls `jev/jev.py` on the server side. The API key stays in the server's environment; only prose is sent.
+- HTTP listens on 127.0.0.1 only. It refuses a Host other than 127.0.0.1, localhost or [::1] and a foreign Origin (403), and a POST that is not `application/json` (415). There is no authentication, so never expose it to other machines.
+
+**Unusable when.** `.last.md` never comes, or the status is `NEEDS_CONTEXT` or `BLOCKED`: take the next step or rework, as with any runner. Remove a `.claim.json` left behind only after confirming the client has stopped.

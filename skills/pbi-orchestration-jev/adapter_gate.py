@@ -1,4 +1,4 @@
-"""最終レビューとセキュリティレビューを使うかを、毎回同じ基準で決めて表で返す (appendix/adapters.md の「Final review and security review」)。
+"""最終レビューとセキュリティレビューを使うかを、毎回同じ基準で決めて表で返す (appendix/review.md)。
 
   python adapter_gate.py <pbi-dir> [--numstat FILE] [--home DIR]
 
@@ -36,7 +36,7 @@ PBI_NAME = re.compile(r'^PBI-(\d+)\.md$')
 MAX_DIFF = 300
 MAX_PBIS = 2
 
-DESIGN_REASON = 'decided by the orchestrator (appendix/adapters.md)'
+DESIGN_REASON = 'decided by the orchestrator (appendix/design.md)'
 OFF_REASON = 'turned off in agents.json'
 SECURITY_SKIP_REASON = 'no sensitive or deep PBI'
 

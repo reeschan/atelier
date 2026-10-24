@@ -11,6 +11,7 @@
     "kind": "skill",
     "name": "mattpocock-skills:domain-modeling"
   },
+  "doc": "appendix/design.md",
   "where": "main",
   "memory": "full",
   "when": "ask-or-decide",
@@ -25,7 +26,7 @@
     "--comment",
     "ultra",
     "--max-findings",
-    "GLOSSARY.md か CONTEXT.md が作業リポジトリに無ければ動かさない"
+    "do not run unless the target repository has GLOSSARY.md or CONTEXT.md"
   ],
   "interactive": true,
   "calls_back": false,

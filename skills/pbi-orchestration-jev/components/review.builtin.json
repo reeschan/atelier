@@ -8,9 +8,9 @@
     "en": "The orchestrator checks the whole diff"
   },
   "invoke": {
-    "kind": "builtin",
-    "doc": "appendix/finish.md"
+    "kind": "builtin"
   },
+  "doc": "appendix/review.md",
   "where": "main",
   "memory": "full",
   "when": "always",

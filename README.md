@@ -22,7 +22,7 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - **Pass/fail comes from verification commands.** Neither the sub-agent's report nor Jev's answer is taken at face value. The worker starts its report with a status line (`DONE` / `DONE_WITH_CONCERNS` / `NEEDS_CONTEXT` / `BLOCKED`); the orchestrator sorts the report by that status and the verification results, and asks Jev to triage only when the two disagree. The orchestrator runs the commands itself and checks each acceptance criterion.
 - **At most two rounds of rework, and an optional tier up.** A failed PBI goes back with the review notes, twice at most. The orchestrator can raise a PBI's tier (for example haiku to sonnet) with `prepare.py --only PBI-<n> --tier <tier>`, which rewrites that PBI's route from the routing in effect at that moment. If the design needs rethinking, or a PBI still fails after two rounds, the orchestrator stops and asks the user.
 - **Only prose goes to Jev.** PBI text, briefs, excerpts from reports and rework notes. Never source code, diffs, environment variables or credentials.
-- **The orchestrator's context stays small.** Every token in the orchestrator's context is re-read on every later turn. Workers end with a 5-line report that starts with a status line and put the details in a file, long command output goes to log files, and PBI text is written once and passed by path (`worker.md`, section 0.7 of `SKILL.md`).
+- **The orchestrator's context stays small.** Every token in the orchestrator's context is re-read on every later turn. Workers end with a 5-line report that starts with a status line and put the details in a file, long command output goes to log files, and PBI text is written once and passed by path (`worker.md`, and "Keep the context small" in `SKILL.md`).
 - **Hand-off when the context grows.** Between waves of PBIs the orchestrator measures its context with `agent_stats.py --ctx`. Above 250,000 tokens it writes `docs/pbi/HANDOFF.md` (plus a hand-off memory when shared memory is available) and asks you to `/clear` and resume with `/pbi-orchestration-jev resume`. From a session started without a project folder, run `/pbi-orchestration-jev resume <repository path>`; without the path, the skill finds the repository from the hand-off memory.
 - **Opus designs and reviews; cheaper models implement.** Only PBIs that need design decisions are implemented by Opus. Sensitive or tightly coupled PBIs are implemented by Sonnet and get a deep review from the Opus orchestrator.
 - **Optional output compression with [rtk](https://github.com/rtk-ai/rtk).** A bundled hook rewrites Bash / PowerShell commands to `rtk <cmd>` only in sessions where the skill switched it on.
@@ -313,13 +313,17 @@ It then checks that `STATUS.md` and the branch match, and either moves the sessi
 
 ```
 skills/pbi-orchestration-jev/
-├── SKILL.md                    # the skill (instructions for the orchestrator)
+├── SKILL.md                    # the skill: the workflow engine the orchestrator follows
+├── CONTEXT.md                  # glossary (English and Japanese terms)
+├── flow.py                     # resolves and checks a workflow template; prints the plan per stage
+├── workflows/                  # bundled workflow templates (jev-routed, high-model, jev-routed-pstack)
+├── components/                 # component definitions: what fills each stage, and the doc that runs it
 ├── runners.md                  # how to hand PBIs to opencode / Codex / Antigravity / dsh
 ├── dsh_run.py                  # runs one PBI on DeepSeek Harness headless
 ├── claude_run.py               # runs one PBI on Claude Code headless
-├── verify-commands.md          # pitfalls when writing verification commands
 ├── worker.md                   # how workers proceed and report
-├── appendix/                   # read only when needed (memory, rework, handoff, finish, jev, setup, adapters, priority-templates)
+├── appendix/                   # read only when needed: engine, the stage procedures (design, plan, verify, review, rework, finish), handoff, memory, jev, setup, adapters, priority-templates
+├── prompts/                    # subagent prompts (design review, PBI review, final review)
 ├── agents/pbi-worker.md        # worker / reviewer sub-agent (copy to ~/.claude/agents)
 ├── prepare.py                  # Jev gate 1 + decision table in one call; prints a table
 ├── verify.py                   # runs a PBI's verification commands; prints exit codes and tails

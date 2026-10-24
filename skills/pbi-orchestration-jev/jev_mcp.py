@@ -64,10 +64,13 @@ REPORT_RE = re.compile(r'^(PBI-\d+)(?:\.rework-(\d+))?$')
 NAME_RE = re.compile(r'^[A-Za-z0-9._-]+$')
 STATUSES = ('DONE', 'DONE_WITH_CONCERNS', 'NEEDS_CONTEXT', 'BLOCKED')
 FAIL_STATUSES = ('NEEDS_CONTEXT', 'BLOCKED')
-# record の outcome (record_run.py の --outcome と同じ値)
-OUTCOMES = ('合格', '差し戻し', '昇格', '使えず', '保留')
-# claim_task が sections に入れる PBI の見出し (SKILL.md 2 章のテンプレート)
-SECTIONS = ('目的', '対象', '触らない範囲', '受け入れ条件', '検証コマンド', '参照', '補足')
+# record の outcome (record_run.py の --outcome と同じ値。英語の値は record_run.py が日本語の値に直して書く)
+OUTCOMES = ('pass', 'rework', 'tier-up', 'unavailable', 'hold', '合格', '差し戻し', '昇格', '使えず', '保留')
+# claim_task が sections に入れる PBI の見出し (appendix/plan.md の雛形)。キーは英語の見出しで、
+# 旧い PBI の日本語の見出しも同じキーで読む
+SECTIONS = (('Goal', '目的'), ('Targets', '対象'), ('Do not touch', '触らない範囲'),
+            ('Acceptance criteria', '受け入れ条件'), ('Verify commands', '検証コマンド'), ('Refs', '参照'),
+            ('Notes', '補足'))
 QUEUE = 'mcp'
 # run の実行先ごとの渡し方 (runners.md の「実行先ごとの渡し方」)。あとで実行先を足せる形にする。
 # logs: 作業ルートの docs/pbi/<実行先>/<報告名><接尾辞> のうち、あれば返すログ。
@@ -208,10 +211,11 @@ def kill_tree(proc: subprocess.Popen):
 def sections_of(pbi_text: str) -> dict:
     """PBI の「## 見出し」ごとの本文 (前後の空白を落とす)。"""
     out = {}
-    for name in SECTIONS:
-        m = re.search(rf'^## {re.escape(name)}\s*\n(.*?)(?=^## |\Z)', pbi_text, re.S | re.M)
+    for names in SECTIONS:
+        heading = '|'.join(re.escape(n) for n in names)
+        m = re.search(rf'^## (?:{heading})\s*\n(.*?)(?=^## |\Z)', pbi_text, re.S | re.M)
         if m:
-            out[name] = m.group(1).strip()
+            out[names[0]] = m.group(1).strip()
     return out
 
 
@@ -348,18 +352,18 @@ class Tasks:
         if p['last'].is_file():
             raise ToolError(f'{report} は報告済み')
         changed = [str(c) for c in (changed or [])]
-        unresolved = (unresolved or '').strip() or 'なし'
+        unresolved = (unresolved or '').strip() or 'none'
         body = (details or '').strip()
-        if body.startswith('状態:'):
+        if body.startswith(('Status:', '状態:')):
             body = body.split('\n', 1)[1].strip() if '\n' in body else ''
         p['details'].parent.mkdir(parents=True, exist_ok=True)
-        p['details'].write_text(f'状態: {status}\n\n{body}\n', encoding='utf-8')
+        p['details'].write_text(f'Status: {status}\n\n{body}\n', encoding='utf-8')
         summary = '\n'.join([
-            f'状態: {status}',
-            f'結果: {result}',
-            f'変更: {", ".join(changed) if changed else "なし"}',
-            f'未解決: {" ".join(unresolved.splitlines())}',
-            f'詳細: docs/pbi/reports/{report}.md',
+            f'Status: {status}',
+            f'Result: {result}',
+            f'Changed: {", ".join(changed) if changed else "none"}',
+            f'Open: {" ".join(unresolved.splitlines())}',
+            f'Details: docs/pbi/reports/{report}.md',
         ]) + '\n'
         if artifacts is not None:
             p['artifacts'].write_text(json.dumps(artifacts, ensure_ascii=False, indent=1), encoding='utf-8')
@@ -378,7 +382,7 @@ class Tasks:
             raise ToolError(f'status は {" / ".join(STATUSES)} のどれか: {status}')
         if not (isinstance(passed, int) and isinstance(total, int) and 0 <= passed <= total):
             raise ToolError('passed と total は 0 <= passed <= total の整数')
-        return self._write_report(root, report, status, f'受け入れ条件 pass {passed}/{total}', changed,
+        return self._write_report(root, report, status, f'acceptance criteria pass {passed}/{total}', changed,
                                   unresolved, details, artifacts)
 
     def fail_task(self, repo: str, report: str, status: str, reason: str, details: str = '') -> dict:
@@ -388,8 +392,8 @@ class Tasks:
             raise ToolError(f'status は {" / ".join(FAIL_STATUSES)} のどれか: {status}')
         if not (reason or '').strip():
             raise ToolError('reason を書く')
-        body = details.strip() or f'## 未解決\n- {reason.strip()}'
-        return self._write_report(root, report, status, '未実施', [], reason, body)
+        body = details.strip() or f'## Open\n- {reason.strip()}'
+        return self._write_report(root, report, status, 'not run', [], reason, body)
 
     def verify(self, repo: str, report: str, workdir: str | None = None, name: str | None = None,
                timeout: int = 900) -> dict:
@@ -503,7 +507,7 @@ class Tasks:
         base.mkdir(parents=True, exist_ok=True)
         prompt_path = base / f'{report}.prompt.md'
         last_path = base / f'{report}.last.md'
-        prompt_path.write_text(f'{prompt.rstrip()}\n\n要約の書き先: `{rel}/{report}.last.md`\n', encoding='utf-8')
+        prompt_path.write_text(f'{prompt.rstrip()}\n\nSummary file: `{rel}/{report}.last.md`\n', encoding='utf-8')
         # 前の実行の .last.md を、今回の結果と取り違えない
         last_path.unlink(missing_ok=True)
         flags = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' \
