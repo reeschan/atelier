@@ -146,6 +146,18 @@ class ComponentDefinitionsTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertGreater(len(components), 0)
 
+    def test_then_must_name_a_known_component(self):
+        directory = os.path.join(tempfile.gettempdir(), f'pbi-flow-components-{uuid.uuid4().hex}')
+        os.mkdir(directory)
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        write_json(os.path.join(directory, 'x.y.json'), {
+            'id': 'x.y', 'stages': ['design'], 'title': {'ja': 'あ', 'en': 'a'},
+            'invoke': {'kind': 'builtin', 'doc': 'SKILL.md'}, 'where': 'main', 'memory': 'full',
+            'when': 'always', 'cost': 'low', 'then': ['x.missing'], 'interactive': False, 'calls_back': False,
+        })
+        _, errors = flow.load_components(directory)
+        self.assertEqual(errors, ['component x.y.json: then points at an unknown component: x.missing'])
+
     def test_runner_components_never_use_full_memory(self):
         components, _ = flow.load_components()
         for component in components.values():

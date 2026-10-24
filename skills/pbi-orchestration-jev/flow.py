@@ -5,7 +5,7 @@
 テンプレートの解決順は、--workflow を省くと <pbi-dir>/workflow.json → <home>/workflows/jev-routed.json →
 同梱の workflows/jev-routed.json。--workflow NAME を渡すと <home>/workflows/NAME.json → 同梱の workflows/NAME.json
 (<pbi-dir>/workflow.json は読まない)。home は common.resolve_home で解決する。
-コンポーネントの定義は同梱の components/<id>.json だけを読む。
+コンポーネントの定義は同梱の components/<id>.json だけを読み、then に書いた部品が実在することも確かめる。
 
 検証すること: 9 つの工程がすべてあること・知らない工程が無いこと、各工程の候補が 1 つ以上で、どれも実在し、
 その工程を担う部品であること、最後の候補が後ろ盾 (builtin か、requires の無い script) であること、
@@ -63,6 +63,10 @@ def load_components(base=COMPONENTS) -> tuple[dict, list[str]]:
             errors.append(f'component {path.name}: {problem}')
             continue
         found[data['id']] = data
+    for cid, data in found.items():
+        for following in data.get('then', []):
+            if following not in found:
+                errors.append(f'component {cid}.json: then points at an unknown component: {following}')
     return found, errors
 
 
