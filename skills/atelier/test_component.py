@@ -200,8 +200,23 @@ class ComponentCliTest(unittest.TestCase):
                                       '--where', 'main', '--models', 'opus xhigh', 'sonnet high')
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['review'][0],
-                         {'id': 'review.pstack-interrogate', 'when': 'deep', 'models': ['opus xhigh', 'sonnet high']})
-        self.assertNotIn('models', self.load('components', 'review.pstack-interrogate.json'))
+                         {'id': 'review.pstack-interrogate', 'when': 'deep', 'where': 'main',
+                          'models': ['opus xhigh', 'sonnet high']})
+        # where と models は共有の部品の定義に書かないので、登録済みの部品のまま別のテンプレートで変えられる
+        component_file = self.load('components', 'review.pstack-interrogate.json')
+        self.assertEqual(component_file['where'], 'subagent-readonly')
+        self.assertNotIn('models', component_file)
+        code, out, err = self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--workflow', 'high-model',
+                                      '--where', 'main', '--models', 'sonnet high')
+        self.assertEqual(code, 0, out + err)
+        # 登録し直して --when だけ変えても、where と models は残り、--no-models で消える
+        self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--when', 'always')
+        self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['review'][0],
+                         {'id': 'review.pstack-interrogate', 'when': 'always', 'where': 'main',
+                          'models': ['opus xhigh', 'sonnet high']})
+        self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--when', 'always', '--no-models')
+        self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['review'][0],
+                         {'id': 'review.pstack-interrogate', 'when': 'always', 'where': 'main'})
         # サブエージェントで動く部品は、さらにサブエージェントを起こせないので models を持てない
         _, out, _ = self.run_cli('add', 'pstack:how', '--stage', 'understand', '--models', 'opus')
         self.assertIn('error understand: understand.pstack-how has models but does not run in main '
@@ -209,7 +224,7 @@ class ComponentCliTest(unittest.TestCase):
 
     def test_other_settings_for_a_registered_component_are_refused(self):
         self.run_cli('add', 'my-review', '--stage', 'review')
-        code, _, err = self.run_cli('add', 'my-review', '--stage', 'review', '--where', 'main', '--workflow', 'high-model')
+        code, _, err = self.run_cli('add', 'my-review', '--stage', 'review', '--memory', 'full', '--workflow', 'high-model')
         self.assertEqual(code, 2)
         self.assertIn('already registered with other settings', err)
         self.assertFalse(os.path.exists(os.path.join(self.home, 'workflows', 'high-model.json')))
@@ -314,7 +329,7 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(self.run_cli('example', 'use', 'recommended', '--as', 'jev-routed', '--replace')[0], 0)
 
     def test_example_use_refuses_a_component_registered_with_other_settings(self):
-        self.run_cli('add', 'pstack:how', '--stage', 'understand', '--where', 'subagent')
+        self.run_cli('add', 'pstack:how', '--stage', 'understand', '--memory', 'full')
         code, out, err = self.run_cli('example', 'use', 'recommended')
         self.assertEqual(code, 2)
         self.assertIn('understand.pstack-how', err)
