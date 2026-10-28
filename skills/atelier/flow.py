@@ -9,7 +9,7 @@
 確かめる。同梱するのはこのスキルの部品と Claude Code の built-in だけ。他の人のスキルは利用者がプラグインのコマンドで
 入れ、component.py add がその SKILL.md から home の部品を書く。home の部品は同梱の id を上書きできない (後ろ盾を守るため)。
 
-オプションの工程 (ui-design・marketing) は、テンプレートの optional に {"stage", "after", "components"} で置いたときだけ
+オプションの工程 (ui-design・marketing・security・model-check) は、テンプレートの optional に {"stage", "after", "components"} で置いたときだけ
 after の工程の直後 (関所より先) に並ぶ。関所と同じく成り立つ部品をすべて動かし、後ろ盾は要らない (appendix/optional.md)。
 
 検証すること: 9 つの工程がすべてあること・知らない工程が無いこと、各工程の候補が 1 つ以上で、どれも実在し、
@@ -18,9 +18,13 @@ after の工程の直後 (関所より先) に並ぶ。関所と同じく成り�
 after: route の関所だけにあること、where が runner の部品が memory full でないこと、calls_back が真の部品を
 使っていないこと、オプションの工程の stage・after・部品 (その工程を担うもの、1 つの工程は 1 回だけ)、
 fix.max_rework が 0〜5 の整数、build.external_memory が none か refs-only。
+候補の where の上書き (main・subagent-readonly・subagent。runner の部品は変えられない) と models
+(部品が起こすサブエージェントのモデル。`opus xhigh` の形で 1〜10 個、where が main の候補だけ。サブエージェントは
+サブエージェントを起こせないため)。
 
-標準出力はタブ区切りの表 (stage / component / invoke / where / memory / when / status / doc。1 行目は見出し)。
+標準出力はタブ区切りの表 (stage / component / invoke / where / memory / when / status / doc / models。1 行目は見出し)。
 doc は、その部品を動かす手順が書いてあるスキルの中のファイル (設計者はそこを読んで動かす)。
+where はテンプレートの上書きがあればそれ。models はカンマ区切り、無ければ `-`。
 関所の行の stage は `gate after <工程>`、オプションの工程の行は `<工程> after <工程>`。status は builtin・script ok・cli missing <名前>・env missing <名前>・
 plugin ok <SKILL.md の場所>・plugin missing <名前> (read-skill の部品。プラグインの置き場 PBI_PLUGINS_DIR、
 無ければ ~/.claude/plugins の下で、<プラグイン名>/ か <プラグイン名>/<版>/ の直下に invoke.path があるかを見る)・
@@ -38,6 +42,7 @@ tier-opus は tier が opus、coupling-high は scores.coupling が 2、deep は
 """
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -52,15 +57,21 @@ DEFAULT_WORKFLOW = 'jev-routed'
 STAGES = ('understand', 'design', 'plan', 'route', 'build', 'verify', 'review', 'fix', 'finish')
 GATE = 'gate'
 # オプションの工程。テンプレートの optional に置いたときだけ、after の工程の直後に動く。後ろ盾は要らない (無ければ飛ばす)
-OPTIONAL = ('ui-design', 'marketing', 'security')
+OPTIONAL = ('ui-design', 'marketing', 'security', 'model-check')
 # optional に置くときの既定の after (component.py add が使う)
-OPTIONAL_AFTER = {'ui-design': 'design', 'marketing': 'understand', 'security': 'review'}
+OPTIONAL_AFTER = {'ui-design': 'design', 'marketing': 'understand', 'security': 'review', 'model-check': 'design'}
 ROLES = STAGES + (GATE,) + OPTIONAL
 # オプションの工程を置ける after。finish のあとは完了報告に載らないので置かない
 OPTIONAL_PLACES = STAGES[:-1]
 INVOKE_KINDS = ('skill', 'read-skill', 'script', 'builtin')
 WHERE = ('main', 'subagent-readonly', 'subagent', 'runner')
 MEMORY = ('full', 'refs-only', 'none')
+# テンプレートの候補で上書きできる where。runner は worker.md の担当なので上書きでは選べない
+ENTRY_WHERE = ('main', 'subagent-readonly', 'subagent')
+# テンプレートの候補の models (部品が起こすサブエージェントのモデル)。Agent ツールの model と effort の形
+MODEL_SPEC = re.compile(r'(opus|sonnet|haiku|fable|inherit)( (low|medium|high|xhigh|max))?')
+# 1 つの部品が同時に起こすサブエージェントの上限
+MAX_MODELS = 10
 WHEN = ('always', 'clearly-complex', 'ask-or-decide', 'adapter-gate', 'tier-opus', 'coupling-high', 'deep',
         'ui-change', 'user-facing', 'ask-user')
 # PBI ごとに決まる条件。段と brief の値が出そろう振り分けのあと (after: route の関所) でしか判定できない
@@ -72,7 +83,7 @@ EXTERNAL_MEMORY = ('none', 'refs-only')
 # 差し戻しの上限の範囲 (今の上限は 2。5 を超える回数は設計の見直しに回すべき規模)
 MAX_REWORK_RANGE = (0, 5)
 
-HEADER = 'stage\tcomponent\tinvoke\twhere\tmemory\twhen\tstatus\tdoc'
+HEADER = 'stage\tcomponent\tinvoke\twhere\tmemory\twhen\tstatus\tdoc\tmodels'
 DECIDE_HEADER = 'place\tcomponent\tpbi\tdecision\treason'
 # プラグインの置き場の下を探す深さ (~/.claude/plugins/cache/<marketplace>/<plugin>/<版> まで届く)
 PLUGIN_SEARCH_DEPTH = 5
@@ -174,13 +185,26 @@ def find_workflow(pbi_dir: Path, name: str | None, home: Path) -> tuple[Path | N
     return None, candidates
 
 
+ENTRY_KEYS = {'id', 'when', 'where', 'models'}
+
+
 def entry(item) -> tuple[str | None, str | None]:
-    """テンプレートの候補 1 つ (文字列か {"id", "when"}) を (id, when の上書き) にする。"""
+    """テンプレートの候補 1 つ (文字列か {"id", "when", "where", "models"}) を (id, when の上書き) にする。"""
     if isinstance(item, str):
         return item, None
-    if isinstance(item, dict) and isinstance(item.get('id'), str) and set(item) <= {'id', 'when'}:
+    if isinstance(item, dict) and isinstance(item.get('id'), str) and set(item) <= ENTRY_KEYS:
         return item['id'], item.get('when')
     return None, None
+
+
+def entry_where(item, component: dict) -> str:
+    """候補の where (テンプレートの上書き、無ければ部品の where)。"""
+    return item.get('where') or component['where'] if isinstance(item, dict) else component['where']
+
+
+def entry_models(item) -> list:
+    """候補の models (部品が起こすサブエージェントのモデル)。無ければ空。"""
+    return item.get('models') or [] if isinstance(item, dict) else []
 
 
 def workflow_errors(workflow, components: dict) -> list[str]:
@@ -249,7 +273,7 @@ def check_item(item, role: str, place: str, components: dict, errors: list, afte
     """候補 1 つを確かめ、誤りを errors に足す。正しければ部品の定義を返す。"""
     cid, when = entry(item)
     if cid is None:
-        errors.append(f'{place}: a component must be an id or {{"id", "when"}}')
+        errors.append(f'{place}: a component must be an id or {{"id", "when", "where", "models"}}')
         return None
     component = components.get(cid)
     if component is None:
@@ -267,6 +291,19 @@ def check_item(item, role: str, place: str, components: dict, errors: list, afte
         errors.append(f'{place}: {cid} uses when {effective}, which only a gate after route can decide')
     elif effective in OPTIONAL_ONLY_WHEN and role not in OPTIONAL:
         errors.append(f'{place}: {cid} uses when {effective}, which only an optional stage can use')
+    if isinstance(item, dict) and 'where' in item and item['where'] not in ENTRY_WHERE:
+        errors.append(f'{place}: {cid} where must be one of {", ".join(ENTRY_WHERE)}')
+    elif component['where'] == 'runner' and isinstance(item, dict) and 'where' in item:
+        errors.append(f'{place}: {cid} runs on a runner; its where cannot change')
+    if isinstance(item, dict) and 'models' in item:
+        models = item['models']
+        if not isinstance(models, list) or not models or len(models) > MAX_MODELS \
+                or not all(isinstance(m, str) and MODEL_SPEC.fullmatch(m) for m in models):
+            errors.append(f'{place}: {cid} models must be 1 to {MAX_MODELS} of "<opus|sonnet|haiku|fable|inherit> '
+                          '[low|medium|high|xhigh|max]"')
+        elif entry_where(item, component) != 'main':
+            # サブエージェントはサブエージェントを起こせないので、models を使えるのは設計者が動かす部品だけ
+            errors.append(f'{place}: {cid} has models but does not run in main (a subagent cannot start subagents)')
     return component
 
 
@@ -371,8 +408,9 @@ def plan_rows(workflow: dict, components: dict, agents, env) -> list[tuple]:
     def row(place, item):
         cid, when = entry(item)
         component = components[cid]
-        rows.append((place, cid, component['invoke']['kind'], component['where'], component['memory'],
-                     when or component['when'], status(component, agents, env), component['doc']))
+        rows.append((place, cid, component['invoke']['kind'], entry_where(item, component), component['memory'],
+                     when or component['when'], status(component, agents, env), component['doc'],
+                     ','.join(entry_models(item)) or '-'))
 
     for stage in STAGES:
         for item in workflow['stages'][stage]:

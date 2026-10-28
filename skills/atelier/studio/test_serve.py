@@ -408,8 +408,8 @@ class ServeTest(unittest.TestCase):
         flow_state = self.get_state()['flow']
         self.assertEqual(flow_state['stages'][0], 'understand')
         self.assertIn('deep', flow_state['when'])
-        self.assertEqual(flow_state['optional'], ['ui-design', 'marketing', 'security'])
-        self.assertEqual(flow_state['optional_after'], {'ui-design': 'design', 'marketing': 'understand', 'security': 'review'})
+        self.assertEqual(flow_state['optional'], ['ui-design', 'marketing', 'security', 'model-check'])
+        self.assertEqual(flow_state['optional_after'], {'ui-design': 'design', 'marketing': 'understand', 'security': 'review', 'model-check': 'design'})
         self.assertNotIn('finish', flow_state['optional_places'])
         self.assertEqual(flow_state['default'], 'jev-routed')
         self.assertEqual(flow_state['errors'], [])

@@ -200,6 +200,14 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - when に `ask-user` を足した。オーケストレーターは自分で決めず、毎回 1 回だけ利用者に聞き、はいのときだけ動かす。route 以降に置いた工程なら PBI 一覧の承認のときに一緒に聞き、あとで止まらない (承認は route のあとなので、plan 以前に置いた工程はその工程の最初の行の前に聞く)。使えるのはオプションの工程だけで、ほかの工程と関所では flow.py が誤りにする。答えは `docs/pbi/adapters.json` に残し、resume で聞き直さない。答えが無ければ動かさない。
 - 推奨の見本では、security に Cloudflare の security-audit (cloudflare/security-audit-skill、MIT) を `ask-user` で入れた。プラグインではなく Skills CLI で `~/.claude/skills/security-audit` に入る自分のスキルの形なので、`install.command` に `npx skills add ... --global --agent claude-code --yes` を書く。スキルの中身はリポジトリに入れない。対象のコードを動かすのはスキルが求めるサンドボックスの中だけで、無ければ候補のまま報告させる。
 
+### pstack 0.15.36 への追従
+
+- pstack 0.15.36 で `interrogate` が作り直され、敵役のサブエージェントを worktree で並べ、変更を実際に動かして示せた指摘だけを残すようになった。サブエージェントはサブエージェントを起こせないので、今までの読み取り専用のサブエージェントでは動かない。そこで、テンプレートの候補に `where` (そのテンプレートでだけ動かす場所を変える) と `models` (部品が起こすサブエージェントのモデル。`opus xhigh` の形で 1〜10 個) を足した。`models` は `where` が `main` の候補だけに書ける。部品の定義はテンプレートの間で共有するので、`when` と同じく候補に書く (登録済みの部品を消さずにテンプレートだけ替えられる)。推奨の見本では、interrogate を `main` にして、敵役を opus xhigh と sonnet high にした。
+- 新しい interrogate の出力 (Intent・Findings・Dropped) には重要度が無い。実行で示せた指摘は minor にせず、受け入れ条件を破る・データを壊す・セキュリティの穴なら critical、ほかは major として `final.review.md` に写す。敵役が作る worktree (`.claude/worktrees/`) は、結果を捨てる判定の git status から外す。
+- 4 つ目のオプションの工程 `model-check` (既定は design のあと) を足した。状態の多い作業で、ルールを TLA+ のモデルで確かめ、読む人の言葉の状態遷移図にする。推奨の見本では pstack の `statechart` を `ask-user` で入れた。初回は mise が TLC と Java (約 300 MB) を入れるので、聞くときにそれを伝え、はいをダウンロードの許可とする。使えなければ、仕様に Mermaid の `stateDiagram-v2` を手で描いて承認のときに確かめてもらう。合意したルールは仕様に、破れたルールの道筋は計画がテストにする。
+- pstack の Orchestrate と poteto-mode から、自分の言葉で 2 つを取り込んだ: PBI のレビューは作った担当と別のモデルにする (opus で作ったものは sonnet high で見る)、最初のメッセージと仕様と完了報告で、利用者の目的を自分の言葉で言い直す。
+- 最終レビューの重要度の基準を決め、承認済みの ADR との食い違いは見送らない (コードを直すか、新しい ADR を起こすかを利用者が決める) ことにした。worker は、PBI と仕様で決まっていない利用者に見える振る舞いを決めずに Open に書く。
+
 ## Testing Decisions
 
 - generic-reorg.md と同じく、スクリプトを CLI として一時ディレクトリ (docs/pbi と home) で動かし、出力だけを見る。
