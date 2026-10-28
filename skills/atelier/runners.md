@@ -23,7 +23,7 @@ How to work and report: read docs/pbi/worker.md first and follow it.
 
 - Write the prompt to `docs/pbi/<runner>/<report>.prompt.md` and end it with `Summary file: docs/pbi/<runner>/<report>.last.md`.
 - Launch one per background Bash call (`run_in_background`) from the repository root, never several joined with `&`. cd with a literal absolute path; a cd through a variable stops at Claude Code's permission check.
-- Treat them as unable to use shared memory. When the PBI lists refs, `get` each one yourself and append them to the prompt file under `## Refs (workspace)`, by id, adding "The refs are copied below. Do not use memory." The template's `build.external_memory` stays `none` unless the user chose `refs-only` for a runner that has a memory `get` tool; `record_run.py` flags any other memory use (`appendix/engine.md`).
+- Treat them as unable to use shared memory. When the PBI lists refs, `get` each one yourself and append them to the prompt file under `## Refs (workspace)`, by id, adding "The refs are copied below. Do not use memory." The template's `build.external_memory` stays `none` unless the user chose `refs-only` for a runner that has a memory `get` tool (today only dsh, through `--memory refs-only`); `record_run.py` flags any other memory use (`appendix/engine.md`).
 - They read AGENTS.md or nothing, never CLAUDE.md. Put the conventions a PBI needs in the PBI.
 - Read only `.last.md` (5 lines). Never read `.jsonl`, `.log` or `.json` whole; take the items named below with `grep -m` or `tail -n`.
 - `record_run.py` reads tokens, cost, steps and time from each runner's logs. Never add them by hand.
@@ -132,10 +132,11 @@ agy -p "Read docs/pbi/agy/<report>.prompt.md and follow it." --model <model> --m
 
 ```bash
 mkdir -p docs/pbi/dsh
-python <skill>/dsh_run.py <report> --model <model> [--effort <effort>]
+python <skill>/dsh_run.py <report> --model <model> [--effort <effort>] [--memory refs-only]
 ```
 
 - `dsh_run.py` writes a per-run patch (`<report>.patch.yml`: provider, model, reasoningEffort) and passes it with `--patch`. It writes the events to `.jsonl`, diagnostics to `.err`, the final text to `.final.md`, and start, end and exit code to `.run.json`. Leave out `--effort` when it is null.
+- Memory: pass `--memory refs-only` only when the template's `build.external_memory` is `refs-only`. The per-run patch then also connects the shared-memory MCP (`ATELIER_SHARED_MEMORY_URL`, default `http://127.0.0.1:7820/mcp`), so the worker can `get` the listed refs by id. dsh cannot hide the other memory tools, so still copy the refs into the prompt, and in place of "Do not use memory." write "You may `get` only the ids listed above. Do not search or write memory." Without the flag `dsh_run.py` adds no memory tool; keep shared-memory out of the `cordis.patch.yml` files under `DSH_HOME` (use a `--patch` overlay for other launches) so `none` holds.
 - Keys: environment variables first, then `~/.config/deepseek/deepseek.key` (DeepSeek official) and `~/.config/opencode/opencode-go.key` (OpenCode Go). Values are never shown. A missing key exits 2: treat it as unusable and tell the user where the key goes.
 - Location: `dsh` on the PATH, or `PBI_DSH_BIN` (`@deepseek-ai/dsh/lib/bin.js`) with `PBI_DSH_NODE` (default: node on the PATH). `DSH_HOME` is passed the same way.
 - Permissions: `DSH_PERMISSION_MODE=workspace-write`. Writes stay in the repository; commands run in a sandbox (PowerShell on Windows). Headless runs have nobody to approve an escalation, so commands that need more are denied.
