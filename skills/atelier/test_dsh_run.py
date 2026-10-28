@@ -58,15 +58,16 @@ class CliTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def run_cli(self, *args, key_file=True, env_key=None, exit_code=0):
+    def run_cli(self, *args, key_file=True, env_key=None, exit_code=0, extra_env=None):
         if key_file:
             (self.home / '.config' / 'deepseek' / 'deepseek.key').write_text('﻿sk-test-value\r\n', encoding='utf-8')
         env = {k: v for k, v in os.environ.items()
-               if k not in ('DEEPSEEK_API_KEY', 'OPENCODE_GO_API_KEY', 'DSH_HOME')}
+               if k not in ('DEEPSEEK_API_KEY', 'OPENCODE_GO_API_KEY', 'DSH_HOME', 'ATELIER_SHARED_MEMORY_URL')}
         env.update(PBI_DSH_NODE=sys.executable, PBI_DSH_BIN=str(self.fake), FAKE_DSH_LOG=str(self.log),
                    FAKE_DSH_EXIT=str(exit_code), USERPROFILE=str(self.home), HOME=str(self.home))
         if env_key:
             env['DEEPSEEK_API_KEY'] = env_key
+        env.update(extra_env or {})
         return subprocess.run([sys.executable, SCRIPT, *args], cwd=self.repo, capture_output=True, text=True,
                               encoding='utf-8', env=env)
 
@@ -95,6 +96,37 @@ class CliTest(unittest.TestCase):
         for p in d.iterdir():
             self.assertNotIn('sk-test-value', p.read_text(encoding='utf-8'), p.name)
         self.assertNotIn('sk-test-value', r.stdout + r.stderr)
+
+    def test_memory_is_off_by_default(self):
+        r = self.run_cli('PBI-001', '--model', 'deepseek-official/deepseek-flash')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = self.repo / 'docs' / 'pbi' / 'dsh'
+        self.assertNotIn('shared-memory', (d / 'PBI-001.patch.yml').read_text(encoding='utf-8'))
+        self.assertEqual(json.loads((d / 'PBI-001.run.json').read_text(encoding='utf-8'))['memory'], 'none')
+
+    def test_refs_only_adds_shared_memory_mcp_to_the_patch(self):
+        r = self.run_cli('PBI-001', '--model', 'deepseek-official/deepseek-flash', '--memory', 'refs-only')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = self.repo / 'docs' / 'pbi' / 'dsh'
+        patch = (d / 'PBI-001.patch.yml').read_text(encoding='utf-8')
+        self.assertIn('- insert:\n    - id: mcp-shared-memory\n', patch)
+        self.assertIn('        serverName: shared-memory\n', patch)
+        self.assertIn('        url: http://127.0.0.1:7820/mcp\n', patch)
+        self.assertIn('provider: deepseek-official', patch)
+        self.assertEqual(json.loads((d / 'PBI-001.run.json').read_text(encoding='utf-8'))['memory'], 'refs-only')
+
+    def test_memory_url_comes_from_env_and_is_checked(self):
+        r = self.run_cli('PBI-001', '--model', 'deepseek-official/deepseek-flash', '--memory', 'refs-only',
+                         extra_env={'ATELIER_SHARED_MEMORY_URL': 'http://127.0.0.1:9000/mcp'})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        patch = (self.repo / 'docs' / 'pbi' / 'dsh' / 'PBI-001.patch.yml').read_text(encoding='utf-8')
+        self.assertIn('url: http://127.0.0.1:9000/mcp', patch)
+        for url in ('http://x/mcp #c', "http://x/'a", 'file:///etc/passwd', 'http://x/\n- id: y'):
+            r = self.run_cli('PBI-001', '--model', 'deepseek-official/deepseek-flash', '--memory', 'refs-only',
+                             extra_env={'ATELIER_SHARED_MEMORY_URL': url})
+            self.assertEqual(r.returncode, 2, url)
+        r = self.run_cli('PBI-001', '--model', 'deepseek-official/deepseek-flash', '--memory', 'full')
+        self.assertEqual(r.returncode, 2)
 
     def test_null_effort_omits_reasoning_effort(self):
         r = self.run_cli('PBI-001', '--model', 'deepseek-official/deepseek-flash', '--effort', 'null')

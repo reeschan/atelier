@@ -1,10 +1,15 @@
 """実行先 dsh（DeepSeek Harness の headless）で PBI を 1 件動かす。runners.md の「dsh」の節から呼ぶ。
 
-  python <このディレクトリ>/dsh_run.py <報告名> --model <provider>/<model> [--effort <effort>] [--pbi-dir docs/pbi]
+  python <このディレクトリ>/dsh_run.py <報告名> --model <provider>/<model> [--effort <effort>] [--memory none|refs-only]
+      [--pbi-dir docs/pbi]
 
 - 依頼文は <pbi-dir>/dsh/<報告名>.prompt.md（先に書いておく）。リポジトリのルートで実行する（そこが dsh の作業ルートになる）。
 - モデルと effort は、実行ごとの上書き設定 <pbi-dir>/dsh/<報告名>.patch.yml に書いて `--patch` で渡す
   （agent-default-model の provider・model・reasoningEffort）。DSH_HOME の共通の設定より後に当たる。
+- --memory refs-only（テンプレートの build.external_memory が refs-only のとき）は、同じ上書き設定に shared-memory の
+  MCP（mcp__shared-memory__get など）を足す。接続先は環境変数 ATELIER_SHARED_MEMORY_URL、無ければ
+  http://127.0.0.1:7820/mcp。dsh の MCP には道具を絞る設定が無いので search・write も見える。refs にある id の get
+  以外は依頼文で禁じ、record_run.py がログから違反を見る。既定の none では足さない。
 - 出力: <報告名>.jsonl（`--json` のイベント）・<報告名>.err（dsh の診断）・<報告名>.final.md（final イベントの本文）・
   <報告名>.run.json（開始・終了の時刻と終了コード。record_run.py が読む）。
   5 行の報告 <報告名>.last.md は実装担当が書く（依頼文の末尾の「要約の書き先」）。
@@ -38,6 +43,11 @@ LOCAL_KEY_ENV = 'QWEN_LOCAL_API_KEY'
 # YAML に書き込む値。!!js や改行が入らないよう、使える文字を限る
 NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
 REPORT = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
+MEMORY = ('none', 'refs-only')
+MEMORY_URL_ENV = 'ATELIER_SHARED_MEMORY_URL'
+MEMORY_URL_DEFAULT = 'http://127.0.0.1:7820/mcp'
+# YAML に書き込む URL。引用符・空白・# や !!js が入らないよう、使える文字を限る
+MEMORY_URL = re.compile(r'^https?://[A-Za-z0-9._~:/?&=%+-]{1,500}$')
 
 
 def now() -> str:
@@ -56,7 +66,7 @@ def parse_model(value: str) -> tuple[str, str]:
     return provider, model
 
 
-def patch_yaml(provider: str, model: str, effort: str | None) -> str:
+def patch_yaml(provider: str, model: str, effort: str | None, memory_url: str | None = None) -> str:
     lines = [
         '# dsh_run.py が実行ごとに書く上書き設定 (手で直さない)',
         '- id: agent-default-model',
@@ -66,6 +76,16 @@ def patch_yaml(provider: str, model: str, effort: str | None) -> str:
     ]
     if effort is not None:
         lines.append(f'    reasoningEffort: {effort}')
+    if memory_url is not None:
+        lines += [
+            '- insert:',
+            '    - id: mcp-shared-memory',
+            "      name: '@deepseek-ai/dsh-mcp-client'",
+            '      config:',
+            '        serverName: shared-memory',
+            '        transport: streamable-http',
+            f'        url: {memory_url}',
+        ]
     return '\n'.join(lines) + '\n'
 
 
@@ -132,6 +152,7 @@ def main() -> None:
     ap.add_argument('report')
     ap.add_argument('--model', required=True)
     ap.add_argument('--effort', default=None)
+    ap.add_argument('--memory', choices=MEMORY, default='none')
     ap.add_argument('--pbi-dir', default='docs/pbi')
     args = ap.parse_args()
 
@@ -141,6 +162,11 @@ def main() -> None:
     effort = None if args.effort in (None, '', 'null', 'none') else args.effort
     if effort is not None and not NAME.match(effort):
         fail(f'--effort に使えない文字があります: {effort!r}')
+    memory_url = None
+    if args.memory == 'refs-only':
+        memory_url = os.environ.get(MEMORY_URL_ENV) or MEMORY_URL_DEFAULT
+        if not MEMORY_URL.match(memory_url):
+            fail(f'{MEMORY_URL_ENV} に使えない文字があります: {memory_url!r}')
 
     base = Path(args.pbi_dir) / 'dsh'
     prompt = base / f'{args.report}.prompt.md'
@@ -150,7 +176,7 @@ def main() -> None:
 
     env = build_env(provider)
     patch = base / f'{args.report}.patch.yml'
-    patch.write_text(patch_yaml(provider, model, effort), encoding='utf-8')
+    patch.write_text(patch_yaml(provider, model, effort, memory_url), encoding='utf-8')
     task = f'{prompt.as_posix()} を読み、その指示どおりに作業してください。'
     jsonl = base / f'{args.report}.jsonl'
     err = base / f'{args.report}.err'
@@ -160,12 +186,13 @@ def main() -> None:
             [*launcher, '--profile', 'headless', '--patch', str(patch.resolve()), '--json', task],
             stdin=subprocess.DEVNULL, stdout=out, stderr=errf, env=env)
     # dsh の --json には時刻が無いので、record_run.py が読む開始・終了時刻をここで残す
-    run = {'start': start, 'end': now(), 'exit': code, 'model': f'{provider}/{model}', 'effort': effort}
+    run = {'start': start, 'end': now(), 'exit': code, 'model': f'{provider}/{model}', 'effort': effort,
+           'memory': args.memory}
     (base / f'{args.report}.run.json').write_text(json.dumps(run, ensure_ascii=False) + '\n', encoding='utf-8')
     text = final_text(jsonl)
     if text is not None:
         (base / f'{args.report}.final.md').write_text(text, encoding='utf-8')
-    print(f'dsh_run: exit={code} model={provider}/{model} effort={effort} jsonl={jsonl.as_posix()}')
+    print(f'dsh_run: exit={code} model={provider}/{model} effort={effort} memory={args.memory} jsonl={jsonl.as_posix()}')
     sys.exit(code)
 
 
