@@ -11,11 +11,12 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 | stage | the stage, `<optional stage> after <stage>`, or `gate after <stage>` |
 | component | the component id (`components/<id>.json`, or `<home>/components/<id>.json`) |
 | invoke | `skill` (Skill tool), `read-skill` (read a plugin's SKILL.md and follow it), `script` (a bundled Python script), `builtin` (a procedure in this skill) |
-| where | `main` (your session), `subagent-readonly`, `subagent`, `runner` (a worker on its route) |
+| where | `main` (your session), `subagent-readonly`, `subagent`, `runner` (a worker on its route); the template entry's `where` when it has one |
 | memory | how much shared memory the component may use: `full`, `refs-only`, `none` |
 | when | the condition under which it runs (below) |
 | status | `builtin`, `script ok`, `cli missing <name>`, `env missing <name>`, `plugin ok <SKILL.md path>`, `plugin missing <name>`, or `check skill list` |
 | doc | the file in this skill that holds the procedure; read it when the component is picked |
+| models | the models of the subagents the component starts, from the template entry (`opus xhigh,sonnet high`), or `-` for the skill's own choice |
 
 ## Picking
 
@@ -46,14 +47,14 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 | `user-facing` | the request adds or changes something end users see or pay for (`appendix/optional.md`) |
 | `ask-user` | the user said yes when asked this run; always ask, never decide alone. Optional stages only (`appendix/optional.md`) |
 
-A template entry `{"id", "when"}` replaces the component's own `when` in that template only.
+A template entry `{"id", "when", "where", "models"}` replaces the component's own `when` and `where` in that template only, and `models` names the models of the subagents the component starts (`## read-skill components`). The component file is shared by every template, so these never go into it. `flow.py` accepts `models` only on an entry whose `where` is `main`, because a subagent cannot start subagents.
 
 The per-PBI values are decided by a script. Once every `route.json` exists, run `python <skill>/flow.py docs/pbi --decide` (with the same `--workflow <name>` as at the start, if any): it prints place, component, PBI, decision (`run`, `skip`, or `orchestrator` for a `when` you decide) and reason, for each row of the gates after route (one per PBI) and for each review row whose `when` is `deep` (PBI `all`). Follow it; do not judge these values yourself.
 
 ## where and memory
 
 - `main`: run it yourself, in this session.
-- `subagent-readonly`: an Agent tool subagent (`general-purpose`) told to write nothing but its output file in `docs/pbi/`, and never to commit or post. Take `git rev-parse HEAD` and `git status --porcelain -- . ':!docs/pbi'` before and after; if either changed, discard the result and record `fallback`.
+- `subagent-readonly`: an Agent tool subagent (`general-purpose`) told to write nothing but its output file in `docs/pbi/`, and never to commit or post. Take `git rev-parse HEAD` and `git status --porcelain -- . ':!docs/pbi' ':!.claude/worktrees'` before and after; if either changed, discard the result and record `fallback`.
 - `subagent`: a `general-purpose` subagent that may write only the result file named in its prompt.
 - `runner`: the worker on the PBI's route (`runners.md`).
 - `full`: the component may search and read shared memory like you do. `refs-only`: it may `get` only the refs listed in the PBI. `none`: no memory tools.
@@ -65,7 +66,7 @@ The per-PBI values are decided by a script. Once every `route.json` exists, run 
 The bundled components cover only this skill and the skills built into Claude Code (`code-review`, `security-review`). This skill ships no one else's skill and no component for one. Any other skill, the user's own included, becomes an **external component**:
 
 1. The user installs the skill with Claude Code's plugin commands (`/plugin marketplace add <repo>`, `/plugin install <plugin>@<marketplace>`), or keeps their own in `~/.claude/skills/<name>/`.
-2. `python <skill>/component.py add <plugin>:<name> --stage <stage> [--after <stage>] [--when W] [--forbid TEXT]` (`--stage` is a stage, `gate`, or an optional stage: `ui-design`, `marketing`, `security`) reads the installed SKILL.md and writes `<home>/components/<stage>.<plugin>-<name>.json`: `skill` when the model can invoke it, `read-skill` when it has `disable-model-invocation` (plugin skills only; a personal skill must be model-invocable), with the license and link from the plugin's `plugin.json`. `--when` goes on the template's entry (`{"id", "when"}`), not into the shared component file, so one template's condition never changes another's; registering the same component again with other settings is refused. It puts the component first in that stage of `<home>/workflows/<workflow>.json` (default `jev-routed`, copied from the bundled one when missing), last in the gate after `--after`, or last in the optional stage (placed after `--after`, or its default place, the first time). It checks the result like `flow.py` and leaves nothing on an error.
+2. `python <skill>/component.py add <plugin>:<name> --stage <stage> [--after <stage>] [--when W] [--forbid TEXT]` (`--stage` is a stage, `gate`, or an optional stage: `ui-design`, `marketing`, `security`) reads the installed SKILL.md and writes `<home>/components/<stage>.<plugin>-<name>.json`: `skill` when the model can invoke it, `read-skill` when it has `disable-model-invocation` (plugin skills only; a personal skill must be model-invocable), with the license and link from the plugin's `plugin.json`. `--when`, `--where` and `--models` go on the template's entry (`{"id", "when", "where", "models"}`), not into the shared component file, so one template's settings never change another's (a later `add` keeps the entry's `where` and `models` unless given again; `--no-models` drops the models); registering the same component again with other settings is refused. It puts the component first in that stage of `<home>/workflows/<workflow>.json` (default `jev-routed`, copied from the bundled one when missing), last in the gate after `--after`, or last in the optional stage (placed after `--after`, or its default place, the first time). It checks the result like `flow.py` and leaves nothing on an error.
 3. `component.py remove <id>` takes it out of that template and deletes the component, refusing while another home template still uses it; `component.py list` shows bundled and external components.
 4. An example template (`examples/workflows/<name>.json`) carries a whole template plus, for each skill it uses, how to install and register it. `component.py example check <name>` shows which skills are missing and prints the install commands (exit 3 while some are missing; the script installs nothing). `component.py example use <name> [--as NAME] [--replace]` registers every skill and writes the template to home. `setup --recommended` drives this (`appendix/adapters.md`).
 
@@ -77,8 +78,11 @@ The bundled components cover only this skill and the skills built into Claude Co
 A `read-skill` component points at a skill that the model cannot invoke (all pstack skills). Run it like this:
 
 1. The status column gives the SKILL.md path (`plugin ok <path>`); `flow.py` looked under `~/.claude/plugins/` (or `PBI_PLUGINS_DIR`). With `plugin missing`, record `fallback (plugin not installed)` and take the next row.
-2. Start a subagent of the row's `where` type. In its prompt: the SKILL.md path to read and follow, the harness notes to read first when the plugin has them (pstack: `docs/harness/claude-code.md`, two levels above `skills/`), the component's `forbid` items, the request or the PBI path, and the output file below.
-3. Output: a note in `docs/pbi/notes/` (`<slug>.<name>.md`, or `PBI-<n>.<name>.md` per PBI), or the result file its `forbid` names. The subagent returns at most 5 lines and the path.
+2. When `where` is `main` (a skill that starts its own subagents, such as pstack's `interrogate`), read the harness notes and the SKILL.md yourself and follow them, with the component's `forbid` items. Go to step 3. Otherwise, start a subagent of the row's `where` type. In its prompt: the SKILL.md path to read and follow, the harness notes to read first when the plugin has them (pstack: `docs/harness/claude-code.md`, two levels above `skills/`), the component's `forbid` items, the request or the PBI path, and the output file below.
+   - With `models`, start the skill's subagents on those models, one subagent per entry, in that order, in place of the models the skill picks (pstack reads them from a role line such as `interrogate reviewers`; the entries already have the Claude Code form `<model> <effort>`, and `inherit` means omit `model`). Without `models`, the skill picks as it says.
+   - Worktrees the skill makes for its subagents (`isolation: "worktree"`, under `.claude/worktrees/`) are theirs to write in; the forbid on other files still holds in the work tree. When the skill is done, remove them with `git worktree remove --force <path>`; first copy into the output any repro that a finding cites.
+   - Its subagents report to you with commands and output; keep only what the output file needs.
+3. Output: a note in `docs/pbi/notes/` (`<slug>.<name>.md`, or `PBI-<n>.<name>.md` per PBI), the result file its `forbid` names, or, for an optional stage, its artifact folder (`appendix/optional.md`). Name the output in the prompt; it is "the output file named in the prompt" of the read-skill forbid, and a scratch folder outside the repository that the skill asks for is not a repository file. The subagent returns at most 5 lines and the path.
 4. Link per-PBI notes from that PBI's Notes section, so its worker reads them. Workers never run plugin skills themselves.
 
 ## STATUS.md

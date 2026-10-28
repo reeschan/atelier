@@ -14,6 +14,9 @@ Final review of this repository's work. Report only: do not edit, commit, push o
 - Write <docs/pbi/reviews/final.review.md, or docs/pbi/reviews/final.security.md for security>.
   Line 1: findings: <critical>,<major>,<minor>
   Then one line per finding: - [critical|major|minor] <file>:<line> — <why> — <repro>
+  critical: an acceptance criterion fails, something breaks, or stored data or an outside system is affected.
+  major: the change drifts from the spec's intent, decides a behavior the spec leaves open, or contradicts an accepted decision record (ADR).
+  minor: wording or a small mismatch; the behavior still matches the spec.
   If you stopped on a question, line 1 is BLOCKED: <reason>, with no finding lines.
 - Your final message: the three counts and one line per finding, nothing else.
 ```

@@ -154,7 +154,7 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 ### 外部部品 (PR 3)
 
 - 利用者の求めで、同梱する部品とプリセットを、このスキルの部品と Claude Code の built-in (`code-review`・`security-review`) だけにした。他の人のスキルは、その部品の定義 (名前・リンク・ライセンスだけの JSON) も含めてリポジトリに置かない。
-- スキルは利用者が Claude Code のプラグインのコマンド (`/plugin marketplace add`・`/plugin install`) で入れる。`component.py add <plugin>:<name> --stage <工程>` (関所は `--stage gate --after <工程>`) が、入った SKILL.md を読んで `<home>/components/<工程>.<plugin>-<name>.json` を書き、home のテンプレート (既定 jev-routed。無ければ同梱のものを写す) の工程の先頭か、関所の最後に差す。`disable-model-invocation: true` なら read-skill (プラグインのスキルだけ。自分のスキルはモデルから呼べるものに限る)、ほかは skill。ライセンスとリンクはプラグインの `.claude-plugin/plugin.json` から取る。`--where`・`--memory`・`--forbid` で上書きできる。`--when` は共有の部品の定義ではなくテンプレートの候補 (`{"id", "when"}`) に書き、別のテンプレートの動きを変えない。同じ部品をほかの設定で登録し直すのは断る。`~/.claude/skills/<name>/` の自分のスキルも `add <name>` で同じように使える。
+- スキルは利用者が Claude Code のプラグインのコマンド (`/plugin marketplace add`・`/plugin install`) で入れる。`component.py add <plugin>:<name> --stage <工程>` (関所は `--stage gate --after <工程>`) が、入った SKILL.md を読んで `<home>/components/<工程>.<plugin>-<name>.json` を書き、home のテンプレート (既定 jev-routed。無ければ同梱のものを写す) の工程の先頭か、関所の最後に差す。`disable-model-invocation: true` なら read-skill (プラグインのスキルだけ。自分のスキルはモデルから呼べるものに限る)、ほかは skill。ライセンスとリンクはプラグインの `.claude-plugin/plugin.json` から取る。`--memory`・`--forbid` で上書きできる。`--when`・`--where`・`--models` は共有の部品の定義ではなくテンプレートの候補 (`{"id", "when", "where", "models"}`) に書き、別のテンプレートの動きを変えない。同じ部品をほかの設定で登録し直すのは断る。`~/.claude/skills/<name>/` の自分のスキルも `add <name>` で同じように使える。
 - 書いたあと flow.py と同じ検証をし、誤りなら書いたものを元に戻して終了コード 2。`remove <id>` で外す (id の形と components/ の直下であることを確かめ、ほかの home のテンプレートが使っていれば何も変えずに止める)。`list` で同梱と外部の部品を並べる。同梱の部品は消せず、同じ id の外部部品も作れない (どの工程も後ろ盾を失わないため)。プラグインのスキルの id に plugin 名を入れるのは、built-in の code-review と同じ名前のスキル (mattpocock-skills の code-review) とぶつからないようにするため。
 - `flow.py` は同梱の `components/` のあとに `<home>/components/` も読む。
 - `setup --recommended` は、承認されたら mattpocock-skills を入れ、grilling と code-review を `component.py add` で登録する。設計の呼び出し先が無いときに `setup --recommended` を勧める 1 行は出さない。README の「External components」に、mattpocock-skills・pstack・yomiyasu を入れて登録するコマンドを並べた。
@@ -199,6 +199,14 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - 利用者の求めで、3 つ目のオプションの工程 `security` を足した。変えたコードのセキュリティ監査をし、要約を `docs/pbi/security/<slug>.md` に書く (スキル自身の出力はスキルの既定の場所、リポジトリの外)。既定の場所は review のあと。fix より前なので、PBI が変えたファイルで確かめられた指摘は、レビューの指摘と同じくその PBI の差し戻しにする (上限に数える)。PBI の外の指摘と、確かめきれなかった候補は完了報告に書き、この回では直さない。
 - when に `ask-user` を足した。オーケストレーターは自分で決めず、毎回 1 回だけ利用者に聞き、はいのときだけ動かす。route 以降に置いた工程なら PBI 一覧の承認のときに一緒に聞き、あとで止まらない (承認は route のあとなので、plan 以前に置いた工程はその工程の最初の行の前に聞く)。使えるのはオプションの工程だけで、ほかの工程と関所では flow.py が誤りにする。答えは `docs/pbi/adapters.json` に残し、resume で聞き直さない。答えが無ければ動かさない。
 - 推奨の見本では、security に Cloudflare の security-audit (cloudflare/security-audit-skill、MIT) を `ask-user` で入れた。プラグインではなく Skills CLI で `~/.claude/skills/security-audit` に入る自分のスキルの形なので、`install.command` に `npx skills add ... --global --agent claude-code --yes` を書く。スキルの中身はリポジトリに入れない。対象のコードを動かすのはスキルが求めるサンドボックスの中だけで、無ければ候補のまま報告させる。
+
+### pstack 0.15.36 への追従
+
+- pstack 0.15.36 で `interrogate` が作り直され、敵役のサブエージェントを worktree で並べ、変更を実際に動かして示せた指摘だけを残すようになった。サブエージェントはサブエージェントを起こせないので、今までの読み取り専用のサブエージェントでは動かない。そこで、テンプレートの候補に `where` (そのテンプレートでだけ動かす場所を変える) と `models` (部品が起こすサブエージェントのモデル。`opus xhigh` の形で 1〜10 個) を足した。`models` は `where` が `main` の候補だけに書ける。部品の定義はテンプレートの間で共有するので、`when` と同じく候補に書く (登録済みの部品を消さずにテンプレートだけ替えられる)。推奨の見本では、interrogate を `main` にして、敵役を opus xhigh と sonnet high にした。
+- 新しい interrogate の出力 (Intent・Findings・Dropped) には重要度が無い。実行で示せた指摘は minor にせず、受け入れ条件を破る・データを壊す・セキュリティの穴なら critical、ほかは major として `final.review.md` に写す。敵役が作る worktree (`.claude/worktrees/`) は、結果を捨てる判定の git status から外す。
+- 4 つ目のオプションの工程 `model-check` (既定は design のあと) を足した。状態の多い作業で、ルールを TLA+ のモデルで確かめ、読む人の言葉の状態遷移図にする。推奨の見本では pstack の `statechart` を `ask-user` で入れた。初回は mise が TLC と Java (約 300 MB) を入れるので、聞くときにそれを伝え、はいをダウンロードの許可とする。使えなければ、仕様に Mermaid の `stateDiagram-v2` を手で描いて承認のときに確かめてもらう。合意したルールは仕様に、破れたルールの道筋は計画がテストにする。
+- pstack の Orchestrate と poteto-mode から、自分の言葉で 2 つを取り込んだ: PBI のレビューは作った担当と別のモデルにする (opus で作ったものは sonnet high で見る)、最初のメッセージと仕様と完了報告で、利用者の目的を自分の言葉で言い直す。
+- 最終レビューの重要度の基準を決め、承認済みの ADR との食い違いは見送らない (コードを直すか、新しい ADR を起こすかを利用者が決める) ことにした。worker は、PBI と仕様で決まっていない利用者に見える振る舞いを決めずに Open に書く。
 
 ## Testing Decisions
 

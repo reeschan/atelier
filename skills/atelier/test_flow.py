@@ -27,7 +27,7 @@ sys.path.insert(0, HERE)
 import component  # noqa: E402
 import flow  # noqa: E402
 
-HEADER = 'stage\tcomponent\tinvoke\twhere\tmemory\twhen\tstatus\tdoc'
+HEADER = 'stage\tcomponent\tinvoke\twhere\tmemory\twhen\tstatus\tdoc\tmodels'
 PRESETS = ('jev-routed', 'high-model')
 # 偽の pstack に置くスキル (どれも disable-model-invocation なので read-skill の部品になる)
 PSTACK_SKILLS = ('how', 'blast-radius', 'architect', 'interrogate')
@@ -181,7 +181,7 @@ class FlowCliTest(unittest.TestCase):
         self.add_optional()
         good = self.home_workflow()
         cases = [
-            ('error each optional step needs stage (ui-design, marketing, security), after (a stage before finish) and a non-empty components list',
+            ('error each optional step needs stage (ui-design, marketing, security, model-check), after (a stage before finish) and a non-empty components list',
              [{'stage': 'deploy', 'after': 'finish', 'components': ['ui-design.my-ui']}]),
             ('error optional: ui-design appears more than once',
              [{'stage': 'ui-design', 'after': 'design', 'components': ['ui-design.my-ui']},
@@ -240,6 +240,39 @@ class FlowCliTest(unittest.TestCase):
                 lines = self.errors_for(data)
                 self.assertIn(expected, lines)
                 self.assertNotIn(HEADER, lines)
+
+    def test_entry_where_and_models(self):
+        '''テンプレートの候補で where を上書きでき、where が main の候補だけが models (敵役などのモデル) を持てる。'''
+        env = self.install_pstack()
+        good = self.home_workflow()
+        interrogate = {'id': 'review.pstack-interrogate', 'when': 'deep', 'where': 'main',
+                       'models': ['opus xhigh', 'sonnet high', 'inherit']}
+        data = copy.deepcopy(good)
+        data['stages']['review'][0] = interrogate
+        write_json(os.path.join(self.base, 'workflow.json'), data)
+        result = self.run_flow(env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        row = next(r for r in self.rows(result.stdout) if r[1] == 'review.pstack-interrogate')
+        self.assertEqual((row[3], row[8]), ('main', 'opus xhigh,sonnet high,inherit'))
+        # 部品の定義は共有なので、候補の where は部品のファイルを変えない
+        with open(os.path.join(self.home, 'components', 'review.pstack-interrogate.json'), encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['where'], 'subagent-readonly')
+        place = 'review: review.pstack-interrogate'
+        cases = [
+            (f'error {place} has models but does not run in main (a subagent cannot start subagents)',
+             {'id': 'review.pstack-interrogate', 'models': ['opus']}),
+            (f'error {place} models must be 1 to 10 of "<opus|sonnet|haiku|fable|inherit> [low|medium|high|xhigh|max]"',
+             {'id': 'review.pstack-interrogate', 'where': 'main', 'models': ['gpt-5']}),
+            (f'error {place} models must be 1 to 10 of "<opus|sonnet|haiku|fable|inherit> [low|medium|high|xhigh|max]"',
+             {'id': 'review.pstack-interrogate', 'where': 'main', 'models': ['sonnet'] * 11}),
+            (f'error {place} where must be one of main, subagent-readonly, subagent',
+             {'id': 'review.pstack-interrogate', 'where': 'runner'}),
+        ]
+        for expected, item in cases:
+            with self.subTest(expected=expected):
+                data = copy.deepcopy(good)
+                data['stages']['review'][0] = item
+                self.assertIn(expected, self.errors_for(data))
 
     def write_route(self, pbi, tier, coupling, review):
         write_json(os.path.join(self.base, f'{pbi}.route.json'),

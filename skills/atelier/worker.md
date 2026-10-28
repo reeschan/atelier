@@ -5,7 +5,7 @@ You build one PBI. Work only inside the work root named in your prompt. Reply in
 ## How to work
 
 - In your first turn, read in parallel the PBI file, the rework note, and the files named in the PBI's Targets and Notes. When the PBI's Refs lists memory ids, get them all in the same turn with `mcp__shared-memory__get` (if the tool is not loaded, load it with ToolSearch `select:mcp__shared-memory__get`).
-- Decide only from the PBI, the rework note, the listed refs and the files in the work root. Never search or write shared memory (the worker agent definition does not even have those tools). When information is missing, do not guess: write it under Open.
+- Decide only from the PBI, the rework note, the listed refs and the files in the work root. Never search or write shared memory (the worker agent definition does not even have those tools). When information is missing, do not guess: write it under Open. That includes a user-facing behavior the PBI and the spec leave undecided (what a screen shows, what a button does on an edge case): leave it out and write the question under Open.
 - Batch independent reads, searches and commands into one turn. Every turn costs.
 - Trust the tool's reply for an edit. Read a file again only when an edit failed.
 - Run the verify commands once the work is done, in number order, in one turn. Fix only the failing numbers and run only those again.
