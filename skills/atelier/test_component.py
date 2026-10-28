@@ -45,7 +45,7 @@ class ComponentCliTest(unittest.TestCase):
         self.plugin('mattpocock-skills', {'grilling': False, 'code-review': False},
                     {'license': 'MIT', 'homepage': 'https://github.com/mattpocock/skills'}, group='engineering')
         self.plugin('grouped', {'deep': True}, {'license': 'MIT'}, group='productivity')
-        self.plugin('pstack', {'how': True, 'blast-radius': True, 'architect': True, 'interrogate': True}, {'license': 'MIT', 'repository': {'url': 'https://github.com/cursor/plugins'}})
+        self.plugin('pstack', {'how': True, 'blast-radius': True, 'architect': True, 'interrogate': True, 'statechart': True}, {'license': 'MIT', 'repository': {'url': 'https://github.com/cursor/plugins'}})
         self.plugin('yomiyasu', {'yomiyasu': False}, {'license': 'MIT', 'repository': 'https://github.com/nanaism/yomiyasu'})
         self.plugin('founder-skill', {'founder-consumer': False}, {'license': 'MIT'})
         write(os.path.join(self.skills, 'my-review', 'SKILL.md'), skill_md('my-review'))
@@ -195,9 +195,36 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(self.load('workflows', 'high-model.json')['stages']['understand'][0], 'understand.pstack-how')
         self.assertEqual(self.load('components', 'understand.pstack-how.json')['when'], 'always')
 
+    def test_models_live_on_the_workflow_entry(self):
+        code, out, err = self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--when', 'deep',
+                                      '--where', 'main', '--models', 'opus xhigh', 'sonnet high')
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['review'][0],
+                         {'id': 'review.pstack-interrogate', 'when': 'deep', 'where': 'main',
+                          'models': ['opus xhigh', 'sonnet high']})
+        # where と models は共有の部品の定義に書かないので、登録済みの部品のまま別のテンプレートで変えられる
+        component_file = self.load('components', 'review.pstack-interrogate.json')
+        self.assertEqual(component_file['where'], 'subagent-readonly')
+        self.assertNotIn('models', component_file)
+        code, out, err = self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--workflow', 'high-model',
+                                      '--where', 'main', '--models', 'sonnet high')
+        self.assertEqual(code, 0, out + err)
+        # 登録し直して --when だけ変えても、where と models は残り、--no-models で消える
+        self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--when', 'always')
+        self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['review'][0],
+                         {'id': 'review.pstack-interrogate', 'when': 'always', 'where': 'main',
+                          'models': ['opus xhigh', 'sonnet high']})
+        self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--when', 'always', '--no-models')
+        self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['review'][0],
+                         {'id': 'review.pstack-interrogate', 'when': 'always', 'where': 'main'})
+        # サブエージェントで動く部品は、さらにサブエージェントを起こせないので models を持てない
+        _, out, _ = self.run_cli('add', 'pstack:how', '--stage', 'understand', '--models', 'opus')
+        self.assertIn('error understand: understand.pstack-how has models but does not run in main '
+                      '(a subagent cannot start subagents)', out)
+
     def test_other_settings_for_a_registered_component_are_refused(self):
         self.run_cli('add', 'my-review', '--stage', 'review')
-        code, _, err = self.run_cli('add', 'my-review', '--stage', 'review', '--where', 'main', '--workflow', 'high-model')
+        code, _, err = self.run_cli('add', 'my-review', '--stage', 'review', '--memory', 'full', '--workflow', 'high-model')
         self.assertEqual(code, 2)
         self.assertIn('already registered with other settings', err)
         self.assertFalse(os.path.exists(os.path.join(self.home, 'workflows', 'high-model.json')))
@@ -287,8 +314,12 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(architect['invoke']['kind'], 'read-skill')
         self.assertIn('do not run Phase D (implementation) or Phase E', architect['forbid'])
         self.assertEqual(self.load('components', 'gate.yomiyasu.json')['doc'], 'appendix/finish.md')
-        self.assertEqual([s['stage'] for s in workflow['optional']], ['marketing', 'ui-design', 'security'])
-        self.assertEqual(workflow['optional'][2]['components'], [{'id': 'security.security-audit', 'when': 'ask-user'}])
+        self.assertEqual([s['stage'] for s in workflow['optional']], ['marketing', 'ui-design', 'model-check', 'security'])
+        self.assertEqual(workflow['optional'][2]['components'], [{'id': 'model-check.pstack-statechart', 'when': 'ask-user'}])
+        self.assertEqual(workflow['optional'][3]['components'], [{'id': 'security.security-audit', 'when': 'ask-user'}])
+        # interrogate は敵役を起こすので設計者が動かし、敵役のモデルはテンプレートの候補に書く
+        self.assertEqual(workflow['stages']['review'][0], {'id': 'review.pstack-interrogate', 'when': 'deep', 'where': 'main',
+                                                         'models': ['opus xhigh', 'sonnet high']})
         self.assertEqual(self.load('components', 'ui-design.ui-video.json')['doc'], 'appendix/optional.md')
         code, out, err = self.run_cli('example', 'check', 'recommended')
         self.assertEqual(code, 0, out + err)
@@ -298,7 +329,7 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(self.run_cli('example', 'use', 'recommended', '--as', 'jev-routed', '--replace')[0], 0)
 
     def test_example_use_refuses_a_component_registered_with_other_settings(self):
-        self.run_cli('add', 'pstack:how', '--stage', 'understand', '--where', 'subagent')
+        self.run_cli('add', 'pstack:how', '--stage', 'understand', '--memory', 'full')
         code, out, err = self.run_cli('example', 'use', 'recommended')
         self.assertEqual(code, 2)
         self.assertIn('understand.pstack-how', err)

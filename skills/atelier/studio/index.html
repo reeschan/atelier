@@ -429,6 +429,7 @@ footer { font-size: 12px; color: var(--ink-soft); }
       flowErrors: 'このテンプレートの誤り (保存できない)', flowComponentErrors: '部品の定義の誤り',
       flowDescJa: '説明 (日本語)', flowDescEn: '説明 (英語)',
       flowWhen: 'when', flowWhenDefault: '部品の既定 ({0})',
+      flowModels: 'サブエージェントのモデル', flowModelsHint: '例: opus xhigh, sonnet high (空なら部品の既定)',
       flowAdd: '部品を足す', flowNoAdd: '足せる部品が無い', flowLastFallback: '最後の部品が builtin か script ではない。',
       flowEmptyStage: '部品が 1 つも無い。', flowGates: '関所', flowGatesIntro: '工程のあとに、成り立つ部品をすべて動かす。',
       flowGateAfter: 'この工程のあと', flowAddGate: '関所を足す', flowRemoveGate: '関所を消す',
@@ -440,7 +441,7 @@ footer { font-size: 12px; color: var(--ink-soft); }
       flowExists: '{0} はもうある。',
       stage_understand: '理解', stage_design: '設計', stage_plan: '計画', stage_route: '振り分け', stage_build: '実装',
       stage_verify: '検証', stage_review: 'レビュー', stage_fix: '差し戻し', stage_finish: '仕上げ',
-      'stage_ui-design': 'UI デザイン', stage_marketing: 'マーケティング', stage_security: 'セキュリティ',
+      'stage_ui-design': 'UI デザイン', stage_marketing: 'マーケティング', stage_security: 'セキュリティ', 'stage_model-check': '状態モデルの検査',
     },
     en: {
       tagline: 'Set up runners and models, routing and priority templates on one screen',
@@ -510,6 +511,7 @@ footer { font-size: 12px; color: var(--ink-soft); }
       flowErrors: 'Errors in this template (it cannot be saved)', flowComponentErrors: 'Errors in component definitions',
       flowDescJa: 'Description (Japanese)', flowDescEn: 'Description (English)',
       flowWhen: 'when', flowWhenDefault: 'component default ({0})',
+      flowModels: 'Subagent models', flowModelsHint: 'e.g. opus xhigh, sonnet high (empty: the component default)',
       flowAdd: 'Add component', flowNoAdd: 'No component to add', flowLastFallback: 'The last component is not builtin or a script.',
       flowEmptyStage: 'No components yet.', flowGates: 'Gates', flowGatesIntro: 'After a stage, every component whose when holds runs.',
       flowGateAfter: 'After stage', flowAddGate: 'Add gate', flowRemoveGate: 'Remove gate',
@@ -521,7 +523,7 @@ footer { font-size: 12px; color: var(--ink-soft); }
       flowExists: '{0} already exists.',
       stage_understand: 'Understand', stage_design: 'Design', stage_plan: 'Plan', stage_route: 'Route', stage_build: 'Build',
       stage_verify: 'Verify', stage_review: 'Review', stage_fix: 'Fix', stage_finish: 'Finish',
-      'stage_ui-design': 'UI design', stage_marketing: 'Marketing', stage_security: 'Security',
+      'stage_ui-design': 'UI design', stage_marketing: 'Marketing', stage_security: 'Security', 'stage_model-check': 'Model check',
     },
   };
 
@@ -1304,13 +1306,21 @@ footer { font-size: 12px; color: var(--ink-soft); }
     return '<label class="field-row"><span>' + esc(t('flowWhen')) + '</span><select data-role="flow-when"' + attrs + '>' + options.join('') + '</select></label>';
   }
 
+  // where が main のスキルの候補だけ、その部品が起こすサブエージェント (interrogate の敵役など) のモデルを書ける
+  function modelsInput(item, attrs) {
+    const value = isObject(item) && Array.isArray(item.models) ? item.models.join(', ') : '';
+    return '<label class="field-row"><span>' + esc(t('flowModels')) + '</span><input type="text" data-role="flow-models"' + attrs +
+      ' value="' + esc(value) + '" placeholder="' + esc(t('flowModelsHint')) + '"></label>';
+  }
+
   function flowRow(item, index, count, place, perPbi) {
     const info = flowInfo();
     const cid = entryId(item);
     const component = info.components[cid];
     const attrs = ' data-place="' + esc(place) + '" data-index="' + index + '"';
+    const where = (isObject(item) && item.where) || (component && component.where);
     const tags = component
-      ? [component.kind, component.where, 'memory ' + component.memory, 'cost ' + component.cost]
+      ? [component.kind, where, 'memory ' + component.memory, 'cost ' + component.cost]
         .map((tag) => '<span class="tag">' + esc(tag) + '</span>').join('') +
         (component.source === 'home' ? '<span class="tag manual">' + esc(t('flowSourceTagHome')) + '</span>' : '')
       : '<span class="badge">unknown</span>';
@@ -1318,6 +1328,7 @@ footer { font-size: 12px; color: var(--ink-soft); }
       '<div class="flow-row-head"><b>' + esc(titleOf(component, cid)) + '</b><span class="model-id">' + esc(cid) + '</span></div>' +
       '<div class="tags">' + tags + '</div>' +
       whenSelect(item, perPbi, attrs) +
+      (where === 'main' && component && (component.kind === 'skill' || component.kind === 'read-skill') ? modelsInput(item, attrs) : '') +
       '<div class="step-actions">' +
       '<button class="icon" type="button" data-act="flow-up"' + attrs + (index === 0 ? ' disabled' : '') + ' aria-label="' + esc(t('up')) + '">↑</button>' +
       '<button class="icon" type="button" data-act="flow-down"' + attrs + (index === count - 1 ? ' disabled' : '') + ' aria-label="' + esc(t('down')) + '">↓</button>' +
@@ -1842,7 +1853,21 @@ footer { font-size: 12px; color: var(--ink-soft); }
         const index = Number(el.dataset.index);
         if (!list || !list[index]) return;
         const cid = entryId(list[index]);
-        list[index] = el.value ? { id: cid, when: el.value } : cid;
+        // where と models (テンプレートで決めた起動先とモデル) は残す
+        const kept = isObject(list[index]) ? Object.assign({}, list[index]) : { id: cid };
+        delete kept.when;
+        if (el.value) kept.when = el.value;
+        list[index] = Object.keys(kept).length > 1 ? kept : cid;
+        renderFlow();
+      } else if (role === 'flow-models') {
+        const list = flowList(el.dataset.place || '');
+        const index = Number(el.dataset.index);
+        if (!list || !list[index]) return;
+        const kept = isObject(list[index]) ? Object.assign({}, list[index]) : { id: entryId(list[index]) };
+        const models = el.value.split(',').map((m) => m.trim().replace(/\s+/g, ' ')).filter(Boolean);
+        delete kept.models;
+        if (models.length) kept.models = models;
+        list[index] = Object.keys(kept).length > 1 ? kept : kept.id;
         renderFlow();
       } else if (role === 'flow-gate-after') {
         const gate = flow.draft.gates[Number(el.dataset.index)];
