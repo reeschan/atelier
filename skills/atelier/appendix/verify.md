@@ -26,7 +26,7 @@ Do not take the worker's report, or Jev's triage, on trust.
 2. Judge each acceptance criterion: pass or fail.
 3. Look at `git diff --stat`, then read the diff. List only the problems that should block the merge: file, line, why, how to reproduce.
    - A PBI with review `deep`: read the whole diff, focused on authentication, permissions, input validation, how data can be lost, and contracts between modules.
-   - A diff over 300 lines, and a `deep` PBI when you are not running on Opus: give the review to a `pbi-worker` subagent with `prompts/pbi-review.md`, on Opus unless the attempt you judge was built on Opus; then on Sonnet at high effort. A reviewer on the model that built the change shares its blind spots. Use its result as input, not as the decision.
+   - A diff over 300 lines, a `deep` PBI when you are not running on Opus, and a `deep` PBI built on the model you run on: give the review to a `pbi-worker` subagent with `prompts/pbi-review.md`, on Opus unless the attempt you judge was built on Opus; then on Sonnet at high effort. A reviewer on the model that built the change shares its blind spots. Use its result as input, not as the decision.
 4. Passing criteria do not prove the absence of bugs that the criteria cannot catch. When you find one, put a small script that shows it in `docs/pbi/tools/` and use it as the repro in the rework note.
 
 ## Decide and record

@@ -1,7 +1,7 @@
 """入れたスキルを外部部品 (home の components/) として登録し、テンプレートに差す (docs/specs/atelier-workflow.md)。
 
   python component.py add <skill> --stage <stage|gate|ui-design|marketing|security> [--after <stage>] [--workflow NAME] [--when W] [--where W]
-                          [--memory M] [--forbid TEXT ...] [--models SPEC ...] [--home DIR]
+                          [--memory M] [--forbid TEXT ...] [--models SPEC ... | --no-models] [--home DIR]
   python component.py remove <id> [--workflow NAME] [--home DIR]
   python component.py list [--home DIR]
   python component.py example list
@@ -23,8 +23,9 @@ add は <home>/components/<stage>.<plugin>-<name>.json (関所は gate.…、自
 (既定 jev-routed) に差す。home にそのテンプレートが無ければ同梱のものを写してから変える。工程では先頭
 (足した部品をいちばん先に試す) に、関所では --after の工程の関所の最後に、オプションの工程 (ui-design・marketing・security・model-check) では
 その工程の最後に入れる (テンプレートにまだ無ければ --after か既定の場所に置く)。書いたあと flow.py と同じ検証をして、誤りがあれば
-何も残さず終了コード 2 で止める。--when と --models (部品が起こすサブエージェントのモデル。`opus xhigh` の形。
-where が main の部品だけ) はテンプレートの候補に書く。remove は部品を home とテンプレートから外す。同梱の部品は消せない。
+何も残さず終了コード 2 で止める。--when・--where・--models (部品が起こすサブエージェントのモデル。`opus xhigh` の形。
+where が main の候補だけ) はテンプレートの候補に書く。登録し直すとき、渡さなかった --where と --models は今の候補の値を残す
+(--no-models で消す)。remove は部品を home とテンプレートから外す。同梱の部品は消せない。
 
 example は、外部部品を使うテンプレートの見本 (examples/workflows/<name>.json) を扱う。見本はテンプレート (workflow) と、
 それが使うスキルの入れ方と登録のしかた (skills) だけを持ち、スキルの中身も部品の定義も持たない。
@@ -217,15 +218,16 @@ def load_workflow(home: Path, name: str) -> tuple[Path, dict]:
 
 
 def insert(workflow: dict, cid: str, stage: str, after: str | None, when: str | None = None,
-           models: list | None = None) -> None:
+           models: list | None = None, where: str | None = None, clear_models: bool = False) -> None:
     """工程なら先頭、関所なら after の工程の関所の最後、オプションの工程ならその工程の最後に差す。
 
     when はテンプレートの中の候補 ({"id", "when"}) に書く。部品の定義は複数のテンプレートで共有するので、
-    あるテンプレートの when が別のテンプレートの動きを変えないようにするため。models も同じ。
-    もう入っていれば候補を書き換える。
+    あるテンプレートの when が別のテンプレートの動きを変えないようにするため。where と models も同じ。
+    もう入っていれば候補を書き換える。where と models は、渡さなければ今の候補の値を残す (clear_models で消す)。
     """
-    item = {'id': cid, **({'when': when} if when else {}), **({'models': list(models)} if models else {})}
-    item = item if len(item) > 1 else cid
+    item = {'id': cid, **({'when': when} if when else {}), **({'where': where} if where else {}),
+            **({'models': list(models)} if models else {})}
+    keep = ('where',) if clear_models else ('where', 'models')
     if stage == 'gate':
         gates = workflow.setdefault('gates', [])
         gate = next((g for g in gates if isinstance(g, dict) and g.get('after') == after), None)
@@ -236,7 +238,7 @@ def insert(workflow: dict, cid: str, stage: str, after: str | None, when: str | 
                        if isinstance(g, dict) and g.get('after') in flow.STAGES
                        and flow.STAGES.index(g['after']) > order), len(gates))
             gates.insert(at, gate)
-        place(gate['components'], cid, item, at_end=True)
+        place(gate['components'], cid, item, at_end=True, keep=keep)
         return
     if stage in flow.OPTIONAL:
         steps = workflow.setdefault('optional', [])
@@ -244,13 +246,19 @@ def insert(workflow: dict, cid: str, stage: str, after: str | None, when: str | 
         if step is None:
             step = {'stage': stage, 'after': after, 'components': []}
             steps.append(step)
-        place(step['components'], cid, item, at_end=True)
+        place(step['components'], cid, item, at_end=True, keep=keep)
         return
-    place(workflow['stages'][stage], cid, item, at_end=False)
+    place(workflow['stages'][stage], cid, item, at_end=False, keep=keep)
 
 
-def place(items: list, cid: str, item, at_end: bool) -> None:
+def place(items: list, cid: str, item: dict, at_end: bool, keep=('where', 'models')) -> None:
+    """候補を差す。もう入っていれば置き換え、keep の欄は新しい候補に無ければ今の値を残す。"""
     ids = [flow.entry(existing)[0] for existing in items]
+    if cid in ids:
+        old = items[ids.index(cid)]
+        if isinstance(old, dict):
+            item = {**{k: old[k] for k in keep if k in old and k not in item}, **item}
+    item = item if len(item) > 1 else cid
     if cid in ids:
         items[ids.index(cid)] = item
     elif at_end:
@@ -337,7 +345,8 @@ def cmd_add(args, home: Path) -> int:
         print(f'{args.skill}: skill not found; {hint}', file=sys.stderr)
         return 2
     try:
-        component = build_component(args.skill, skill_md, plugin, name, rel, args)
+        # --where はテンプレートの候補に書く (部品の定義は共有なので、ほかのテンプレートの動きを変えない)
+        component = build_component(args.skill, skill_md, plugin, name, rel, argparse.Namespace(**{**vars(args), 'where': None}))
         wf_path, workflow = load_workflow(home, args.workflow)
     except ValueError as e:
         print(str(e), file=sys.stderr)
@@ -357,7 +366,8 @@ def cmd_add(args, home: Path) -> int:
     except ValueError as e:
         print(str(e), file=sys.stderr)
         return 2
-    insert(workflow, component['id'], args.stage, args.after, args.when, args.models)
+    where = args.where if args.where and args.where != component['where'] else None
+    insert(workflow, component['id'], args.stage, args.after, args.when, args.models, where, args.no_models)
     errors = save_checked(home, wf_path, workflow, comp_path, component)
     if errors:
         for error in errors:
@@ -629,11 +639,12 @@ def main(argv=None) -> int:
                      help='--stage gate かオプションの工程のとき、どの工程のあとか (オプションの工程は省けば既定の場所)')
     add.add_argument('--workflow', default=flow.DEFAULT_WORKFLOW, help='差すテンプレート (既定 jev-routed)')
     add.add_argument('--when', choices=flow.WHEN)
-    add.add_argument('--where', choices=flow.WHERE)
+    add.add_argument('--where', choices=flow.ENTRY_WHERE, help='このテンプレートでだけ動かす場所 (テンプレートの候補に書く)')
     add.add_argument('--memory', choices=flow.MEMORY)
     add.add_argument('--forbid', action='append', help='渡さない引数や飛ばす手順 (繰り返せる)')
     add.add_argument('--models', nargs='+', metavar='SPEC',
                      help='部品が起こすサブエージェントのモデル ("opus xhigh" など。where が main の部品だけ)')
+    add.add_argument('--no-models', action='store_true', help='テンプレートの候補の models を消す')
     remove = sub.add_parser('remove', help='外部部品を home とテンプレートから外す')
     remove.add_argument('id')
     remove.add_argument('--workflow', default=flow.DEFAULT_WORKFLOW)

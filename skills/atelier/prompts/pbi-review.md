@@ -1,6 +1,6 @@
 # Prompt: review of one PBI's diff
 
-Give this to a subagent when a PBI's diff is over 300 lines, or the PBI is `deep` and you are not running on Opus. Fill in the brackets. The reviewer never runs on the model that built the attempt: Opus, or Sonnet at high effort when the attempt was built on Opus.
+Give this to a subagent when a PBI's diff is over 300 lines, or the PBI is `deep` and you are not running on Opus or it was built on the model you run on. Fill in the brackets. The reviewer never runs on the model that built the attempt: Opus, or Sonnet at high effort when the attempt was built on Opus.
 
 ```text
 description: PBI-<n>.review <short text>
