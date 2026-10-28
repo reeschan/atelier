@@ -26,7 +26,7 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
 
 Write it to `docs/pbi/REPORT.md` first, in the user's language. The gates after finish run on that file. The bundled templates have none; a template that adds yomiyasu as an external component (`gate.yomiyasu`, `appendix/engine.md`) polishes a Japanese report's wording when the yomiyasu skill is installed: call it on the file, apply its wording fixes, and keep numbers, ids, paths, commands and pasted tables as they are. Then send the file's text to the user.
 
-Three headings, in this order:
+Open with one line that restates the user's goal in your own words, as at the start, then three headings, in this order:
 
 - **Waiting on you**: PBIs at the limit, held, or left with quality warnings, and the decision each one needs.
 - **Changes**: the PBIs that passed and the files they changed.

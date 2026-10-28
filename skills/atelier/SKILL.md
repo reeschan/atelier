@@ -25,6 +25,7 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 - The build stage always runs `worker.md`, whatever the template. Templates change who designs, reviews and which model builds, never how a worker works.
 - Stages hand off through their artifacts in `docs/pbi/` and `docs/specs/`. Components never call each other.
 - Every stage ends with a fallback component, so a run never needs anything beyond Claude Code.
+- A review never runs on the model that built what it reviews (`appendix/verify.md`).
 
 ## Read on event
 
@@ -33,7 +34,7 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 | Argument `resume`, or the end of a wave | `appendix/handoff.md` |
 | Argument `setup`, `setup --recommended`, `models` or `templates`, or home has no `agents.json` | `appendix/setup.md` |
 | Picking a component, a `when` you cannot decide, a `read-skill` component, writing a stage record, the user asks to add a skill to the workflow | `appendix/engine.md` |
-| The template has an `optional` list (`ui-design`, `marketing`, `security` rows in the flow table) | `appendix/optional.md` |
+| The template has an `optional` list (`ui-design`, `marketing`, `security`, `model-check` rows in the flow table) | `appendix/optional.md` |
 | A component is picked | its `doc` column in the flow table |
 | Choosing the work key, writing refs, handing off, promoting at the end | `appendix/memory.md` |
 | Priority templates: the start-time sync, applying or editing one in chat, an expired application | `appendix/priority-templates.md` |
@@ -41,6 +42,8 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 | The `adapters` setting in agents.json (turns a design or review stage off, or names a skill for it) | `appendix/adapters.md` |
 
 ## Start
+
+Open your first message with the user's goal, the problem it solves and the smallest change that reaches it, in your own words, in two or three lines. Do not wait for a reply; the approval of the PBI list is where the user corrects it. Restate the goal in the spec, and in the completion report.
 
 1. Run `python <skill>/flow.py docs/pbi` (create `docs/pbi/` first). It resolves the template (`docs/pbi/workflow.json`, then home, then bundled; the default is `jev-routed`) and prints one row per candidate: stage, component, invoke, where, memory, when, status, doc. When the user names a template (for example "use recommended"), add `--workflow <name>` here and to every later `flow.py` call (`--decide` too), and write it in STATUS.md.
    - On `error` lines, show them to the user in one line each, run again with `--workflow jev-routed`, and note the fallback in the approval list.
@@ -74,6 +77,7 @@ After route and its gates, show the user the PBI list and wait for approval. Per
 - the priority-template line from `prepare.py`, and the warning when a template overrides the opus tier
 - open assumptions from the design stage, and expired priority applications (`appendix/priority-templates.md`)
 - the question for each optional stage with an `ask-user` row placed after route or later (security, by default): whether to run it this time (`appendix/optional.md`)
+- the model-check chart and its rules, when that stage ran
 
 ## One PBI
 

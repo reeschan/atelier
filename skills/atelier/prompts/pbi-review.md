@@ -1,11 +1,12 @@
 # Prompt: review of one PBI's diff
 
-Give this to an Opus subagent when a PBI's diff is over 300 lines, or the PBI is `deep` and you are not running on Opus. Fill in the brackets.
+Give this to a subagent when a PBI's diff is over 300 lines, or the PBI is `deep` and you are not running on Opus. Fill in the brackets. The reviewer never runs on the model that built the attempt: Opus, or Sonnet at high effort when the attempt was built on Opus.
 
 ```text
 description: PBI-<n>.review <short text>
 subagent_type: pbi-worker
-model: opus
+model: <opus, or sonnet when the attempt was built on opus>
+effort: <omit for opus; high for sonnet>
 prompt:
 Work root: <absolute path of the repository or worktree>. Work here and write nothing outside it.
 Read docs/pbi/PBI-<n>.md and the refs in its Refs section (get them by id), then read `git diff -- <targets>`.

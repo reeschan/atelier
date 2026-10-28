@@ -61,7 +61,8 @@ Atelier (旧名 **pbi-orchestration-jev**) は、開発を**ワークフロー�
 
 - テンプレート: 同梱は 2 つです。`jev-routed` (既定。判定表が許す PBI は安いモデルへ) と `high-model` (すべての PBI を agent の opus へ)。対象リポジトリの `docs/pbi/workflow.json`、次に home の `workflows/<名前>.json` が同梱より優先されます。テンプレートは `fix.max_rework` (0〜5) と `build.external_memory` (外部の実行先が PBI に書かれた ref を読めるか) も決めます。
 - 自分の部品: どのスキルも Claude Code のプラグインのコマンドで入れ、`component.py add` で登録できます ([外部部品](#外部部品))。同梱のテンプレートが使うのは、このスキルと Claude Code の built-in だけです。
-- オプションの工程: テンプレートで入れたときだけ、選んだ工程の直後に動く工程が 3 つあります。`ui-design` (画面の方向性・テーマ・モックアップ・操作の動画。既定は design のあと)、`marketing` (誰のための作業で、どう受け取られるか。既定は understand のあと)、`security` (変えたコードのセキュリティ監査。既定は review のあと) です。`when` が成り立つ部品をすべて動かし、後ろ盾は要りません。使える部品が無ければ飛ばします。`ui-change` と `user-facing` はオーケストレーターが判断し、`ask-user` は毎回ユーザーに聞きます (route 以降の工程なら PBI 一覧の承認のときに一緒に聞きます。オプションの工程だけで使えます)。できたものは `docs/pbi/ui/<slug>/`・`docs/pbi/marketing/<slug>.md`・`docs/pbi/security/<slug>.md` に置きます。画面のものは計画がその画面を作る PBI からリンクし、セキュリティで確かめられた指摘はその PBI の差し戻しになります (`skills/atelier/appendix/optional.md`)。同梱のテンプレートはどれも入れていません。`component.py add <スキル> --stage ui-design` (か `marketing`・`security`。場所を変えるときは `--after <工程>`) で登録します。
+- オプションの工程: テンプレートで入れたときだけ、選んだ工程の直後に動く工程が 4 つあります。`ui-design` (画面の方向性・テーマ・モックアップ・操作の動画。既定は design のあと)、`marketing` (誰のための作業で、どう受け取られるか。既定は understand のあと)、`model-check` (作業が動かす状態をモデルにして検査し、コードを読まない人にも読める状態遷移図にする。既定は design のあと)、`security` (変えたコードのセキュリティ監査。既定は review のあと) です。`when` が成り立つ部品をすべて動かし、後ろ盾は要りません。使える部品が無ければ飛ばします。`ui-change` と `user-facing` はオーケストレーターが判断し、`ask-user` は毎回ユーザーに聞きます (route 以降の工程なら PBI 一覧の承認のときに一緒に聞きます。オプションの工程だけで使えます)。できたものは `docs/pbi/ui/<slug>/`・`docs/pbi/marketing/<slug>.md`・`docs/pbi/model-check/<slug>/`・`docs/pbi/security/<slug>.md` に置きます。画面のものは計画がその画面を作る PBI からリンクし、モデルで破れたルールは計画がテストにし、セキュリティで確かめられた指摘はその PBI の差し戻しになります (`skills/atelier/appendix/optional.md`)。同梱のテンプレートはどれも入れていません。`component.py add <スキル> --stage ui-design` (か `marketing`・`model-check`・`security`。場所を変えるときは `--after <工程>`) で登録します。
+- テンプレートごとの部品の設定: テンプレートの候補は `{"id", "when", "where", "models"}` にできます。`where` はそのテンプレートでだけ動かす場所を変え (`main` ならオーケストレーターが自分で動かす)、`models` はその部品が起こすサブエージェントのモデルを決めます (interrogate の敵役なら `["opus xhigh", "sonnet high"]`)。サブエージェントはサブエージェントを起こせないので、`models` は `where` が `main` の候補だけに書けます。編集画面の「開発フロー」タブでは、その行にモデルの欄が出ます。
 - 編集画面の「開発フロー」タブを使えば、JSON を書かずに、工程・関所・オプションの工程ごとに部品を並べて home に保存できます ([セットアップと編集画面](#セットアップと編集画面))。
 - 仕様は [docs/specs/atelier-workflow.md](docs/specs/atelier-workflow.md)、オーケストレーターの手順は `skills/atelier/appendix/engine.md` にあります。
 
@@ -207,7 +208,8 @@ python $S/component.py add mattpocock-skills:code-review --stage review --when a
 python $S/component.py add pstack:how --stage understand --when clearly-complex
 python $S/component.py add pstack:blast-radius --stage gate --after route --when coupling-high
 python $S/component.py add pstack:architect --stage gate --after route --when tier-opus --forbid "do not run Phase D (implementation) or Phase E"
-python $S/component.py add pstack:interrogate --stage review --when deep
+python $S/component.py add pstack:interrogate --stage review --when deep --where main --models "opus xhigh" "sonnet high"
+python $S/component.py add pstack:statechart --stage model-check --when ask-user
 
 # yomiyasu (MIT): 日本語の完了報告の言い回しを整える
 /plugin marketplace add nanaism/yomiyasu
@@ -232,7 +234,7 @@ python $S/component.py add security-audit --stage security --when ask-user
 
 ### 作者のおすすめのテンプレート
 
-既定では、このスキルと Claude Code の外にあるものは使いません。作者が実際に使っている構成は、テンプレートの見本 `examples/workflows/recommended.json` として置いてあります。jev-routed に、[pstack](https://github.com/cursor/plugins) (理解の `how`、振り分けのあとの `blast-radius` と `architect`、深いレビューの `interrogate`)、[mattpocock-skills](https://github.com/mattpocock/skills) (設計の `grilling`、最終レビューの `code-review`)、[yomiyasu](https://github.com/nanaism/yomiyasu) (日本語の完了報告の推敲) と、3 つのオプションの工程を足したものです。マーケティングは [founder-skill](https://github.com/Jakeschincariol/founder-skill) の `founder-consumer` (買い手のパネルを模す。利用者に見える作業のとき)、UI デザインは作者の [design-studio](https://github.com/reeschan/claude-skill-design-studio) と [ui-video](skills/ui-video/SKILL.md) (画面が変わる作業のとき)、セキュリティは Cloudflare の [security-audit](https://github.com/cloudflare/security-audit-skill) (使うかを毎回聞く) です。どれも MIT です。見本が持つのはテンプレートと、スキルごとの入れ方・登録のしかただけで、他の人のスキルの中身はこのリポジトリに入れていません。
+既定では、このスキルと Claude Code の外にあるものは使いません。作者が実際に使っている構成は、テンプレートの見本 `examples/workflows/recommended.json` として置いてあります。jev-routed に、[pstack](https://github.com/cursor/plugins) (理解の `how`、振り分けのあとの `blast-radius` と `architect`、深いレビューの `interrogate`。interrogate はオーケストレーターが動かし、敵役は opus xhigh と sonnet high)、[mattpocock-skills](https://github.com/mattpocock/skills) (設計の `grilling`、最終レビューの `code-review`)、[yomiyasu](https://github.com/nanaism/yomiyasu) (日本語の完了報告の推敲) と、4 つのオプションの工程を足したものです。状態モデルの検査は pstack の `statechart` (使うかを毎回聞く)、マーケティングは [founder-skill](https://github.com/Jakeschincariol/founder-skill) の `founder-consumer` (買い手のパネルを模す。利用者に見える作業のとき)、UI デザインは作者の [design-studio](https://github.com/reeschan/claude-skill-design-studio) と [ui-video](skills/ui-video/SKILL.md) (画面が変わる作業のとき)、セキュリティは Cloudflare の [security-audit](https://github.com/cloudflare/security-audit-skill) (使うかを毎回聞く) です。どれも MIT です。見本が持つのはテンプレートと、スキルごとの入れ方・登録のしかただけで、他の人のスキルの中身はこのリポジトリに入れていません。
 
 ```sh
 /atelier setup --recommended          # 確かめ、1 回だけ聞き、足りないものを入れ、登録し、テンプレートを書く
