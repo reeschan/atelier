@@ -11,7 +11,7 @@ case の形は CASE_SCHEMA の版と appendix/cases.md にある。要素は種�
            本文は入れず、パスと sha256 の先頭 12 文字だけを入れる (worker.md は保全先にも写るので本文を入れる)
   task:    PBI の節 (Goal・Targets・Do not touch・Acceptance criteria・Verify commands・Notes・Depends on)
   size:    PBI の大きさ。facts.json の見積もり、節の数 (Targets・Acceptance・Verify・Refs)、最初の tier、
-           実装担当に渡した文章の文字数 (worker.md・PBI・brief・Refs の要旨)
+           文字数 (worker.md・最初の実行のときの PBI・PBI に書いた Refs の要旨。ref の本文は数えない)
   result:  runs.jsonl の行を実行ごとに縮めたもの (結果・原因・指摘・検証の終了コード・メモリと範囲の違反・
            時間・ステップ・トークンの内訳・費用) と、差し戻しを含めた合計 (totals)
   private: 差し戻しの note の Expected と Repro。採点にだけ使い、実装担当に見せない
@@ -30,7 +30,7 @@ CASE_SCHEMA = 'atelier.case/1'
 SECTIONS = {'goal': ('Goal',), 'targets': ('Targets',), 'do_not_touch': ('Do not touch',),
             'acceptance': ('Acceptance criteria',), 'notes': ('Notes',)}
 NUMBERED = re.compile(r'^\s*(\d+)[.:)]\s+(.*\S)\s*$')
-PATHLIKE = re.compile(r'`?([\w./-]+/[\w.-]+|[\w-]+\.[A-Za-z0-9]+)`?')
+TARGET_LINE = re.compile(r'^\s*[-*]\s+(?:`([^`]+)`|(\S+))')
 DEPENDS = re.compile(r'^\s*-\s*Depends on:\s*(.*)$', re.M)
 PBI_ID = re.compile(r'PBI-\d+')
 FACT_KEYS = ('files_changed', 'files_new', 'files_deleted', 'modules', 'criteria', 'sensitive')
@@ -60,7 +60,14 @@ def task_of(pbi_text: str) -> dict:
 
 
 def target_paths(targets: str) -> list[str]:
-    return sorted({m.group(1) for m in PATHLIKE.finditer(targets)})
+    """Targets の各行の最初のパス (バッククォートの中身、無ければ最初の語)。Makefile や $id.ts もそのまま 1 つに数える。"""
+    out = set()
+    for line in targets.splitlines():
+        m = TARGET_LINE.match(line)
+        path = (m.group(1) or m.group(2)).strip().rstrip(':：,、') if m else ''
+        if path and path.lower() not in ('none', 'なし'):
+            out.add(path)
+    return sorted(out)
 
 
 def guardrails(root: Path, targets: list[str]) -> list[dict]:
@@ -140,11 +147,15 @@ def size_of(base: Path, pbi: str, pbi_text: str, task: dict, memory: list[dict],
         facts = {k: doc.get(k) for k in FACT_KEYS} if isinstance(doc, dict) else None
     except (OSError, ValueError):
         pass
+    # PBI は止まったあとに書き直されることがあるので、最初の実行が記録した長さを使う (無い古い行だけ今のファイル)
+    pbi_chars = (first.get('input') or {}).get('pbi_chars')
+    if pbi_chars is None and pbi_text:
+        pbi_chars = len(pbi_text)
     return {'facts': facts, 'tier': first.get('tier'),
             'targets': len(target_paths(task['targets'])), 'acceptance': len(task['acceptance']),
             'verify': len(task['verify']), 'refs': len(memory),
-            'chars': {'worker': chars(base / 'worker.md'), 'pbi': len(pbi_text) if pbi_text else None,
-                      'brief': chars(base / f'{pbi}.brief.md'), 'refs': sum(len(m['gist']) for m in memory)}}
+            'chars': {'worker': chars(base / 'worker.md'), 'pbi': pbi_chars,
+                      'refs': sum(len(m['gist']) for m in memory)}}
 
 
 def rework_notes(base: Path, pbi: str) -> list[dict]:
