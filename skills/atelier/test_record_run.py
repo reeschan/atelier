@@ -603,6 +603,7 @@ class RecordRunTest(unittest.TestCase):
         self.assertEqual(row['prompt'], {'worker': record_run.file_version(self.pbi / 'worker.md')})
         self.assertEqual(len(row['prompt']['worker']), 12)
         self.assertEqual(row['base_commit'], head)
+        self.assertEqual(row['input'], {'pbi_chars': len('# PBI-007\n')})
 
     def test_no_worker_copy_and_no_git_give_nulls(self):
         self.write_opencode('PBI-007', [step_finish(1792117900000, 1, 1, 0, 0, 0, 0.0)])
@@ -610,6 +611,9 @@ class RecordRunTest(unittest.TestCase):
         [row] = self.rows()
         self.assertEqual(row['prompt'], {'worker': None})
         self.assertIsNone(row['base_commit'])
+        (self.pbi / 'PBI-007.md').unlink()
+        self.record('PBI-007', 2, 'pass')
+        self.assertEqual(self.rows()[-1]['input'], {'pbi_chars': None})
 
     def opencode_get(self, ref=None):
         state = {'input': {'id': ref}} if ref else {}

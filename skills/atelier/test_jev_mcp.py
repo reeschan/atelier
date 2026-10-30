@@ -254,7 +254,7 @@ class JevMcpTest(unittest.TestCase):
                                     'rework', 'tier', 'runner', 'model', 'effort', 'models_seen', 'time', 'steps',
                                     'tokens', 'cost_reported', 'cost_api_equiv', 'prices_checked_at',
                                     'prices_home_checked_at', 'verify', 'unchanged', 'memory', 'prompt',
-                                    'base_commit', 'judged', 'archive'})
+                                    'base_commit', 'input', 'judged', 'archive'})
         self.assertEqual(row['schema'], 1)
         self.assertTrue(row['recorded_at'])
         self.assertEqual((row['repo'], row['pbi'], row['report'], row['attempt'], row['rework']),
