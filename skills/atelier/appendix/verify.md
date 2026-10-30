@@ -25,6 +25,7 @@ Do not take the worker's report, or Jev's triage, on trust.
    When `verify.py` cannot read the commands (exit code 2), run them in one Bash call, each redirected to its own log.
 2. Judge each acceptance criterion: pass or fail.
 3. Look at `git diff --stat`, then read the diff. List only the problems that should block the merge: file, line, why, how to reproduce.
+   - Check the diff against the CLAUDE.md files that apply to the changed files. A broken rule there is a finding with the cause `convention`.
    - A PBI with review `deep`: read the whole diff, focused on authentication, permissions, input validation, how data can be lost, and contracts between modules.
    - A diff over 300 lines, a `deep` PBI when you are not running on Opus, and a `deep` PBI built on the model you run on: give the review to a `pbi-worker` subagent with `prompts/pbi-review.md`, on Opus unless the attempt you judge was built on Opus; then on Sonnet at high effort. A reviewer on the model that built the change shares its blind spots. Use its result as input, not as the decision.
 4. Passing criteria do not prove the absence of bugs that the criteria cannot catch. When you find one, put a small script that shows it in `docs/pbi/tools/` and use it as the repro in the rework note.
@@ -34,10 +35,10 @@ Do not take the worker's report, or Jev's triage, on trust.
 Decide one of pass, rework, tier up or hold, and record it right away, once:
 
 ```bash
-python <skill>/record_run.py <report> --attempt <position in the route> --outcome pass|rework|tier-up|hold --findings <critical>,<major>,<minor>
+python <skill>/record_run.py <report> --attempt <position in the route> --outcome pass|rework|tier-up|hold --findings <critical>,<major>,<minor> [--cause <cause>,...]
 ```
 
-- Pass only the outcome and the finding counts; the script reads everything else from the logs.
+- Pass only the outcome, the finding counts and, for rework, tier up and hold, the cause (`appendix/cases.md`); the script reads everything else from the logs.
 - To tier up, first rewrite the route with `prepare.py --only PBI-<n> --tier <tier>`; `record_run.py` reads the new `route.json`.
 - When its output says the archive copy failed, keep working and mention it in the completion report.
 - When it prints `memory violation`, the worker used shared memory beyond what the template allows. The result still counts as judged; write the runner and model in the PBI's STATUS.md note, and when the same runner does it again (with any model), route the rest with `--skip <runner>`. `violation` null means it could not be checked (no readable log, or a `get` whose id the log does not show); note that too.
