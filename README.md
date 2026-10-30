@@ -41,6 +41,7 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - Override routing for a while. Turn on a priority template and it replaces per-tier routes until its deadline, then asks whether to continue. You can also set it from a web page (an artifact); see Priority templates below.
 - Usage stats. `agent_stats.py` reads Claude Code transcripts and reports tokens per model and per agent, how often the prompt cache had to be rebuilt, and the current context size.
 - A record per run. Each time the orchestrator decides a run (pass, rework, promotion, unavailable, on hold), `record_run.py` appends one line to `docs/pbi/runs.jsonl`: runner, model, effort, tokens, cost, steps, time and verification results are read from the logs, and only the outcome and the review finding counts come from the orchestrator. Values it cannot read stay null. It also copies that run's raw logs to an archive outside the repository: `$PBI_RUNS_ARCHIVE` if set (point it at a synced folder to keep logs off the machine), otherwise `~/.claude/pbi-runs`. `model_report.py` sums the runs per model, across repositories with `--archive`, and adds a provisional A–D grade for people to adjust later; it never changes routing.
+- Records for an outer harness. A rework, tier up or hold also records its cause (`spec`, `convention`, `scope`, `memory`, `model`, `env`), and every row carries the version of `docs/pbi/worker.md`, the base commit and the refs the worker did not read. At finish, `export_cases.py` writes one normalized case per PBI to `docs/pbi/cases.jsonl` and the archive: what was injected into the worker (system prompt, the CLAUDE.md conventions that applied, refs), the PBI's sections, every attempt's result, and the rework notes' expectations kept apart for scoring. Atelier builds no prompt from them; an outer harness such as harness2 reads them to replay PBIs and propose changes to the instructions (`skills/atelier/appendix/cases.md`).
 - Costs are estimates. The bundled `prices.json` is a sample price list; a `prices.json` in your home overrides and extends it. `agent_stats.py --cost` reports the designer's cost in API-equivalent USD, and `model_report.py` reports how many runs have no known cost (it leaves them out of the sums).
 
 ## Stages, components and templates
@@ -423,13 +424,14 @@ skills/atelier/
 ├── dsh_run.py                  # runs one PBI on DeepSeek Harness headless
 ├── claude_run.py               # runs one PBI on Claude Code headless
 ├── worker.md                   # how workers proceed and report
-├── appendix/                   # read only when needed: engine, the stage procedures (design, plan, verify, review, rework, finish, optional), handoff, memory, jev, setup, adapters, priority-templates
+├── appendix/                   # read only when needed: engine, the stage procedures (design, plan, verify, review, rework, finish, optional), cases, handoff, memory, jev, setup, adapters, priority-templates
 ├── prompts/                    # subagent prompts (design review, PBI review, final review)
 ├── agents/pbi-worker.md        # worker / reviewer sub-agent (copy to ~/.claude/agents)
 ├── prepare.py                  # Jev gate 1 + decision table in one call; prints a table
 ├── verify.py                   # runs a PBI's verification commands; prints exit codes and tails
 ├── record_run.py               # one line per run in runs.jsonl, and a copy of its raw logs in the archive
 ├── model_report.py             # results, tokens, cost and a provisional grade per model, from runs.jsonl
+├── export_cases.py             # one normalized case per judged PBI in cases.jsonl, for an outer harness
 ├── prices.json                 # sample API prices for the cost_api_equiv estimate (a prices.json in your home overrides it; not what you are billed)
 ├── select_model.py             # decision table: tier, route and review depth; drops steps per agents.json
 ├── adapter_gate.py             # whether the final and security reviews run, and why
@@ -459,7 +461,7 @@ skills/atelier/
 │   └── test_jev.py / jev.test.mjs
 ├── test_select_model.py / test_agents.py / test_common.py
 ├── test_setup_agents.py / test_model_fetch.py / test_templates.py / test_prepare.py / test_unchanged.py
-├── test_record_run.py / test_model_report.py / test_dsh_run.py / test_jev_mcp.py
+├── test_record_run.py / test_model_report.py / test_export_cases.py / test_dsh_run.py / test_jev_mcp.py
 ├── test_claude_run.py          # claude_run: arguments, settings and tools
 ├── test_adapter_gate.py        # the review gates: 299/300/301 lines, 2/3 PBIs, deep and sensitive
 ├── test_references.py          # every file the skill docs name exists

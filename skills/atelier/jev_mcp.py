@@ -66,6 +66,8 @@ STATUSES = ('DONE', 'DONE_WITH_CONCERNS', 'NEEDS_CONTEXT', 'BLOCKED')
 FAIL_STATUSES = ('NEEDS_CONTEXT', 'BLOCKED')
 # record の outcome (record_run.py の --outcome と同じ値。英語の値は record_run.py が日本語の値に直して書く)
 OUTCOMES = ('pass', 'rework', 'tier-up', 'unavailable', 'hold', '合格', '差し戻し', '昇格', '使えず', '保留')
+# record の cause (record_run.py の CAUSES と同じ値)
+CAUSES = ('spec', 'convention', 'scope', 'memory', 'model', 'env')
 # claim_task が sections に入れる PBI の見出し (appendix/plan.md の雛形)。キーは英語の見出しで、
 # 旧い PBI の日本語の見出しも同じキーで読む
 SECTIONS = (('Goal', '目的'), ('Targets', '対象'), ('Do not touch', '触らない範囲'),
@@ -579,11 +581,11 @@ class Tasks:
 
     def record(self, repo: str, report: str, attempt: int, outcome: str, findings: list | None = None,
                runner: str | None = None, model: str | None = None, effort: str | None = None,
-               tier: str | None = None) -> dict:
+               tier: str | None = None, cause: list | None = None) -> dict:
         """record_run.py を 1 回呼び、1 回の実行 (PBI × attempt) を docs/pbi/runs.jsonl に 1 行足す。
 
         record_run.py <報告名> --attempt N --outcome O [...] を、repo をカレントにして動かす。引数は
-        record_run.py の --findings・--runner・--model・--effort・--tier と同じ。同じ (報告名, attempt) が
+        record_run.py の --findings・--runner・--model・--effort・--tier・--cause と同じ。同じ (報告名, attempt) が
         既にあれば record_run.py が終了コード 2 を返すので、そのまま返す。行は jev-mcp では組み立てない。
         """
         root = self.repo(repo)
@@ -598,6 +600,10 @@ class Tasks:
                     or not all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in findings):
                 raise ToolError('findings は 重大,中,軽微 の 3 つの整数 (例 [0, 1, 2])')
             argv += ['--findings', ','.join(str(n) for n in findings)]
+        if cause is not None:
+            if not isinstance(cause, list) or not cause or not all(isinstance(c, str) for c in cause):
+                raise ToolError(f'cause は {" / ".join(CAUSES)} の文字列のリスト (例 ["spec"])')
+            argv += ['--cause', ','.join(cause)]
         for option, value in (('--runner', runner), ('--model', model), ('--effort', effort), ('--tier', tier)):
             if value is None:
                 continue
@@ -700,7 +706,9 @@ TOOLS = [
          'runner': {'type': 'string', 'description': 'route.json と違う実行先で動かしたとき (--runner)'},
          'model': {'type': 'string', 'description': 'route.json と違うモデルで動かしたとき (--model)'},
          'effort': {'type': 'string', 'description': '--effort と同じ'},
-         'tier': {'type': 'string', 'description': '--tier と同じ'}}}},
+         'tier': {'type': 'string', 'description': '--tier と同じ'},
+         'cause': {'type': 'array', 'items': {'type': 'string', 'enum': list(CAUSES)}, 'minItems': 1,
+                   'description': '差し戻し・昇格・保留の原因 (--cause と同じ。appendix/cases.md)'}}}},
 ]
 
 

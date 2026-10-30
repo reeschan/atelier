@@ -15,7 +15,13 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
    - A cache rebuild is a request that read less than half of what was cached just before and wrote anew. Past the TTL it counts as "TTL expired"; expired under a 5m TTL but within 1 hour, it counts as "a 1h TTL would have prevented it".
    - For earlier work, use `--all` (every session, PBI subagents included) or `--session <ID>`.
    - Per-PBI models, tokens and cost are in `runs.jsonl`. The jev-log line at the end holds only the count of cache rebuilds and the number of `runs.jsonl` rows.
-3. When rtk mode is on, run these from the repository root, then turn it off. The number covers every rtk run in this repository so far (other sessions, Codex and opencode included); say so.
+3. Write the cases for an outer harness (`appendix/cases.md`). It only reads `docs/pbi/` and writes `cases.jsonl`.
+
+   ```bash
+   python <skill>/export_cases.py
+   ```
+
+4. When rtk mode is on, run these from the repository root, then turn it off. The number covers every rtk run in this repository so far (other sessions, Codex and opencode included); say so.
 
    ```bash
    rtk gain -p | head -n 20
@@ -40,4 +46,5 @@ Open with one line that restates the user's goal in your own words, as at the st
   - where Jev was skipped, and the number of handoffs
   - the stats summary: the orchestrator's share and the top 3 subagents by reads
   - rtk savings (tokens and rate, top commands), or "rtk: off (context below the threshold)"
-  - working memory: the work key, the number of refs written, the promoted memory ids and titles, and every `runs.jsonl` row whose `memory.violation` is true (runner, model, what was used)
+  - working memory: the work key, the number of refs written, the promoted memory ids and titles, and every `runs.jsonl` row whose `memory.violation` is true (runner, model, what was used), and the rows with `missed_refs`
+  - the causes of rework, tier up and hold, counted from `runs.jsonl`, and the line `export_cases.py` printed
