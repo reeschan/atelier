@@ -130,6 +130,36 @@ class ExportCasesTest(unittest.TestCase):
             {'kind': 'repro', 'text': '`node docs/pbi/tools/stable.mjs`'}]}])
         self.assertEqual(self.cases(self.archive / 'app' / 'main__W-003' / 'cases.jsonl'), [case])
 
+    def test_size_time_and_tokens(self):
+        (self.pbi / 'PBI-002.facts.json').write_text(json.dumps(
+            {'files_changed': 2, 'files_new': 0, 'files_deleted': 0, 'modules': 1, 'criteria': 2,
+             'sensitive': False, 'extra': 'x'}), encoding='utf-8')
+        (self.pbi / 'PBI-002.brief.md').write_text('brief text', encoding='utf-8')
+        first = row('PBI-002', 1, '差し戻し', cause=['spec'])
+        first.update(time={'seconds': 300}, steps=20, cost_api_equiv=0.5,
+                     tokens={'input': 60, 'output': 30, 'reasoning': None, 'cache_read': 10, 'cache_write': 0,
+                             'total': 100})
+        second = row('PBI-002.rework-1', 1, '合格', rework=1)
+        second.update(time={'seconds': 120}, steps=None, cost_reported=0.2, cost_api_equiv=0.9)
+        self.write_rows([first, second])
+        self.run_export()
+        [case] = self.cases()
+        size = case['size']
+        self.assertEqual(size['facts'], {'files_changed': 2, 'files_new': 0, 'files_deleted': 0, 'modules': 1,
+                                         'criteria': 2, 'sensitive': False})
+        self.assertEqual((size['tier'], size['targets'], size['acceptance'], size['verify'], size['refs']),
+                         ('sonnet', 2, 2, 2, 2))
+        self.assertEqual(size['chars'], {'worker': len('# How to work\n'), 'pbi': len(PBI), 'brief': 10,
+                                         'refs': len('日付は UTC で持つ') + len('並べ替えは安定ソート')})
+        a = case['result']['attempts'][0]
+        self.assertEqual((a['seconds'], a['steps'], a['cost'], a['tokens']), (300, 20, 0.5, 100))
+        self.assertEqual(a['token_parts'], {'input': 60, 'output': 30, 'reasoning': None, 'cache_read': 10,
+                                            'cache_write': 0})
+        self.assertEqual(case['result']['attempts'][1]['cost'], 0.2)
+        self.assertEqual(case['result']['totals'], {
+            'seconds': 420, 'steps': 20, 'tokens': 200, 'cost': 0.7, 'attempts': 2,
+            'unknown': {'seconds': 0, 'steps': 1, 'tokens': 0, 'cost': 0}})
+
     def test_unavailable_only_pbi_is_left_out(self):
         self.write_rows([row('PBI-002', 1, '使えず')])
         r = self.run_export()
@@ -142,6 +172,9 @@ class ExportCasesTest(unittest.TestCase):
         [case] = self.cases()
         self.assertEqual([m['fetched'] for m in case['harness']['memory']], [None, None])
         self.assertTrue(case['result']['first_pass'])
+        self.assertIsNone(case['size']['facts'])
+        self.assertIsNone(case['size']['chars']['brief'])
+        self.assertEqual(case['result']['totals']['unknown']['seconds'], 1)
 
     def test_missing_runs_exits_2(self):
         self.assertEqual(self.run_export().returncode, 2)

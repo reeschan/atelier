@@ -10,7 +10,10 @@ case の形は CASE_SCHEMA の版と appendix/cases.md にある。要素は種�
            ルートと Targets のパスの親ディレクトリにあるもの)、memory (Refs の id と要旨と、get したか)。
            本文は入れず、パスと sha256 の先頭 12 文字だけを入れる (worker.md は保全先にも写るので本文を入れる)
   task:    PBI の節 (Goal・Targets・Do not touch・Acceptance criteria・Verify commands・Notes・Depends on)
-  result:  runs.jsonl の行を実行ごとに縮めたもの (結果・原因・指摘・検証の終了コード・メモリと範囲の違反)
+  size:    PBI の大きさ。facts.json の見積もり、節の数 (Targets・Acceptance・Verify・Refs)、最初の tier、
+           実装担当に渡した文章の文字数 (worker.md・PBI・brief・Refs の要旨)
+  result:  runs.jsonl の行を実行ごとに縮めたもの (結果・原因・指摘・検証の終了コード・メモリと範囲の違反・
+           時間・ステップ・トークンの内訳・費用) と、差し戻しを含めた合計 (totals)
   private: 差し戻しの note の Expected と Repro。採点にだけ使い、実装担当に見せない
 PBI の行が runs.jsonl に無いもの、「使えず」だけのものは書かない。
 """
@@ -30,6 +33,8 @@ NUMBERED = re.compile(r'^\s*(\d+)[.:)]\s+(.*\S)\s*$')
 PATHLIKE = re.compile(r'`?([\w./-]+/[\w.-]+|[\w-]+\.[A-Za-z0-9]+)`?')
 DEPENDS = re.compile(r'^\s*-\s*Depends on:\s*(.*)$', re.M)
 PBI_ID = re.compile(r'PBI-\d+')
+FACT_KEYS = ('files_changed', 'files_new', 'files_deleted', 'modules', 'criteria', 'sensitive')
+TOKEN_PARTS = ('input', 'output', 'reasoning', 'cache_read', 'cache_write')
 EXPECTED = re.compile(r'^\s*-\s*(Expected|Repro):\s*(.*\S)\s*$', re.M)
 
 
@@ -91,16 +96,55 @@ def memory_of(pbi_text: str, rows: list[dict]) -> list[dict]:
     return out
 
 
+def cost_of(r: dict):
+    return r.get('cost_reported') if r.get('cost_reported') is not None else r.get('cost_api_equiv')
+
+
 def attempt_of(r: dict) -> dict:
     judged = r.get('judged') or {}
+    tokens = r.get('tokens') or {}
     return {'report': r.get('report'), 'attempt': r.get('attempt'), 'rework': r.get('rework'),
             'runner': r.get('runner'), 'model': r.get('model'), 'effort': r.get('effort'), 'tier': r.get('tier'),
             'outcome': judged.get('outcome'), 'cause': judged.get('cause'), 'findings': judged.get('findings'),
             'verify_codes': (r.get('verify') or {}).get('codes'),
             'memory_violation': (r.get('memory') or {}).get('violation'),
             'do_not_touch_violation': (r.get('unchanged') or {}).get('violation'),
-            'worker': (r.get('prompt') or {}).get('worker'), 'tokens': (r.get('tokens') or {}).get('total'),
+            'worker': (r.get('prompt') or {}).get('worker'), 'tokens': tokens.get('total'),
+            'token_parts': {k: tokens.get(k) for k in TOKEN_PARTS},
+            'seconds': (r.get('time') or {}).get('seconds'), 'steps': r.get('steps'), 'cost': cost_of(r),
             'archive': (r.get('archive') or {}).get('dir')}
+
+
+def totals(rows: list[dict]) -> dict:
+    """差し戻しと「使えず」も含めた全実行の合計。値が分からない実行の数を unknown に数える。"""
+    values = {'seconds': [(r.get('time') or {}).get('seconds') for r in rows], 'steps': [r.get('steps') for r in rows],
+              'tokens': [(r.get('tokens') or {}).get('total') for r in rows], 'cost': [cost_of(r) for r in rows]}
+    out = {k: (sum(v for v in vs if v is not None) if any(v is not None for v in vs) else None)
+           for k, vs in values.items()}
+    out['attempts'] = len(rows)
+    out['unknown'] = {k: sum(1 for v in vs if v is None) for k, vs in values.items()}
+    return out
+
+
+def chars(path: Path) -> int | None:
+    try:
+        return len(path.read_text(encoding='utf-8'))
+    except OSError:
+        return None
+
+
+def size_of(base: Path, pbi: str, pbi_text: str, task: dict, memory: list[dict], first: dict) -> dict:
+    facts = None
+    try:
+        doc = json.loads((base / f'{pbi}.facts.json').read_text(encoding='utf-8'))
+        facts = {k: doc.get(k) for k in FACT_KEYS} if isinstance(doc, dict) else None
+    except (OSError, ValueError):
+        pass
+    return {'facts': facts, 'tier': first.get('tier'),
+            'targets': len(target_paths(task['targets'])), 'acceptance': len(task['acceptance']),
+            'verify': len(task['verify']), 'refs': len(memory),
+            'chars': {'worker': chars(base / 'worker.md'), 'pbi': len(pbi_text) if pbi_text else None,
+                      'brief': chars(base / f'{pbi}.brief.md'), 'refs': sum(len(m['gist']) for m in memory)}}
 
 
 def rework_notes(base: Path, pbi: str) -> list[dict]:
@@ -132,6 +176,7 @@ def build_case(base: Path, root: Path, repo: str, pbi: str, rows: list[dict]) ->
         worker_text = None
     outcomes = [(r.get('judged') or {}).get('outcome') for r in delivered]
     first = delivered[0]
+    memory = memory_of(pbi_text, delivered)
     return {
         'schema': CASE_SCHEMA,
         'id': f"{repo}:{first.get('work_key') or ''}:{pbi}",
@@ -141,12 +186,13 @@ def build_case(base: Path, root: Path, repo: str, pbi: str, rows: list[dict]) ->
             'system_prompt': {'path': 'docs/pbi/worker.md', 'version': record_run.file_version(worker),
                               'text': worker_text},
             'guardrails': guardrails(root, target_paths(task['targets'])),
-            'memory': memory_of(pbi_text, delivered),
+            'memory': memory,
         },
         'task': task,
+        'size': size_of(base, pbi, pbi_text, task, memory, first),
         'result': {'first_pass': outcomes[0] == '合格', 'passed': '合格' in outcomes,
                    'sent_back': any(o in ('差し戻し', '昇格', '保留') for o in outcomes),
-                   'attempts': [attempt_of(r) for r in rows]},
+                   'attempts': [attempt_of(r) for r in rows], 'totals': totals(rows)},
         'private': {'rework': rework_notes(base, pbi)},
     }
 
