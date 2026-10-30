@@ -39,6 +39,7 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 | Choosing the work key, writing refs, handing off, promoting at the end | `appendix/memory.md` |
 | Priority templates: the start-time sync, applying or editing one in chat, an expired application | `appendix/priority-templates.md` |
 | Asking Jev directly (report triage, rework check) | `appendix/jev.md` |
+| Recording the cause of a rework, tier up or hold; writing the cases at finish | `appendix/cases.md` |
 | The `adapters` setting in agents.json (turns a design or review stage off, or names a skill for it) | `appendix/adapters.md` |
 
 ## Start

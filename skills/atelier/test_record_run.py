@@ -165,7 +165,7 @@ class RecordRunTest(unittest.TestCase):
         self.assertEqual(row['time']['seconds'], 70)
         self.assertEqual(row['verify'], {'passed': 2, 'total': 3, 'codes': [0, 0, 1]})
         self.assertEqual(row['unchanged'], {'checked': True, 'violation': False})
-        self.assertEqual(row['judged'], {'outcome': '合格', 'findings': {'重大': 0, '中': 1, '軽微': 2}})
+        self.assertEqual(row['judged'], {'outcome': '合格', 'findings': {'重大': 0, '中': 1, '軽微': 2}, 'cause': None})
         self.assertTrue(row['archive']['ok'])
 
     def test_dsh_tokens_steps_and_time_from_status_usage_and_run_json(self):
@@ -557,6 +557,60 @@ class RecordRunTest(unittest.TestCase):
         self.assertEqual(row['memory']['unlisted_refs'], ['mem-9'])
         self.assertIn('memory violation: allowed refs-only, used get, search, unlisted refs mem-9', r.stdout)
 
+    def test_agent_refs_not_fetched_are_missed_but_not_a_violation(self):
+        (self.pbi / 'PBI-007.md').write_text('# PBI-007\n\n## Refs\n- mem-1: 要旨\n- `mem-2`: 要旨\n\n## Notes\nnone\n',
+                                             encoding='utf-8')
+        self.write_route('PBI-007', [AGENT], tier='sonnet')
+        self.write_agent('PBI-007 build', [memory_call('2026-10-16T10:00:00Z', 'r1', 'get', 'tu1', 'mem-1')])
+        r = self.record('PBI-007', 1, 'pass')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [row] = self.rows()
+        self.assertEqual(row['memory']['missed_refs'], ['mem-2'])
+        self.assertFalse(row['memory']['violation'])
+
+    def test_refs_none_has_no_missed_refs(self):
+        (self.pbi / 'PBI-007.md').write_text('# PBI-007\n\n## Refs\nnone\n', encoding='utf-8')
+        self.write_route('PBI-007', [AGENT], tier='sonnet')
+        self.write_agent('PBI-007 build', [assistant('2026-10-16T10:00:00Z', 'r1', 'claude-sonnet-5-5', 1, 1, 0, 0, 0)])
+        self.record('PBI-007', 1, 'pass')
+        self.assertEqual(self.rows()[0]['memory']['missed_refs'], [])
+
+    def test_cause_is_stored_in_judged_and_checked(self):
+        self.write_opencode('PBI-007', [step_finish(1792117900000, 1, 1, 0, 0, 0, 0.0)])
+        r = self.record('PBI-007', 1, 'rework', '--cause', 'convention,spec,spec')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.rows()[0]['judged']['cause'], ['spec', 'convention'])
+        bad = self.record('PBI-007', 2, 'rework', '--cause', 'taste')
+        self.assertEqual(bad.returncode, 2)
+        self.assertIn('--cause', bad.stderr)
+
+    def test_rework_without_cause_warns(self):
+        self.write_opencode('PBI-007', [step_finish(1792117900000, 1, 1, 0, 0, 0, 0.0)])
+        r = self.record('PBI-007', 1, 'rework')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('cause: 未記入', r.stdout)
+        self.assertNotIn('cause: 未記入', self.record('PBI-007', 2, 'pass').stdout)
+
+    def test_worker_version_and_base_commit(self):
+        self.write_opencode('PBI-007', [step_finish(1792117900000, 1, 1, 0, 0, 0, 0.0)])
+        (self.pbi / 'worker.md').write_text('# How to work\n', encoding='utf-8')
+        git = ['git', '-c', 'user.name=t', '-c', 'user.email=t@example.com']
+        subprocess.run(['git', 'init', '-q'], cwd=self.repo, check=True)
+        subprocess.run([*git, 'commit', '-q', '--allow-empty', '-m', 'x'], cwd=self.repo, check=True)
+        head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=self.repo, capture_output=True, text=True).stdout.strip()
+        self.record('PBI-007', 1, 'pass')
+        [row] = self.rows()
+        self.assertEqual(row['prompt'], {'worker': record_run.file_version(self.pbi / 'worker.md')})
+        self.assertEqual(len(row['prompt']['worker']), 12)
+        self.assertEqual(row['base_commit'], head)
+
+    def test_no_worker_copy_and_no_git_give_nulls(self):
+        self.write_opencode('PBI-007', [step_finish(1792117900000, 1, 1, 0, 0, 0, 0.0)])
+        self.record('PBI-007', 1, 'pass')
+        [row] = self.rows()
+        self.assertEqual(row['prompt'], {'worker': None})
+        self.assertIsNone(row['base_commit'])
+
     def opencode_get(self, ref=None):
         state = {'input': {'id': ref}} if ref else {}
         return {'type': 'tool', 'part': {'tool': 'shared-memory_get', 'state': state}}
@@ -614,7 +668,8 @@ class RecordRunTest(unittest.TestCase):
         self.assertEqual(self.record('PBI-007', 1, 'pass').returncode, 0)
         [row] = self.rows()
         self.assertEqual(row['memory'], {'allowed': 'none', 'calls': {'get': 0, 'search': 0, 'write': 0}, 'used': [],
-                                         'unlisted_refs': [], 'violation': False, 'source': 'log scan'})
+                                         'unlisted_refs': [], 'missed_refs': None, 'violation': False,
+                                     'source': 'log scan'})
 
     def test_bad_outcome_is_rejected(self):
         r = self.record('PBI-007', 1, 'よかった')
