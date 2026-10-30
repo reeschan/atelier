@@ -41,6 +41,7 @@ Atelier (旧名 **pbi-orchestration-jev**) は、開発を**ワークフロー�
 - 振り分けを期限付きで上書きできます。優先テンプレートをオンにすると、期限までのあいだ段ごとの route を差し替えます。期限が来たら続けるかを聞きます。設定は Web ページ (Artifact) からもできます (下の「優先テンプレート」)。
 - `agent_stats.py` が、Claude Code の会話記録からモデル別・エージェント別のトークン数、プロンプトキャッシュの作り直しの回数、今の文脈の大きさを集計します。
 - 実行の合否 (合格・差し戻し・昇格・使えず・保留) を決めるたびに、`record_run.py` が `docs/pbi/runs.jsonl` に 1 行を足します。実行先・モデル・effort・トークン・コスト・ステップ数・時間・検証の結果はログから読み、オーケストレーターが渡すのは結果とレビュー指摘の件数だけです。読めない値は null のままにします。その実行の生ログはリポジトリの外の保全先にコピーします。保全先は環境変数 `PBI_RUNS_ARCHIVE` (同期するフォルダを指せば、ほかの場所にも残せます)、無ければ `~/.claude/pbi-runs` です。`model_report.py` はモデル別に集計し (`--archive` でリポジトリをまたいで)、後から人が調整する目安として仮の評価 A〜D を付けます。振り分けは変えません。
+- 外のハーネスのための記録も残します。差し戻し・昇格・保留には原因 (`spec`・`convention`・`scope`・`memory`・`model`・`env`) を付け、どの行にも `docs/pbi/worker.md` の版・元のコミット・実装担当が読まなかった ref を入れます。終わりに `export_cases.py` が PBI ごとに正規化した case を `docs/pbi/cases.jsonl` と保全先に書きます。中身は、実装担当に注入したもの (system prompt・効いていた CLAUDE.md の規約・ref)、PBI の節、試行ごとの結果、採点にだけ使う差し戻しの期待値です。Atelier はこれでプロンプトを組み立てません。harness2 などの外のハーネスが読んで PBI を作り直し、指示の直し方を出します (`skills/atelier/appendix/cases.md`)。
 - 費用は参考値です。同梱の `prices.json` は見本の単価表で、home の `prices.json` で上書き・追加できます。`agent_stats.py --cost` は設計者の費用を API 換算の USD で出し、`model_report.py` は費用の分からない実行の件数を出します (合計には足しません)。
 
 ## 工程・部品・テンプレート
@@ -423,7 +424,7 @@ skills/atelier/
 ├── dsh_run.py                  # DeepSeek Harness の headless で PBI を 1 件動かす
 ├── claude_run.py               # Claude Code の headless で PBI を 1 件動かす
 ├── worker.md                   # 実装担当の進め方と報告の形
-├── appendix/                   # 場面ごとに読む付録: engine、工程の手順 (design・plan・verify・review・rework・finish・optional)、handoff・memory・jev・setup・adapters・priority-templates
+├── appendix/                   # 場面ごとに読む付録: engine、工程の手順 (design・plan・verify・review・rework・finish・optional)、cases・handoff・memory・jev・setup・adapters・priority-templates
 ├── prompts/                    # サブエージェントへの依頼文 (設計の見直し・PBI のレビュー・最終レビュー)
 ├── agents/pbi-worker.md        # 実装担当・レビュー用のサブエージェントの定義 (~/.claude/agents に置く)
 ├── prepare.py                  # Jev のゲート 1 と決定表を 1 回で実行し、表だけを出す
@@ -447,6 +448,7 @@ skills/atelier/
 ├── agent_stats.py              # 会話記録からトークン・キャッシュ・文脈の大きさを集計
 ├── record_run.py               # 1 回の実行を runs.jsonl に 1 行で記録し、生ログを保全先にコピー
 ├── model_report.py             # runs.jsonl からモデル別の結果・トークン・コスト・仮の評価を集計
+├── export_cases.py             # 判定した PBI ごとに正規化した case を cases.jsonl に書く (外のハーネス向け)
 ├── prices.json                 # API 換算コスト (cost_api_equiv) の見本の料金表 (home の prices.json で上書き。請求額ではない)
 ├── jev.config.template.json    # Jev のゲートの雛形
 ├── opencode.config.json        # opencode の権限 (push・reset・リポジトリ外を拒否)
@@ -459,7 +461,7 @@ skills/atelier/
 │   └── test_jev.py / jev.test.mjs
 ├── test_select_model.py / test_agents.py / test_common.py
 ├── test_setup_agents.py / test_model_fetch.py / test_templates.py / test_prepare.py / test_unchanged.py
-├── test_record_run.py / test_model_report.py / test_dsh_run.py / test_jev_mcp.py
+├── test_record_run.py / test_model_report.py / test_export_cases.py / test_dsh_run.py / test_jev_mcp.py
 ├── test_claude_run.py          # claude_run の引数・設定の道具・環境
 ├── test_adapter_gate.py        # レビューの判定 (299/300/301 行・PBI 2/3 件・deep・sensitive)
 ├── test_references.py          # スキルの文書が名前を挙げるファイルの実在

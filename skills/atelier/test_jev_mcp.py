@@ -253,7 +253,8 @@ class JevMcpTest(unittest.TestCase):
         self.assertEqual(set(row), {'schema', 'recorded_at', 'repo', 'work_key', 'pbi', 'report', 'attempt',
                                     'rework', 'tier', 'runner', 'model', 'effort', 'models_seen', 'time', 'steps',
                                     'tokens', 'cost_reported', 'cost_api_equiv', 'prices_checked_at',
-                                    'prices_home_checked_at', 'verify', 'unchanged', 'memory', 'judged', 'archive'})
+                                    'prices_home_checked_at', 'verify', 'unchanged', 'memory', 'prompt',
+                                    'base_commit', 'judged', 'archive'})
         self.assertEqual(row['schema'], 1)
         self.assertTrue(row['recorded_at'])
         self.assertEqual((row['repo'], row['pbi'], row['report'], row['attempt'], row['rework']),
@@ -263,7 +264,7 @@ class JevMcpTest(unittest.TestCase):
         self.assertEqual({k: row['tokens'][k] for k in ('input', 'output', 'total')},
                          {'input': 100, 'output': 20, 'total': 120})
         self.assertEqual(row['cost_reported'], 0.0123)
-        self.assertEqual(row['judged'], {'outcome': '合格', 'findings': {'重大': 0, '中': 1, '軽微': 2}})
+        self.assertEqual(row['judged'], {'outcome': '合格', 'findings': {'重大': 0, '中': 1, '軽微': 2}, 'cause': None})
         self.assertTrue(row['archive']['ok'])
         for column in ('role', 'source', 'label'):
             self.assertNotIn(column, row)
@@ -342,6 +343,16 @@ class JevMcpTest(unittest.TestCase):
                          ('opencode', 'opencode/model-b', 'max', 'haiku'))
         self.assertEqual(row['judged']['outcome'], '昇格')
 
+    def test_record_passes_the_cause(self):
+        self.write_runner_log()
+        out = self.record(outcome='rework', cause=['scope', 'spec'])
+        self.assertEqual(out['code'], 0, out['stderr'])
+        self.assertEqual(self.rows()[0]['judged']['cause'], ['spec', 'scope'])
+        bad = self.call('record', repo=str(self.repo), report='PBI-001', attempt=2, outcome='rework', cause='spec')
+        self.assertTrue(bad['isError'])
+        import record_run
+        self.assertEqual(jev_mcp.CAUSES, record_run.CAUSES)
+
     def test_record_rework_report_name_is_the_same_as_record_run(self):
         self.write_runner_log(report='PBI-001.rework-2')
         out = self.record(report='PBI-001.rework-2', attempt=3)
@@ -357,7 +368,8 @@ class JevMcpTest(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0]['inputSchema']['required'], ['repo', 'report', 'attempt', 'outcome'])
         self.assertEqual(list(found[0]['inputSchema']['properties']),
-                         ['repo', 'report', 'attempt', 'outcome', 'findings', 'runner', 'model', 'effort', 'tier'])
+                         ['repo', 'report', 'attempt', 'outcome', 'findings', 'runner', 'model', 'effort', 'tier',
+                          'cause'])
         base = {'repo': str(self.repo), 'report': 'PBI-001'}
         for arguments in ({'attempt': 1, 'outcome': '合格', 'role': 'executor'},
                           {'attempt': 1, 'outcome': {'ok': True}},

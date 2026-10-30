@@ -18,8 +18,9 @@ The limit is the template's `fix.max_rework` (2 in the bundled templates). Each 
    - Out-of-scope change: <file and what to revert, if any>
    ```
 
-2. Check the note with the Jev gate `rework_quality` (names_condition, states_current_and_expected, has_repro; `appendix/jev.md`). Rewrite any item under 0.6 before sending.
-3. Launch it with the prompt of `runners.md`, report name `PBI-<n>.rework-<k>`, and add one to the PBI's rework count in STATUS.md.
+2. Record the attempt with its cause (`appendix/cases.md`) if you have not yet.
+3. Check the note with the Jev gate `rework_quality` (names_condition, states_current_and_expected, has_repro; `appendix/jev.md`). Rewrite any item under 0.6 before sending.
+4. Launch it with the prompt of `runners.md`, report name `PBI-<n>.rework-<k>`, and add one to the PBI's rework count in STATUS.md.
 
 ## Stop
 

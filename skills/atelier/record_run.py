@@ -10,7 +10,9 @@
 実行先・モデル・effort・段は docs/pbi/<PBI>.route.json の route[attempt-1] から取る。昇格などで route.json と
 違う実行先で動かしたときは --runner / --model / --effort / --tier で渡す。
 
-判断による値は --outcome と --findings の 2 つだけで、行の judged に分けて入れる。それ以外はファイルから読む:
+判断による値は --outcome と --findings と --cause の 3 つだけで、行の judged に分けて入れる。--cause は差し戻し・
+昇格・保留の原因 (CAUSES のどれか。カンマで複数)。指示の側 (spec・convention・scope・memory) か、モデルの側 (model) か、
+環境 (env) かを分けて、rework_report.py が差し戻し率を原因別に出す。それ以外はファイルから読む:
   opencode: docs/pbi/opencode/<報告名>.jsonl の step_finish (tokens・cost の合計、数をステップ数、時刻の幅)
   agent:    Claude Code の会話記録のうち、description が報告名で始まるサブエージェント (agent_stats.load_requests)
   codex:    docs/pbi/codex/<報告名>.log の「tokens used」の合計だけ (内訳は null)
@@ -24,7 +26,10 @@
             数え、get した id が PBI の Refs (旧い PBI は 参照) の節に無ければ unlisted_refs に入れる。外部の実行先は
             ログ (.jsonl・.json・.log) に shared-memory の get/search/write の名前が出たかだけを見る (数は出さない)。
             許される使い方は agent が refs-only、外部の実行先がテンプレートの build.external_memory (flow.py と同じ
-            解決順。無ければ none)。search・write、none での get、Refs に無い id の get を violation にする
+            解決順。無ければ none)。search・write、none での get、Refs に無い id の get を violation にする。
+            agent は Refs にあるのに get しなかった id を missed_refs に入れる (違反ではなく、読み漏れの目安)
+  指示の版: docs/pbi/worker.md の sha256 の先頭 12 文字を prompt.worker に入れる (指示を直した前後を比べる)
+  元の版:   git rev-parse HEAD を base_commit に入れる (harness2_export.py が作り直しの起点に使う)
 取れない値は 0 ではなく null にする。cost_reported は実行先が出した USD (opencode の cost)、cost_api_equiv は
 トークン × 単価表の API 換算 (参考値で請求額ではない)。単価表は同梱の --prices に home の --home/prices.json を
 重ねたもの。トークン数と単価が分かる実行先ならどれでも出す。prices_checked_at (同梱の単価表の日付) と
@@ -38,10 +43,12 @@ PBI_RUNS_ARCHIVE にそのフォルダを入れる)。
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -55,6 +62,12 @@ OUTCOMES = ('合格', '差し戻し', '昇格', '使えず', '保留')
 # 指示文 (英語) が使う --outcome の値。runs.jsonl には今までどおり OUTCOMES の値で書く (model_report.py が読む)
 OUTCOME_ALIASES = {'pass': '合格', 'rework': '差し戻し', 'tier-up': '昇格', 'unavailable': '使えず', 'hold': '保留'}
 SEVERITIES = ('重大', '中', '軽微')
+# 差し戻し・昇格・保留の原因。spec: PBI・brief・rework note の書き足りなさや誤り (指示を書いた側)、convention: リポジトリの
+# 規約 (CLAUDE.md・lint) を守らない、scope: Targets の外や Do not touch への変更、memory: Refs の読み漏れや許されない
+# shared-memory の使い方、model: 情報は足りていたのにモデルが届かない、env: 権限・ネットワーク・道具の不調
+CAUSES = ('spec', 'convention', 'scope', 'memory', 'model', 'env')
+# 指示 (worker.md・PBI の書き方) を直せば減らせる原因
+PROMPT_CAUSES = ('spec', 'convention', 'scope', 'memory')
 REPORT_RE = re.compile(r'^(PBI-\d+)(?:\.rework-(\d+))?$')
 MEMORY_TOOLS = ('get', 'search', 'write')
 AGENT_MEMORY_TOOL = re.compile(r'^mcp__shared-memory__(get|search|write)$')
@@ -67,6 +80,7 @@ LOG_NAME_KEYS = ('tool', 'name', 'tool_name', 'toolName')
 LOG_ARG_KEYS = ('input', 'arguments', 'args', 'params')
 # Refs の欄から id を拾う
 REF_ID = re.compile(r'[\w.-]+')
+LEADING_REF_ID = re.compile(r'^\s*(?:[-*]\s*)?`?([\w.-]+)`?')
 RUNNER_DIRS = ('opencode', 'codex', 'agy', 'dsh', 'claude')
 RUNNER_SUFFIXES = ('.prompt.md', '.jsonl', '.err', '.log', '.last.md', '.json', '.patch.yml', '.run.json', '.final.md')
 TOKEN_FIELDS = ('input', 'output', 'reasoning', 'cache_read', 'cache_write', 'cache_write_5m', 'cache_write_1h')
@@ -433,6 +447,16 @@ def listed_refs(pbi_text: str) -> set[str]:
     return set(REF_ID.findall(refs_section(pbi_text)))
 
 
+def leading_ref_ids(pbi_text: str) -> set[str]:
+    """Refs の欄の各行の先頭の id (「- mem-1: 要旨」の mem-1)。要旨の語は入れない。none は id ではない。"""
+    ids = set()
+    for line in refs_section(pbi_text).splitlines():
+        m = LEADING_REF_ID.match(line)
+        if m and m.group(1).lower() not in ('none', 'なし'):
+            ids.add(m.group(1))
+    return ids
+
+
 def refs_section(pbi_text: str) -> str:
     m = re.search(r'^## (?:Refs|参照)\s*\n(.*?)(?=^## |\Z)', pbi_text, re.S | re.M)
     return m.group(1) if m else ''
@@ -450,8 +474,8 @@ def allowed_memory(runner: str, base: Path, home: Path) -> str:
 
 
 def read_memory(runner: str, transcript: Path | None, logs: list[Path], pbi_text: str, allowed: str) -> dict:
-    unknown = {'allowed': allowed, 'calls': None, 'used': None, 'unlisted_refs': None, 'violation': None,
-               'source': None}
+    unknown = {'allowed': allowed, 'calls': None, 'used': None, 'unlisted_refs': None, 'missed_refs': None,
+               'violation': None, 'source': None}
     if runner == 'agent':
         if transcript is None:
             return unknown
@@ -467,11 +491,13 @@ def read_memory(runner: str, transcript: Path | None, logs: list[Path], pbi_text
     gets = [ref for tool, ref in calls if tool == 'get']
     unlisted = sorted({ref for ref in gets if ref and ref not in refs})
     violation = bool(used & {'search', 'write'}) or (bool(gets) and allowed == 'none') or bool(unlisted)
+    # 読み漏れは id が分かる agent だけで数える (外部の実行先は runners.md が本文を依頼文に写す)
+    missed = sorted(leading_ref_ids(pbi_text) - {ref for ref in gets if ref}) if runner == 'agent' else None
     # refs-only で id の分からない get があれば、守ったとは言えない
     if not violation and any(ref is None for ref in gets):
         violation = None
     return {'allowed': allowed, 'calls': counts, 'used': sorted(used), 'unlisted_refs': unlisted,
-            'violation': violation, 'source': source}
+            'missed_refs': missed, 'violation': violation, 'source': source}
 
 
 def read_verify(path: Path) -> tuple[dict | None, dict]:
@@ -556,6 +582,33 @@ def read_rows(path: Path) -> list[dict]:
     return rows
 
 
+def parse_causes(s: str | None) -> list[str] | None:
+    if not s:
+        return None
+    causes = [c.strip() for c in s.split(',') if c.strip()]
+    bad = [c for c in causes if c not in CAUSES]
+    if bad:
+        fail(f'--cause は {" / ".join(CAUSES)} のどれか (カンマで複数): {", ".join(bad)}')
+    return sorted(set(causes), key=CAUSES.index)
+
+
+def file_version(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    except OSError:
+        return None
+
+
+def head_commit(cwd: Path) -> str | None:
+    try:
+        r = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=cwd, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return r.stdout.strip() or None
+
+
 def parse_findings(s: str | None) -> dict | None:
     if s is None:
         return None
@@ -572,6 +625,7 @@ def main():
     ap.add_argument('--attempt', type=int, required=True)
     ap.add_argument('--outcome', required=True)
     ap.add_argument('--findings')
+    ap.add_argument('--cause', help=f'差し戻し・昇格・保留の原因: {", ".join(CAUSES)} (カンマで複数)')
     for opt in ('--runner', '--model', '--effort', '--tier', '--work-key', '--repo'):
         ap.add_argument(opt)
     ap.add_argument('--dir', default='docs/pbi')
@@ -589,6 +643,7 @@ def main():
     if args.attempt < 1:
         fail('--attempt は 1 以上')
     findings = parse_findings(args.findings)
+    causes = parse_causes(args.cause)
     pbi, rework = m.group(1), int(m.group(2) or 0)
     cwd = Path.cwd().resolve()
     base = Path(args.dir)
@@ -662,7 +717,8 @@ def main():
         'prices_checked_at': prices.get('checked_at') if cost_api is not None else None,
         'prices_home_checked_at': prices.get('home_checked_at') if cost_api is not None else None,
         'verify': verify, 'unchanged': unchanged, 'memory': memory,
-        'judged': {'outcome': args.outcome, 'findings': findings},
+        'prompt': {'worker': file_version(base / 'worker.md')}, 'base_commit': head_commit(cwd),
+        'judged': {'outcome': args.outcome, 'findings': findings, 'cause': causes},
         'archive': archive_info,
     }
     # 保全先の runs.jsonl はこの作業キーの行だけにする (前の作業の行を写すと --archive で二重に数える)。
@@ -683,6 +739,8 @@ def main():
     print(f"記録: {args.report} attempt {args.attempt} {runner} {model} {args.outcome} "
           f"tokens={total if total is not None else '不明'} "
           f"cost={'不明' if cost is None else f'{cost:.4f}'} {saved}")
+    if causes is None and args.outcome in ('差し戻し', '昇格', '保留'):
+        print(f"cause: 未記入。差し戻し率の原因別の集計に入らない (--cause {','.join(CAUSES)})")
     if memory['violation']:
         print(f"memory violation: allowed {memory['allowed']}, used {', '.join(memory['used']) or 'none'}"
               + (f", unlisted refs {', '.join(memory['unlisted_refs'])}" if memory['unlisted_refs'] else ''))
