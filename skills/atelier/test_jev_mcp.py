@@ -560,6 +560,7 @@ opencode = bool(args) and args[0] == 'run'
 claude = '--setting' in args
 with open(os.environ['FAKE_RECORD'], 'w', encoding='utf-8') as f:
     json.dump({'kind': 'opencode' if opencode else 'claude' if claude else 'dsh', 'argv': args, 'cwd': os.getcwd(),
+               'pwd': os.environ.get('PWD'),
                'opencode_config': os.environ.get('OPENCODE_CONFIG'),
                'prompt': None if opencode or claude
                else open('docs/pbi/dsh/%s.prompt.md' % args[0], encoding='utf-8').read()}, f)
@@ -625,8 +626,9 @@ class RunTest(unittest.TestCase):
         if os.name == 'nt':
             (self.fakes / 'opencode.cmd').write_text(f'@"{sys.executable}" "{script}" %*\r\n', encoding='utf-8')
         else:
+            # sh を挟まない: sh は引き継いだ PWD が cwd と違うと直してしまい、PWD のテストが効かない
             fake = self.fakes / 'opencode'
-            fake.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding='utf-8')
+            fake.write_text(f'#!{sys.executable}\n{FAKE_RUNNER}', encoding='utf-8')
             fake.chmod(0o755)
         self.record = self.tmp / 'record.json'
         env = mock.patch.dict(os.environ, {
@@ -692,6 +694,15 @@ class RunTest(unittest.TestCase):
     def test_opencode_without_effort_has_no_hash(self):
         self.ok(runner='opencode', model='opencode/deepseek-v4.1-flash-free')
         self.assertEqual(self.recorded()['argv'][1:3], ['-m', 'opencode/deepseek-v4.1-flash-free'])
+
+    def test_child_pwd_is_the_working_directory_for_every_runner(self):
+        # jev-mcp を起動したときの PWD は作業ルートの外に置いて呼ぶ。子の PWD は作業ルート (記録の cwd) になる
+        for runner in ('dsh', 'opencode', 'claude'):
+            with self.subTest(runner=runner), mock.patch.dict(os.environ, {'PWD': str(self.outside)}):
+                self.ok(runner=runner, model='a/b')
+                rec = self.recorded()
+                self.assertEqual(Path(rec['pwd']).resolve(), Path(rec['cwd']).resolve())
+                self.assertEqual(Path(rec['cwd']).resolve(), self.repo)
 
     def test_last_is_missing_or_empty_is_unusable_for_both(self):
         for runner in ('dsh', 'opencode'):
