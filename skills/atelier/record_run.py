@@ -29,7 +29,8 @@
             解決順。無ければ none)。search・write、none での get、Refs に無い id の get を violation にする。
             agent は Refs にあるのに get しなかった id を missed_refs に入れる (違反ではなく、読み漏れの目安)
   指示の版: docs/pbi/worker.md の sha256 の先頭 12 文字を prompt.worker に入れる (指示を直した前後を比べる)
-  元の版:   git rev-parse HEAD を base_commit に入れる (harness2_export.py が作り直しの起点に使う)
+  元の版:   git rev-parse HEAD を base_commit に入れる (外のハーネスが作り直しの起点に使う)
+  入力:     input.pbi_chars に、記録したときの docs/pbi/<PBI>.md の文字数 (export_cases.py の size に使う。無ければ null)
 取れない値は 0 ではなく null にする。cost_reported は実行先が出した USD (opencode の cost)、cost_api_equiv は
 トークン × 単価表の API 換算 (参考値で請求額ではない)。単価表は同梱の --prices に home の --home/prices.json を
 重ねたもの。トークン数と単価が分かる実行先ならどれでも出す。prices_checked_at (同梱の単価表の日付) と
@@ -718,6 +719,7 @@ def main():
         'prices_home_checked_at': prices.get('home_checked_at') if cost_api is not None else None,
         'verify': verify, 'unchanged': unchanged, 'memory': memory,
         'prompt': {'worker': file_version(base / 'worker.md')}, 'base_commit': head_commit(cwd),
+        'input': {'pbi_chars': len(pbi_text) if pbi_text else None},
         'judged': {'outcome': args.outcome, 'findings': findings, 'cause': causes},
         'archive': archive_info,
     }
