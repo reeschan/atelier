@@ -514,7 +514,8 @@ class Tasks:
         last_path.unlink(missing_ok=True)
         flags = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' \
             else {'start_new_session': True}
-        env = None
+        # 実行先によっては実際の cwd ではなく PWD を作業ディレクトリにするため、子の PWD も作業ルートにそろえる
+        env = {**os.environ, 'PWD': str(cwd)}
         files = []
         if runner == 'dsh':
             argv = [sys.executable, str(DSH_RUN), report, '--model', model]
@@ -531,7 +532,7 @@ class Tasks:
             argv = [binary, 'run', '-m', f'{model}#{effort}' if effort else model, '--format', 'json',
                     f'{rel}/{report}.prompt.md を読み、その指示どおりに作業してください。']
             config = OPENCODE_EDIT_ONLY_CONFIG if setting == 'edit-only' else OPENCODE_CONFIG
-            env = {**os.environ, 'OPENCODE_CONFIG': str(config)}
+            env = {**env, 'OPENCODE_CONFIG': str(config)}
             files = [open(base / f'{report}.jsonl', 'wb'), open(base / f'{report}.err', 'wb')]
             streams = {'stdin': subprocess.DEVNULL, 'stdout': files[0], 'stderr': files[1]}
         timed_out = False
