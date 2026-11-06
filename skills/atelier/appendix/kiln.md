@@ -21,22 +21,22 @@ Kiln is **off** unless `docs/pbi/kiln.json` exists or the template sets `kiln.en
 
 ## Enable
 
-1. Copy `<skill>/examples/kiln.json` to `docs/pbi/kiln.json` (that sample has `"enabled": true`), or set `kiln.enabled` to true on the workflow template. The run file wins over the template.
+1. Turn Kiln on by setting `kiln.enabled` to true on the workflow template, or by copying `<skill>/examples/kiln.json` to `docs/pbi/kiln.json` when that file is absent (the sample has `"enabled": true`). The run file wins over the template, so creating it overrides the template's thresholds. If `docs/pbi/kiln.json` already exists, keep it unless the user explicitly approves replacing it.
 2. Install the companion skill **sac-strategic-compact** only after the user says yes. It does strategic cool-down and compact-event logs. Without it, still obey the kiln numbers using this appendix and `appendix/handoff.md` alone.
-3. Keep a `run_id` for the Atelier run when measuring (for `.kiln/compact-events.jsonl`).
+3. Keep one `run_id` for the whole Atelier run and put it on every `.kiln/compact-events.jsonl` line. When you write a handoff, store that same id in `docs/pbi/HANDOFF.md` as `Run id: <run_id>` (`appendix/handoff.md`). After `/clear`, resume reads it back and does not create another, so events stay on one run.
 
 Companion skill: https://github.com/reeschan/sac-strategic-compact
 Atelier mapping in that repo: `docs/atelier-mapping.md`
 
 ## Measure and cool
 
-At every wave boundary (and when crossing a designer soft line between stages):
+While Kiln is on, measure at each stage boundary and at every wave boundary, before the next stage or wave starts. A wave-boundary check alone cannot see a soft or peak crossing in an earlier stage.
 
 1. `python <skill>/agent_stats.py --ctx`
 2. If `docs/pbi/kiln.json` exists, use its numbers. Otherwise, when the template's kiln is enabled, use the template's numbers. Otherwise use `appendix/handoff.md` alone.
 3. Order: aux (rtk) → soft/peak cool-down (state tablet + `/compact` or short resume) → handoff threshold (existing Hand off procedure).
 4. Never cool mid-worker attempt.
-5. When sac-strategic-compact is installed, follow it for the state tablet and **always** append a compact-event log line (including `noop`). Log path default: `docs/pbi/.kiln/compact-events.jsonl`.
+5. When sac-strategic-compact is installed, follow it for the state tablet and **always** append a compact-event log line (including `noop`). Use this run's `run_id`, including the one restored from `HANDOFF.md` after resume. Log path default: `docs/pbi/.kiln/compact-events.jsonl`.
 
 State tablet path when kiln is on: `docs/pbi/CONTEXT_STATE.md` (in addition to HANDOFF.md when handing off).
 
