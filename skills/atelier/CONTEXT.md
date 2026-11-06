@@ -134,6 +134,16 @@ _Avoid_: note (notes are files in `docs/pbi/notes/`)
 At the end, copying up to 3 checked refs into repository or global memory.
 _Avoid_: tier up (that is routing)
 
+## Context capacity
+
+**kiln (窯)**:
+The forge-wide limit on working context for this run. Soft / peak / handoff / aux lines, plus separate chambers for the orchestrator (designer) and the worker (implementer). Optional: off unless `docs/pbi/kiln.json` exists or the template sets `kiln.enabled`. Details in `appendix/kiln.md`.
+_Avoid_: context window (that is the model limit), budget alone (name the kiln lines)
+
+**designer chamber / implementer chamber (設計者室・実装者室)**:
+The kiln budgets for the orchestrator and for one worker attempt. The implementer chamber prefers a fresh worker per attempt (`worker.md`).
+_Avoid_: parent/child context
+
 ## Adapters
 
 **adapter setting (アダプターの設定)**:

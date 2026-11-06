@@ -53,5 +53,12 @@
   },
   "build": {
     "external_memory": "none"
+  },
+  "kiln": {
+    "enabled": false,
+    "require_skill": false,
+    "prompt_install": true,
+    "skill": "sac-strategic-compact",
+    "skill_url": "https://github.com/reeschan/sac-strategic-compact"
   }
 }

@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "require_skill": false,
+  "designer_peak": 48000,
+  "designer_soft": 36000,
+  "implementer_peak": 24000,
+  "implementer_soft": 18000,
+  "handoff_at": 250000,
+  "aux_compress_at": 150000,
+  "log_path": "docs/pbi/.kiln/compact-events.jsonl"
+}

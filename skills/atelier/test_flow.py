@@ -120,6 +120,21 @@ class FlowCliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(result.stdout.startswith('workflow jev-routed ('))
 
+    def test_kiln_stays_off_and_flow_ignores_the_key(self):
+        '''同梱テンプレートの窯はオフ。flow.py は知らないトップレベルの kiln を誤りにしない。'''
+        for name in PRESETS:
+            kiln = bundled(name)['kiln']
+            self.assertFalse(kiln['enabled'], name)
+            self.assertFalse(kiln['require_skill'], name)
+            self.assertTrue(kiln['prompt_install'], name)
+            self.assertEqual(kiln['skill_url'], 'https://github.com/reeschan/sac-strategic-compact')
+        data = bundled('jev-routed')
+        data['kiln'] = {'enabled': True, 'designer_peak': 48000, 'handoff_at': 250000}
+        write_json(os.path.join(self.base, 'workflow.json'), data)
+        result = self.run_flow()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(result.stdout.startswith('workflow jev-routed ('))
+
     def test_build_uses_the_worker_in_every_preset(self):
         for name in PRESETS:
             with self.subTest(name=name):
