@@ -1,10 +1,12 @@
 # Appendix: Kiln (optional)
 
+**Name.** The English term is **Kiln**, from Compaction (working-context cool-down / strategic compaction). The Japanese reading is **窯**. Japanese prose introduces it as Compaction 文脈の Kiln（読みは窯）, and does not lead with 窯 as the source term.
+
 Read this when `docs/pbi/kiln.json` exists, the workflow template has a `kiln` object, the user asks about context budgets, or setup offers the compaction skill.
 
 ## Concept
 
-The **kiln (窯)** is Atelier's forge-wide constraint on working context. Stages still hand off through artifacts; the kiln only says how hot (how large) the orchestrator's conversation may run before it must cool down.
+**Kiln** (Japanese reading 窯) is Atelier's forge-wide constraint on working context. Stages still hand off through artifacts; the kiln only says how hot (how large) the orchestrator's conversation may run before it must cool down.
 
 | Line | Meaning | Default when kiln is on |
 |---|---|---|
