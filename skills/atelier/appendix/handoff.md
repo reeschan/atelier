@@ -2,6 +2,10 @@
 
 Read this at every wave boundary, and when the argument is `resume` (or `resume <repository path>`).
 
+## Kiln
+
+When `docs/pbi/kiln.json` exists or the template sets `kiln.enabled` to true, read `appendix/kiln.md` first. Prefer the soft / peak / aux / handoff numbers in `docs/pbi/kiln.json` over the fixed 150,000 / 250,000 below; when that file is absent, use the enabled template's kiln numbers. Still follow this file's Hand off and Resume procedures at the handoff line. Log compact decisions when sac-strategic-compact is available. Without kiln, keep the fixed thresholds in this file.
+
 ## Measure at a wave boundary
 
 When every PBI of the wave is reviewed and STATUS.md is up to date, measure the context before starting the next wave:

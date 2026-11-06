@@ -282,6 +282,9 @@ class ComponentCliTest(unittest.TestCase):
             data, problem = component.load_example(str(path))
             self.assertIsNotNone(data, problem)
             self.assertEqual(data['workflow']['name'], data['name'], path.name)
+            if data['name'] == 'recommended':
+                self.assertFalse(data['workflow']['kiln']['enabled'])
+                self.assertTrue(data['workflow']['kiln']['prompt_install'])
 
     def test_example_check_lists_missing_skills_and_install_commands(self):
         shutil.rmtree(os.path.join(self.plugins, 'cache', 'market', 'yomiyasu'))

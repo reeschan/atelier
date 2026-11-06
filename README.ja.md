@@ -32,6 +32,7 @@ Atelier (旧名 **pbi-orchestration-jev**) は、開発を**ワークフロー�
 - Jev に送るのは文章だけです。PBI 本文、要約、報告の抜粋、差し戻し文を送り、ソースコード、diff、環境変数、認証情報は送りません。
 - オーケストレーターの文脈に入ったものは以後の全ターンで読み直されるので、文脈を小さく保ちます。実装担当は最後に状態の行から始まる 5 行の報告だけを返して詳細はファイルに書き、長いコマンドの出力はログファイルに書き、PBI 本文は 1 回だけ書いてパスで渡します (`worker.md`、`SKILL.md` の「Keep the context small」)。
 - 文脈が大きくなったら引き継ぎます。PBI の波の区切りで `agent_stats.py --ctx` で文脈の大きさを測り、250,000 トークン以上なら `docs/pbi/HANDOFF.md` (と、共有メモリがあれば引き継ぎのメモリ) を書いて止まります。`/clear` のあと `/atelier resume` で続きから再開します。フォルダを選ばずに始めたセッションからは `/atelier resume <リポジトリのパス>` で再開でき、パスを省くと引き継ぎのメモリから作業リポジトリを探します。
+- 窯 (Kiln) は、1 回の作業の文脈に任意の上限を足します。既定ではオフで、`docs/pbi/kiln.json` があるか、ワークフローのテンプレートが `kiln.enabled` を true にしたときだけ働きます。線は soft・peak・handoff・aux の 4 本で、オーケストレーターの設計者室と、実装担当 1 回分の実装者室に分かれます。`kiln.json` があるときは、その数字が引き継ぎの固定しきい値 (150,000 と 250,000) に優先します。冷まし方と compact の記録は [sac-strategic-compact](https://github.com/reeschan/sac-strategic-compact) が行い、Atelier はそれを必須にせず、自動では入れません。テンプレートの `kiln.prompt_install` は、そのスキルが無いときにその URL からの導入を案内するだけです。手順は [skills/atelier/appendix/kiln.md](skills/atelier/appendix/kiln.md)、`docs/pbi/kiln.json` に写す見本は [skills/atelier/examples/kiln.json](skills/atelier/examples/kiln.json) です。
 - Opus は設計とレビューを受け持ち、実装は安いモデルに任せます。Opus で実装するのは設計判断が要る PBI だけです。機密に触れる PBI や結合度の高い PBI は Sonnet で実装し、Opus のオーケストレーターが重点的にレビューします。
 - [rtk](https://github.com/rtk-ai/rtk) でコマンド出力を圧縮できます (任意)。同梱のフックが、スキルが有効にしたセッションだけ Bash / PowerShell のコマンドを `rtk <cmd>` に書き換えます。
 - 機械的な手順はスクリプトが行います。Jev のゲート 1 (要約の判定・PBI の品質) と決定表の判定は `prepare.py` が、検証コマンドの実行は `verify.py` が 1 回で行い、オーケストレーターには表だけを返します。PBI が触ってはいけないファイルは、`unchanged.py` が起動前にハッシュを取って確かめます。スキル本文も毎回要る中核と、場面ごとに読む `appendix/` に分けてあります。作者の実測 (2026-10、6 タスク) では、この 2 つで費用が 15% 下がりました。
@@ -424,7 +425,7 @@ skills/atelier/
 ├── dsh_run.py                  # DeepSeek Harness の headless で PBI を 1 件動かす
 ├── claude_run.py               # Claude Code の headless で PBI を 1 件動かす
 ├── worker.md                   # 実装担当の進め方と報告の形
-├── appendix/                   # 場面ごとに読む付録: engine、工程の手順 (design・plan・verify・review・rework・finish・optional)、cases・handoff・memory・jev・setup・adapters・priority-templates
+├── appendix/                   # 場面ごとに読む付録: engine、工程の手順 (design・plan・verify・review・rework・finish・optional)、cases・handoff・kiln・memory・jev・setup・adapters・priority-templates
 ├── prompts/                    # サブエージェントへの依頼文 (設計の見直し・PBI のレビュー・最終レビュー)
 ├── agents/pbi-worker.md        # 実装担当・レビュー用のサブエージェントの定義 (~/.claude/agents に置く)
 ├── prepare.py                  # Jev のゲート 1 と決定表を 1 回で実行し、表だけを出す
@@ -440,6 +441,7 @@ skills/atelier/
 ├── studio/                     # 編集画面: home を 4 つのタブで読み書きする (index.html・serve.py・catalog.json・update_catalog.py)
 ├── templates.py                # 優先テンプレート: 検査、Web ページからの同期、適用・回答・写しの書き込み
 ├── web/priority-templates.html # 優先テンプレートを見て設定する Web ページ (Artifact)
+├── examples/kiln.json          # 窯の見本。docs/pbi/kiln.json に写すとその実行で窯がオンになる
 ├── examples/routing/           # 外部の実行先を使う振り分けの見本 (multi-runner.json)
 ├── examples/templates/         # 優先テンプレートの例 (home の templates/ にコピーして使う)
 ├── examples/workflows/         # 外部部品を使うテンプレートの見本と、要るスキルの入れ方 (component.py example)
@@ -510,6 +512,7 @@ python skills/atelier/jev_mcp.py --http --port 7830 --root /path/to/repo   # htt
 - 実行先のモデルと effort はテンプレート `routing.json` で変えられます (形は `routing.default.json`)。対象リポジトリの `docs/pbi/routing.json`、または home の `routing.json` に置くと、`select_model.py` がそちらを使います。無ければ同梱の `routing.default.json` のままです。
 - テンプレートは編集画面でも組めます (上の「セットアップと編集画面」)。
 - 引き継ぎのしきい値 (250,000 トークン) と、外部の実行先の結果も同じ時期に見直してください。
+- 窯をオンにしたときは、そのしきい値は固定の 150,000 / 250,000 ではなく `docs/pbi/kiln.json` の数字です (見本は [skills/atelier/examples/kiln.json](skills/atelier/examples/kiln.json))。手順は [skills/atelier/appendix/kiln.md](skills/atelier/appendix/kiln.md)、冷まし方は [sac-strategic-compact](https://github.com/reeschan/sac-strategic-compact) に任せます (入っていなくても窯の数字は守ります)。
 
 ## テスト
 
