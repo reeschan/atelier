@@ -32,6 +32,7 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 | Event | Read |
 |---|---|
 | Argument `resume`, or the end of a wave | `appendix/handoff.md` |
+| `docs/pbi/kiln.json`, template `kiln`, or context budgets | `appendix/kiln.md` |
 | Argument `setup`, `setup --recommended`, `models` or `templates`, or home has no `agents.json` | `appendix/setup.md` |
 | Picking a component, a `when` you cannot decide, a `read-skill` component, writing a stage record, the user asks to add a skill to the workflow | `appendix/engine.md` |
 | The template has an `optional` list (`ui-design`, `marketing`, `security`, `model-check` rows in the flow table) | `appendix/optional.md` |
@@ -79,6 +80,7 @@ After route and its gates, show the user the PBI list and wait for approval. Per
 - open assumptions from the design stage, and expired priority applications (`appendix/priority-templates.md`)
 - the question for each optional stage with an `ask-user` row placed after route or later (security, by default): whether to run it this time (`appendix/optional.md`)
 - the model-check chart and its rules, when that stage ran
+- when the template has `kiln.prompt_install` and sac-strategic-compact is missing: offer install from its GitHub URL (`appendix/kiln.md`). Do not install it. Kiln stays off unless the user turns it on
 
 ## One PBI
 
@@ -90,6 +92,10 @@ After route and its gates, show the user the PBI list and wait for approval. Per
 - [ ] Update the PBI's row in STATUS.md.
 
 Run PBIs with no unfinished dependency together as a wave, at most 5 at once, never two that touch the same file. After each wave, measure the context (`appendix/handoff.md`).
+
+## Kiln (optional)
+
+When `docs/pbi/kiln.json` exists or the template sets `kiln.enabled`, follow the kiln lines in `appendix/kiln.md` (designer chamber). Workers stay in the implementer chamber: one fresh attempt, PBI and refs only. Cool-down and compact-event logs use sac-strategic-compact when it is installed; otherwise `appendix/handoff.md` alone. This skill does not require that companion.
 
 ## Keep the context small
 
