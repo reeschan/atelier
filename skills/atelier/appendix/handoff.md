@@ -4,7 +4,7 @@ Read this at every wave boundary, and when the argument is `resume` (or `resume 
 
 ## Kiln
 
-When `docs/pbi/kiln.json` exists or the template sets `kiln.enabled` to true, read `appendix/kiln.md` first. Prefer the soft / peak / aux / handoff numbers in `docs/pbi/kiln.json` over the fixed 150,000 / 250,000 below; when that file is absent, use the enabled template's kiln numbers. Still follow this file's Hand off and Resume procedures at the handoff line. Log compact decisions when sac-strategic-compact is available. Without kiln, keep the fixed thresholds in this file.
+When `docs/pbi/kiln.json` exists or the template sets `kiln.enabled` to true, read `appendix/kiln.md` first. Prefer the soft / peak / aux / handoff numbers in `docs/pbi/kiln.json` over the fixed 150,000 / 250,000 below; when that file is absent, use the enabled template's kiln numbers. Creating `docs/pbi/kiln.json` from the sample overrides those template numbers. While Kiln is on, measure at stage boundaries as well as wave boundaries (`appendix/kiln.md`). Still follow this file's Hand off and Resume procedures at the handoff line. On handoff, write the current `run_id` into `HANDOFF.md`; on resume, keep that same id so `.kiln/compact-events.jsonl` stays one run. Log compact decisions when sac-strategic-compact is available. Without kiln, keep the fixed thresholds in this file.
 
 ## Measure at a wave boundary
 
@@ -33,7 +33,7 @@ node <skill>/rtk/rtk-mode.mjs on
 
 ## Hand off
 
-1. Write `docs/pbi/HANDOFF.md` in at most 40 lines. The first two lines are always `Repository: <absolute path of the repository, or the worktree's work root>` and `Branch: <branch>`. Then: the next wave (PBIs and route heads), skipped runners and why, decisions you overrode, design decisions not yet in a PBI (add them to a PBI or the spec first), warnings for later PBIs found in review, the stage records from STATUS.md, and whether `docs/pbi/adapters.json` exists.
+1. Write `docs/pbi/HANDOFF.md` in at most 40 lines. The first two lines are always `Repository: <absolute path of the repository, or the worktree's work root>` and `Branch: <branch>`. Then: the next wave (PBIs and route heads), skipped runners and why, decisions you overrode, design decisions not yet in a PBI (add them to a PBI or the spec first), warnings for later PBIs found in review, the stage records from STATUS.md, and whether `docs/pbi/adapters.json` exists. When Kiln is on, add a line `Run id: <run_id>` with the id already used for `.kiln/compact-events.jsonl`. If you have not chosen one yet, choose it now (a UUID or the harness id) and keep that value.
 2. Write the handoff memory in the workspace (`appendix/memory.md`, "Hand off"): the gist of HANDOFF.md, the work key, the workspace scope, the absolute repository path and the branch.
 3. Append `{"event": "handoff", "context": <value>, "done": <done>, "remaining": <remaining>}` to jev-log.
 4. Tell the user only these two lines, in their language, and stop (rtk mode stays on; put the real absolute path in place of `<path>`):
@@ -50,4 +50,4 @@ node <skill>/rtk/rtk-mode.mjs on
    3. When that still finds nothing (no MCP, no hits, no path in the body): ask the user for the path.
 
    Confirm that the path has `docs/pbi/STATUS.md` and that its current branch (`git -C <path> branch --show-current`) matches STATUS.md and the handoff memory. When it does not, stop and ask. Then, when the app's change_directory (`mcp__ccd_directory__change_directory`, loaded with ToolSearch) is available, move the session there. The move takes effect at the end of the turn, so until then, and for good when it is not available, work with absolute paths (Read and Write with absolute paths, Bash and PowerShell with `git -C <path>` or explicit paths). Say in one line of your first reply which path you chose and how (working directory, argument, memory, or the user).
-2. Read `docs/pbi/STATUS.md` and `docs/pbi/HANDOFF.md`, and other files only in the parts you need. Do not redo the stages before build. Continue with the next wave.
+2. Read `docs/pbi/STATUS.md` and `docs/pbi/HANDOFF.md`, and other files only in the parts you need. When Kiln is on, restore `run_id` from the `Run id:` line in `HANDOFF.md` and use that same id on later `.kiln/compact-events.jsonl` lines. Do not create a new `run_id` after `/clear`. Do not redo the stages before build. Continue with the next wave.
