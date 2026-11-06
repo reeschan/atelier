@@ -134,6 +134,16 @@ _Avoid_: note (notes are files in `docs/pbi/notes/`)
 At the end, copying up to 3 checked refs into repository or global memory.
 _Avoid_: tier up (that is routing)
 
+## Context capacity
+
+**Kiln (窯)**:
+Optional limit on working context for this run. The English name is Kiln, from Compaction (working-context cool-down / strategic compaction). The Japanese reading is 窯. Soft / peak / handoff / aux lines, plus separate chambers for the orchestrator (designer) and the worker (implementer). Off unless `docs/pbi/kiln.json` exists or the template sets `kiln.enabled`. Details in `appendix/kiln.md`.
+_Avoid_: leading with 窯 as the source term, context window (that is the model limit), budget alone (name the Kiln lines)
+
+**designer chamber / implementer chamber (設計者室・実装者室)**:
+The Kiln budgets for the orchestrator and for one worker attempt. The implementer chamber prefers a fresh worker per attempt (`worker.md`).
+_Avoid_: parent/child context
+
 ## Adapters
 
 **adapter setting (アダプターの設定)**:

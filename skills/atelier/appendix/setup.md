@@ -91,6 +91,13 @@ These steps come last in setup. Each one is optional; the skill runs with none o
 
 The 10-second hook timeout is room for the gate's own 5-second limit. Turn the mode on for the session with `node <skill>/rtk/rtk-mode.mjs on`; without the flag file, the hook passes commands through unchanged. Restart Claude Code after the settings change so the hook and `rtk` on the PATH are picked up. When the user does not approve the block, leave `~/.claude/settings.json` as it is.
 
+**Kiln + sac-strategic-compact**. Optional context-capacity constraint (窯) and strategic cool-down. Atelier runs without it and does not install it. When the template has `kiln.prompt_install` (the bundled templates do) and the skill is missing, or the user asks:
+
+1. Ask whether to turn kiln on for future runs. Leave it off unless they say yes.
+2. If yes, copy `<skill>/examples/kiln.json` to `docs/pbi/kiln.json` when a run folder exists (or tell the user to copy it at Start).
+3. Check for the skill `sac-strategic-compact` (Skill tool / skills list). If missing, offer install from https://github.com/reeschan/sac-strategic-compact (`skills/sac-strategic-compact` into the user's skills directory). Do not install without a yes.
+4. Point at `appendix/kiln.md`. Compact-event logs go under `docs/pbi/.kiln/` when measuring.
+
 ## recommended
 
 The argument `setup --recommended` installs nothing without the user's yes: it checks the recommended example template, shows the missing skills and asks once. Follow `appendix/adapters.md` (`## Recommended set`).
