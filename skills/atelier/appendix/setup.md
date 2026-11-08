@@ -91,8 +91,6 @@ These steps come last in setup. Each one is optional; the skill runs with none o
 
 The 10-second hook timeout is room for the gate's own 5-second limit. Turn the mode on for the session with `node <skill>/rtk/rtk-mode.mjs on`; without the flag file, the hook passes commands through unchanged. Restart Claude Code after the settings change so the hook and `rtk` on the PATH are picked up. When the user does not approve the block, leave `~/.claude/settings.json` as it is.
 
-**Kiln + sac-strategic-compact**. Optional context-capacity constraint (Kiln; Japanese reading 窯) and strategic cool-down. Atelier runs without it and does not install it. When the template has `kiln.prompt_install` (the bundled templates do) and the skill is missing, or the user asks:
-
 **Recommended tools**. Run `python <skill>/tools_check.py` and show its table, one line per tool: status, how to install, and the fallback that runs without it. The tools are oh-my-mermaid (`omm` and the `omm-scan` skill, for the map stage), jevlint (for lint-survey and lint-recheck; `no-key` means it runs AST only until `jevlint auth set typesafe`), sac-strategic-compact (kiln), and pstack's `principle-test-behavior-not-implementation` (the test stage). Every row that is not `ok`:
 
 1. Ask once with AskUserQuestion, naming each tool with its link: install it now, or go on with the fallback.

@@ -21,7 +21,7 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 ## Picking
 
 1. A stage takes the first row that is usable and whose `when` holds. The rows after it are not run.
-2. A gate, and an optional stage (`appendix/optional.md`), runs every row that is usable and whose `when` holds.
+2. A gate, and the optional stages `ui-design`, `marketing`, `security` and `model-check` (`appendix/optional.md`), run every row that is usable and whose `when` holds. The optional stages `map`, `lint-survey` and `lint-recheck` pick like a stage (rule 1): their last row is the fallback prompt, which runs only when the rows before it are not usable.
 3. Usable:
    - `builtin` and `script ok`: always.
    - `plugin ok`: always; run it as in `## read-skill components`.

@@ -4,7 +4,7 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
 
 ## Before the report
 
-1. Promote refs and close the work (`appendix/memory.md`, "Finish").
+1. Promote refs (`appendix/memory.md`, "Finish"). Close the work (the done memory) only after the report is written: see the end of `## The completion report`.
 2. Collect the session's stats (read only; nothing changes). After a handoff, also collect the earlier session with `--session <ID>`.
 
    ```bash
@@ -30,7 +30,7 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
 
 ## The completion report
 
-Write it to `docs/pbi/REPORT.md` first, in the user's language. The gates after finish run on that file. The bundled templates have none; a template that adds yomiyasu as an external component (`gate.yomiyasu`, `appendix/engine.md`) polishes a Japanese report's wording when the yomiyasu skill is installed: call it on the file, apply its wording fixes, and keep numbers, ids, paths, commands and pasted tables as they are. Then send the file's text to the user.
+Write it to `docs/pbi/REPORT.md` first, in the user's language. The gates after finish run on that file. The bundled templates have none; a template that adds yomiyasu as an external component (`gate.yomiyasu`, `appendix/engine.md`) polishes a Japanese report's wording when the yomiyasu skill is installed: call it on the file, apply its wording fixes, and keep numbers, ids, paths, commands and pasted tables as they are. Then send the file's text to the user. Once `docs/pbi/REPORT.md` exists, close the work: write the done memory (`appendix/memory.md`, "Finish"). A run that stops before the report keeps its handoff, so `resume` still finds it.
 
 Open with one line that restates the user's goal in your own words, as at the start, then three headings, in this order:
 
@@ -46,7 +46,7 @@ Open with one line that restates the user's goal in your own words, as at the st
   - where Jev was skipped, and the number of handoffs
   - the stats summary: the orchestrator's share and the top 3 subagents by reads
   - rtk savings (tokens and rate, top commands), or "rtk: off (context below the threshold)"
-  - the lint recheck: the path of `docs/pbi/jevlint/recheck.md`, its `report` rows, the reworks it caused, and each send to an outside model (stage, files, cost, the user's answer) from `adapters.json` `sends`
+  - the lint recheck: the path of `docs/pbi/jevlint/recheck.md`, its `report` rows, the reworks it caused, and each send to an outside model: the stage, the file count and the user's answer from `adapters.json` `sends`, the files from `docs/pbi/jevlint/<name>.send.txt`, and the tokens, cost and provider from `docs/pbi/jevlint/<name>.dry-run.json`
   - the lint survey's leads under "Found, not in this run", and the map's source (cache folder, scan, or fallback prompt)
   - the recommended tools that were missing and the fallback each stage used
   - kiln: the number of compact-event lines per action (`docs/pbi/.kiln/compact-events.jsonl`), and the continues after a kiln stop

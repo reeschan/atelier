@@ -1,14 +1,15 @@
 """lint の下調べと見直しで jevlint を流す (appendix/lint.md)。外のモデルに送るのは、許可の記録があるときだけ。
 
-  python lint_run.py files   <pbi-dir> --name NAME (--paths P,... | --base REF [--new F,...]) [--sensitive G,...]
+  python lint_run.py files   <pbi-dir> --name NAME (--paths P,... | --base REF) [--new F,...] [--sensitive G,...]
   python lint_run.py approve <pbi-dir> --name NAME --answer send|ast-only
   python lint_run.py survey  <pbi-dir> --name NAME --mode ast-only|dry-run|model
   python lint_run.py recheck <pbi-dir> --name NAME --base REF --mode ast-only|dry-run|model
 
 files: 見るファイルの一覧を <pbi-dir>/jevlint/NAME.files.txt に書く。--paths はその下の git が追っているファイル、
-  --base はマージ基点 (git merge-base REF HEAD) から作業ツリーまでに変わったファイル (消したものを除く) と --new。
+  --base はマージ基点 (git merge-base REF HEAD) から作業ツリーまでに変わったファイル (消したものを除く)。どちらにも --new
+  (PBI が作った、git がまだ追っていないファイル) を足す。
   lint.json の extensions に合わないものは外す。そのうち外のモデルに送ってよいものを NAME.send.txt に書く。
-  秘密のファイル (SECRET_PATTERNS) と --sensitive の glob (sensitive な PBI の対象) は送らない。外した理由は
+  秘密のファイル (SECRET_PATTERNS) と --sensitive の glob (sensitive な PBI の対象。ワイルドカードの無い値はディレクトリとしても見る) は送らない。外した理由は
   NAME.excluded.txt に 1 行ずつ。
 approve: NAME.send.txt の中身のハッシュと答えを <pbi-dir>/adapters.json の sends に足す (送る直前にユーザーに聞いた答え)。
 survey: NAME.files.txt を jevlint audit にかけ、NAME.json と <pbi-dir>/notes/NAME.md (点・長い関数・弱い問い・
@@ -18,7 +19,7 @@ recheck: マージ基点を一時的な git worktree (スクラッチ) に出し
 
 --mode:
   ast-only  --ast-only で流す。ネットワークを使わない
-  dry-run   送るファイル (NAME.send.txt) の数・トークン・費用・送り先を出すだけ。何も送らない
+  dry-run   送るファイル (NAME.send.txt) の数・トークン・費用・送り先を出し、NAME.dry-run.json に残す。何も送らない
   model     NAME.send.txt をモデルで判定し、残り (送らないファイル) は --ast-only で判定して JSON を合わせる。
             adapters.json の sends に、同じ NAME・同じハッシュ・answer send で、まだ使っていない記録が無ければ
             断る (終了コード 3)。使ったら used を真にする (次に送るときは、また聞く)
@@ -105,6 +106,16 @@ def secret(path: str) -> bool:
     return any(fnmatch.fnmatch(name, pattern) for pattern in SECRET_PATTERNS)
 
 
+def sensitive_match(path: str, glob: str) -> bool:
+    """glob に合うか。ワイルドカードの無い値はディレクトリの前置きとしても見る (src/auth は src/auth/login.ts に合う)。"""
+    if fnmatch.fnmatch(path, glob):
+        return True
+    if any(ch in glob for ch in '*?['):
+        return False
+    prefix = glob.rstrip('/')
+    return path == prefix or path.startswith(prefix + '/')
+
+
 def select(paths: list[str], config: dict, sensitive: list[str], root: Path) -> tuple[list, list, list]:
     """(見るファイル, 送ってよいファイル, (外したファイル, 理由))。"""
     seen, files, send, excluded = set(), [], [], []
@@ -123,7 +134,7 @@ def select(paths: list[str], config: dict, sensitive: list[str], root: Path) -> 
             excluded.append((path, 'extension'))
             continue
         files.append(path)
-        if any(fnmatch.fnmatch(path, glob) for glob in sensitive):
+        if any(sensitive_match(path, glob) for glob in sensitive):
             excluded.append((path, 'sensitive (ast only)'))
             continue
         send.append(path)
@@ -227,7 +238,7 @@ def take_approval(pbi: Path, name: str, send: list[str]) -> None:
 def cmd_files(args, pbi: Path, root: Path) -> int:
     config = lint_config(pbi)
     if args.paths:
-        paths = tracked_under(root, split(args.paths))
+        paths = tracked_under(root, split(args.paths)) + split(args.new)
     else:
         paths = changed_files(root, args.base) + split(args.new)
     files, send, excluded = select(paths, config, split(args.sensitive), root)
@@ -254,6 +265,11 @@ def cmd_approve(args, pbi: Path, _root: Path) -> int:
     return 0
 
 
+def keep_dry_run(pbi: Path, name: str, totals: dict) -> None:
+    """完了報告が読む dry-run の数字 (側ごと) を NAME.dry-run.json に書く。"""
+    common.write_json(out_dir(pbi) / f'{name}.dry-run.json', totals)
+
+
 def print_dry_run(label: str, total: dict) -> None:
     print(f'dry-run {label}: {total["files"]} files, about {total["tokens"]:,} tokens '
           f'(about ${total["cost_usd"]:.4f}), provider {total["provider"]}')
@@ -265,7 +281,9 @@ def cmd_survey(args, pbi: Path, root: Path, command: list[str]) -> int:
     send = read_list(base / f'{args.name}.send.txt')
     preset = config.get('preset') if isinstance(config.get('preset'), str) else None
     if args.mode == 'dry-run':
-        print_dry_run(args.name, dry_run(command, root, send, preset) if send else empty_total())
+        total = dry_run(command, root, send, preset) if send else empty_total()
+        keep_dry_run(pbi, args.name, {'survey': total})
+        print_dry_run(args.name, total)
         return 0
     if args.mode == 'model':
         take_approval(pbi, args.name, send)
@@ -312,17 +330,21 @@ def cmd_recheck(args, pbi: Path, root: Path, command: list[str]) -> int:
     send = read_list(base / f'{args.name}.send.txt')
     preset = config.get('preset') if isinstance(config.get('preset'), str) else None
     merge_base = git(root, 'merge-base', args.base, 'HEAD').strip()
-    if args.mode == 'model':
-        take_approval(pbi, args.name, send)
     scratch = Path(tempfile.mkdtemp(prefix='atelier-lint-'))
     tree = scratch / 'before'
     try:
         git(root, 'worktree', 'add', '--detach', str(tree), merge_base)
+        # 許可は送る直前に使う (worktree を作れずに止まったときは使わずに残す)
+        if args.mode == 'model':
+            take_approval(pbi, args.name, send)
         old = [f for f in files if (tree / f).is_file()]
         old_send = [f for f in send if f in set(old)]
         if args.mode == 'dry-run':
-            print_dry_run(f'{args.name} before', dry_run(command, tree, old_send, preset) if old_send else empty_total())
-            print_dry_run(f'{args.name} after', dry_run(command, root, send, preset) if send else empty_total())
+            before = dry_run(command, tree, old_send, preset) if old_send else empty_total()
+            after = dry_run(command, root, send, preset) if send else empty_total()
+            keep_dry_run(pbi, args.name, {'before': before, 'after': after})
+            print_dry_run(f'{args.name} before', before)
+            print_dry_run(f'{args.name} after', after)
             return 0
         before = judge(command, tree, old, old_send, args.mode, preset) if old else {'files': []}
     finally:

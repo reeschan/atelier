@@ -9,7 +9,7 @@ Sort by the report's status line and by the exit codes from `verify.py`. Ask the
 - `DONE`: go on to `## Check`.
 - `DONE_WITH_CONCERNS`: go on to `## Check`, and read the concerns in the details file.
 - `NEEDS_CONTEXT`: supply what is missing and tell the same worker to continue (SendMessage).
-- `NEEDS_CONTEXT` with `Open: kiln`: the worker stopped at its kiln peak and wrote `## State`. Copy the details file to `docs/pbi/reports/<report>.state.md`, then start a new worker on the same route with the same report name and the `Continue from:` line (`runners.md`). It counts as a continue, not a rework, and is recorded once with `record_run.py` when the PBI is judged. Log the stop with `kiln_log.py --role implementer --boundary attempt` (`appendix/kiln.md`).
+- `NEEDS_CONTEXT` with `Open: kiln`: the worker stopped at its kiln peak and wrote `## State`. Copy the details file to `docs/pbi/reports/<report>.state.md`, then start a new worker on the same route with the same report name and the `Continue from:` line (`runners.md`). It counts as a continue, not a rework, and is recorded once with `record_run.py` when the PBI is judged. Log the stop: `python <skill>/kiln_log.py docs/pbi --role implementer --boundary attempt --phase <report name> --tokens <the attempt's tokens> --action handoff` (`appendix/kiln.md`).
 - `BLOCKED`: read the cause, then continue, rework or stop (`appendix/rework.md`).
 - A continue is not a rework. Allow 2 per PBI; needing a third is a stop (`appendix/rework.md`).
 

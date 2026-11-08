@@ -17,10 +17,10 @@ jevlint (`@indxjp/jevlint`, MIT, https://github.com/INDXDev/jevlint) scores file
 The model questions run only after the user says yes, every time, right before the send. This is the fifth stop point of `SKILL.md`.
 
 1. Make the file list. `lint_run.py files` writes `<name>.files.txt` (all files to judge), `<name>.send.txt` (the files allowed to leave) and `<name>.excluded.txt` under `docs/pbi/jevlint/`. Secret files (`.env*`, keys, credentials) are dropped; files matching `--sensitive` (the targets of sensitive PBIs, or the files a sensitive request will touch) stay AST only.
-2. Run the same stage command with `--mode dry-run`. It prints the files, tokens, cost and provider. Nothing is sent.
+2. Run the same stage command with `--mode dry-run`. It prints the files, tokens, cost and provider and keeps them in `docs/pbi/jevlint/<name>.dry-run.json`. Nothing is sent.
 3. Ask once with AskUserQuestion: the stage, the numbers from the dry run, the provider, the path of `<name>.send.txt`, and two choices, "send" and "AST only". Never ask for a standing approval, a budget, or several sends at once.
 4. Record the answer: `python <skill>/lint_run.py approve docs/pbi --name <name> --answer send|ast-only`. It stores the hash of the send list in `docs/pbi/adapters.json` under `sends`.
-5. Run the stage with `--mode model` after "send", or `--mode ast-only` after "AST only". `--mode model` refuses (exit 3) without an unused "send" record for the same name and list; a changed list needs a new question. On resume, a record with `used` true means the send already happened: do not ask again.
+5. Run the stage with `--mode model` after "send", or `--mode ast-only` after "AST only". `--mode model` refuses (exit 3) without an unused "send" record for the same name and list; a changed list needs a new question. On resume, a record with `used` true and its result on disk (`docs/pbi/jevlint/<name>.json` for the survey, `<name>.after.json` for the recheck) means the send happened: do not ask again. A `used` record without that result means the run stopped before or during the send: ask again before the next model run.
 
 With no `jevlint` key (`tools_check.py` prints `no-key`), skip the question and run AST only. Say so in the stage record.
 
@@ -56,7 +56,7 @@ Runs once, after every PBI has passed and after the test stage (`appendix/tests-
    - A confirmed `bug-hunt` row, or a function that newly reached `function_lines` lines (`action` `rework-candidate`), in a file a PBI's Targets name: rework that PBI (`appendix/rework.md`), counted toward the limit.
    - A row with `action` `report` (a score drop, a weaker question, a long function that grew, another AST measure, any row in `report_only_paths`): no rework. Put the path of `docs/pbi/jevlint/recheck.md` and these rows in the review prompt (`prompts/final-review.md`, `Lint recheck`) and in the completion report.
    - A row in a file no PBI owns: the completion report's findings.
-5. When a reworked PBI passes again, compare its files once more with `--mode ast-only` (make a list with `--paths <its files>` and name it `recheck-<n>`). A second model run needs a new approval.
+5. When a reworked PBI passes again, compare its files once more with `--mode ast-only` (make a list with `--paths <its files>` and `--new <the files it created>`, and name it `recheck-<n>`). A second model run needs a new approval.
 6. Stage record: `stage lint-recheck after verify: lint-recheck.jevlint run (ast-only) worse 4, rework 1`.
 
 ## Fallback prompt (`lint-survey.builtin`, `lint-recheck.builtin`)
