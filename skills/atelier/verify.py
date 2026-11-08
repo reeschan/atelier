@@ -179,13 +179,19 @@ def main():
         print(",".join(str(n) for n, cmd in cmds if is_deferred(cmd, patterns)))
         return
     only = {int(x) for x in args.only.split(",") if x.strip()}
+    # --only か --skip-deferred で絞ったか。絞った結果が空のときに「絞らない」と取り違えないため
+    filtered = bool(only)
     if args.skip_deferred:
         skipped = {n for n, cmd in cmds if is_deferred(cmd, patterns)}
         if skipped:
             print(f"あとに回すので除いた番号: {','.join(str(n) for n in sorted(skipped))}")
             # 除いた番号の前の結果を残すため、--only と同じく前の結果に重ねる
             only = (only or {n for n, _ in cmds}) - skipped
-    if only:
+            filtered = True
+            if cmds and not only:
+                print(f"{args.pbi}: 検証コマンドはすべてあとに回すもの。波の終わりの --deferred で流す")
+                return
+    if filtered:
         cmds = [c for c in cmds if c[0] in only]
     if not cmds:
         print(f"{args.pbi}: 「## Verify commands」から番号付きのコマンドを読めなかった。PBI の書式を直すか、手で実行する")

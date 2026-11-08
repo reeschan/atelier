@@ -127,6 +127,8 @@ def cmd_store(args, pbi: Path) -> int:
         print(f'error {source} is missing (run the scan first)', file=sys.stderr)
         return 2
     folder.mkdir(parents=True, exist_ok=True)
+    # 移す途中で止まっても、古い記録が新しい .omm/ を当たりにしないよう、先に記録を消す
+    (folder / 'fingerprint.json').unlink(missing_ok=True)
     target = folder / OMM
     if target.exists():
         shutil.rmtree(target)

@@ -42,9 +42,17 @@ FALLBACK = {
 }
 
 
-def run(command: list[str], args: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run([*command, *args], capture_output=True, text=True, encoding='utf-8',
-                          env=dict(os.environ, NO_COLOR='1', FORCE_COLOR='0'))
+# jevlint の --version と auth list を待つ上限 (秒)。Start で毎回流すので、止まった CLI で全体を止めない
+TIMEOUT = 30
+
+
+def run(command: list[str], args: list[str]) -> subprocess.CompletedProcess | None:
+    """コマンドを流す。上限の時間を超えたら None。"""
+    try:
+        return subprocess.run([*command, *args], capture_output=True, text=True, encoding='utf-8',
+                              env=dict(os.environ, NO_COLOR='1', FORCE_COLOR='0'), timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 def jevlint_status(home: Path) -> str:
@@ -54,11 +62,11 @@ def jevlint_status(home: Path) -> str:
         return 'missing'
     command = [sys.executable, found] if found.endswith('.py') else [found]
     version = run(command, ['--version'])
-    if version.returncode != 0:
+    if version is None or version.returncode != 0:
         return f'missing (does not run: {found})'
     keys = run(command, ['auth', 'list'])
     label = f'{found} {version.stdout.strip()}'
-    if keys.returncode != 0 or 'typesafe' not in keys.stdout.lower():
+    if keys is None or keys.returncode != 0 or 'typesafe' not in keys.stdout.lower():
         return f'no-key {label}'
     return f'ok {label}'
 

@@ -157,6 +157,27 @@ class LintRunTest(unittest.TestCase):
         self.assertIn('- src/a.ts `bug-hunt.swallowed-error` 0.3: rethrow or report the error', note)
         self.assertNotIn('contracts-stated', note)
 
+    def test_a_sensitive_directory_without_wildcards_covers_its_files(self):
+        self.put('src/auth/login.ts', 'score: 90\n')
+        result = self.run_cli('files', '--name', 'recheck', '--base', 'main', '--new', 'src/auth/login.ts',
+                              '--sensitive', 'src/auth')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('src/auth/login.ts', self.lines('recheck.send.txt'))
+        self.assertIn('src/auth/login.ts\tsensitive (ast only)', self.lines('recheck.excluded.txt'))
+
+    def test_paths_also_take_new_files(self):
+        result = self.run_cli('files', '--name', 'recheck-1', '--paths', 'src/a.ts', '--new', 'src/c.ts')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.lines('recheck-1.files.txt'), ['src/a.ts', 'src/c.ts'])
+
+    def test_dry_run_keeps_its_numbers_for_the_report(self):
+        self.make_recheck_list()
+        self.assertEqual(self.run_cli('recheck', '--name', 'recheck', '--base', 'main', '--mode', 'dry-run').returncode, 0)
+        with open(os.path.join(self.pbi, 'jevlint', 'recheck.dry-run.json'), encoding='utf-8') as f:
+            totals = json.load(f)
+        self.assertEqual((totals['before']['files'], totals['after']['files'], totals['after']['provider']),
+                         (1, 2, 'typesafe'))
+
     def test_files_needs_paths_or_base(self):
         result = self.run_cli('files', '--name', 'x')
         self.assertEqual(result.returncode, 2)

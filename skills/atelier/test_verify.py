@@ -64,6 +64,13 @@ class VerifyDeferredTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.ran(), 1)
 
+    def test_skip_deferred_runs_nothing_when_every_command_is_deferred(self):
+        self.defer('echo')
+        r = self.run_script('PBI-001', '--skip-deferred')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.ran(), 0)
+        self.assertIn('すべてあとに回す', r.stdout)
+
     def test_skip_deferred_runs_only_the_rest(self):
         self.defer('echo heavy')
         r = self.run_script('PBI-001', '--skip-deferred')
