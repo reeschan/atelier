@@ -17,7 +17,7 @@ Atelier (旧名 **pbi-orchestration-jev**) は、開発を**ワークフロー�
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="Atelier のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎのあとに再開する。オーケストレーターは facts を prepare.py に渡し、prepare.py は Jev にゲート 1 (brief と PBI の品質) を聞き、select_model.py で段と route を決める。そのとき home (~/.config/atelier) の振り分け・適用・agents.json と docs/pbi/routing.json を読み、使えない実行先の手順を外す。PBI は、全段の既定の実行先である pbi-worker (Agent ツール) か、setup で選び routing.json に書いた外部の実行先 (opencode・Codex・Antigravity・DeepSeek Harness・Claude Code の headless) に渡り、対象リポジトリのソースコードを変える。オーケストレーターは verify.py と unchanged.py で検証し、Jev には文章だけで、報告と検証が食い違うときの仕分けと差し戻し文の点検を聞き、状態と HANDOFF を docs/pbi/ に記録する。任意の shared-memory の MCP が作業ごとの ref と引き継ぎのメモリを持ち、pbi-worker は ref を get するだけ。setup_agents.py と model_fetch.py が実行先の CLI を検出し、実行先ごとのモデルの一覧を home の agents.json と models/ に控える。開発者は手元の編集画面 (studio/serve.py。エージェントとモデル・振り分け・優先テンプレートと適用・開発フローの 4 タブ) で、それらを home の中だけで読み書きする。templates.py は優先テンプレートと、元になるデータであるローカルの overrides.json を持ち、任意の優先テンプレートの Web ページ (claude.ai の Artifact) はそれと同期するだけ。フェーズ・アダプターは、任意の呼び出し先のスキルが入っていれば使う。設計では、オーケストレーターが mattpocock-skills の grilling を呼ぶ。全 PBI のあとは adapter_gate.py が PBI と agents.json の adapters の設定を読んで、最終レビューとセキュリティレビューを使うかを決め、general-purpose のレビュー用のサブエージェントが mattpocock-skills の code-review か built-in の /code-review・/security-review を呼んで、指摘を docs/pbi/reviews/ に書く。任意の jev-mcp (jev_mcp.py、127.0.0.1) を使うと、MCP クライアントがタスクを受け取って返し、Jev の手順の route (select_model.py)・run (runners.md の渡し方で実行先を 1 回動かす)・record (record_run.py) を使える。jev-mcp は home の振り分けと agents.json を読み、docs/pbi/ に依頼文・報告・runs を書く。">
+  <img src="assets/architecture-light.svg" alt="Atelier のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎのあとに再開する。オーケストレーターは facts を prepare.py に渡し、prepare.py は Jev にゲート 1 (brief と PBI の品質) を聞き、select_model.py で段と route を決める。そのとき home (~/.config/atelier) の振り分け・適用・agents.json と docs/pbi/routing.json を読み、使えない実行先の手順を外す。PBI は、全段の既定の実行先である pbi-worker (Agent ツール) か、setup で選び routing.json に書いた外部の実行先 (opencode・Codex・Antigravity・DeepSeek Harness・Claude Code の headless) に渡り、対象リポジトリのソースコードを変える。オーケストレーターは verify.py と unchanged.py で検証し、Jev には文章だけで、報告と検証が食い違うときの仕分けと差し戻し文の点検を聞き、状態と HANDOFF を docs/pbi/ に記録する。任意の shared-memory の MCP が作業ごとの ref と引き継ぎのメモリを持ち、pbi-worker は ref を get するだけ。setup_agents.py と model_fetch.py が実行先の CLI を検出し、実行先ごとのモデルの一覧を home の agents.json と models/ に控える。開発者は手元の編集画面 (studio/serve.py。エージェントとモデル・振り分け・優先テンプレートと適用・開発フローの 4 タブ) で、それらを home の中だけで読み書きする。templates.py は優先テンプレートと、元になるデータであるローカルの overrides.json を持ち、任意の優先テンプレートの Web ページ (claude.ai の Artifact) はそれと同期するだけ。フェーズ・アダプターは、任意の呼び出し先のスキルが入っていれば使う。設計では、オーケストレーターが mattpocock-skills の grilling を呼ぶ。全 PBI のあとは adapter_gate.py が PBI と agents.json の adapters の設定を読んで、最終レビューとセキュリティレビューを使うかを決め、general-purpose のレビュー用のサブエージェントが mattpocock-skills の code-review か built-in の /code-review・/security-review を呼んで、指摘を docs/pbi/reviews/ に書く。任意の jev-mcp (jev_mcp.py、127.0.0.1) を使うと、MCP クライアントがタスクを受け取って返し、Jev の手順の route (select_model.py)・run (runners.md の渡し方で実行先を 1 回動かす)・record (record_run.py) を使える。jev-mcp は home の振り分けと agents.json を読み、docs/pbi/ に依頼文・報告・runs を書く。 lint_run.py と lint_compare.py は、lint の下調べと見直しで jevlint を流し、ソースコードとマージ基点の worktree を読みます。ファイルの中身を Jev (jevlint のプロバイダー) に送るのは、送るたびにユーザーが許したあとだけです。omm_cache.py は、リポジトリの外の .omm-cache に置いた oh-my-mermaid の走査の結果を使い回し、無いときは omm-scan のスキルを呼びます。kiln_log.py は、Kiln で冷ますかの判断を docs/pbi/.kiln/ に記録し、sac-strategic-compact が入っていればその手順に従います。setup は推奨の道具を tools_check.py で確かめます。">
 </picture>
 
 図のソースは `assets/architecture.d2` です ([D2](https://d2lang.com) で描いています)。
@@ -29,10 +29,15 @@ Atelier (旧名 **pbi-orchestration-jev**) は、開発を**ワークフロー�
 - 段ごとに、上から順に試す実行先の並び (`route`) を出します。利用上限やエラーで使えなければ、次の実行先へ移ります。
 - 合否は検証コマンドで決め、サブエージェントの報告も Jev の答えもそのまま信じません。実装担当は報告の先頭に状態の 1 行 (`DONE` / `DONE_WITH_CONCERNS` / `NEEDS_CONTEXT` / `BLOCKED`) を書き、オーケストレーターはその状態と検証の結果で仕分けます。食い違うときだけ Jev に仕分けを聞きます。オーケストレーターが検証コマンドを自分で実行し、受け入れ条件を 1 つずつ判定します。
 - 差し戻しはレビューの指摘を付けて 2 回まで行い、段上げは任意です。段を上げるときは `prepare.py --only PBI-<n> --tier <tier>` でその PBI の route を書き直します (上げた先の route はその時点の振り分けから引きます)。設計から見直す必要があるときや、2 回差し戻しても通らないときは止めて、ユーザーの判断を待ちます。
-- Jev に送るのは文章だけです。PBI 本文、要約、報告の抜粋、差し戻し文を送り、ソースコード、diff、環境変数、認証情報は送りません。
+- Jev の関所に送るのは文章だけです。PBI 本文、要約、報告の抜粋、差し戻し文を送り、ソースコード、diff、環境変数、認証情報は送りません。例外は lint の下調べと見直しの jevlint で、ファイルの中身を送るのは、その送信をユーザーが許したときだけです (下を参照)。
 - オーケストレーターの文脈に入ったものは以後の全ターンで読み直されるので、文脈を小さく保ちます。実装担当は最後に状態の行から始まる 5 行の報告だけを返して詳細はファイルに書き、長いコマンドの出力はログファイルに書き、PBI 本文は 1 回だけ書いてパスで渡します (`worker.md`、`SKILL.md` の「Keep the context small」)。
 - 文脈が大きくなったら引き継ぎます。PBI の波の区切りで `agent_stats.py --ctx` で文脈の大きさを測り、250,000 トークン以上なら `docs/pbi/HANDOFF.md` (と、共有メモリがあれば引き継ぎのメモリ) を書いて止まります。`/clear` のあと `/atelier resume` で続きから再開します。フォルダを選ばずに始めたセッションからは `/atelier resume <リポジトリのパス>` で再開でき、パスを省くと引き継ぎのメモリから作業リポジトリを探します。
-- Compaction 文脈の Kiln（読みは窯）は、1 回の作業で文脈がどこまで大きくてよいかを決める任意の上限です。既定ではオフです。`docs/pbi/kiln.json` があるとき、またはワークフローのテンプレートが `kiln.enabled` を true にしたときだけ使います。線は soft・peak・handoff・aux の 4 本です。オーケストレーターの上限は設計者室、実装担当の 1 回の試行の上限は実装者室です。`docs/pbi/kiln.json` があるときは、固定の 150,000 と 250,000 と、テンプレートのしきい値より、そのファイルの数字を優先します。Kiln がオンでそのファイルが無いときは、オンのテンプレートのしきい値を使います。文脈を縮める手順と compact の記録は [sac-strategic-compact](https://github.com/reeschan/sac-strategic-compact) が受け持ちます。Atelier はこのスキルを必須にしません。自動では入れません。テンプレートの `kiln.prompt_install` は、スキルが無いときにその URL を案内するだけです。手順は [skills/atelier/appendix/kiln.md](skills/atelier/appendix/kiln.md) です。`docs/pbi/kiln.json` に写す見本は [skills/atelier/examples/kiln.json](skills/atelier/examples/kiln.json) です。
+- Compaction 文脈の Kiln（読みは窯）は、1 回の作業で文脈がどこまで大きくてよいかを決める上限で、既定で有効です。オーケストレーターは工程と波の区切りごとに測り、短い状態の板 (`docs/pbi/CONTEXT_STATE.md`) か引き継ぎで冷まします。サブエージェントと外の作業者にも、同じ決まりを依頼文のブロック (`prompts/kiln-chamber.md`) で渡します。peak までに終わらないと見た作業者は、きりのよい所で止まって `## State` を書き、新しい作業者がその続きから進めます。`kiln_log.py` が、決めたことを 1 行ずつ記録します。線は、設計者が 120,000 / 180,000、実装者が 60,000 / 90,000、引き継ぎが 250,000 です。[sac-strategic-compact](https://github.com/reeschan/sac-strategic-compact) が入っていればその手順に従い、無ければ同梱の写しに従います。`docs/pbi/kiln.json` に `{"enabled": false}` と書くと止まります。手順は [skills/atelier/appendix/kiln.md](skills/atelier/appendix/kiln.md) です。
+- テストは最後にまとめます (既定で有効)。作業者はコードだけを変え、重い検査は波の終わりにオーケストレーターが 1 回だけ流します。作業者ごとに、途中の状態のツリーでテストを回すことはしません。最後の波のあと、テストの工程で、pstack の `principle-test-behavior-not-implementation` に沿って変更範囲のテストを keep・fix・rewrite・delete・add に分け、テスト用の PBI で直します ([skills/atelier/appendix/tests-at-end.md](skills/atelier/appendix/tests-at-end.md))。作者の実行では、作業者 1 本が 70〜95 分から数分になり、トークンも半分以下になりました。
+- 設計の前に、構成図と lint の下調べをします。設計する作業では、`map` の工程が、[oh-my-mermaid](https://github.com/oh-my-mermaid/oh-my-mermaid) の走査の結果から、変える範囲の層とモジュールをまとめます。結果はリポジトリの外に、木のハッシュを鍵にして置くので、同じ基点を 2 度走査しません。続いて `lint-survey` が、その範囲を [jevlint](https://github.com/INDXDev/jevlint) で並べます (点、100 行以上の関数、弱い原則、bug-hunt の候補)。候補はオーケストレーターがファイルを開いて確かめてから仕様に入れ、範囲の外の候補は承認のときにユーザーに見せます ([skills/atelier/appendix/map.md](skills/atelier/appendix/map.md)、[skills/atelier/appendix/lint.md](skills/atelier/appendix/lint.md))。
+- レビューの前に、lint の見直しをします。テストの工程のあと、`lint-recheck` が、マージ基点 (一時的な worktree に出す) と作業ツリーを比べ、悪くなった所を並べます。差し戻すのは、確かめられた bug-hunt と、新しく 100 行以上になった関数だけです。点の低下とほかの計測は、レビューの担当と完了報告に回します。
+- 断りなく外には送りません。jevlint のモデルの問いは、ファイルの中身を外のプロバイダー (既定は TypeSafe の Jev) に送ります。Atelier が送るのは下調べと見直しだけで、送る直前に毎回 dry-run の数字 (ファイル数・トークン・費用・送り先) を見せ、はいと言われたときだけ送ります。同じファイルの一覧への答えが無ければ、`lint_run.py` が送りません。秘密のファイルと sensitive な PBI のファイルは AST だけにし、作業者は jevlint を流さず、それ以外はすべて `--ast-only` で流します。
+- 推奨の道具が無くても動きます。oh-my-mermaid・jevlint・sac-strategic-compact・pstack の test principle は、入っていれば使います。`tools_check.py` が、無いものを入れ方と一緒に、承認のときと setup で見せます。Atelier は自分では何も入れません。入れずに進むときは、同梱の依頼文が Claude Code の中で同じ役目をします。
 - Opus は設計とレビューを受け持ち、実装は安いモデルに任せます。Opus で実装するのは設計判断が要る PBI だけです。機密に触れる PBI や結合度の高い PBI は Sonnet で実装し、Opus のオーケストレーターが重点的にレビューします。
 - [rtk](https://github.com/rtk-ai/rtk) でコマンド出力を圧縮できます (任意)。同梱のフックが、スキルが有効にしたセッションだけ Bash / PowerShell のコマンドを `rtk <cmd>` に書き換えます。
 - 機械的な手順はスクリプトが行います。Jev のゲート 1 (要約の判定・PBI の品質) と決定表の判定は `prepare.py` が、検証コマンドの実行は `verify.py` が 1 回で行い、オーケストレーターには表だけを返します。PBI が触ってはいけないファイルは、`unchanged.py` が起動前にハッシュを取って確かめます。スキル本文も毎回要る中核と、場面ごとに読む `appendix/` に分けてあります。作者の実測 (2026-10、6 タスク) では、この 2 つで費用が 15% 下がりました。
@@ -63,7 +68,7 @@ Atelier (旧名 **pbi-orchestration-jev**) は、開発を**ワークフロー�
 
 - テンプレート: 同梱は 2 つです。`jev-routed` (既定。判定表が許す PBI は安いモデルへ) と `high-model` (すべての PBI を agent の opus へ)。対象リポジトリの `docs/pbi/workflow.json`、次に home の `workflows/<名前>.json` が同梱より優先されます。テンプレートは `fix.max_rework` (0〜5) と `build.external_memory` (外部の実行先が PBI に書かれた ref を読めるか) も決めます。
 - 自分の部品: どのスキルも Claude Code のプラグインのコマンドで入れ、`component.py add` で登録できます ([外部部品](#外部部品))。同梱のテンプレートが使うのは、このスキルと Claude Code の built-in だけです。
-- オプションの工程: テンプレートで入れたときだけ、選んだ工程の直後に動く工程が 4 つあります。`ui-design` (画面の方向性・テーマ・モックアップ・操作の動画。既定は design のあと)、`marketing` (誰のための作業で、どう受け取られるか。既定は understand のあと)、`model-check` (作業が動かす状態をモデルにして検査し、コードを読まない人にも読める状態遷移図にする。既定は design のあと)、`security` (変えたコードのセキュリティ監査。既定は review のあと) です。`when` が成り立つ部品をすべて動かし、後ろ盾は要りません。使える部品が無ければ飛ばします。`ui-change` と `user-facing` はオーケストレーターが判断し、`ask-user` は毎回ユーザーに聞きます (route 以降の工程なら PBI 一覧の承認のときに一緒に聞きます。オプションの工程だけで使えます)。できたものは `docs/pbi/ui/<slug>/`・`docs/pbi/marketing/<slug>.md`・`docs/pbi/model-check/<slug>/`・`docs/pbi/security/<slug>.md` に置きます。画面のものは計画がその画面を作る PBI からリンクし、モデルで破れたルールは計画がテストにし、セキュリティで確かめられた指摘はその PBI の差し戻しになります (`skills/atelier/appendix/optional.md`)。同梱のテンプレートはどれも入れていません。`component.py add <スキル> --stage ui-design` (か `marketing`・`model-check`・`security`。場所を変えるときは `--after <工程>`) で登録します。
+- オプションの工程: 3 つは同梱のテンプレートに入っていて、ふつうの工程と同じく先に使える部品を 1 つ選び、最後は代わりの依頼文になります。`map` と `lint-survey` (understand のあと。設計する作業のときだけ) と、`lint-recheck` (verify のあと。テストの工程が終わり、review の前に 1 回) です。ほかの 4 つは、テンプレートで入れたときだけ、選んだ工程の直後に動きます。`ui-design` (画面の方向性・テーマ・モックアップ・操作の動画。既定は design のあと)、`marketing` (誰のための作業で、どう受け取られるか。既定は understand のあと)、`model-check` (作業が動かす状態をモデルにして検査し、コードを読まない人にも読める状態遷移図にする。既定は design のあと)、`security` (変えたコードのセキュリティ監査。既定は review のあと) です。この 4 つは `when` が成り立つ部品をすべて動かし、後ろ盾は要りません。使える部品が無ければ飛ばします。`ui-change` と `user-facing` はオーケストレーターが判断し、`ask-user` は毎回ユーザーに聞きます (route 以降の工程なら PBI 一覧の承認のときに一緒に聞きます。オプションの工程だけで使えます)。できたものは `docs/pbi/ui/<slug>/`・`docs/pbi/marketing/<slug>.md`・`docs/pbi/model-check/<slug>/`・`docs/pbi/security/<slug>.md` に置きます。画面のものは計画がその画面を作る PBI からリンクし、モデルで破れたルールは計画がテストにし、セキュリティで確かめられた指摘はその PBI の差し戻しになります (`skills/atelier/appendix/optional.md`)。この 4 つは、同梱のテンプレートはどれも入れていません。`component.py add <スキル> --stage ui-design` (か `marketing`・`model-check`・`security`。場所を変えるときは `--after <工程>`) で登録します。
 - テンプレートごとの部品の設定: テンプレートの候補は `{"id", "when", "where", "models"}` にできます。`where` はそのテンプレートでだけ動かす場所を変え (`main` ならオーケストレーターが自分で動かす)、`models` はその部品が起こすサブエージェントのモデルを決めます (interrogate の敵役なら `["opus xhigh", "sonnet high"]`)。サブエージェントはサブエージェントを起こせないので、`models` は `where` が `main` の候補だけに書けます。編集画面の「開発フロー」タブでは、その行にモデルの欄が出ます。
 - 編集画面の「開発フロー」タブを使えば、JSON を書かずに、工程・関所・オプションの工程ごとに部品を並べて home に保存できます ([セットアップと編集画面](#セットアップと編集画面))。
 - 仕様は [docs/specs/atelier-workflow.md](docs/specs/atelier-workflow.md)、オーケストレーターの手順は `skills/atelier/appendix/engine.md` にあります。
@@ -74,24 +79,31 @@ Atelier (旧名 **pbi-orchestration-jev**) は、開発を**ワークフロー�
 
 ```mermaid
 flowchart TD
-  A[設計と PBI への分解] --> B[事実を数える<br/>facts.json]
-  B --> C[prepare.py<br/>Jev: 要約の判定と PBI の品質<br/>select_model.py: 段と route]
-  C --> F{ユーザーの承認}
-  F --> G[波を route の順に実行]
-  G --> V[verify.py で検証コマンドを実行]
-  V --> H{実装担当の状態と verify.py の結果が一致?}
-  H -->|いいえ| H2[Jev: 報告の仕分け]
-  H -->|はい| I
-  H2 --> I[レビュー<br/>受け入れ条件と diff]
-  I -->|fail| K{差し戻しは残っている?}
-  K -->|はい| G
-  K -->|いいえ| L[止めてユーザー判断]
-  I -->|pass| M{文脈 ≥ 25 万?}
-  M -->|いいえ・PBI が残る| G
-  M -->|はい| N[HANDOFF.md・引き継ぎのメモリ<br/>/clear・resume]
+  U[コードとメモリを理解する] --> D{この作業を設計する?}
+  D -->|はい| MAP[map: 範囲の層とモジュール<br/>OMM のキャッシュ・omm-scan・代わりの依頼文]
+  MAP --> LS[lint-survey: 範囲を jevlint で見る<br/>AST は手元で。モデルは送信を許したときだけ]
+  LS --> S[仕様: 範囲の中の確かめた bug-hunt]
+  D -->|いいえ| P
+  S --> P[PBI に分ける<br/>facts.json、Notes に jevlint: の行]
+  P --> C[prepare.py<br/>Jev: 要約の判定と PBI の品質<br/>select_model.py: 段と route]
+  C --> F{ユーザーの承認<br/>無い道具・あとに回すテスト}
+  F --> G[波を route の順に実行<br/>作業者はコードだけを変える]
+  G --> V[verify.py --skip-deferred、PBI ごとに確かめる]
+  V --> W[波の終わり: あとに回したテストを 1 回]
+  W -->|差し戻し| G
+  W -->|次の波| K{Kiln の線を越えた?}
+  K -->|冷ます・引き継ぐ| N[CONTEXT_STATE.md か HANDOFF.md<br/>/compact か /clear と resume]
   N --> G
-  M -->|すべて完了| J[完了報告と統計]
+  K -->|いいえ| G
+  W -->|最後の波が済んだ| T[テストの工程<br/>keep・fix・rewrite・delete・add]
+  T --> LR[lint-recheck: マージ基点と作業ツリーを比べる]
+  LR -->|確かめた悪化| G
+  LR --> R[最終レビューとセキュリティの関所]
+  R -->|確かめた指摘| G
+  R --> J[完了報告と統計]
 ```
+
+作者のテンプレートの流れの全体 (止まる点と、手元の外に出るもの) は [skills/atelier/examples/workflows/README.ja.md](skills/atelier/examples/workflows/README.ja.md) に描いています。
 
 ## 振り分け
 
@@ -236,7 +248,7 @@ python $S/component.py add security-audit --stage security --when ask-user
 
 ### 作者のおすすめのテンプレート
 
-既定では、このスキルと Claude Code の外にあるものは使いません。作者が実際に使っている構成は、テンプレートの見本 `examples/workflows/recommended.json` として置いてあります。jev-routed に、[pstack](https://github.com/cursor/plugins) (理解の `how`、振り分けのあとの `blast-radius` と `architect`、深いレビューの `interrogate`。interrogate はオーケストレーターが動かし、敵役は opus xhigh と sonnet high)、[mattpocock-skills](https://github.com/mattpocock/skills) (設計の `grilling`、最終レビューの `code-review`)、[yomiyasu](https://github.com/nanaism/yomiyasu) (日本語の完了報告の推敲) と、4 つのオプションの工程を足したものです。状態モデルの検査は pstack の `statechart` (使うかを毎回聞く)、マーケティングは [founder-skill](https://github.com/Jakeschincariol/founder-skill) の `founder-consumer` (買い手のパネルを模す。利用者に見える作業のとき)、UI デザインは作者の [design-studio](https://github.com/reeschan/claude-skill-design-studio) と [ui-video](skills/ui-video/SKILL.md) (画面が変わる作業のとき)、セキュリティは Cloudflare の [security-audit](https://github.com/cloudflare/security-audit-skill) (使うかを毎回聞く) です。どれも MIT です。見本が持つのはテンプレートと、スキルごとの入れ方・登録のしかただけで、他の人のスキルの中身はこのリポジトリに入れていません。
+既定では、このスキルと Claude Code の外にあるものは使いません。作者が実際に使っている構成は、テンプレートの見本 `examples/workflows/recommended.json` として置いてあります。jev-routed に、[pstack](https://github.com/cursor/plugins) (理解の `how`、振り分けのあとの `blast-radius` と `architect`、深いレビューの `interrogate`。interrogate はオーケストレーターが動かし、敵役は opus xhigh と sonnet high)、[mattpocock-skills](https://github.com/mattpocock/skills) (設計の `grilling`、最終レビューの `code-review`)、[yomiyasu](https://github.com/nanaism/yomiyasu) (日本語の完了報告の推敲) と、4 つのオプションの工程を足したものです。状態モデルの検査は pstack の `statechart` (使うかを毎回聞く)、マーケティングは [founder-skill](https://github.com/Jakeschincariol/founder-skill) の `founder-consumer` (買い手のパネルを模す。利用者に見える作業のとき)、UI デザインは作者の [design-studio](https://github.com/reeschan/claude-skill-design-studio) と [ui-video](skills/ui-video/SKILL.md) (画面が変わる作業のとき)、セキュリティは Cloudflare の [security-audit](https://github.com/cloudflare/security-audit-skill) (使うかを毎回聞く) です。どれも MIT です。同梱の 3 つの工程 (map・lint の下調べ・lint の見直し)、テストを最後にまとめる選択肢、Kiln も入っています。見本が持つのはテンプレートと、スキルごとの入れ方・登録のしかただけで、他の人のスキルの中身はこのリポジトリに入れていません。流れの全体、いつ何を聞かれるか、何がどこに送られるか、道具が無いときの代わりは [skills/atelier/examples/workflows/README.ja.md](skills/atelier/examples/workflows/README.ja.md) にあります。
 
 ```sh
 /atelier setup --recommended          # 確かめ、1 回だけ聞き、足りないものを入れ、登録し、テンプレートを書く
@@ -263,6 +275,16 @@ python $S/component.py example use recommended --as jev-routed --replace   # 既
 - `check` は何も入れません。足りないコマンドを `install <コマンド>` の行で出すだけです。`setup --recommended` はスキルをライセンスとリンク付きで見せ、「はい」と答えたときだけそのコマンドを実行します。
 - `use` はすべてのスキルを外部部品として登録し、テンプレートを home の `workflows/` に書きます。そのままの名前 (`recommended`。使うときは名前で頼む) か、`--as jev-routed --replace` で既定のテンプレートにします。同じ id の部品がほかの設定で登録済みなら止まり、誤りがあれば何も残しません。
 - 同梱の見本の一覧は `component.py example list` で見られます。入れたあとは `/reload-plugins` か Claude Code の再起動が要ります。
+- 推奨の道具はスキルではないので、`example check` には出ません。`python $S/tools_check.py` が、道具ごとの有無・入れ方・代わりを出します。
+
+```sh
+npm install -g oh-my-mermaid                       # omm (map の工程)
+claude plugin marketplace add oh-my-mermaid/oh-my-mermaid
+claude plugin install oh-my-mermaid@oh-my-mermaid --scope user
+npm install -g @indxjp/jevlint                     # Node 22.23.4 以上 / 24.22.1 以上 / 26.12.1 以上が要る。リポジトリの Node は関係ない
+jevlint auth set typesafe                          # モデルの問いを使うときだけ。キーが無ければ AST だけで動く
+git clone https://github.com/reeschan/sac-strategic-compact.git ~/dev/sac-strategic-compact   # スキルを ~/.claude/skills/sac-strategic-compact に写す
+```
 
 ## 優先テンプレート
 
@@ -300,6 +322,9 @@ cp skills/atelier/examples/templates/cheap-all-tiers.json ~/.config/atelier/temp
 | `claude` (Claude Code の headless) | 任意 | `agents.json` で有効にしたときだけ使う、`routing.json` か優先テンプレートの外部の実行先。設定は `default` と `edit-only` |
 | Node.js | 任意 | rtk のフックと、JS 版の Jev クライアント (`jev.mjs`) |
 | [rtk](https://github.com/rtk-ai/rtk) | 任意 | コマンド出力の圧縮 |
+| [oh-my-mermaid](https://github.com/oh-my-mermaid/oh-my-mermaid) (`omm` と `omm-scan` のスキル) | 推奨 | map の工程。無ければ代わりの依頼文が層をまとめる |
+| [jevlint](https://github.com/INDXDev/jevlint) (`@indxjp/jevlint`、Node 22.23.4 以上 / 24.22.1 以上 / 26.12.1 以上) | 推奨 | lint の下調べと見直し。無ければ代わりの依頼文が同じ物差しで読む。モデルの問いには、プロバイダーのキーと、送るたびの許可が要る |
+| [sac-strategic-compact](https://github.com/reeschan/sac-strategic-compact) | 推奨 | Kiln の冷まし方の手順。無ければ同梱の写しを使う |
 
 必須は Claude Code だけです。Jev・shared-memory・外部の CLI・Web ページ・rtk は任意です。セットアップは任意の CLI (opencode・codex・agy・dsh) を `PATH`・fnm・nvm のグローバル・`PBI_DSH_BIN` から探し、選んだものだけを記録します。使えない実行先は route の次へ移るだけなので、Claude Code だけでも動きます。
 
@@ -425,11 +450,16 @@ skills/atelier/
 ├── dsh_run.py                  # DeepSeek Harness の headless で PBI を 1 件動かす
 ├── claude_run.py               # Claude Code の headless で PBI を 1 件動かす
 ├── worker.md                   # 実装担当の進め方と報告の形
-├── appendix/                   # 場面ごとに読む付録: engine、工程の手順 (design・plan・verify・review・rework・finish・optional)、cases・handoff・kiln・memory・jev・setup・adapters・priority-templates
-├── prompts/                    # サブエージェントへの依頼文 (設計の見直し・PBI のレビュー・最終レビュー)
+├── appendix/                   # 場面ごとに読む付録: engine、工程の手順 (design・plan・verify・review・rework・finish・optional・map・lint・tests-at-end)、cases・handoff・kiln・memory・jev・setup・adapters・priority-templates
+├── prompts/                    # サブエージェントへの依頼文 (設計の見直し・PBI のレビュー・最終レビュー)、すべてのサブエージェントに渡す Kiln のブロック、map と lint の代わりの依頼文
 ├── agents/pbi-worker.md        # 実装担当・レビュー用のサブエージェントの定義 (~/.claude/agents に置く)
 ├── prepare.py                  # Jev のゲート 1 と決定表を 1 回で実行し、表だけを出す
-├── verify.py                   # PBI の検証コマンドを実行し、終了コードと末尾だけを表で出す
+├── verify.py                   # PBI の検証コマンドを実行し、終了コードと末尾だけを表で出す。--deferred はテストを最後にまとめるときの検査を波ごとに 1 回流す
+├── lint_run.py                 # lint の下調べと見直しの jevlint: ファイルの一覧、送信の許可、マージ基点の worktree
+├── lint_compare.py             # jevlint の 2 つの報告から、悪くなった所を出す
+├── omm_cache.py                # OMM の走査の結果を、リポジトリの外に木のハッシュを鍵にして置く
+├── kiln_log.py                 # Kiln で決めたことを 1 行ずつ記録し、run id を持つ
+├── tools_check.py              # 推奨の道具の有無・入れ方・代わり
 ├── select_model.py             # 決定表: 段・route・レビューの深さ。agents.json で手順を外す
 ├── adapter_gate.py             # 最終レビューとセキュリティレビューを使うかどうかと理由を決める
 ├── setup_agents.py             # セットアップ: 実行先の CLI を検出し、選択を agents.json に書き、モデルを取得する
@@ -441,10 +471,13 @@ skills/atelier/
 ├── studio/                     # 編集画面: home を 4 つのタブで読み書きする (index.html・serve.py・catalog.json・update_catalog.py)
 ├── templates.py                # 優先テンプレート: 検査、Web ページからの同期、適用・回答・写しの書き込み
 ├── web/priority-templates.html # 優先テンプレートを見て設定する Web ページ (Artifact)
-├── examples/kiln.json          # Kiln の見本。docs/pbi/kiln.json に写すと、その実行で Kiln がオンになる
+├── examples/kiln.json          # docs/pbi/kiln.json に写す Kiln の線の見本 (Kiln は既定で有効。{"enabled": false} で止める)
+├── examples/lint.json          # docs/pbi/lint.json に写す lint の線の見本
+├── examples/map.json           # docs/pbi/map.json に写す走査のディレクトリの見本
+├── examples/tests-at-end.json  # docs/pbi/tests-at-end.json に写す、あとに回す検査とテストのパスの見本
 ├── examples/routing/           # 外部の実行先を使う振り分けの見本 (multi-runner.json)
 ├── examples/templates/         # 優先テンプレートの例 (home の templates/ にコピーして使う)
-├── examples/workflows/         # 外部部品を使うテンプレートの見本と、要るスキルの入れ方 (component.py example)
+├── examples/workflows/         # 外部部品を使うテンプレートの見本と、要るスキルの入れ方 (component.py example)。README.ja.md に推奨のテンプレートの説明
 ├── unchanged.py                # PBI が触ってはいけないファイルをハッシュで確かめる
 ├── jev_mcp.py                  # jev-mcp: PBI を MCP クライアントに渡す MCP サーバー (stdio / HTTP)
 ├── agent_stats.py              # 会話記録からトークン・キャッシュ・文脈の大きさを集計
@@ -466,6 +499,7 @@ skills/atelier/
 ├── test_record_run.py / test_model_report.py / test_export_cases.py / test_dsh_run.py / test_jev_mcp.py
 ├── test_claude_run.py          # claude_run の引数・設定の道具・環境
 ├── test_adapter_gate.py        # レビューの判定 (299/300/301 行・PBI 2/3 件・deep・sensitive)
+├── test_lint_run.py / test_lint_compare.py / test_omm_cache.py / test_kiln_log.py / test_tools_check.py / test_verify.py
 ├── test_references.py          # スキルの文書が名前を挙げるファイルの実在
 └── test_agent_stats.py
 skills/ui-video/                # 作者の UI デザイン工程用のスキル: storyboard から UI の操作動画を録る (Playwright・ffmpeg)
@@ -512,7 +546,8 @@ python skills/atelier/jev_mcp.py --http --port 7830 --root /path/to/repo   # htt
 - 実行先のモデルと effort はテンプレート `routing.json` で変えられます (形は `routing.default.json`)。対象リポジトリの `docs/pbi/routing.json`、または home の `routing.json` に置くと、`select_model.py` がそちらを使います。無ければ同梱の `routing.default.json` のままです。
 - テンプレートは編集画面でも組めます (上の「セットアップと編集画面」)。
 - 引き継ぎのしきい値 (250,000 トークン) と、外部の実行先の結果も同じ時期に見直してください。
-- Kiln をオンにしたときは、固定の 150,000 / 250,000 ではなく Kiln の数字を使います。`docs/pbi/kiln.json` があるときはそのファイルです。ファイルが無いときは、オンになっているワークフローテンプレートのしきい値です。見本 [skills/atelier/examples/kiln.json](skills/atelier/examples/kiln.json) を `docs/pbi/kiln.json` に写すと、テンプレートの値は上書きされます。手順は [skills/atelier/appendix/kiln.md](skills/atelier/appendix/kiln.md) です。文脈を縮める手順は [sac-strategic-compact](https://github.com/reeschan/sac-strategic-compact) に任せます。このスキルが無くても、Kiln の数字はそのまま使います。
+- Kiln は既定で有効で、固定の 150,000 / 250,000 の代わりに Kiln の線を使います。`docs/pbi/kiln.json` があればそのファイル、無ければテンプレートの `kiln` です。線を変えるときは [skills/atelier/examples/kiln.json](skills/atelier/examples/kiln.json) を写します。手順は [skills/atelier/appendix/kiln.md](skills/atelier/appendix/kiln.md) です。
+- lint の線 (点が 5 下がる、関数 100 行、合致 0.7、前からある指摘が 10% を超えて伸びる) は、テンプレートの `lint` と `docs/pbi/lint.json` にあります。テストのファイルは `report_only_paths` に入れます。長い関数があっても差し戻しになりません。
 
 ## テスト
 

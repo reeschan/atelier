@@ -208,6 +208,16 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - pstack の Orchestrate と poteto-mode から、自分の言葉で 2 つを取り込んだ: PBI のレビューは作った担当と別のモデルにする (opus で作ったものは sonnet high で見る)、最初のメッセージと仕様と完了報告で、利用者の目的を自分の言葉で言い直す。
 - 最終レビューの重要度の基準を決め、承認済みの ADR との食い違いは見送らない (コードを直すか、新しい ADR を起こすかを利用者が決める) ことにした。worker は、PBI と仕様で決まっていない利用者に見える振る舞いを決めずに Open に書く。
 
+### 構成図・lint の下調べと見直し (2026-11-08)
+
+- 設計と状態の図は [atelier-v4.md](atelier-v4.md)。ここには工程と部品の契約の変更だけを書く。
+- オプションの工程を 3 つ足し、同梱のテンプレートと推奨の見本に既定で置いた: `map` (understand のあと。層と変える範囲のモジュール)、`lint-survey` (understand のあと、map の次。jevlint の点・長い関数・弱い問い・bug-hunt の候補)、`lint-recheck` (verify のあと。マージ基点と比べて悪くなった所)。`map` と `lint-survey` の when は `ask-or-decide` で、設計するかの判断を understand の直後に前倒しした。
+- この 3 つは `flow.PICK_FIRST` で、ふつうの工程と同じく先に使える行を 1 つだけ選び、最後の候補は後ろ盾 (builtin。代わりの依頼文) でなければ flow.py が誤りにする。ほかのオプションの工程 (ui-design・marketing・security・model-check) は今までどおり成り立つ行をすべて動かし、後ろ盾は要らない。`component.py add` は PICK_FIRST の工程では後ろ盾より前に部品を入れる。
+- `after: verify` のオプションの工程は、すべての PBI が通り、テストの工程も終えたあと、review の前に 1 回だけ動く (PBI ごとでも波ごとでもない)。
+- 同梱の部品は自分と Claude Code の built-in だけ、の決まりは変えない。`map.builtin` は oh-my-mermaid の `omm-scan` を呼び出し先として手順の中で使い、無ければ同じ部品の中で代わりの依頼文に切り替える。`lint-survey.jevlint`・`lint-recheck.jevlint` はこのスキルの script (`lint_run.py`) で、requires は cli `jevlint`。
+- agents.json の `tools.<名前>.path` で、実行先ではない道具 (jevlint など) の場所を指せる。flow.py は runners が無い agents.json でも tools を読む。
+- テンプレートに `lint` (比べる線) を足した。`build.tests_at_end` と `kiln` は既定で有効にし、run の写しの `"enabled": false` で止める。flow.py は `lint`・`kiln` を検証しない (読むのは lint_run.py・lint_compare.py・kiln_log.py)。
+
 ## Testing Decisions
 
 - generic-reorg.md と同じく、スクリプトを CLI として一時ディレクトリ (docs/pbi と home) で動かし、出力だけを見る。
