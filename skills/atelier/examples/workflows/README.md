@@ -81,7 +81,7 @@ flowchart TD
 
 ## When you are asked
 
-The run stops for your answer only at these points. Everything else goes on, with a one- or two-line status in the same message as the next action.
+The run stops for your answer only at the five stop points of `SKILL.md` (When to stop), plus the design decision when it is unclear. Everything else goes on, with a one- or two-line status in the same message as the next action.
 
 | When | What | Where the answer is kept |
 |---|---|---|
@@ -90,6 +90,7 @@ The run stops for your answer only at these points. Everything else goes on, wit
 | After route | approve the PBI list; install missing tools, run security-audit, add leads outside the range, the drafted deferred tests | `docs/pbi/STATUS.md` |
 | A PBI reaches the rework limit, or a fix turns into a redesign | raise the tier, rewrite, or stop | `docs/pbi/STATUS.md` |
 | A wave boundary past Kiln's hand-off line | `/clear` and `resume` | `docs/pbi/HANDOFF.md` |
+| Before a destructive operation: deleting data, a force push, a change outside the repository | whether to go ahead | not kept |
 
 Whether to run model-check is asked after design, before that stage starts.
 
