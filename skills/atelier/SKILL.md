@@ -33,6 +33,7 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 |---|---|
 | Argument `resume`, or the end of a wave | `appendix/handoff.md` |
 | `docs/pbi/kiln.json`, template `kiln`, or context budgets | `appendix/kiln.md` |
+| `docs/pbi/tests-at-end.json`, template `build.tests_at_end`, or the user asks to leave tests to the end | `appendix/tests-at-end.md` |
 | Argument `setup`, `setup --recommended`, `models` or `templates`, or home has no `agents.json` | `appendix/setup.md` |
 | Picking a component, a `when` you cannot decide, a `read-skill` component, writing a stage record, the user asks to add a skill to the workflow | `appendix/engine.md` |
 | The template has an `optional` list (`ui-design`, `marketing`, `security`, `model-check` rows in the flow table) | `appendix/optional.md` |
@@ -52,6 +53,7 @@ Open your first message with the user's goal, the problem it solves and the smal
 2. Write `docs/pbi/STATUS.md` (format in `appendix/engine.md`). Update one line with Edit each time a state changes.
 3. Copy `<skill>/worker.md` to `docs/pbi/worker.md` and `<skill>/unchanged.py` to `docs/pbi/tools/unchanged.py`. External runners cannot read outside the repository.
 4. Run the start-time sync of priority templates (`appendix/priority-templates.md`).
+5. When the template has `build.tests_at_end` and `docs/pbi/tests-at-end.json` is missing, write the run copy (`appendix/tests-at-end.md`).
 
 ## Run the stages
 
@@ -69,7 +71,7 @@ Go through the stages in this order. For each stage, take the first row that is 
 | fix | write a rework note and send the PBI back to build | `docs/pbi/PBI-<n>.rework-<k>.md` |
 | finish | promote refs, collect stats, write the completion report | the report |
 
-Build, verify and fix repeat per PBI until each PBI passes or stops. Review runs once, after all PBIs; a confirmed finding (from review, or from the security stage when it runs) sends its PBI back to fix. The rework limit is the template's `fix.max_rework`.
+Build, verify and fix repeat per PBI until each PBI passes or stops. With tests at the end on, the test stage of `appendix/tests-at-end.md` runs after the last wave and before review. Review runs once, after all PBIs; a confirmed finding (from review, or from the security stage when it runs) sends its PBI back to fix. The rework limit is the template's `fix.max_rework`.
 
 ## Approve
 
@@ -91,7 +93,7 @@ After route and its gates, show the user the PBI list and wait for approval. Per
 - [ ] Decide pass, rework, tier up or hold, and record it once with `record_run.py`.
 - [ ] Update the PBI's row in STATUS.md.
 
-Run PBIs with no unfinished dependency together as a wave, at most 5 at once, never two that touch the same file. After each wave, measure the context (`appendix/handoff.md`).
+Run PBIs with no unfinished dependency together as a wave, at most 5 at once, never two that touch the same file. With tests at the end on, verify with `--skip-deferred` and record at the end of the wave (`appendix/tests-at-end.md`). After each wave, measure the context (`appendix/handoff.md`).
 
 ## Kiln (optional)
 
