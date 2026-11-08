@@ -46,5 +46,9 @@ Open with one line that restates the user's goal in your own words, as at the st
   - where Jev was skipped, and the number of handoffs
   - the stats summary: the orchestrator's share and the top 3 subagents by reads
   - rtk savings (tokens and rate, top commands), or "rtk: off (context below the threshold)"
+  - the lint recheck: the path of `docs/pbi/jevlint/recheck.md`, its `report` rows, the reworks it caused, and each send to an outside model (stage, files, cost, the user's answer) from `adapters.json` `sends`
+  - the lint survey's leads under "Found, not in this run", and the map's source (cache folder, scan, or fallback prompt)
+  - the recommended tools that were missing and the fallback each stage used
+  - kiln: the number of compact-event lines per action (`docs/pbi/.kiln/compact-events.jsonl`), and the continues after a kiln stop
   - working memory: the work key, the number of refs written, the promoted memory ids and titles, and every `runs.jsonl` row whose `memory.violation` is true (runner, model, what was used), and the rows with `missed_refs`
   - the causes of rework, tier up and hold, counted from `runs.jsonl`, and the line `export_cases.py` printed

@@ -37,6 +37,8 @@ Keep each PBI small: about 3 changed files at most. Write one file per PBI, `doc
 
 - One verify command per line, as `<n>. \`<command>\``. `verify.py` reads exactly this form; put explanations and expected values in the acceptance criteria.
 - List only the refs this PBI needs. A worker never looks for refs that are not listed.
+- When the lint survey ran (`appendix/lint.md`), add its `jevlint:` lines to the Notes of each PBI whose Targets name a file with a long function or a confirmed weak point: one or two lines, as limits to keep. Never paste the survey itself. A function of 100 lines or more is a sign to split by role when the PBI touches it, not a reason to add a PBI.
+- With tests at the end on (the default), keep test files out of the Targets and write `Tests for the end:` lines instead (`appendix/tests-at-end.md`, `## Plan`).
 
 ## Writing verify commands
 

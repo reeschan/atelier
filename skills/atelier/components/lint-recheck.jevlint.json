@@ -1,0 +1,33 @@
+{
+  "id": "lint-recheck.jevlint",
+  "stages": [
+    "lint-recheck"
+  ],
+  "title": {
+    "ja": "jevlint で変更の前後を比べ、悪くなった所を出す",
+    "en": "Compare before and after the change with jevlint and list what got worse"
+  },
+  "invoke": {
+    "kind": "script",
+    "path": "lint_run.py"
+  },
+  "doc": "appendix/lint.md",
+  "where": "main",
+  "memory": "none",
+  "when": "always",
+  "cost": "low",
+  "requires": {
+    "cli": [
+      "jevlint"
+    ]
+  },
+  "forbid": [
+    "jevlint fix",
+    "jevlint pr",
+    "jevlint commits",
+    "jevlint baseline",
+    "send without the user's approval"
+  ],
+  "interactive": false,
+  "calls_back": false
+}

@@ -56,6 +56,14 @@ class VerifyDeferredTest(unittest.TestCase):
         r = self.run_script('PBI-001', '--list-deferred')
         self.assertEqual(r.stdout.strip(), '')
 
+    def test_turned_off_settings_defer_nothing(self):
+        (self.base / 'tests-at-end.json').write_text(
+            json.dumps({'enabled': False, 'deferred': ['echo heavy']}), encoding='utf-8')
+        self.assertEqual(self.run_script('PBI-001', '--list-deferred').stdout.strip(), '')
+        r = self.run_script('PBI-001', '--skip-deferred')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.ran(), 1)
+
     def test_skip_deferred_runs_only_the_rest(self):
         self.defer('echo heavy')
         r = self.run_script('PBI-001', '--skip-deferred')

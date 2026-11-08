@@ -147,7 +147,9 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(data['forbid'], [])
         self.run_cli('add', 'mattpocock-skills:grilling', '--stage', 'ui-design')
         workflow = self.load('workflows', 'jev-routed.json')
-        self.assertEqual(workflow['optional'], [{'stage': 'ui-design', 'after': 'design', 'components': [
+        bundled_optional = [s['stage'] for s in workflow['optional'][:3]]
+        self.assertEqual(bundled_optional, ['map', 'lint-survey', 'lint-recheck'])
+        self.assertEqual(workflow['optional'][3:], [{'stage': 'ui-design', 'after': 'design', 'components': [
             {'id': 'ui-design.my-review', 'when': 'ui-change'}, 'ui-design.mattpocock-skills-grilling']}])
         # 置き場所はテンプレートで 1 つ。違う after は断る
         code, _, err = self.run_cli('add', 'yomiyasu:yomiyasu', '--stage', 'ui-design', '--after', 'plan')
@@ -161,7 +163,13 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(self.load('workflows', 'jev-routed.json')['optional'][-1]['after'], 'review')
         # remove は最後の部品を外すとその工程ごと消す
         self.assertEqual(self.run_cli('remove', 'marketing.yomiyasu')[0], 0)
-        self.assertEqual([s['stage'] for s in self.load('workflows', 'jev-routed.json')['optional']], ['ui-design'])
+        self.assertEqual([s['stage'] for s in self.load('workflows', 'jev-routed.json')['optional']],
+                         ['map', 'lint-survey', 'lint-recheck', 'ui-design'])
+        # 先に使えるものを 1 つ選ぶ工程では、足した部品が後ろ盾より前に入る
+        code, out, err = self.run_cli('add', 'my-review', '--stage', 'lint-survey')
+        self.assertEqual(code, 0, out + err)
+        survey = next(s for s in self.load('workflows', 'jev-routed.json')['optional'] if s['stage'] == 'lint-survey')
+        self.assertEqual(survey['components'], ['lint-survey.my-review', 'lint-survey.jevlint', 'lint-survey.builtin'])
         code, _, err = self.run_cli('add', 'my-review', '--stage', 'review', '--after', 'design')
         self.assertEqual(code, 2)
         self.assertIn('--after is only for --stage gate or an optional stage', err)
@@ -283,7 +291,8 @@ class ComponentCliTest(unittest.TestCase):
             self.assertIsNotNone(data, problem)
             self.assertEqual(data['workflow']['name'], data['name'], path.name)
             if data['name'] == 'recommended':
-                self.assertFalse(data['workflow']['kiln']['enabled'])
+                self.assertTrue(data['workflow']['kiln']['enabled'])
+                self.assertTrue(data['workflow']['build']['tests_at_end']['enabled'])
                 self.assertTrue(data['workflow']['kiln']['prompt_install'])
 
     def test_example_check_lists_missing_skills_and_install_commands(self):
@@ -317,9 +326,11 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(architect['invoke']['kind'], 'read-skill')
         self.assertIn('do not run Phase D (implementation) or Phase E', architect['forbid'])
         self.assertEqual(self.load('components', 'gate.yomiyasu.json')['doc'], 'appendix/finish.md')
-        self.assertEqual([s['stage'] for s in workflow['optional']], ['marketing', 'ui-design', 'model-check', 'security'])
-        self.assertEqual(workflow['optional'][2]['components'], [{'id': 'model-check.pstack-statechart', 'when': 'ask-user'}])
-        self.assertEqual(workflow['optional'][3]['components'], [{'id': 'security.security-audit', 'when': 'ask-user'}])
+        self.assertEqual([s['stage'] for s in workflow['optional']],
+                         ['marketing', 'map', 'lint-survey', 'ui-design', 'model-check', 'lint-recheck', 'security'])
+        optional = {s['stage']: s['components'] for s in workflow['optional']}
+        self.assertEqual(optional['model-check'], [{'id': 'model-check.pstack-statechart', 'when': 'ask-user'}])
+        self.assertEqual(optional['security'], [{'id': 'security.security-audit', 'when': 'ask-user'}])
         # interrogate は敵役を起こすので設計者が動かし、敵役のモデルはテンプレートの候補に書く
         self.assertEqual(workflow['stages']['review'][0], {'id': 'review.pstack-interrogate', 'when': 'deep', 'where': 'main',
                                                          'models': ['opus xhigh', 'sonnet high']})

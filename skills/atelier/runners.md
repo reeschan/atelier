@@ -18,6 +18,8 @@ Report name: <PBI-<n> or PBI-<n>.rework-<k>>
 Files that parallel PBIs touch: <none / paths>
 Deferred verify commands: <numbers>   <- tests at the end only (appendix/tests-at-end.md)
 Test files you must not touch: <globs>   <- tests at the end only
+Kiln: <the implementer block of prompts/kiln-chamber.md, filled in>   <- kiln on (appendix/kiln.md)
+Continue from: docs/pbi/reports/<report>.state.md, ## State   <- after a kiln stop only
 How to work and report: read docs/pbi/worker.md first and follow it.
 ```
 

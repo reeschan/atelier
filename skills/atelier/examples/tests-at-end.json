@@ -1,5 +1,12 @@
 {
-  "deferred": ["pnpm run test:unit", "pnpm run check:domain-tests"],
-  "test_paths": ["scripts/verify_*.mts", "e2e/cypress/e2e/**"],
+  "enabled": true,
+  "deferred": [
+    "pnpm run test:unit",
+    "pnpm run check:domain-tests"
+  ],
+  "test_paths": [
+    "scripts/verify_*.mts",
+    "e2e/cypress/e2e/**"
+  ],
   "principle": "principle-test-behavior-not-implementation"
 }
