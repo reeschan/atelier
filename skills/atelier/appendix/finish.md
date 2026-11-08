@@ -4,7 +4,7 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
 
 ## Before the report
 
-1. Promote refs (`appendix/memory.md`, "Finish").
+1. Promote refs and close the work (`appendix/memory.md`, "Finish").
 2. Collect the session's stats (read only; nothing changes). After a handoff, also collect the earlier session with `--session <ID>`.
 
    ```bash

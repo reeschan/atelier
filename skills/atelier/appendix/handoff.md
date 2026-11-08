@@ -44,7 +44,7 @@ node <skill>/rtk/rtk-mode.mjs on
 
 1. **Find the repository.** When the working directory has `docs/pbi/STATUS.md`, that is it. Otherwise (a session started without a folder runs in an empty folder the app made), try in order:
    1. the path in the argument (`resume <repository path>`)
-   2. one search of shared memory with tags `handoff` and kind `episodic`, without a scope (the one exception to the scope rule, since the workspace is not known yet). Group the hits by work key and take the newest (`created_at`) of each.
+   2. one search of shared memory with tags `handoff`, kind `episodic` and `include_workspaces: true`, without a scope (the one exception to the scope rule, since the workspace is not known yet; without `include_workspaces` an unscoped search leaves out every workspace, and the handoff with it). Group the hits by work key and take the newest (`created_at`) of each. Drop a work key whose newest is a done memory (title starting with `Done:`, `appendix/memory.md`, "Finish"): that work is finished.
       - One candidate: `get` it and take the absolute path and the branch.
       - Two or more (other work may be mid-handoff too): list the work keys, titles and `created_at`, and let the user pick. Never pick the newest yourself.
    3. When that still finds nothing (no MCP, no hits, no path in the body): ask the user for the path.
