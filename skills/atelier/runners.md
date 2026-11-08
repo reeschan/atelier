@@ -16,6 +16,8 @@ PBI: docs/pbi/PBI-<n>.md
 Rework: docs/pbi/PBI-<n>.rework-<k>.md (previous report: docs/pbi/reports/<previous report>.md)   <- reworks only
 Report name: <PBI-<n> or PBI-<n>.rework-<k>>
 Files that parallel PBIs touch: <none / paths>
+Deferred verify commands: <numbers>   <- tests at the end only (appendix/tests-at-end.md)
+Test files you must not touch: <globs>   <- tests at the end only
 How to work and report: read docs/pbi/worker.md first and follow it.
 ```
 

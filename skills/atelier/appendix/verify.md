@@ -23,6 +23,7 @@ Do not take the worker's report, or Jev's triage, on trust.
    ```
 
    When `verify.py` cannot read the commands (exit code 2), run them in one Bash call, each redirected to its own log.
+   With tests at the end on, add `--skip-deferred`; the deferred numbers run at the end of the wave (`appendix/tests-at-end.md`).
 2. Judge each acceptance criterion: pass or fail.
 3. Look at `git diff --stat`, then read the diff. List only the problems that should block the merge: file, line, why, how to reproduce.
    - Check the diff against the CLAUDE.md files that apply to the changed files. A broken rule there is a finding with the cause `convention`.
