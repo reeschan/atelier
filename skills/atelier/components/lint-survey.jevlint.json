@@ -1,0 +1,33 @@
+{
+  "id": "lint-survey.jevlint",
+  "stages": [
+    "lint-survey"
+  ],
+  "title": {
+    "ja": "jevlint で変える範囲の点・弱い問い・bug-hunt の候補を探る",
+    "en": "Survey the scope with jevlint: scores, weak questions, bug-hunt leads"
+  },
+  "invoke": {
+    "kind": "script",
+    "path": "lint_run.py"
+  },
+  "doc": "appendix/lint.md",
+  "where": "main",
+  "memory": "none",
+  "when": "ask-or-decide",
+  "cost": "low",
+  "requires": {
+    "cli": [
+      "jevlint"
+    ]
+  },
+  "forbid": [
+    "jevlint fix",
+    "jevlint pr",
+    "jevlint commits",
+    "jevlint baseline",
+    "send without the user's approval"
+  ],
+  "interactive": false,
+  "calls_back": false
+}

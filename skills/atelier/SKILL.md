@@ -5,16 +5,17 @@ description: Use for implementation work that spans several files and should be 
 
 # Atelier
 
-You are the orchestrator. You run one workflow template: nine stages, each filled by a component. Workers build; you design, decide and accept. Reply in the user's language. Terms are defined in `CONTEXT.md`.
+You are the orchestrator. You run one workflow template: nine stages and the optional stages placed between them, each filled by a component. Workers build; you design, decide and accept. Reply in the user's language. Terms are defined in `CONTEXT.md`.
 
 ## When to stop
 
-Stop and wait for the user only at these four points:
+Stop and wait for the user only at these five points:
 
 1. The approval of the PBI list (`## Approve`).
 2. A PBI reaches the rework limit, or a fix turns out to be a redesign (`appendix/rework.md`).
 3. Before a destructive operation: deleting data, a force push, or a change outside the repository. Writing refs, handoffs and promotions to shared-memory is not destructive.
 4. The handoff at a wave boundary (`appendix/handoff.md`).
+5. Right before jevlint sends file contents to an outside model, every time (`appendix/lint.md`, `## The send approval`).
 
 Do not stop to report anything else. Put a one- or two-line status in the same message as your next action.
 
@@ -32,8 +33,9 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 | Event | Read |
 |---|---|
 | Argument `resume`, or the end of a wave | `appendix/handoff.md` |
-| `docs/pbi/kiln.json`, template `kiln`, or context budgets | `appendix/kiln.md` |
-| `docs/pbi/tests-at-end.json`, template `build.tests_at_end`, or the user asks to leave tests to the end | `appendix/tests-at-end.md` |
+| Kiln (on by default): every stage and wave boundary, and every subagent or worker prompt (it carries `prompts/kiln-chamber.md`) | `appendix/kiln.md` |
+| Tests at the end (on by default), `docs/pbi/tests-at-end.json` | `appendix/tests-at-end.md` |
+| The `map` stage (OMM); the `lint-survey` or `lint-recheck` stage, or any jevlint run | `appendix/map.md`; `appendix/lint.md` |
 | Argument `setup`, `setup --recommended`, `models` or `templates`, or home has no `agents.json` | `appendix/setup.md` |
 | Picking a component, a `when` you cannot decide, a `read-skill` component, writing a stage record, the user asks to add a skill to the workflow | `appendix/engine.md` |
 | The template has an `optional` list (`ui-design`, `marketing`, `security`, `model-check` rows in the flow table) | `appendix/optional.md` |
@@ -53,11 +55,11 @@ Open your first message with the user's goal, the problem it solves and the smal
 2. Write `docs/pbi/STATUS.md` (format in `appendix/engine.md`). Update one line with Edit each time a state changes.
 3. Copy `<skill>/worker.md` to `docs/pbi/worker.md` and `<skill>/unchanged.py` to `docs/pbi/tools/unchanged.py`. External runners cannot read outside the repository.
 4. Run the start-time sync of priority templates (`appendix/priority-templates.md`).
-5. When the template has `build.tests_at_end` and `docs/pbi/tests-at-end.json` is missing, write the run copy (`appendix/tests-at-end.md`).
+5. Write the missing run copies from the template: `tests-at-end.json` (`appendix/tests-at-end.md`), `kiln.json`, `lint.json` (`"enabled": false` turns an option off). Run `python <skill>/tools_check.py` and keep its rows that are not `ok` for Approve.
 
 ## Run the stages
 
-Go through the stages in this order. For each stage, take the first row that is usable and whose `when` holds (`appendix/engine.md`), follow its `doc`, and write its stage record. Then run every usable row of the optional stages placed after it (`<stage> after <stage>` rows, `appendix/optional.md`), then of the gates after it; after route, `flow.py docs/pbi --decide` says which PBIs each gate row runs for.
+Go through the stages in this order. Take the design decision (`appendix/design.md`) right after understand; map and lint-survey run only when it is run. For each stage, take the first row that is usable and whose `when` holds (`appendix/engine.md`), follow its `doc`, and write its stage record. Then run every usable row of the optional stages placed after it (`<stage> after <stage>` rows, `appendix/optional.md`), then of the gates after it; after route, `flow.py docs/pbi --decide` says which PBIs each gate row runs for.
 
 | Stage | Default component does | Artifact |
 |---|---|---|
@@ -71,18 +73,17 @@ Go through the stages in this order. For each stage, take the first row that is 
 | fix | write a rework note and send the PBI back to build | `docs/pbi/PBI-<n>.rework-<k>.md` |
 | finish | promote refs, collect stats, write the completion report | the report |
 
-Build, verify and fix repeat per PBI until each PBI passes or stops. With tests at the end on, the test stage of `appendix/tests-at-end.md` runs after the last wave and before review. Review runs once, after all PBIs; a confirmed finding (from review, or from the security stage when it runs) sends its PBI back to fix. The rework limit is the template's `fix.max_rework`.
+Build, verify and fix repeat per PBI until each PBI passes or stops. With tests at the end on, the test stage of `appendix/tests-at-end.md` runs after the last wave; lint-recheck (`after verify`) runs after that, before review. Review runs once, after all PBIs; a confirmed finding (from review, or from the security stage when it runs) sends its PBI back to fix. The rework limit is the template's `fix.max_rework`.
 
 ## Approve
 
 After route and its gates, show the user the PBI list and wait for approval. Per PBI: id, title, tier, route head, review level, the reason, dropped steps, dependencies, quality warnings. Also:
 
 - one line per stage from the flow table: the component picked, or the fallback with its reason
-- the priority-template line from `prepare.py`, and the warning when a template overrides the opus tier
-- open assumptions from the design stage, and expired priority applications (`appendix/priority-templates.md`)
-- the question for each optional stage with an `ask-user` row placed after route or later (security, by default): whether to run it this time (`appendix/optional.md`)
-- the model-check chart and its rules, when that stage ran
-- when the template has `kiln.prompt_install` and sac-strategic-compact is missing: offer install from its GitHub URL (`appendix/kiln.md`). Do not install it. Kiln stays off unless the user turns it on
+- the priority-template line from `prepare.py` with the warning when a template overrides the opus tier, open assumptions from the design stage, and expired priority applications (`appendix/priority-templates.md`)
+- the leads from the lint survey under "Found, not in this run" (`appendix/lint.md`), and the tests-at-end `deferred` and `test_paths` you drafted
+- one line per recommended tool `tools_check.py` did not find: its install and its fallback. If the user wants to install, stop there and resume after; otherwise the fallback runs
+- the question for each optional stage with an `ask-user` row placed after route or later (security, by default): whether to run it this time (`appendix/optional.md`); the model-check chart and its rules, when that stage ran
 
 ## One PBI
 
@@ -93,11 +94,7 @@ After route and its gates, show the user the PBI list and wait for approval. Per
 - [ ] Decide pass, rework, tier up or hold, and record it once with `record_run.py`.
 - [ ] Update the PBI's row in STATUS.md.
 
-Run PBIs with no unfinished dependency together as a wave, at most 5 at once, never two that touch the same file. With tests at the end on, verify with `--skip-deferred` and record at the end of the wave (`appendix/tests-at-end.md`). After each wave, measure the context (`appendix/handoff.md`).
-
-## Kiln (optional)
-
-When `docs/pbi/kiln.json` exists or the template sets `kiln.enabled`, follow the kiln lines in `appendix/kiln.md` (designer chamber). Workers stay in the implementer chamber: one fresh attempt, PBI and refs only. Cool-down and compact-event logs use sac-strategic-compact when it is installed; otherwise `appendix/handoff.md` alone. This skill does not require that companion.
+Run PBIs with no unfinished dependency together as a wave, at most 5 at once, never two that touch the same file. With tests at the end on, verify with `--skip-deferred` and record at the end of the wave (`appendix/tests-at-end.md`). After each wave, measure the context and log it with `kiln_log.py` (`appendix/kiln.md`, `appendix/handoff.md`).
 
 ## Keep the context small
 
@@ -106,8 +103,7 @@ Everything in your context is re-read on every later turn, which makes the orche
 - Every subagent writes details to a file and returns a few lines and the path: workers the 5 lines in `worker.md`, reviewers counts and one line per finding.
 - Scripts do the mechanical steps (`prepare.py`, `verify.py`, `record_run.py`). Read only their tables.
 - Send long output (tests, builds, `git diff`) to `docs/pbi/verify/` and look at the exit code and the last 20 lines.
-- Check a file's size with `wc -lc` before reading it; over 500 lines, use Grep or offset and limit.
-- Write a PBI once and pass its path. Write multi-line text with the Write tool, not a heredoc.
+- Check a file's size with `wc -lc` before reading it; over 500 lines, use Grep or offset and limit. Write a PBI once and pass its path; write multi-line text with the Write tool, not a heredoc.
 - Batch independent tool calls in one turn.
 
 ## Working memory

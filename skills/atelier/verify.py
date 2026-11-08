@@ -22,7 +22,8 @@ PBI の「## Verify commands」節 (旧い PBI は「## 検証コマンド」) �
   --skip-deferred  あとに回すコマンドを除いて流す (作業者の報告のあとの検証)
   --deferred       位置引数に報告名をカンマでつないで渡す (PBI-003,PBI-004.rework-1)。あとに回すコマンドを
                    同じ文字列ごとに 1 回だけ流し、その結果を各報告の <報告名>.json の番号に重ねる
-  tests-at-end.json が無いか "deferred" が空なら、--skip-deferred は何も除かず、--list-deferred は空を出す。
+  tests-at-end.json が無いか、"enabled" が false か、"deferred" が空なら、--skip-deferred は何も除かず、
+  --list-deferred は空を出す。
 """
 
 import argparse
@@ -67,7 +68,9 @@ def deferred_patterns(base):
         data = json.loads(p.read_text(encoding="utf-8"))
     except ValueError:
         return []
-    found = data.get("deferred", []) if isinstance(data, dict) else []
+    if not isinstance(data, dict) or data.get("enabled", True) is False:
+        return []
+    found = data.get("deferred", [])
     if not isinstance(found, list):
         return []
     return [m for m in found if isinstance(m, str) and m.strip()]

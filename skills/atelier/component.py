@@ -246,7 +246,8 @@ def insert(workflow: dict, cid: str, stage: str, after: str | None, when: str | 
         if step is None:
             step = {'stage': stage, 'after': after, 'components': []}
             steps.append(step)
-        place(step['components'], cid, item, at_end=True, keep=keep)
+        # 先に使えるものを 1 つ選ぶ工程では、後ろ盾 (最後の候補) より前に置く
+        place(step['components'], cid, item, at_end=stage not in flow.PICK_FIRST, keep=keep)
         return
     place(workflow['stages'][stage], cid, item, at_end=False, keep=keep)
 

@@ -1,19 +1,20 @@
 # Appendix: tests at the end
 
-Read this when `docs/pbi/tests-at-end.json` exists, the template's `build.tests_at_end` is set, or the user asks to leave tests to the end. The option is off unless one of these is set.
+Read this at Start of every run. The option is on by default: the bundled templates set `build.tests_at_end`. It is off when the run copy `docs/pbi/tests-at-end.json` says `"enabled": false`, when the user asks for workers to run their own tests, or when no test command is found (below).
 
 With the option on, workers change only the code during the waves. They write no tests, change no tests and run no slow checks. You run the slow checks once per wave, and after the last wave one test stage reviews, fixes, adds and deletes the tests of the whole change.
 
 Use it when several workers share one working tree and the test run is slow or flaky under load: their test runs fail on other PBIs' half-done changes, and you run the tests again at the end of the wave anyway.
 
-## Turn it on
+## Start
 
-1. Copy `<skill>/examples/tests-at-end.json` to `docs/pbi/tests-at-end.json`, or set the same object as `build.tests_at_end` on the template (the run copy wins). With only the template set, write the run copy at Start; `verify.py` reads only the run copy.
-2. Fill the fields for the repository:
+1. When `docs/pbi/tests-at-end.json` is missing, write it from the template's `build.tests_at_end` (shape: `<skill>/examples/tests-at-end.json`). The run copy wins; `verify.py` reads only the run copy. To turn the option off, write `{"enabled": false}`.
+2. The bundled template leaves `deferred` and `test_paths` empty. Draft them from the repository (its package scripts, test runner config, and where its test files live) and show the draft in the PBI list approval (`SKILL.md`, `## Approve`); do not stop to ask before that. The fields:
    - `deferred`: substrings of verify commands that workers never run. Every command that contains one of them runs once per wave, by you. Put here the test runs and the checks that need tests (for example a check that every domain file is read by a test).
    - `test_paths`: globs of test files. Workers never create, change or delete them.
    - `principle`: the skill name of the test principle the test stage follows. The default is pstack's `principle-test-behavior-not-implementation`. Find its `SKILL.md` with Glob under `~/.claude/plugins/`; it cannot be invoked as a skill (`disable-model-invocation`), so pass its path. When it is missing, use `## Test principle (fallback)` below.
-3. Write the option in STATUS.md: `Tests at end: on (deferred: ..., test_paths: ...)`.
+3. When no test command is found, `deferred` stays empty and the option does nothing: write `Tests at end: off (no test command)` in STATUS.md, and workers run their verify commands as usual.
+4. Otherwise write the option in STATUS.md: `Tests at end: on (deferred: ..., test_paths: ...)`.
 
 ## Plan
 

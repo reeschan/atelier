@@ -14,6 +14,8 @@ You build one PBI. Work only inside the work root named in your prompt. Reply in
 - Send long output (tests, builds, lint, type checks) to `docs/pbi/reports/<report>.<number>.log` and look at the exit code and the last 30 lines. Grep the log when that is not enough.
 - Look into and change only what the PBI's Targets cover. When information is missing, or a change outside the Targets turns out to be needed, stop and write it under Open instead of guessing.
 - Do not call review skills or subagents. Build it yourself and verify it yourself.
+- Never run jevlint (or any tool that sends file contents to an outside model). The orchestrator runs it. A `jevlint:` line in the PBI's Notes is a limit to keep: do not grow that function or file.
+- When the prompt has a `Kiln` block, follow it. If you judge the work will not finish within its peak, stop at a clean point (never mid-edit), write `## State` in the details file (the six headings of the block) and report `NEEDS_CONTEXT` with `Open: kiln`. A new worker continues from your `## State`.
 - Write multi-line text (file contents, long messages) with the Write tool, not a Bash heredoc. On Windows, the Bash tool fails with `unexpected EOF` when one command has both a `<` redirect inside `$( )` and `$'...'`; split them into two commands.
 - Command output may be compressed by rtk. Treat it as the full result; run `rtk proxy <command>` only when it is unusable (empty, at odds with the exit code, or broken).
 
@@ -29,7 +31,7 @@ Status: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 
 - DONE: you checked every acceptance criterion yourself.
 - DONE_WITH_CONCERNS: done, with a concern.
-- NEEDS_CONTEXT: information is missing and you cannot go on.
+- NEEDS_CONTEXT: information is missing and you cannot go on, or (with `Open: kiln`) you stopped at the kiln's peak and wrote `## State`.
 - BLOCKED: the environment, permissions or similar stop you.
 
 1. Write the details to `docs/pbi/reports/<report>.md`: the status line and these four headings.

@@ -1,6 +1,6 @@
 # Appendix: optional stages
 
-Read this when the template has an `optional` list and one of its rows is picked (`appendix/engine.md`). Optional stages add work that not every run needs. A template turns one on by listing it; the bundled templates list none.
+Read this when the template has an `optional` list and one of its rows is picked (`appendix/engine.md`). Optional stages add work that not every run needs. A template turns one on by listing it. The bundled templates list `map`, `lint-survey` and `lint-recheck`; the others only when you add them.
 
 ## The stages
 
@@ -10,10 +10,14 @@ Read this when the template has an `optional` list and one of its rows is picked
 | `marketing` | `understand` | who the work is for and how they react: a simulated user panel, objections, positioning, a launch note | `docs/pbi/marketing/<slug>.md` |
 | `security` | `review` | a security audit of the changed code: trust boundaries, confirmed vulnerabilities with source evidence, leads that need validation | `docs/pbi/security/<slug>.md` (a summary; the skill keeps its full output where it says) |
 | `model-check` | `design` | a checked model of how the system moves between states: the rules the user agrees to, a statechart in the reader's words, the shortest path to each state that breaks a rule | `docs/pbi/model-check/<slug>/` |
+| `map` | `understand` | the layers and modules the request touches, from the OMM cache, a scan, or the fallback prompt (`appendix/map.md`) | `docs/pbi/notes/map.md` |
+| `lint-survey` | `understand` (after `map`) | jevlint scores, long functions, weak questions and bug-hunt leads in the range (`appendix/lint.md`) | `docs/pbi/notes/survey.md` |
+| `lint-recheck` | `verify` | what the change made worse, compared with the merge-base (`appendix/lint.md`) | `docs/pbi/jevlint/recheck.md` |
 
 - The template says where each one runs (`{"stage", "after", "components"}`, `after` any stage but `finish`, so its files are ready for the completion report). Each optional stage appears at most once.
-- Optional stages need no fallback. When no row is usable or no `when` holds, skip the stage and record why.
-- Like a gate, an optional stage runs every row that is usable and whose `when` holds, in order. A UI design can take a design skill and then a video skill.
+- `ui-design`, `marketing`, `security` and `model-check` need no fallback. When no row is usable or no `when` holds, skip the stage and record why. Like a gate, they run every row that is usable and whose `when` holds, in order. A UI design can take a design skill and then a video skill.
+- `map`, `lint-survey` and `lint-recheck` pick like a stage: the first usable row whose `when` holds, and nothing after it. Their last row is a fallback (`flow.py` checks it), so they always run when their `when` holds. Rows placed after the same stage run in the template's order (`map` before `lint-survey`).
+- `after verify` means once, when every PBI has passed and the test stage of `appendix/tests-at-end.md` (when on) has ended, before review. It does not run per PBI or per wave.
 
 ## when for optional stages
 
