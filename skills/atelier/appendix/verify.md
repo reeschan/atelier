@@ -9,6 +9,7 @@ Sort by the report's status line and by the exit codes from `verify.py`. Ask the
 - `DONE`: go on to `## Check`.
 - `DONE_WITH_CONCERNS`: go on to `## Check`, and read the concerns in the details file.
 - `NEEDS_CONTEXT`: supply what is missing and tell the same worker to continue (SendMessage).
+- `NEEDS_CONTEXT` with `Open: kiln`: the worker stopped at its kiln peak and wrote `## State`. Copy the details file to `docs/pbi/reports/<report>.state.md`, then start a new worker on the same route with the same report name and the `Continue from:` line (`runners.md`). It counts as a continue, not a rework, and is recorded once with `record_run.py` when the PBI is judged. Log the stop: `python <skill>/kiln_log.py docs/pbi --role implementer --boundary attempt --phase <report name> --tokens <the attempt's tokens> --action handoff` (`appendix/kiln.md`).
 - `BLOCKED`: read the cause, then continue, rework or stop (`appendix/rework.md`).
 - A continue is not a rework. Allow 2 per PBI; needing a third is a stop (`appendix/rework.md`).
 
@@ -23,6 +24,7 @@ Do not take the worker's report, or Jev's triage, on trust.
    ```
 
    When `verify.py` cannot read the commands (exit code 2), run them in one Bash call, each redirected to its own log.
+   With tests at the end on, add `--skip-deferred`; the deferred numbers run at the end of the wave (`appendix/tests-at-end.md`).
 2. Judge each acceptance criterion: pass or fail.
 3. Look at `git diff --stat`, then read the diff. List only the problems that should block the merge: file, line, why, how to reproduce.
    - Check the diff against the CLAUDE.md files that apply to the changed files. A broken rule there is a finding with the cause `convention`.

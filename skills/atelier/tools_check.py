@@ -1,0 +1,106 @@
+"""推奨の道具が入っているかを 1 行ずつ出す (appendix/setup.md、SKILL.md の Approve)。何も入れない。
+
+  python tools_check.py [--home DIR] [--skills-dir DIR]
+
+列 (タブ区切り、1 行目は見出し): tool / status / install / fallback
+  status   ok <場所>、missing、または jevlint の no-key (キーが無いのでモデルの判定は使えず、AST だけで動く)
+  install  入れ方 (入れるのはユーザーが許可したときだけ)
+  fallback 入れずに進むときの代わり
+
+道具: omm (oh-my-mermaid の CLI)、omm-scan (oh-my-mermaid のプラグインのスキル)、jevlint、
+sac-strategic-compact、principle-test-behavior-not-implementation (pstack)。
+jevlint は agents.find_cli で探し (home の agents.json の tools.jevlint.path、PATH、fnm・nvm の Node の版)、
+`jevlint auth list` に typesafe があるかを見る (キーの値は出ない)。
+プラグインの置き場は PBI_PLUGINS_DIR、無ければ ~/.claude/plugins。スキルの置き場は --skills-dir、無ければ ~/.claude/skills。
+終了コード: 0 (無い道具があっても 0)。
+"""
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import agents as agents_module
+import common
+import flow
+
+HEADER = 'tool\tstatus\tinstall\tfallback'
+INSTALL = {
+    'omm': 'npm install -g oh-my-mermaid',
+    'omm-scan': '/plugin marketplace add oh-my-mermaid/oh-my-mermaid, then /plugin install oh-my-mermaid@oh-my-mermaid',
+    'jevlint': 'fnm install 26.12.1; npm install -g @indxjp/jevlint (with that Node first in PATH); '
+               'jevlint auth set typesafe',
+    'sac-strategic-compact': 'https://github.com/reeschan/sac-strategic-compact (into ~/.claude/skills/sac-strategic-compact)',
+    'principle-test-behavior-not-implementation': '/plugin install pstack@cursor-plugins',
+}
+FALLBACK = {
+    'omm': 'map: prompts/map-fallback.md',
+    'omm-scan': 'map: prompts/map-fallback.md',
+    'jevlint': 'lint-survey and lint-recheck: prompts/lint-fallback.md',
+    'sac-strategic-compact': 'appendix/kiln.md and prompts/kiln-chamber.md',
+    'principle-test-behavior-not-implementation': 'appendix/tests-at-end.md, Test principle (fallback)',
+}
+
+
+# jevlint の --version と auth list を待つ上限 (秒)。Start で毎回流すので、止まった CLI で全体を止めない
+TIMEOUT = 30
+
+
+def run(command: list[str], args: list[str]) -> subprocess.CompletedProcess | None:
+    """コマンドを流す。上限の時間を超えたら None。"""
+    try:
+        return subprocess.run([*command, *args], capture_output=True, text=True, encoding='utf-8',
+                              env=dict(os.environ, NO_COLOR='1', FORCE_COLOR='0'), timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def jevlint_status(home: Path) -> str:
+    agents = common.load_json(home / 'agents.json', {})
+    found = agents_module.find_cli('jevlint', agents if isinstance(agents, dict) else {}, os.environ)
+    if not found:
+        return 'missing'
+    command = [sys.executable, found] if found.endswith('.py') else [found]
+    version = run(command, ['--version'])
+    if version is None or version.returncode != 0:
+        return f'missing (does not run: {found})'
+    keys = run(command, ['auth', 'list'])
+    label = f'{found} {version.stdout.strip()}'
+    if keys is None or keys.returncode != 0 or 'typesafe' not in keys.stdout.lower():
+        return f'no-key {label}'
+    return f'ok {label}'
+
+
+def rows(home: Path, skills_dir: Path, env) -> list[tuple]:
+    agents = common.load_json(home / 'agents.json', {})
+    omm = agents_module.find_cli('omm', agents if isinstance(agents, dict) else {}, env)
+    plugins = flow.plugins_root(env)
+    scan = flow.find_plugin_file('oh-my-mermaid', 'skills/omm-scan/SKILL.md', plugins)
+    sac = skills_dir / 'sac-strategic-compact' / 'SKILL.md'
+    principle = flow.find_plugin_file('pstack', 'skills/principle-test-behavior-not-implementation/SKILL.md', plugins)
+    status = {
+        'omm': f'ok {omm}' if omm else 'missing',
+        'omm-scan': f'ok {scan}' if scan else 'missing',
+        'jevlint': jevlint_status(home),
+        'sac-strategic-compact': f'ok {sac}' if sac.is_file() else 'missing',
+        'principle-test-behavior-not-implementation': f'ok {principle}' if principle else 'missing',
+    }
+    return [(tool, status[tool], INSTALL[tool], FALLBACK[tool]) for tool in INSTALL]
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--home')
+    ap.add_argument('--skills-dir')
+    args = ap.parse_args(argv)
+    common.utf8_stdout()
+    home = common.resolve_home(args.home)
+    skills = Path(args.skills_dir) if args.skills_dir else Path.home() / '.claude' / 'skills'
+    print(HEADER)
+    for cells in rows(home, skills, os.environ):
+        print('\t'.join(cells))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

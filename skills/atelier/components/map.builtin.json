@@ -1,0 +1,26 @@
+{
+  "id": "map.builtin",
+  "stages": [
+    "map"
+  ],
+  "title": {
+    "ja": "OMM のキャッシュか走査、無ければ代わりの依頼文で層と構成を要約する",
+    "en": "Summarise layers and structure from the OMM cache or a scan, or from the fallback prompt"
+  },
+  "invoke": {
+    "kind": "builtin"
+  },
+  "doc": "appendix/map.md",
+  "where": "subagent",
+  "memory": "none",
+  "when": "ask-or-decide",
+  "cost": "mid",
+  "forbid": [
+    "npm install",
+    "commit .omm/",
+    "omm view",
+    "leave .omm/ in the working tree"
+  ],
+  "interactive": false,
+  "calls_back": false
+}

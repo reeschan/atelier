@@ -1,0 +1,55 @@
+stateDiagram-v2
+    state Run {
+        state Flow {
+            [*] --> Understand
+            Understand --> Decide: 理解した
+            Decide --> Map: 設計する
+            Decide --> Plan: 設計しない
+            Map --> Scanning: キャッシュに無い
+            Scanning --> Map: 走査が済んだ
+            Map --> SurveyAst: 構成を見た [omm を片付けた]
+            %% when OmmNone
+            SurveyAst --> AskSurvey: モデルで見たい
+            AskSurvey --> SendingSurvey: 送ると答えた
+            AskSurvey --> Spec: AST だけと答えた
+            SendingSurvey --> Spec: 送り終えた
+            SurveyAst --> Spec: AST で足りた
+            Spec --> Plan: 仕様を書いた
+            Plan --> Approve: 分けて振り分けた
+            Approve --> Stopped: 道具を入れる
+            Stopped --> Understand: 入れ終わって再開
+            Approve --> Waves: 承認された
+            Waves --> WaveTests: 波の PBI を確かめた
+            WaveTests --> Waves: 次の波か差し戻し
+            WaveTests --> TidyTests: 最後の波が済んだ
+            TidyTests --> RecheckAst: テストがすべて通った
+            RecheckAst --> AskRecheck: モデルで比べたい
+            AskRecheck --> SendingRecheck: 送ると答えた
+            AskRecheck --> Judge: AST だけと答えた
+            SendingRecheck --> Judge: 送り終えた
+            RecheckAst --> Judge: AST で足りた
+            Judge --> Waves: 確かめた悪化で差し戻し
+            Judge --> Review: 悪化が無い
+            Review --> Waves: 確かめた指摘で差し戻し
+            Review --> Done: 指摘が無い
+        }
+        --
+        state Consent {
+            [*] --> NoAnswer
+            NoAnswer --> MaySend: 送ると答えた [送信を聞いている]
+            %% when AskSurvey, AskRecheck
+            MaySend --> NoAnswer: 送り終えた
+        }
+        --
+        state Omm {
+            [*] --> OmmNone
+            OmmNone --> OmmLeft: 走査が済んだ [走査している]
+            %% when Scanning
+            OmmLeft --> OmmNone: キャッシュへ移した
+        }
+    }
+    %% never SendWithoutConsent: SendingSurvey & NoAnswer -- ユーザーの許可を得ずに、下調べでファイルの中身を外のモデルに送らない
+    %% never RecheckWithoutConsent: SendingRecheck & NoAnswer -- ユーザーの許可を得ずに、見直しでファイルの中身を外のモデルに送らない
+    %% never OmmLeftAtSurvey: SurveyAst & OmmLeft -- 走査で作業ツリーにできた .omm/ を残したまま、下調べに進まない
+    %% never OmmLeftAtSpec: Spec & OmmLeft -- 走査で作業ツリーにできた .omm/ を残したまま、仕様を書かない
+    %% never ConsentCarriedOver: RecheckAst & MaySend -- 下調べで得た許可を、見直しの送信に持ち越さない

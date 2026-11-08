@@ -1,0 +1,9 @@
+{
+  "scan_dirs": [
+    "src"
+  ],
+  "perspectives": [
+    "overall-architecture",
+    "dependency-map"
+  ]
+}

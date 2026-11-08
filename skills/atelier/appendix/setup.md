@@ -91,12 +91,15 @@ These steps come last in setup. Each one is optional; the skill runs with none o
 
 The 10-second hook timeout is room for the gate's own 5-second limit. Turn the mode on for the session with `node <skill>/rtk/rtk-mode.mjs on`; without the flag file, the hook passes commands through unchanged. Restart Claude Code after the settings change so the hook and `rtk` on the PATH are picked up. When the user does not approve the block, leave `~/.claude/settings.json` as it is.
 
-**Kiln + sac-strategic-compact**. Optional context-capacity constraint (Kiln; Japanese reading 窯) and strategic cool-down. Atelier runs without it and does not install it. When the template has `kiln.prompt_install` (the bundled templates do) and the skill is missing, or the user asks:
+**Recommended tools**. Run `python <skill>/tools_check.py` and show its table, one line per tool: status, how to install, and the fallback that runs without it. The tools are oh-my-mermaid (`omm` and the `omm-scan` skill, for the map stage), jevlint (for lint-survey and lint-recheck; `no-key` means it runs AST only until `jevlint auth set typesafe`), sac-strategic-compact (kiln), and pstack's `principle-test-behavior-not-implementation` (the test stage). Every row that is not `ok`:
 
-1. Ask whether to turn kiln on for future runs. Leave it off unless they say yes.
-2. If yes and a run folder exists, copy `<skill>/examples/kiln.json` to `docs/pbi/kiln.json` only when that file is absent. If `docs/pbi/kiln.json` already exists, keep it and say so. Replace it with the sample only after the user explicitly approves. Without a run folder, tell the user to copy the sample at Start, and not to replace a `kiln.json` they already have. Creating the file overrides the enabled template's thresholds (`appendix/kiln.md`).
-3. Check for the skill `sac-strategic-compact` (Skill tool / skills list). If missing, offer install from https://github.com/reeschan/sac-strategic-compact (`skills/sac-strategic-compact` into the user's skills directory). Do not install without a yes.
-4. Point at `appendix/kiln.md`. Compact-event logs go under `docs/pbi/.kiln/` when measuring.
+1. Ask once with AskUserQuestion, naming each tool with its link: install it now, or go on with the fallback.
+2. On yes, show the commands and run only the ones the user approves. Downloads and global installs need that yes; never install on your own. A plugin install needs `/reload-plugins` or a restart before it is listed.
+3. On no, nothing changes: each run uses the fallback (`appendix/map.md`, `appendix/lint.md`, `appendix/kiln.md`, `appendix/tests-at-end.md`) and its stage record says so.
+
+When jevlint lives outside PATH and the fnm or nvm Node versions, set its path in `agents.json`: `{"tools": {"jevlint": {"path": "<path to jevlint.cmd>"}}}`. The OMM cache folder is `omm.cache_dir` in the same file (`appendix/map.md`).
+
+**Kiln** is on by default (`appendix/kiln.md`). To turn it off for a repository, write `{"enabled": false}` to `docs/pbi/kiln.json`. When `docs/pbi/kiln.json` already exists, keep it and say so; replace it only after the user explicitly approves.
 
 ## recommended
 

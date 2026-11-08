@@ -102,6 +102,8 @@
       {"stage": "marketing", "after": "understand", "components": [
         {"id": "marketing.founder-skill-founder-consumer", "when": "user-facing"}
       ]},
+      {"stage": "map", "after": "understand", "components": ["map.builtin"]},
+      {"stage": "lint-survey", "after": "understand", "components": ["lint-survey.jevlint", "lint-survey.builtin"]},
       {"stage": "ui-design", "after": "design", "components": [
         {"id": "ui-design.design-studio", "when": "ui-change"},
         {"id": "ui-design.ui-video", "when": "ui-change"}
@@ -109,18 +111,39 @@
       {"stage": "model-check", "after": "design", "components": [
         {"id": "model-check.pstack-statechart", "when": "ask-user"}
       ]},
+      {"stage": "lint-recheck", "after": "verify", "components": ["lint-recheck.jevlint", "lint-recheck.builtin"]},
       {"stage": "security", "after": "review", "components": [
         {"id": "security.security-audit", "when": "ask-user"}
       ]}
     ],
     "fix": {"max_rework": 2},
-    "build": {"external_memory": "none"},
+    "build": {
+      "external_memory": "none",
+      "tests_at_end": {"enabled": true, "deferred": [], "test_paths": [], "principle": "principle-test-behavior-not-implementation"}
+    },
     "kiln": {
-      "enabled": false,
+      "enabled": true,
       "require_skill": false,
       "prompt_install": true,
       "skill": "sac-strategic-compact",
-      "skill_url": "https://github.com/reeschan/sac-strategic-compact"
+      "skill_url": "https://github.com/reeschan/sac-strategic-compact",
+      "designer_soft": 120000,
+      "designer_peak": 180000,
+      "implementer_soft": 60000,
+      "implementer_peak": 90000,
+      "handoff_at": 250000,
+      "aux_compress_at": 150000,
+      "log_path": "docs/pbi/.kiln/compact-events.jsonl"
+    },
+    "lint": {
+      "preset": "full",
+      "exclude_questions": ["documentation.contracts-stated"],
+      "score_drop": 5,
+      "function_lines": 100,
+      "compliance": 0.7,
+      "ast_growth": 0.1,
+      "report_only_paths": [],
+      "extensions": [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py"]
     }
   }
 }

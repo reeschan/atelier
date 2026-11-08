@@ -1,75 +1,79 @@
-# Appendix: Kiln (optional)
+# Appendix: Kiln
 
 **Name.** The English term is **Kiln**, from Compaction (working-context cool-down / strategic compaction). The Japanese reading is **窯**. Japanese prose introduces it as Compaction 文脈の Kiln（読みは窯）, and does not lead with 窯 as the source term.
 
-Read this when `docs/pbi/kiln.json` exists, the workflow template has a `kiln` object, the user asks about context budgets, or setup offers the compaction skill.
+Read this at Start, at every stage and wave boundary, and before writing any subagent or worker prompt. Kiln is on by default; `docs/pbi/kiln.json` with `"enabled": false` turns it off, and then only `appendix/handoff.md` applies.
 
 ## Concept
 
-**Kiln** (Japanese reading 窯) is Atelier's forge-wide constraint on working context. Stages still hand off through artifacts; the kiln only says how hot (how large) the orchestrator's conversation may run before it must cool down.
+**Kiln** (Japanese reading 窯) is the limit on working context for the whole run: the orchestrator (designer chamber), every subagent and every external worker (implementer chamber). Stages still hand off through their artifacts; the kiln only says how large a conversation may grow before it cools down. It never replaces verify, STATUS.md or `worker.md`.
 
-| Line | Meaning | Default when kiln is on |
+| Line | Meaning | Default |
 |---|---|---|
-| Soft | Cool at the next stage / wave boundary | designer 36000 / implementer 18000 |
-| Peak | Must cool before the next stage starts | designer 48000 / implementer 24000 |
-| Aux | Optional output compressor (rtk) | 150000 (same as handoff.md rtk) |
-| Handoff | Write HANDOFF and stop for `/clear` + resume | 250000 (same as handoff.md) |
+| Soft | Cool at the next stage or wave boundary | designer 120000 / implementer 60000 |
+| Peak | Must cool before the next stage starts (implementer: stop at a clean point) | designer 180000 / implementer 90000 |
+| Aux | Turn on rtk mode | 150000 |
+| Handoff | Write HANDOFF.md and stop for `/clear` and resume | 250000 |
 
-Roles map to the glossary: orchestrator = designer chamber, worker = implementer chamber.
+The lines come from the run copy `docs/pbi/kiln.json` (example `examples/kiln.json`), else the template's `kiln`. Write the run copy at Start only when it is missing; keep an existing `docs/pbi/kiln.json` unless the user explicitly approves replacing it. Claude Code's system prompt and this skill's body take a few tens of thousands of tokens before any work, so lines far below the defaults only make every boundary cool down.
 
-Kiln is **off** unless `docs/pbi/kiln.json` exists or the template sets `kiln.enabled` to true. A `kiln` object with `"enabled": false` does not turn it on. The bundled templates ship that stub so `prompt_install` can offer the companion skill without changing the run. While kiln is off, keep using only the fixed thresholds in `appendix/handoff.md`. Kiln never replaces verify, STATUS, or `worker.md`. Atelier does not depend on sac-strategic-compact.
+## sac-strategic-compact
 
-## Enable
+The companion skill (https://github.com/reeschan/sac-strategic-compact) holds the same recipe. When `tools_check.py` finds it, follow it for the designer's tablet and cool-down. When it is missing, follow this appendix; the rules below are its copy. Either way:
 
-1. Turn Kiln on by setting `kiln.enabled` to true on the workflow template, or by copying `<skill>/examples/kiln.json` to `docs/pbi/kiln.json` when that file is absent (the sample has `"enabled": true`). The run file wins over the template, so creating it overrides the template's thresholds. If `docs/pbi/kiln.json` already exists, keep it unless the user explicitly approves replacing it.
-2. Install the companion skill **sac-strategic-compact** only after the user says yes. It does strategic cool-down and compact-event logs. Without it, still obey the kiln numbers using this appendix and `appendix/handoff.md` alone.
-3. Keep one `run_id` for the whole Atelier run and put it on every `.kiln/compact-events.jsonl` line. When you write a handoff, store that same id in `docs/pbi/HANDOFF.md` as `Run id: <run_id>` (`appendix/handoff.md`). After `/clear`, resume reads it back and does not create another, so events stay on one run.
+- record every decision with `python <skill>/kiln_log.py` (the log script the skill names, log_compact_event.py, is not installed with it; `kiln_log.py` writes the same line);
+- give subagents and external workers the block in `prompts/kiln-chamber.md`, never the skill. Workers do not read skills.
 
-Companion skill: https://github.com/reeschan/sac-strategic-compact
-Atelier mapping in that repo: `docs/atelier-mapping.md`
+When it is missing, offer the install once at Approve (one line with the URL). Never install it yourself.
 
-## Measure and cool
+## Run id
 
-While Kiln is on, measure at each stage boundary and at every wave boundary, before the next stage or wave starts. A wave-boundary check alone cannot see a soft or peak crossing in an earlier stage.
+One run keeps one `run_id` on every line of `docs/pbi/.kiln/compact-events.jsonl`. `kiln_log.py` keeps it in `docs/pbi/.kiln/run_id` and creates it on the first line. On handoff, write it into `docs/pbi/HANDOFF.md` as `Run id: <run_id>` (`appendix/handoff.md`). On resume, pass it back once with `kiln_log.py --run-id <run_id>` when `docs/pbi/.kiln/run_id` is missing; never start another id after `/clear`.
 
-1. `python <skill>/agent_stats.py --ctx`
-2. If `docs/pbi/kiln.json` exists, use its numbers. Otherwise, when the template's kiln is enabled, use the template's numbers. Otherwise use `appendix/handoff.md` alone.
-3. Order: aux (rtk) → soft/peak cool-down (state tablet + `/compact` or short resume) → handoff threshold (existing Hand off procedure).
-4. Never cool mid-worker attempt.
-5. When sac-strategic-compact is installed, follow it for the state tablet and **always** append a compact-event log line (including `noop`). Use this run's `run_id`, including the one restored from `HANDOFF.md` after resume. Log path default: `docs/pbi/.kiln/compact-events.jsonl`.
+## Designer (the orchestrator)
 
-State tablet path when kiln is on: `docs/pbi/CONTEXT_STATE.md` (in addition to HANDOFF.md when handing off).
+At every stage boundary and wave boundary, never while a worker attempt runs:
 
-## Template field
+1. Measure: `python <skill>/agent_stats.py --ctx`.
+2. Decide and log in one step: `python <skill>/kiln_log.py docs/pbi --role designer --boundary phase|wave --phase <stage> --tokens <context> --task-id <W-n>`. It prints the action from the lines: `noop`, `aux_on`, `suggest`, `compact` or `handoff`. Pass `--action` and `--note` when you choose differently (for example, waiting for a subagent before cooling).
+3. Act:
+   - `noop`: go on.
+   - `aux_on`: turn on rtk mode (`appendix/handoff.md`, `## rtk mode`).
+   - `suggest` or `compact`: write the state tablet `docs/pbi/CONTEXT_STATE.md` (below), then run `/compact` with keep-instructions (what to keep: paths, ids, the next action), not a discard list. `suggest` may wait for the next boundary; `compact` may not.
+   - `handoff`: follow `appendix/handoff.md`, `## Hand off`, with the state tablet beside HANDOFF.md.
+4. After a cool-down or a resume, read the task, STATUS.md and the state tablet only. Do not redo finished stages from memory of the chat.
 
-Bundled templates keep kiln off and only name the companion skill:
+### State tablet
 
-```json
-"kiln": {
-  "enabled": false,
-  "require_skill": false,
-  "prompt_install": true,
-  "skill": "sac-strategic-compact",
-  "skill_url": "https://github.com/reeschan/sac-strategic-compact"
-}
-```
+40 to 80 lines, six headings:
 
-When `prompt_install` is true and sac-strategic-compact is missing, say so at Approve and during setup, and offer `skill_url`. Do not install it, and do not block the run.
+1. **Objective**: one line
+2. **Established facts**: paths, symbols, commands, observed values; mark guesses
+3. **Applied changes**: files touched, and whether verified
+4. **Verification**: checks, outcomes, obstacles
+5. **Dead ends**: do not repeat
+6. **Remaining plan**: ordered steps, the immediate next action, the done condition
 
-A template that turns kiln on can also carry the lines (the run's `docs/pbi/kiln.json` still wins):
+### When to cool
 
-```json
-"kiln": {
-  "enabled": true,
-  "require_skill": false,
-  "designer_peak": 48000,
-  "designer_soft": 36000,
-  "implementer_peak": 24000,
-  "implementer_soft": 18000,
-  "handoff_at": 250000,
-  "aux_compress_at": 150000,
-  "log_path": "docs/pbi/.kiln/compact-events.jsonl"
-}
-```
+| Boundary | Cool? |
+|---|---|
+| understand and map → plan | Yes, once the notes are on disk |
+| plan → build | Yes, once the PBIs are on disk |
+| In the middle of a worker attempt or a subagent | No |
+| After a failed approach | Yes, after writing the dead ends |
+| A wave, the test stage or the lint recheck is done | Measure, then follow the lines |
 
-`require_skill: true` means: if sac-strategic-compact is missing, say so at Approve and offer install. Do not block the run unless the user asked to require it.
+## Implementer (every subagent and worker)
+
+- Start a fresh subagent or worker for every attempt (`runners.md`). Never pass the designer's conversation into it.
+- Put the block of `prompts/kiln-chamber.md`, filled with the implementer lines, into every prompt: workers (`Kiln:` line in `runners.md`), reviewers (`prompts/final-review.md`), the map and lint subagents, plan drafters. External runners get it as text in their prompt file.
+- A worker that stops at its peak reports `NEEDS_CONTEXT` with `Open: kiln` and a `## State` section. Continue it as `appendix/verify.md` says: a new worker with `Continue from:`, counted as a continue, not a rework.
+- After each attempt is recorded, log it: `python <skill>/kiln_log.py docs/pbi --role implementer --boundary attempt --phase <report name> --tokens <the attempt's tokens from record_run.py> --action noop|handoff` (`handoff` for a kiln stop).
+
+## Do not
+
+- Cool down in the middle of a worker attempt or a running subagent.
+- Pass designer chat history into an implementer attempt.
+- Skip the log line when you measured at a boundary, even for `noop`.
+- Use SAC (one action per conversation) unless the user asks for it.

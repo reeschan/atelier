@@ -9,14 +9,17 @@
 確かめる。同梱するのはこのスキルの部品と Claude Code の built-in だけ。他の人のスキルは利用者がプラグインのコマンドで
 入れ、component.py add がその SKILL.md から home の部品を書く。home の部品は同梱の id を上書きできない (後ろ盾を守るため)。
 
-オプションの工程 (ui-design・marketing・security・model-check) は、テンプレートの optional に {"stage", "after", "components"} で置いたときだけ
-after の工程の直後 (関所より先) に並ぶ。関所と同じく成り立つ部品をすべて動かし、後ろ盾は要らない (appendix/optional.md)。
+オプションの工程 (ui-design・marketing・security・model-check・map・lint-survey・lint-recheck) は、テンプレートの optional に
+{"stage", "after", "components"} で置いたときだけ after の工程の直後 (関所より先) に並ぶ。ui-design・marketing・security・
+model-check は関所と同じく成り立つ部品をすべて動かし、後ろ盾は要らない。map・lint-survey・lint-recheck (PICK_FIRST) は
+工程と同じく先に使えるものを 1 つだけ選び、最後の候補は後ろ盾にする (appendix/optional.md)。
 
 検証すること: 9 つの工程がすべてあること・知らない工程が無いこと、各工程の候補が 1 つ以上で、どれも実在し、
 その工程を担う部品であること、最後の候補が後ろ盾 (builtin か、requires の無い script) であること、
 関所の after が工程であり、部品が gate を担うこと、when の値、PBI ごとの when (tier-opus・coupling-high) が
 after: route の関所だけにあること、where が runner の部品が memory full でないこと、calls_back が真の部品を
-使っていないこと、オプションの工程の stage・after・部品 (その工程を担うもの、1 つの工程は 1 回だけ)、
+使っていないこと、オプションの工程の stage・after・部品 (その工程を担うもの、1 つの工程は 1 回だけ、PICK_FIRST の工程は
+最後の候補が後ろ盾)、
 fix.max_rework が 0〜5 の整数、build.external_memory が none か refs-only。
 候補の where の上書き (main・subagent-readonly・subagent。runner の部品は変えられない) と models
 (部品が起こすサブエージェントのモデル。`opus xhigh` の形で 1〜10 個、where が main の候補だけ。サブエージェントは
@@ -56,10 +59,15 @@ DEFAULT_WORKFLOW = 'jev-routed'
 
 STAGES = ('understand', 'design', 'plan', 'route', 'build', 'verify', 'review', 'fix', 'finish')
 GATE = 'gate'
-# オプションの工程。テンプレートの optional に置いたときだけ、after の工程の直後に動く。後ろ盾は要らない (無ければ飛ばす)
-OPTIONAL = ('ui-design', 'marketing', 'security', 'model-check')
-# optional に置くときの既定の after (component.py add が使う)
-OPTIONAL_AFTER = {'ui-design': 'design', 'marketing': 'understand', 'security': 'review', 'model-check': 'design'}
+# オプションの工程。テンプレートの optional に置いたときだけ、after の工程の直後に動く
+OPTIONAL = ('ui-design', 'marketing', 'security', 'model-check', 'map', 'lint-survey', 'lint-recheck')
+# 工程と同じく先に使えるものを 1 つだけ選ぶオプションの工程。最後の候補は後ろ盾 (代わりの依頼文) にする。
+# ほかのオプションの工程は成り立つ部品をすべて動かし、後ろ盾は要らない (無ければ飛ばす)
+PICK_FIRST = ('map', 'lint-survey', 'lint-recheck')
+# optional に置くときの既定の after (component.py add が使う)。verify のあとは、全 PBI が通りテストの工程も終えた
+# あと、review の前に 1 回だけ動く (appendix/optional.md)
+OPTIONAL_AFTER = {'ui-design': 'design', 'marketing': 'understand', 'security': 'review', 'model-check': 'design',
+                  'map': 'understand', 'lint-survey': 'understand', 'lint-recheck': 'verify'}
 ROLES = STAGES + (GATE,) + OPTIONAL
 # オプションの工程を置ける after。finish のあとは完了報告に載らないので置かない
 OPTIONAL_PLACES = STAGES[:-1]
@@ -254,9 +262,13 @@ def workflow_errors(workflow, components: dict) -> list[str]:
             errors.append(f'optional: {step["stage"]} appears more than once')
             continue
         seen.add(step['stage'])
+        last = None
         for item in step['components']:
-            check_item(item, step['stage'], f'{step["stage"]} after {step["after"]}', components, errors,
-                       after=step['after'])
+            last = check_item(item, step['stage'], f'{step["stage"]} after {step["after"]}', components, errors,
+                              after=step['after'])
+        if step['stage'] in PICK_FIRST and last is not None and not is_fallback(last):
+            errors.append(f'{step["stage"]}: the last component must be builtin or a script with no requires '
+                          f'({last["id"]})')
     fix = workflow.get('fix', {})
     rework = fix.get('max_rework') if isinstance(fix, dict) else None
     low, high = MAX_REWORK_RANGE
@@ -474,7 +486,9 @@ def main(argv=None) -> int:
             print('\t'.join(cells))
         return 0
     print(HEADER)
-    for cells in plan_rows(workflow, components, agents_module.load_agents(home), os.environ):
+    # runners が無くても tools (jevlint など道具の場所) は読む
+    agents = common.load_json(home / 'agents.json')
+    for cells in plan_rows(workflow, components, agents if isinstance(agents, dict) else None, os.environ):
         print('\t'.join(cells))
     return 0
 

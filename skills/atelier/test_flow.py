@@ -104,8 +104,14 @@ class FlowCliTest(unittest.TestCase):
                 result = self.run_flow('--workflow', name)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 rows = self.rows(result.stdout)
-                stages = [row[0] for row in rows if not row[0].startswith('gate')]
+                stages = [row[0] for row in rows if ' after ' not in row[0]]
                 self.assertEqual(list(dict.fromkeys(stages)), list(flow.STAGES))
+                places = [row[0] for row in rows]
+                # v4 の既定の流れ: map と lint-survey は understand のあと、lint-recheck は verify のあと (review の前)
+                self.assertEqual(places[places.index('understand') + 1:places.index('design')],
+                                 ['map after understand', 'lint-survey after understand', 'lint-survey after understand'])
+                self.assertEqual(places[places.index('verify') + 1:places.index('review')],
+                                 ['lint-recheck after verify', 'lint-recheck after verify'])
 
     def test_added_components_resolve(self):
         env = self.install_pstack()
@@ -120,11 +126,12 @@ class FlowCliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(result.stdout.startswith('workflow jev-routed ('))
 
-    def test_kiln_stays_off_and_flow_ignores_the_key(self):
-        '''同梱テンプレートの窯はオフ。flow.py は知らないトップレベルの kiln を誤りにしない。'''
+    def test_kiln_is_on_and_flow_ignores_the_key(self):
+        '''同梱テンプレートの窯は既定で有効 (線は設計者 120000/180000)。flow.py は知らないトップレベルの kiln を誤りにしない。'''
         for name in PRESETS:
             kiln = bundled(name)['kiln']
-            self.assertFalse(kiln['enabled'], name)
+            self.assertTrue(kiln['enabled'], name)
+            self.assertEqual((kiln['designer_soft'], kiln['designer_peak'], kiln['handoff_at']), (120000, 180000, 250000))
             self.assertFalse(kiln['require_skill'], name)
             self.assertTrue(kiln['prompt_install'], name)
             self.assertEqual(kiln['skill_url'], 'https://github.com/reeschan/sac-strategic-compact')
@@ -177,7 +184,7 @@ class FlowCliTest(unittest.TestCase):
     def test_optional_stages_follow_their_stage_before_gates(self):
         self.add_optional()
         workflow = self.home_workflow()
-        self.assertEqual(workflow['optional'], [
+        self.assertEqual(workflow['optional'], bundled('jev-routed')['optional'] + [
             {'stage': 'ui-design', 'after': 'design', 'components': [{'id': 'ui-design.my-ui', 'when': 'ui-change'}]},
             {'stage': 'marketing', 'after': 'design', 'components': [{'id': 'marketing.my-fb', 'when': 'user-facing'}]},
             {'stage': 'security', 'after': 'review', 'components': [{'id': 'security.my-sec', 'when': 'ask-user'}]},
@@ -196,8 +203,11 @@ class FlowCliTest(unittest.TestCase):
         self.add_optional()
         good = self.home_workflow()
         cases = [
-            ('error each optional step needs stage (ui-design, marketing, security, model-check), after (a stage before finish) and a non-empty components list',
+            ('error each optional step needs stage (ui-design, marketing, security, model-check, map, lint-survey, lint-recheck), after (a stage before finish) and a non-empty components list',
              [{'stage': 'deploy', 'after': 'finish', 'components': ['ui-design.my-ui']}]),
+            ('error lint-survey: the last component must be builtin or a script with no requires (lint-survey.jevlint)',
+             [{'stage': 'map', 'after': 'understand', 'components': ['map.builtin']},
+              {'stage': 'lint-survey', 'after': 'understand', 'components': ['lint-survey.jevlint']}]),
             ('error optional: ui-design appears more than once',
              [{'stage': 'ui-design', 'after': 'design', 'components': ['ui-design.my-ui']},
               {'stage': 'ui-design', 'after': 'plan', 'components': ['ui-design.my-ui']}]),
@@ -344,6 +354,19 @@ class FlowCliTest(unittest.TestCase):
         unknown = self.run_flow('--workflow', 'no-such-workflow')
         self.assertEqual(unknown.returncode, 2)
         self.assertIn('workflow not found', unknown.stderr)
+
+
+    def test_jevlint_status_reads_the_tools_path(self):
+        empty = os.path.join(self.dir, 'empty')
+        os.makedirs(empty)
+        isolated = {'PATH': empty, 'FNM_DIR': empty, 'NVM_DIR': empty, 'HOME': empty, 'APPDATA': empty}
+        status = {row[1]: row[6] for row in self.rows(self.run_flow(env=isolated).stdout)}
+        self.assertEqual(status['lint-survey.jevlint'], 'cli missing jevlint')
+        self.assertEqual(status['lint-survey.builtin'], 'builtin')
+        write_json(os.path.join(self.home, 'agents.json'),
+                   {'tools': {'jevlint': {'path': os.path.join(HERE, 'testdata', 'fake_jevlint.py')}}})
+        status = {row[1]: row[6] for row in self.rows(self.run_flow(env=isolated).stdout)}
+        self.assertEqual((status['lint-survey.jevlint'], status['lint-recheck.jevlint']), ('script ok', 'script ok'))
 
 
 class ComponentDefinitionsTest(unittest.TestCase):

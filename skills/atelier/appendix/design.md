@@ -10,6 +10,8 @@ Read this when the understand or design stage picks `understand.builtin`, `desig
 
 ## Design: the decision
 
+Take this decision right after understand, before the optional stages placed after it (`map`, `lint-survey`, whose `when` is `ask-or-decide`). The design stage then uses the saved decision and does not ask again.
+
 1. **Spec given**: the run starts with a spec path (a `docs/specs/*.md` file in the request, or a handoff from a design skill that passes one). The design is done: record `stage design: built-in skip (spec given)`.
 2. **Setting**: run `python <skill>/adapter_gate.py docs/pbi` (no PBIs needed yet) and take the `design` row's setting.
    - `off`: skip without asking and record `off (turned off in agents.json)`.
@@ -21,6 +23,8 @@ Read this when the understand or design stage picks `understand.builtin`, `desig
    - **Otherwise**: ask once with AskUserQuestion, before the split, whether to run the design step. Save the answer in `docs/pbi/adapters.json` as `{"design": {"decision": "run|skip", "asked": true}}`. On resume, read it and do not ask again. Do not store it in `docs/pbi/state.json`, which the web sync overwrites.
 
 ## Design: run
+
+Read `docs/pbi/notes/map.md` and `docs/pbi/notes/survey.md` when they exist (`appendix/map.md`, `appendix/lint.md`): the spec names the layers each change belongs to, and the confirmed bug-hunt leads inside the range.
 
 1. Run the picked component in your session: the skill named in the setting, or the template's design skill when it is in the skill list. The bundled templates have none; the user adds one as an external component (`appendix/engine.md`, `## External components`).
 2. Then write `docs/specs/<slug>.md` yourself, where `<slug>` is a short lowercase name for the work. Headings, in this order: Problem Statement, Solution, User Stories, Implementation Decisions, Testing Decisions, Out of Scope, Further Notes. The design skills decide; they do not write the spec.
