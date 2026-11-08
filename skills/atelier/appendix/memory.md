@@ -24,9 +24,9 @@ You search widely to design; a worker reads only its PBI and the refs it lists. 
 
 ## Search
 
-- Search only for what CLAUDE.md does not hold: reasons behind past decisions, pitfalls found in other repositories. At most once in `repo:<repo>` and once in `global`, always with a scope; an unscoped search mixes in other work and other branches.
+- Search only for what CLAUDE.md does not hold: reasons behind past decisions, pitfalls found in other repositories. At most once in `repo:<repo>` and once in `global`, always with a scope; an unscoped search mixes in other repositories.
 - Search the workspace scope only when resuming.
-- The one unscoped search is the resume lookup with tags `handoff` (`appendix/handoff.md`).
+- A search without a scope leaves out every workspace (`project:work.*`). The one unscoped search is the resume lookup with tags `handoff` and `include_workspaces: true` (`appendix/handoff.md`).
 
 ## Write refs
 
@@ -52,4 +52,6 @@ You search widely to design; a worker reads only its PBI and the refs it lists. 
 - Promote at most 3 refs that meet all three: useful for the next work, not visible from the code, and checked.
 - Promote to `repo:<repo>` when the fact is specific to the repository, to `global` otherwise. Write it as a new memory with the ref in `supersedes`, the tag `work:<branch>/<work number>`, and provenance `agent_verified`.
 - Do not stop for approval. List the promoted ids and titles in the completion report.
-- Leave the workspace open. Other work cannot see it, it drops out of search after 30 days without access, and `get` by id still reaches it.
+- Close the work when it has a handoff memory, and only after the completion report is written (`appendix/finish.md`): search the workspace scope with tags `handoff` and take the newest. Write a done memory in the workspace with that one in `supersedes`: kind `episodic`, tags `handoff` and `work:<branch>/<work number>`, provenance `agent_verified`. Its title starts with `Done:` and names the repository and the work number. Its body gives the finish date and the promoted ids. The superseded handoff leaves search, and resume skips a work key whose newest hit is a done memory.
+- With no handoff memory, write no done memory: the resume lookup has nothing to find.
+- Leave the workspace as it is. A search without a scope does not return it; `get` by id and a search with the workspace scope still reach it.

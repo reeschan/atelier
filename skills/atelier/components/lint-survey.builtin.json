@@ -1,0 +1,20 @@
+{
+  "id": "lint-survey.builtin",
+  "stages": [
+    "lint-survey"
+  ],
+  "title": {
+    "ja": "代わりの依頼文で、同じ物差しで読む（外には送らない）",
+    "en": "Read with the same measures from the fallback prompt (nothing leaves Claude Code)"
+  },
+  "invoke": {
+    "kind": "builtin"
+  },
+  "doc": "appendix/lint.md",
+  "where": "subagent",
+  "memory": "none",
+  "when": "ask-or-decide",
+  "cost": "mid",
+  "interactive": false,
+  "calls_back": false
+}

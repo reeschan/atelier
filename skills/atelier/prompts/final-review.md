@@ -11,6 +11,8 @@ Final review of this repository's work. Report only: do not edit, commit, push o
 - Call the Skill tool with <skill name>. For the built-in code-review, pass the argument medium; for the others, pass no argument.
 - Never pass --fix, --comment, ultra or --max-findings.
 - If the skill asks you a question, do not answer it. Stop and write BLOCKED.
+- Lint recheck: <the path of docs/pbi/jevlint/recheck.md and its report rows, or none>. Look at those places; do not run jevlint.
+- <the implementer block of prompts/kiln-chamber.md, when kiln is on>
 - Write <docs/pbi/reviews/final.review.md, or docs/pbi/reviews/final.security.md for security>.
   Line 1: findings: <critical>,<major>,<minor>
   Then one line per finding: - [critical|major|minor] <file>:<line> — <why> — <repro>

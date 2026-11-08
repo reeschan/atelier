@@ -38,6 +38,30 @@ _Avoid_: hook, checkpoint
 The last component of every stage: builtin, or a script with no requirements, so every template runs with Claude Code alone.
 _Avoid_: default component
 
+**optional stage (オプションの工程)**:
+A step placed after one of the nine stages by the template's `optional` list: ui-design, marketing, security, map, lint-survey, lint-recheck. The bundled templates place map, lint-survey and lint-recheck.
+_Avoid_: extra stage, 段 (that is a tier)
+
+**map (構成図の工程)**:
+The optional stage that summarises the layers and modules the request touches, from the OMM cache, an OMM scan, or the fallback prompt.
+_Avoid_: architecture scan (that is OMM's own step), diagram
+
+**lint survey / lint recheck (lint の下調べ・lint の見直し)**:
+The optional stages that run jevlint before the design (scores, long functions, weak questions, bug-hunt leads in the range) and after the test stage (what the change made worse than the merge-base).
+_Avoid_: lint (that is the repository's own linter), audit alone
+
+**send approval (送信の許可)**:
+The user's answer, asked right before each jevlint run that sends file contents to an outside model. One answer covers one file list once.
+_Avoid_: consent in general, standing approval
+
+**fallback prompt (代わりの依頼文)**:
+The bundled prompt that does a recommended tool's job inside Claude Code when the tool is missing (`prompts/map-fallback.md`, `prompts/lint-fallback.md`, `prompts/kiln-chamber.md`).
+_Avoid_: fallback alone (that is the last component of a stage)
+
+**recommended tool (推奨の道具)**:
+oh-my-mermaid, jevlint, sac-strategic-compact and pstack's test principle: used when installed, offered at Approve when missing, replaced by a fallback prompt otherwise. `tools_check.py` lists them.
+_Avoid_: dependency, requirement
+
 **wave (波)**:
 PBIs with no unfinished dependency, run together and reviewed before the next wave starts.
 _Avoid_: batch, round
@@ -137,8 +161,12 @@ _Avoid_: tier up (that is routing)
 ## Context capacity
 
 **Kiln (窯)**:
-Optional limit on working context for this run. The English name is Kiln, from Compaction (working-context cool-down / strategic compaction). The Japanese reading is 窯. Soft / peak / handoff / aux lines, plus separate chambers for the orchestrator (designer) and the worker (implementer). Off unless `docs/pbi/kiln.json` exists or the template sets `kiln.enabled`. Details in `appendix/kiln.md`.
+Limit on working context for this run. The English name is Kiln, from Compaction (working-context cool-down / strategic compaction). The Japanese reading is 窯. Soft / peak / handoff / aux lines, plus separate chambers for the orchestrator (designer) and every subagent and worker (implementer). On by default; `docs/pbi/kiln.json` with `"enabled": false` turns it off. It reaches subagents and external workers through the implementer block of `prompts/kiln-chamber.md`. Details in `appendix/kiln.md`.
 _Avoid_: leading with 窯 as the source term, context window (that is the model limit), budget alone (name the Kiln lines)
+
+**state tablet (状態の板)**:
+The short file written before a cool-down (`docs/pbi/CONTEXT_STATE.md`), or the `## State` section a worker writes when it stops at its peak: objective, facts, changes, verification, dead ends, remaining plan.
+_Avoid_: summary, memo
 
 **designer chamber / implementer chamber (設計者室・実装者室)**:
 The Kiln budgets for the orchestrator and for one worker attempt. The implementer chamber prefers a fresh worker per attempt (`worker.md`).

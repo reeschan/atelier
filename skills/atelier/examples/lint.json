@@ -1,0 +1,22 @@
+{
+  "preset": "full",
+  "exclude_questions": [
+    "documentation.contracts-stated"
+  ],
+  "score_drop": 5,
+  "function_lines": 100,
+  "compliance": 0.7,
+  "extensions": [
+    ".ts",
+    ".tsx",
+    ".mts",
+    ".cts",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".py"
+  ],
+  "ast_growth": 0.1,
+  "report_only_paths": []
+}
