@@ -151,10 +151,16 @@ def _valid_adapter_value(value) -> bool:
 
 
 def _configured_path(runner, agents) -> str | None:
-    """agents.json の path が存在するファイルならそのパス。"""
-    path = _runner_config(runner, agents).get('path')
-    if isinstance(path, str) and Path(path).is_file():
-        return path
+    """agents.json の runners.<名前>.path か tools.<名前>.path が存在するファイルならそのパス。
+
+    tools は実行先ではない道具 (jevlint など) の場所。実行先の一覧には出ない。
+    """
+    tools = agents.get('tools') if isinstance(agents, dict) else None
+    tool = tools.get(runner) if isinstance(tools, dict) else None
+    for config in (_runner_config(runner, agents), tool if isinstance(tool, dict) else {}):
+        path = config.get('path')
+        if isinstance(path, str) and Path(path).is_file():
+            return path
     return None
 
 
