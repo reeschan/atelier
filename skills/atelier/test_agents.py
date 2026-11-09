@@ -13,7 +13,7 @@ import agents
 OPENCODE = {'runner': 'opencode', 'model': 'opencode-go/deepseek-v4.1-flash', 'effort': None}
 CODEX = {'runner': 'codex', 'model': 'gpt-6-astra', 'effort': 'high'}
 AGENT_STEP = {'runner': 'agent', 'model': 'sonnet', 'effort': 'high'}
-ADAPTERS_AUTO = {'design': 'auto', 'review': 'auto', 'security': 'auto'}
+ADAPTERS_AUTO = {'design': 'auto', 'review': 'auto', 'security': 'auto', 'confirm': 'auto'}
 
 
 def make_cli(directory, name):
@@ -142,10 +142,11 @@ class LoadAdaptersTest(Base):
         expected = {**ADAPTERS_AUTO, 'review': 'off'}
         self.assertEqual(agents.load_adapters(self.root), (expected, []))
 
-    def test_all_three_keys_accept_auto_off_and_skill_names(self):
+    def test_all_four_keys_accept_auto_off_and_skill_names(self):
         self.write({'adapters': {'design': 'auto', 'review': 'off',
-                                 'security': 'mattpocock-skills:code-review'}})
-        expected = {'design': 'auto', 'review': 'off', 'security': 'mattpocock-skills:code-review'}
+                                 'security': 'mattpocock-skills:code-review', 'confirm': 'answer-me-with-html'}})
+        expected = {'design': 'auto', 'review': 'off', 'security': 'mattpocock-skills:code-review',
+                    'confirm': 'answer-me-with-html'}
         self.assertEqual(agents.load_adapters(self.root), (expected, []))
 
     def test_skill_name_characters_and_length_boundaries(self):

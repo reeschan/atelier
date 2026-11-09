@@ -341,6 +341,18 @@ def find_plugin_file(plugin: str, rel: str, root: Path) -> Path | None:
     return max(found, key=lambda c: c.stat().st_mtime) if found else None
 
 
+def find_skill_file(name: str, skills_dir: Path, env) -> Path | None:
+    """スキルの SKILL.md。<プラグイン>:<スキル> はプラグインの置き場、ほかは skills_dir/<名前>/SKILL.md。無ければ None。
+
+    スクリプトから見える置き場だけを見る。Claude Code のスキルの一覧にあるかは、設計者が一覧で確かめる。
+    """
+    if ':' in name:
+        plugin, _, skill = name.partition(':')
+        return find_plugin_file(plugin, f'skills/{skill}/SKILL.md', plugins_root(env))
+    candidate = Path(skills_dir) / name / 'SKILL.md'
+    return candidate if candidate.is_file() else None
+
+
 def status(component: dict, agents, env) -> str:
     """部品が使えるかの見込み。Skill ツールで呼ぶスキルはスクリプトから見えないので check skill list。"""
     kind = component['invoke']['kind']

@@ -8,7 +8,8 @@
   fallback 入れずに進むときの代わり
 
 道具: omm (oh-my-mermaid の CLI)、omm-scan (oh-my-mermaid のプラグインのスキル)、jevlint、
-sac-strategic-compact、principle-test-behavior-not-implementation (pstack)。
+sac-strategic-compact、principle-test-behavior-not-implementation (pstack)、answer-me-with-html (Approve を HTML で見せる
+confirm のスキル。repo は answer-me-with-any、スキル名は answer-me-with-html。appendix/adapters.md の `## Confirm`)。
 jevlint は agents.find_cli で探し (home の agents.json の tools.jevlint.path、PATH、fnm・nvm の Node の版)、
 `jevlint auth list` に typesafe があるかを見る (キーの値は出ない)。
 プラグインの置き場は PBI_PLUGINS_DIR、無ければ ~/.claude/plugins。スキルの置き場は --skills-dir、無ければ ~/.claude/skills。
@@ -25,6 +26,9 @@ import common
 import flow
 
 HEADER = 'tool\tstatus\tinstall\tfallback'
+# confirm のスキルの出所 (repo と、設計で合わせた fork の main)
+CONFIRM_REPO = 'https://github.com/reeschan/answer-me-with-any'
+CONFIRM_COMMIT = '8856dde51ff8'
 INSTALL = {
     'omm': 'npm install -g oh-my-mermaid',
     'omm-scan': '/plugin marketplace add oh-my-mermaid/oh-my-mermaid, then /plugin install oh-my-mermaid@oh-my-mermaid',
@@ -32,6 +36,9 @@ INSTALL = {
                'jevlint auth set typesafe',
     'sac-strategic-compact': 'https://github.com/reeschan/sac-strategic-compact (into ~/.claude/skills/sac-strategic-compact)',
     'principle-test-behavior-not-implementation': '/plugin install pstack@cursor-plugins',
+    'answer-me-with-html': f'git clone {CONFIRM_REPO} and check out {CONFIRM_COMMIT}, then copy its skills/answer-me-with-html '
+                           'to ~/.claude/skills/answer-me-with-html (skill answer-me-with-html, repo answer-me-with-any; '
+                           'only after the user says yes)',
 }
 FALLBACK = {
     'omm': 'map: prompts/map-fallback.md',
@@ -39,6 +46,7 @@ FALLBACK = {
     'jevlint': 'lint-survey and lint-recheck: prompts/lint-fallback.md',
     'sac-strategic-compact': 'appendix/kiln.md and prompts/kiln-chamber.md',
     'principle-test-behavior-not-implementation': 'appendix/tests-at-end.md, Test principle (fallback)',
+    'answer-me-with-html': 'confirm: the same Markdown in chat (appendix/adapters.md, Confirm)',
 }
 
 
@@ -78,12 +86,14 @@ def rows(home: Path, skills_dir: Path, env) -> list[tuple]:
     scan = flow.find_plugin_file('oh-my-mermaid', 'skills/omm-scan/SKILL.md', plugins)
     sac = skills_dir / 'sac-strategic-compact' / 'SKILL.md'
     principle = flow.find_plugin_file('pstack', 'skills/principle-test-behavior-not-implementation/SKILL.md', plugins)
+    confirm = flow.find_skill_file(agents_module.CONFIRM_SKILL, skills_dir, env)
     status = {
         'omm': f'ok {omm}' if omm else 'missing',
         'omm-scan': f'ok {scan}' if scan else 'missing',
         'jevlint': jevlint_status(home),
         'sac-strategic-compact': f'ok {sac}' if sac.is_file() else 'missing',
         'principle-test-behavior-not-implementation': f'ok {principle}' if principle else 'missing',
+        'answer-me-with-html': f'ok {confirm}' if confirm else 'missing',
     }
     return [(tool, status[tool], INSTALL[tool], FALLBACK[tool]) for tool in INSTALL]
 

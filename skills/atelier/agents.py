@@ -11,9 +11,12 @@ from pathlib import Path
 
 from common import AGENT, RUNNERS, load_json
 
-# agents.json の adapters が取るフェーズと、設定値として扱う文字列
-ADAPTER_PHASES = ('design', 'review', 'security')
+# agents.json の adapters が取るフェーズと、設定値として扱う文字列。
+# confirm は工程ではなく、Approve の見せ方 (appendix/adapters.md、`## Confirm`)
+ADAPTER_PHASES = ('design', 'review', 'security', 'confirm')
 ADAPTER_SETTINGS = ('auto', 'off')
+# confirm が auto のときに探すスキル (answer-me-with-any の skills/answer-me-with-html)
+CONFIRM_SKILL = 'answer-me-with-html'
 
 # フェーズの値として受け付けるスキル名の形
 SKILL_NAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9:_./-]{0,127}$')
@@ -51,7 +54,7 @@ def load_agents(home) -> dict | None:
 def load_adapters(home) -> tuple[dict, list[str]]:
     """<home>/agents.json の adapters を読む。(フェーズごとの設定, 警告) を返す。
 
-    1 つ目は常に design・review・security の 3 つのキーを持つ辞書で、既定は "auto"。
+    1 つ目は常に design・review・security・confirm の 4 つのキーを持つ辞書で、既定は "auto"。
     2 つ目は英語の警告を 1 件 1 行にしたリスト。runners の有無・中身は見ない。
     """
     settings = {phase: 'auto' for phase in ADAPTER_PHASES}
