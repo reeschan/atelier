@@ -1,0 +1,13 @@
+{
+  "schema": "atelier.design-record/1",
+  "design_id": "workspace:cursor/handoff-design-a5f0:W-001:atelier-handoff",
+  "revision": 1,
+  "targets": [
+    "PBI-012",
+    "PBI-013",
+    "PBI-014"
+  ],
+  "concerns": [
+    "notes/c1.slice.json"
+  ]
+}

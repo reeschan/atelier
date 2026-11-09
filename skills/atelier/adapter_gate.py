@@ -1,6 +1,6 @@
 """最終レビューとセキュリティレビューを使うかを、毎回同じ基準で決めて表で返す (appendix/review.md)。
 
-  python adapter_gate.py <pbi-dir> [--numstat FILE] [--home DIR]
+  python adapter_gate.py <pbi-dir> [--numstat FILE] [--home DIR] [--skills-dir DIR]
 
 <pbi-dir> の PBI-<数字>.md を PBI として数える (.rework-1 や .brief の付いたファイルは数えない)。
 PBI ごとに PBI-<n>.route.json の review (deep / normal) と PBI-<n>.facts.json の sensitive (真偽値) を読む。
@@ -14,20 +14,26 @@ route.json が無い・読めない PBI は deep、facts.json が無い・読め
 
 review は diff が 300 行以下・PBI が 2 件以下・deep も sensitive も無い、のすべてで skip。ほかは run。
 security は sensitive か deep の PBI が 1 件でもあれば run。design はスクリプトでは決めず manual。
+confirm は Approve の見せ方 (appendix/adapters.md、`## Confirm`)。auto は answer-me-with-html、スキル名はそのスキルを
+--skills-dir (無ければ ~/.claude/skills) かプラグインの置き場 (<プラグイン>:<スキル>) で探し、あれば skill、無ければ chat
+(同じ Markdown をチャットに出す)。どちらでも何も入れない・作らない。off は今までどおりの一覧だけ。
 設定が off のフェーズは判定にかかわらず off で、理由は turned off in agents.json。
 設定がスキル名のときは判定はそのまま (run / skip) で、setting の列に名前を出す。
 
 標準出力はタブ区切りの表 (phase / setting / decision / reason。1 行目は見出し)。
 agents.load_adapters の警告は表のあとに `warn <警告>` の形で 1 行ずつ出す。
+表は design・review・security・confirm の 4 行。
 終了コード: 0 = 正常 (PBI 0 件も正常)。2 = <pbi-dir> が無い・--numstat が読めない・引数の誤り。
 """
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
 
 import agents as agents_module
 import common
+import flow
 
 # PBI として数えるファイルの形 (.rework-1・.brief などの付いたものは数えない)
 PBI_NAME = re.compile(r'^PBI-(\d+)\.md$')
@@ -101,6 +107,17 @@ def design_row(setting) -> tuple:
     return setting, 'manual', DESIGN_REASON
 
 
+def confirm_row(setting, skills_dir, env) -> tuple:
+    """Approve の見せ方。skill (スキルの手順で HTML)・chat (同じ Markdown をチャット)・off (今までの一覧)。"""
+    if setting == 'off':
+        return setting, 'off', OFF_REASON
+    name = agents_module.CONFIRM_SKILL if setting == 'auto' else setting
+    found = flow.find_skill_file(name, skills_dir, env)
+    if found:
+        return setting, 'skill', f'{name} found at {found.as_posix()}; use it only if it is in the skill list'
+    return setting, 'chat', f'{name} not installed; show the same Markdown in chat (no install, no CLI)'
+
+
 def review_row(setting, diff, records, unknown_reason='diff size unknown (no --numstat)') -> tuple:
     if setting == 'off':
         return setting, 'off', OFF_REASON
@@ -133,6 +150,7 @@ def main(argv=None) -> int:
     ap.add_argument('pbi_dir', help='作業の docs/pbi (PBI-<数字>.md の置き場所)')
     ap.add_argument('--numstat', help='git diff --numstat の出力を保存したファイル')
     ap.add_argument('--home', help='agents.json を置く home (common.resolve_home)')
+    ap.add_argument('--skills-dir', help='スキルの置き場 (既定は ~/.claude/skills)')
     args = ap.parse_args(argv)
     common.utf8_stdout()
 
@@ -152,11 +170,13 @@ def main(argv=None) -> int:
         if diff is None:
             unknown_reason = reason
 
+    skills = Path(args.skills_dir) if args.skills_dir else Path.home() / '.claude' / 'skills'
     settings, warnings = agents_module.load_adapters(common.resolve_home(args.home))
     records = pbi_records(base)
     rows = [('design', design_row(settings['design'])),
             ('review', review_row(settings['review'], diff, records, unknown_reason)),
-            ('security', security_row(settings['security'], records))]
+            ('security', security_row(settings['security'], records)),
+            ('confirm', confirm_row(settings['confirm'], skills, os.environ))]
 
     print('phase\tsetting\tdecision\treason')
     for phase, (setting, decision, reason) in rows:

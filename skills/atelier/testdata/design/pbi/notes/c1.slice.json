@@ -1,0 +1,17 @@
+{
+  "schema": "atelier.design-slice/1",
+  "id": "c1",
+  "question": "OMM の置き場所",
+  "reads": [
+    {
+      "path": "skills/atelier/omm_cache.py",
+      "lines": [
+        1,
+        40
+      ]
+    }
+  ],
+  "unknown": [
+    "利用者の選択"
+  ]
+}
