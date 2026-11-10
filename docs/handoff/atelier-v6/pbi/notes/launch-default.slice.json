@@ -1,0 +1,17 @@
+{
+  "schema": "atelier.design-slice/1",
+  "id": "launch-default",
+  "question": "Claude Code から呼ぶときの既定の起動は agent (設計者をサブエージェントに) でよいか",
+  "reads": [
+    {
+      "path": "docs/specs/atelier-v6.md",
+      "lines": [
+        80,
+        95
+      ]
+    }
+  ],
+  "unknown": [
+    "ユーザーが裏で回す headless を既定にしたいか"
+  ]
+}

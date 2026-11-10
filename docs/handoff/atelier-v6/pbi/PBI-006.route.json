@@ -1,0 +1,1 @@
+{"tier": "opus", "route": [{"runner": "agent", "model": "opus", "effort": null}], "dropped": [], "review": "normal", "scores": {"novelty": 1, "coupling": 1, "ambiguity": 1}, "reasons": ["決定: opus。--tier opus で指定", "novelty=1（Jev の答えが無いため 1 とした）", "coupling=1（Jev の答えが無いため 1 とした）", "ambiguity=1（Jev の答えが無いため 1 とした）"], "template": {"name": null, "applied": false, "note": "適用なし"}}

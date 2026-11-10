@@ -1,0 +1,17 @@
+{
+  "schema": "atelier.design-slice/1",
+  "id": "version-name",
+  "question": "この変更を v6 と呼んでよいか",
+  "reads": [
+    {
+      "path": "docs/specs/atelier-v6.md",
+      "lines": [
+        1,
+        3
+      ]
+    }
+  ],
+  "unknown": [
+    "ユーザーの版の数え方"
+  ]
+}
