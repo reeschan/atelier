@@ -208,6 +208,14 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - pstack の Orchestrate と poteto-mode から、自分の言葉で 2 つを取り込んだ: PBI のレビューは作った担当と別のモデルにする (opus で作ったものは sonnet high で見る)、最初のメッセージと仕様と完了報告で、利用者の目的を自分の言葉で言い直す。
 - 最終レビューの重要度の基準を決め、承認済みの ADR との食い違いは見送らない (コードを直すか、新しい ADR を起こすかを利用者が決める) ことにした。worker は、PBI と仕様で決まっていない利用者に見える振る舞いを決めずに Open に書く。
 
+### UI の見た目の手直し (unslop、2026-11-11)
+
+- 利用者の求めで、ui-design に「いまある画面の見た目を点検して直す」部品の口を足した。新しく見た目を作る design-studio とは別の行にし、取り違えずに選べるようにする。きっかけは既存サイトの見た目の改修で、unslop を観点として読んで PBI に分け、design-studio は方向性が二重になるので飛ばしたこと。
+- when に `ui-retouch` (いまある画面の見た目だけを直す。画面も流れも足さない) を足した。`ui-change` とは 1 つの判断で、答えは ui-change・ui-retouch・どちらでもない の 3 つ。同じ回に両方は成り立たない (作る部品と直す部品が別々に方向性を決めてしまうため)。画面を足しつつ既存も直す依頼は `ui-change` にする。`docs/pbi/adapters.json` の ui-design には、聞いたときにどちらだったかも残す。
+- 新しい工程は作らず、ui-design の中の行で分けた。工程を足すと flow.py・component.py・編集画面・成果物の置き場が増えるが、行と when で足りるため。
+- 推奨の見本に heydamir/unslop (CC BY 4.0) を `ui-design.unslop` (`ui-retouch`) で入れた。forbid で、unslop の手順 1〜4 (画面を見る・点検・どこまで直すか・方向性) で止め、画面のファイルは直さない。直すのは PBI で、unslop のパスの順に分け、受け入れ条件に点検の行番号 (A1…) を書く。成果物は `docs/pbi/ui/<slug>/audit.md`。手順は `appendix/optional.md` の `## UI retouch`。
+- pstack にも `unslop` があるが、文章の AI っぽさを消すもので別物 (CONTEXT.md に書いた)。
+
 ### 構成図・lint の下調べと見直し (2026-11-08)
 
 - 設計と状態の図は [atelier-v4.md](atelier-v4.md)。ここには工程と部品の契約の変更だけを書く。
