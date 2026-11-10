@@ -49,7 +49,7 @@ class ComponentCliTest(unittest.TestCase):
         self.plugin('yomiyasu', {'yomiyasu': False}, {'license': 'MIT', 'repository': 'https://github.com/nanaism/yomiyasu'})
         self.plugin('founder-skill', {'founder-consumer': False}, {'license': 'MIT'})
         write(os.path.join(self.skills, 'my-review', 'SKILL.md'), skill_md('my-review'))
-        for name in ('design-studio', 'ui-video', 'security-audit'):
+        for name in ('design-studio', 'ui-video', 'unslop', 'security-audit'):
             write(os.path.join(self.skills, name, 'SKILL.md'), skill_md(name))
         write(os.path.join(self.skills, 'my-hidden', 'SKILL.md'), skill_md('my-hidden', disabled=True))
 
@@ -335,6 +335,13 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(workflow['stages']['review'][0], {'id': 'review.pstack-interrogate', 'when': 'deep', 'where': 'main',
                                                          'models': ['opus xhigh', 'sonnet high']})
         self.assertEqual(self.load('components', 'ui-design.ui-video.json')['doc'], 'appendix/optional.md')
+        # 作る部品 (design-studio) と直す部品 (unslop) は同じ ui-design に並び、when の組で片方だけが動く
+        self.assertEqual(optional['ui-design'], [{'id': 'ui-design.design-studio', 'when': 'ui-change'},
+                                                 {'id': 'ui-design.ui-video', 'when': 'ui-change'},
+                                                 {'id': 'ui-design.unslop', 'when': 'ui-retouch'}])
+        unslop = self.load('components', 'ui-design.unslop.json')
+        self.assertEqual(unslop['invoke'], {'kind': 'skill', 'name': 'unslop'})
+        self.assertTrue(any('passes are built as PBIs' in item for item in unslop['forbid']))
         code, out, err = self.run_cli('example', 'check', 'recommended')
         self.assertEqual(code, 0, out + err)
         self.assertNotIn('not registered', out)
