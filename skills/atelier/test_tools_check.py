@@ -11,7 +11,8 @@ import uuid
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, 'tools_check.py')
 FAKE = os.path.join(HERE, 'testdata', 'fake_jevlint.py')
-TOOLS = ['omm', 'omm-scan', 'jevlint', 'sac-strategic-compact', 'principle-test-behavior-not-implementation']
+TOOLS = ['omm', 'omm-scan', 'jevlint', 'sac-strategic-compact', 'principle-test-behavior-not-implementation',
+         'answer-me-with-html']
 
 
 class ToolsCheckTest(unittest.TestCase):
@@ -47,6 +48,12 @@ class ToolsCheckTest(unittest.TestCase):
                 self.assertTrue(row[2] and row[3])
         self.assertIn('https://github.com/reeschan/sac-strategic-compact', rows['sac-strategic-compact'][2])
         self.assertIn('prompts/lint-fallback.md', rows['jevlint'][3])
+        install = rows['answer-me-with-html'][2]
+        for part in ('https://github.com/reeschan/answer-me-with-any', '8856dde51ff8',
+                     'skills/answer-me-with-html', '~/.claude/skills/answer-me-with-html', 'only after the user says yes'):
+            self.assertIn(part, install)
+        self.assertIn('the same Markdown in chat', rows['answer-me-with-html'][3])
+        self.assertEqual(os.listdir(os.path.join(self.dir, 'skills')), [])
 
     def test_found_tools_and_a_missing_key(self):
         with open(os.path.join(self.dir, 'home', 'agents.json'), 'w', encoding='utf-8') as f:
@@ -54,9 +61,11 @@ class ToolsCheckTest(unittest.TestCase):
         self.touch('plugins', 'oh-my-mermaid', '0.2.0', 'skills', 'omm-scan', 'SKILL.md')
         self.touch('plugins', 'pstack', '0.15.32', 'skills', 'principle-test-behavior-not-implementation', 'SKILL.md')
         self.touch('skills', 'sac-strategic-compact', 'SKILL.md')
+        self.touch('skills', 'answer-me-with-html', 'SKILL.md')
         rows = self.rows()
         self.assertTrue(rows['jevlint'][1].startswith('ok ') and rows['jevlint'][1].endswith('0.0.0-fake'))
-        for tool in ('omm-scan', 'sac-strategic-compact', 'principle-test-behavior-not-implementation'):
+        for tool in ('omm-scan', 'sac-strategic-compact', 'principle-test-behavior-not-implementation',
+                     'answer-me-with-html'):
             self.assertTrue(rows[tool][1].startswith('ok '), rows[tool])
         self.assertEqual(rows['omm'][1], 'missing')
         self.assertTrue(self.rows(FAKE_JEVLINT_KEYS='')['jevlint'][1].startswith('no-key '))
