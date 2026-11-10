@@ -42,6 +42,10 @@ _Avoid_: default component
 A step placed after one of the nine stages by the template's `optional` list: ui-design, marketing, security, map, lint-survey, lint-recheck. The bundled templates place map, lint-survey and lint-recheck.
 _Avoid_: extra stage, 段 (that is a tier)
 
+**UI new look / UI retouch (見た目づくり・見た目の手直し)**:
+The two halves of the ui-design decision, `ui-change` and `ui-retouch`; at most one holds in a run. A new look makes screens from a direction (design-studio); a retouch audits screens that already exist for AI-looking signs and fixes them through PBIs (unslop).
+_Avoid_: redesign (it can mean either), unslop for prose (pstack's `unslop` cleans writing, not screens)
+
 **map (構成図の工程)**:
 The optional stage that summarises the layers and modules the request touches, from the OMM cache, an OMM scan, or the fallback prompt.
 _Avoid_: architecture scan (that is OMM's own step), diagram
