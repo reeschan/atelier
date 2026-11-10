@@ -44,7 +44,7 @@ Do not stop to report anything else. Put a one- or two-line status in the same m
 | Priority templates: the start-time sync, applying or editing one in chat, an expired application | `appendix/priority-templates.md` |
 | Asking Jev directly (report triage, rework check) | `appendix/jev.md` |
 | Recording the cause of a rework, tier up or hold; writing the cases at finish | `appendix/cases.md` |
-| The `adapters` setting in agents.json (turns a design or review stage off, or names a skill for it) | `appendix/adapters.md` |
+| The `adapters` setting in agents.json (turns a design or review stage off, names a skill for it, or the `confirm` view of Approve) | `appendix/adapters.md` |
 
 ## Start
 
@@ -83,6 +83,7 @@ After route and its gates, show the user the PBI list and wait for approval. Per
 - the priority-template line from `prepare.py` with the warning when a template overrides the opus tier, open assumptions from the design stage, and expired priority applications (`appendix/priority-templates.md`)
 - the leads from the lint survey under "Found, not in this run" (`appendix/lint.md`), and the tests-at-end `deferred` and `test_paths` you drafted
 - one line per recommended tool `tools_check.py` did not find: its install and its fallback. If the user wants to install, stop there and resume after; otherwise the fallback runs
+- show it through the confirm adapter unless it is `off`: the same Markdown to the skill or to chat, and only a reply `design_record.py check-reply` matches is the approval (`appendix/adapters.md`, `## Confirm`)
 - the question for each optional stage with an `ask-user` row placed after route or later (security, by default): whether to run it this time (`appendix/optional.md`); the model-check chart and its rules, when that stage ran
 
 ## One PBI

@@ -43,8 +43,12 @@ class AdapterGateTest(unittest.TestCase):
         self.base = os.path.join(self.dir, 'pbi')
         self.home = os.path.join(self.dir, 'home')
         self.numstat = os.path.join(self.dir, 'numstat.txt')
+        self.skills = os.path.join(self.dir, 'skills')
+        self.plugins = os.path.join(self.dir, 'plugins')
         os.makedirs(self.base)
         os.makedirs(self.home)
+        os.makedirs(self.skills)
+        os.makedirs(self.plugins)
 
     def reset(self):
         """PBI と home の中身を空にして、境目ごとの入力をまっさらな状態から作る。"""
@@ -81,9 +85,10 @@ class AdapterGateTest(unittest.TestCase):
         command = [sys.executable, SCRIPT, pbi_dir or self.base]
         if numstat:
             command += ['--numstat', self.numstat]
-        command += ['--home', home or self.home]
+        command += ['--home', home or self.home, '--skills-dir', self.skills]
         command += list(args)
-        return subprocess.run(command, capture_output=True, text=True, encoding='utf-8')
+        env = dict(os.environ, PBI_PLUGINS_DIR=self.plugins)
+        return subprocess.run(command, capture_output=True, text=True, encoding='utf-8', env=env)
 
     def table(self, result):
         """標準出力の表を phase → [setting, decision, reason] にする。見出しと warn の行は確かめる。"""
@@ -225,14 +230,15 @@ class AdapterGateTest(unittest.TestCase):
         self.assertRow(rows, 'design', 'auto', 'manual', DESIGN_REASON)
         self.assertRow(rows, 'review', 'auto', 'skip', 'diff 0 lines, 0 PBIs, no deep or sensitive')
         self.assertRow(rows, 'security', 'auto', 'skip', 'no sensitive or deep PBI')
-        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows['confirm'][:2], ['auto', 'chat'])
+        self.assertEqual(len(rows), 4)
 
     def test_off_setting(self):
         self.add_pbi(1)
         self.write_numstat(added=999)
-        self.write_adapters({'design': 'off', 'review': 'off', 'security': 'off'})
+        self.write_adapters({'design': 'off', 'review': 'off', 'security': 'off', 'confirm': 'off'})
         rows = self.table(self.gate())
-        for phase in ('design', 'review', 'security'):
+        for phase in ('design', 'review', 'security', 'confirm'):
             self.assertRow(rows, phase, 'off', 'off', OFF_REASON)
 
     def test_skill_name_setting_keeps_decision(self):
@@ -254,9 +260,37 @@ class AdapterGateTest(unittest.TestCase):
         result = self.gate()
         rows = self.table(result)
         self.assertRow(rows, 'review', 'auto', 'skip', 'diff 0 lines, 1 PBIs, no deep or sensitive')
-        self.assertEqual(result.stdout.splitlines()[4:],
+        self.assertEqual(result.stdout.splitlines()[5:],
                          ['warn adapters.review: invalid value, using auto',
                           'warn adapters.zzz: unknown phase, ignored'])
+
+    def touch_skill(self, *parts):
+        path = os.path.join(*parts, 'SKILL.md')
+        write_text(path, '---\nname: x\n---\n')
+        return path.replace(os.sep, '/')
+
+    def test_confirm_auto_uses_chat_until_the_skill_is_installed(self):
+        """auto は answer-me-with-html。無ければ chat で、何も入れない。"""
+        self.write_numstat()
+        rows = self.table(self.gate())
+        self.assertRow(rows, 'confirm', 'auto', 'chat',
+                       'answer-me-with-html not installed; show the same Markdown in chat (no install, no CLI)')
+        self.assertEqual(os.listdir(self.skills), [])
+        found = self.touch_skill(self.skills, 'answer-me-with-html')
+        rows = self.table(self.gate())
+        self.assertRow(rows, 'confirm', 'auto', 'skill',
+                       f'answer-me-with-html found at {found}; use it only if it is in the skill list')
+
+    def test_confirm_skill_name_and_plugin_skill(self):
+        self.write_numstat()
+        self.write_adapters({'confirm': 'my-confirm'})
+        self.assertEqual(self.table(self.gate())['confirm'][:2], ['my-confirm', 'chat'])
+        self.touch_skill(self.skills, 'my-confirm')
+        self.assertEqual(self.table(self.gate())['confirm'][:2], ['my-confirm', 'skill'])
+        self.write_adapters({'confirm': 'am:answer-me-with-html'})
+        self.assertEqual(self.table(self.gate())['confirm'][:2], ['am:answer-me-with-html', 'chat'])
+        self.touch_skill(self.plugins, 'am', '1.0.0', 'skills', 'answer-me-with-html')
+        self.assertEqual(self.table(self.gate())['confirm'][:2], ['am:answer-me-with-html', 'skill'])
 
     def test_missing_pbi_dir_exits_2(self):
         result = self.gate(pbi_dir=os.path.join(self.dir, 'nowhere'))
