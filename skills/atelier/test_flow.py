@@ -199,6 +199,25 @@ class FlowCliTest(unittest.TestCase):
         review = len(places) - 1 - places[::-1].index('review')
         self.assertEqual(places[review + 1:review + 3], ['security after review', 'gate after review'])
 
+    def test_ui_design_takes_a_retouch_row_beside_a_new_look_row(self):
+        """見た目を作る部品 (ui-change) と直す部品 (ui-retouch) は同じ ui-design に別の行として並ぶ。"""
+        self.add_optional()
+        skills = os.path.join(self.dir, 'skills')
+        path = os.path.join(skills, 'my-retouch', 'SKILL.md')
+        os.makedirs(os.path.dirname(path))
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('---\nname: my-retouch\ndescription: my-retouch\n---\n')
+        with mock.patch.dict(os.environ, {'PBI_SKILLS_DIR': skills}), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(component.main(['--home', self.home, 'add', 'my-retouch', '--stage', 'ui-design',
+                                             '--when', 'ui-retouch']), 0)
+        ui = [s for s in self.home_workflow()['optional'] if s['stage'] == 'ui-design']
+        self.assertEqual(ui[0]['components'], [{'id': 'ui-design.my-ui', 'when': 'ui-change'},
+                                               {'id': 'ui-design.my-retouch', 'when': 'ui-retouch'}])
+        result = self.run_flow()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        rows = [(row[1], row[5]) for row in self.rows(result.stdout) if row[0] == 'ui-design after design']
+        self.assertEqual(rows, [('ui-design.my-ui', 'ui-change'), ('ui-design.my-retouch', 'ui-retouch')])
+
     def test_optional_validation_errors(self):
         self.add_optional()
         good = self.home_workflow()

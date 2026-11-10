@@ -81,7 +81,10 @@ MODEL_SPEC = re.compile(r'(opus|sonnet|haiku|fable|inherit)( (low|medium|high|xh
 # 1 つの部品が同時に起こすサブエージェントの上限
 MAX_MODELS = 10
 WHEN = ('always', 'clearly-complex', 'ask-or-decide', 'adapter-gate', 'tier-opus', 'coupling-high', 'deep',
-        'ui-change', 'user-facing', 'ask-user')
+        'ui-change', 'ui-retouch', 'user-facing', 'ask-user')
+# 画面の見た目の条件は 2 つで 1 組にし、同じ実行で両方は成り立たない (appendix/optional.md)。新しい画面・流れ・方向性は
+# ui-change (design-studio など新しく見た目を作る部品)、いまある画面の見た目の手直しだけなら ui-retouch (unslop など
+# 点検して直す部品)。作る部品と直す部品が同じ回に重なると方向性が二重になるため
 # PBI ごとに決まる条件。段と brief の値が出そろう振り分けのあと (after: route の関所) でしか判定できない
 PER_PBI_WHEN = ('tier-opus', 'coupling-high')
 # 利用者に毎回聞く条件。聞く時点を決めてあるのはオプションの工程だけ (appendix/optional.md)
