@@ -1,8 +1,8 @@
 {
   "name": "recommended",
   "description": {
-    "ja": "作者が実際に使っている構成。jev-routed に、pstack (理解・振り分けのあとの関所・深いレビュー)、mattpocock-skills (設計の grilling と最終レビュー)、yomiyasu (完了報告の推敲) と、オプションの工程のマーケティング (founder-skill の利用者パネル)、UI デザイン (design-studio と ui-video)、状態モデルの検査 (pstack の statechart。使うかを毎回聞く)、セキュリティ (Cloudflare の security-audit。使うかを毎回聞く) を足したもの。interrogate は設計者が自分で動かし、敵役は opus xhigh と sonnet high。スキルはこの例に含まれず、component.py example check が入れ方を出す。",
-    "en": "The author's own setup: jev-routed plus pstack (understand, gates after route, deep review), mattpocock-skills (grilling for design, the final review), yomiyasu (polishing the Japanese completion report), the optional stages marketing (founder-skill's user panel), UI design (design-studio and ui-video), model check (pstack's statechart, asked every run) and security (Cloudflare's security-audit, asked every run). interrogate runs in the orchestrator's session, with adversaries on opus xhigh and sonnet high. The skills are not included; component.py example check prints how to install them."
+    "ja": "作者が実際に使っている構成。jev-routed に、pstack (理解・振り分けのあとの関所・深いレビュー)、mattpocock-skills (設計の grilling と最終レビュー)、yomiyasu (完了報告の推敲) と、オプションの工程のマーケティング (founder-skill の利用者パネル)、UI デザイン (新しい見た目は design-studio と ui-video、いまある画面の手直しは unslop)、状態モデルの検査 (pstack の statechart。使うかを毎回聞く)、セキュリティ (Cloudflare の security-audit。使うかを毎回聞く) を足したもの。interrogate は設計者が自分で動かし、敵役は opus xhigh と sonnet high。スキルはこの例に含まれず、component.py example check が入れ方を出す。",
+    "en": "The author's own setup: jev-routed plus pstack (understand, gates after route, deep review), mattpocock-skills (grilling for design, the final review), yomiyasu (polishing the Japanese completion report), the optional stages marketing (founder-skill's user panel), UI design (design-studio and ui-video for a new look, unslop for retouching existing screens), model check (pstack's statechart, asked every run) and security (Cloudflare's security-audit, asked every run). interrogate runs in the orchestrator's session, with adversaries on opus xhigh and sonnet high. The skills are not included; component.py example check prints how to install them."
   },
   "skills": [
     {
@@ -62,6 +62,15 @@
       "license": "MIT", "link": "https://github.com/reeschan/atelier/tree/main/skills/ui-video"
     },
     {
+      "skill": "unslop", "stage": "ui-design", "after": "design",
+      "install": {"command": "git clone https://github.com/heydamir/unslop ~/dev/unslop && mkdir -p ~/.claude/skills && cp -r ~/dev/unslop/skills/unslop ~/.claude/skills/"},
+      "forbid": [
+        "Stop after the direction (unslop's steps 1-4: look, audit, decide how much, direction). Do not edit the app's files; the passes are built as PBIs.",
+        "Do not make the story video or generate paid images unless the user asks for them in this run."
+      ],
+      "license": "CC-BY-4.0", "link": "https://github.com/heydamir/unslop"
+    },
+    {
       "skill": "security-audit", "stage": "security", "after": "review",
       "install": {"command": "npx skills add https://github.com/cloudflare/security-audit-skill --skill security-audit --global --agent claude-code --yes"},
       "license": "MIT", "link": "https://github.com/cloudflare/security-audit-skill"
@@ -106,7 +115,8 @@
       {"stage": "lint-survey", "after": "understand", "components": ["lint-survey.jevlint", "lint-survey.builtin"]},
       {"stage": "ui-design", "after": "design", "components": [
         {"id": "ui-design.design-studio", "when": "ui-change"},
-        {"id": "ui-design.ui-video", "when": "ui-change"}
+        {"id": "ui-design.ui-video", "when": "ui-change"},
+        {"id": "ui-design.unslop", "when": "ui-retouch"}
       ]},
       {"stage": "model-check", "after": "design", "components": [
         {"id": "model-check.pstack-statechart", "when": "ask-user"}
