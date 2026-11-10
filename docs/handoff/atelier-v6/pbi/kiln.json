@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "require_skill": false,
+  "prompt_install": true,
+  "skill": "sac-strategic-compact",
+  "skill_url": "https://github.com/reeschan/sac-strategic-compact",
+  "designer_soft": 120000,
+  "designer_peak": 180000,
+  "implementer_soft": 60000,
+  "implementer_peak": 90000,
+  "handoff_at": 250000,
+  "aux_compress_at": 150000,
+  "log_path": "docs/pbi/.kiln/compact-events.jsonl"
+}

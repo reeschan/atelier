@@ -1,0 +1,261 @@
+"""役割の受け渡しの JSON (レビュー・テスト・設計者の出番) を確かめ、レビューを 1 つの束にまとめる (appendix/episodes.md)。
+
+使い方 (リポジトリのルートで):
+  python <このディレクトリ>/role_results.py check <file> [<file> ...]
+  python <このディレクトリ>/role_results.py bundle --reports PBI-001,PBI-002.rework-1 --out docs/pbi/reviews/wave-1.bundle.json [--dir docs/pbi]
+
+check   schema ごとに中身を確かめ、1 ファイル 1 行 (ok / 誤りの一覧) を出す。
+        atelier.review/1 (レビュー担当)・atelier.test-result/1 (テスト担当)・atelier.episode/1 (設計者の出番)。
+bundle  docs/pbi/reviews/<報告名>.review.json を全部読み、1 報告 1 行の束 (atelier.review-bundle/1) を書く。
+        設計者は束の表だけを読み、照合が要る報告の review.json だけを開く。
+
+終了コード: 0 すべて正しい・そろった / 3 誤り・欠けがある / 2 引数の誤り
+"""
+import argparse
+import sys
+from pathlib import Path
+
+import common
+
+REVIEW = 'atelier.review/1'
+BUNDLE = 'atelier.review-bundle/1'
+TEST_RESULT = 'atelier.test-result/1'
+EPISODE = 'atelier.episode/1'
+
+SEVERITIES = ('critical', 'major', 'minor')
+CRITERION = ('pass', 'fail', 'deferred')
+RECOMMEND = ('pass', 'rework', 'tier-up', 'hold')
+TEST_KINDS = ('wave', 'survey', 'final')
+TEST_CAUSES = ('intended', 'regression', 'unknown')
+TEST_RECOMMEND = ('pass', 'rework', 'needs-designer')
+SURVEY_VERDICTS = ('keep', 'fix', 'rewrite', 'delete', 'add')
+
+EPISODES = ('design', 'build', 'test', 'review', 'finish')
+EPISODE_STATUS = ('done', 'question', 'handoff', 'error')
+QUESTION_KINDS = ('approve', 'rework-limit', 'destructive', 'send-approval', 'decision')
+SUMMARY_MAX_LINES = 5
+SUMMARY_MAX_CHARS = 200
+
+EXIT_OK = 0
+EXIT_USAGE = 2
+EXIT_INVALID = 3
+
+
+def _is_str(value) -> bool:
+    return isinstance(value, str) and value.strip() != ''
+
+
+def _is_count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def check_review(data) -> list[str]:
+    """レビュー担当の結果 (1 報告) の誤りを返す。空なら正しい。"""
+    errors = []
+    if not isinstance(data, dict) or data.get('schema') != REVIEW:
+        return [f'schema is not {REVIEW}']
+    for key in ('report', 'pbi'):
+        if not _is_str(data.get(key)):
+            errors.append(f'{key}: missing')
+    reviewer = data.get('reviewer')
+    if not isinstance(reviewer, dict) or not _is_str(reviewer.get('model')):
+        errors.append('reviewer.model: missing')
+    verify = data.get('verify')
+    if not isinstance(verify, dict) or not isinstance(verify.get('failed'), list):
+        errors.append('verify.failed: not a list')
+    criteria = data.get('criteria')
+    if not isinstance(criteria, list) or not criteria:
+        errors.append('criteria: empty')
+    else:
+        for i, row in enumerate(criteria):
+            if not isinstance(row, dict) or row.get('verdict') not in CRITERION or not _is_str(row.get('evidence')):
+                errors.append(f'criteria[{i}]: needs verdict ({"/".join(CRITERION)}) and evidence')
+    findings = data.get('findings')
+    if not isinstance(findings, list):
+        errors.append('findings: not a list')
+    else:
+        for i, row in enumerate(findings):
+            if (not isinstance(row, dict) or row.get('severity') not in SEVERITIES
+                    or not _is_str(row.get('file')) or not _is_str(row.get('why'))):
+                errors.append(f'findings[{i}]: needs severity, file and why')
+    if not isinstance(data.get('unchanged_ok'), bool):
+        errors.append('unchanged_ok: not true or false')
+    if data.get('recommendation') not in RECOMMEND:
+        errors.append(f'recommendation: one of {", ".join(RECOMMEND)}')
+    return errors
+
+
+def check_test_result(data) -> list[str]:
+    """テスト担当の結果の誤りを返す。"""
+    if not isinstance(data, dict) or data.get('schema') != TEST_RESULT:
+        return [f'schema is not {TEST_RESULT}']
+    errors = []
+    if data.get('kind') not in TEST_KINDS:
+        errors.append(f'kind: one of {", ".join(TEST_KINDS)}')
+    commands = data.get('commands')
+    if not isinstance(commands, list):
+        errors.append('commands: not a list')
+    else:
+        for i, row in enumerate(commands):
+            if not isinstance(row, dict) or not _is_str(row.get('command')) or not isinstance(row.get('exit'), int):
+                errors.append(f'commands[{i}]: needs command and exit')
+    failing = data.get('failing')
+    if not isinstance(failing, list):
+        errors.append('failing: not a list')
+    else:
+        for i, row in enumerate(failing):
+            if (not isinstance(row, dict) or not _is_str(row.get('test'))
+                    or row.get('cause') not in TEST_CAUSES or not _is_str(row.get('why'))):
+                errors.append(f'failing[{i}]: needs test, cause ({"/".join(TEST_CAUSES)}) and why')
+    if data.get('kind') == 'survey':
+        survey = data.get('survey')
+        if not isinstance(survey, dict) or any(not _is_count(survey.get(v)) for v in SURVEY_VERDICTS):
+            errors.append(f'survey: counts for {", ".join(SURVEY_VERDICTS)}')
+    if data.get('recommendation') not in TEST_RECOMMEND:
+        errors.append(f'recommendation: one of {", ".join(TEST_RECOMMEND)}')
+    return errors
+
+
+def check_episode(data) -> list[str]:
+    """設計者の出番の結果の誤りを返す。前後の出番のつながりは conductor.py が確かめる。"""
+    if not isinstance(data, dict) or data.get('schema') != EPISODE:
+        return [f'schema is not {EPISODE}']
+    errors = []
+    if data.get('episode') not in EPISODES:
+        errors.append(f'episode: one of {", ".join(EPISODES)}')
+    if not isinstance(data.get('seq'), int) or isinstance(data.get('seq'), bool):
+        errors.append('seq: not a number')
+    status = data.get('status')
+    if status not in EPISODE_STATUS:
+        errors.append(f'status: one of {", ".join(EPISODE_STATUS)}')
+    summary = data.get('summary')
+    if (not isinstance(summary, list) or len(summary) > SUMMARY_MAX_LINES
+            or any(not isinstance(line, str) or len(line) > SUMMARY_MAX_CHARS for line in summary)):
+        errors.append(f'summary: at most {SUMMARY_MAX_LINES} lines of {SUMMARY_MAX_CHARS} characters')
+    if status == 'question':
+        question = data.get('question')
+        if (not isinstance(question, dict) or question.get('kind') not in QUESTION_KINDS
+                or not _is_str(question.get('path')) or not _is_str(question.get('summary'))):
+            errors.append(f'question: needs kind ({"/".join(QUESTION_KINDS)}), path and summary')
+        elif question.get('check') not in (None, 'design-record'):
+            errors.append('question.check: design-record or absent')
+    if status == 'handoff' and not _is_str(data.get('state')):
+        errors.append('state: the state tablet path is needed for a handoff')
+    if status == 'done':
+        nxt = data.get('next')
+        if data.get('episode') == 'finish':
+            if nxt is not None:
+                errors.append('next: null after finish')
+            if not _is_str(data.get('report')):
+                errors.append('report: the completion report path is needed after finish')
+        elif not isinstance(nxt, dict) or nxt.get('episode') not in EPISODES:
+            errors.append('next.episode: missing')
+        elif nxt.get('episode') == 'build' and (not isinstance(nxt.get('wave'), int) or nxt['wave'] < 1):
+            errors.append('next.wave: a number from 1 for build')
+    if status == 'error' and not _is_str(data.get('reason')):
+        errors.append('reason: needed for an error')
+    return errors
+
+
+CHECKS = {REVIEW: check_review, TEST_RESULT: check_test_result, EPISODE: check_episode}
+
+
+def check_file(path) -> list[str]:
+    data = common.load_json(path)
+    if data is None:
+        return ['not readable JSON']
+    check = CHECKS.get(data.get('schema')) if isinstance(data, dict) else None
+    if check is None:
+        return [f'unknown schema (expected one of {", ".join(CHECKS)})']
+    return check(data)
+
+
+def bundle_row(report: str, data: dict, path: str) -> dict:
+    """束の 1 行。設計者が照合を決めるのに要る数だけを持つ。"""
+    criteria = data['criteria']
+    counts = {s: sum(1 for f in data['findings'] if f['severity'] == s) for s in SEVERITIES}
+    return {
+        'report': report,
+        'pbi': data['pbi'],
+        'recommendation': data['recommendation'],
+        'criteria_pass': sum(1 for c in criteria if c['verdict'] == 'pass'),
+        'criteria_total': sum(1 for c in criteria if c['verdict'] != 'deferred'),
+        'deferred': sum(1 for c in criteria if c['verdict'] == 'deferred'),
+        'verify_failed': list(data['verify']['failed']),
+        'findings': [counts[s] for s in SEVERITIES],
+        'unchanged_ok': data['unchanged_ok'],
+        'reviewer': data['reviewer']['model'],
+        'path': path,
+    }
+
+
+def bundle(reports: list[str], base: Path) -> dict:
+    rows, missing, invalid = [], [], []
+    for report in reports:
+        path = base / 'reviews' / f'{report}.review.json'
+        shown = path.as_posix()
+        data = common.load_json(path)
+        if data is None:
+            missing.append(report)
+            continue
+        errors = check_review(data)
+        if errors:
+            invalid.append({'report': report, 'errors': errors})
+            continue
+        rows.append(bundle_row(report, data, shown))
+    return {'schema': BUNDLE, 'reports': rows, 'missing': missing, 'invalid': invalid}
+
+
+def needs_designer(row: dict) -> bool:
+    """設計者が review.json を開いて照合する報告か。そろって通った報告は表だけで決まる。"""
+    return (row['recommendation'] != 'pass' or row['verify_failed'] or not row['unchanged_ok']
+            or row['criteria_pass'] < row['criteria_total'] or row['findings'][0] or row['findings'][1])
+
+
+def print_bundle(data: dict) -> None:
+    print('report\trecommend\tcriteria\tverify failed\tfindings c,m,m\tunchanged\topen')
+    for row in data['reports']:
+        failed = ','.join(str(n) for n in row['verify_failed']) or '-'
+        crit = f"{row['criteria_pass']}/{row['criteria_total']}" + (f" +{row['deferred']}d" if row['deferred'] else '')
+        open_it = row['path'] if needs_designer(row) else '-'
+        print(f"{row['report']}\t{row['recommendation']}\t{crit}\t{failed}\t"
+              f"{','.join(str(n) for n in row['findings'])}\t{'ok' if row['unchanged_ok'] else 'CHANGED'}\t{open_it}")
+    for report in data['missing']:
+        print(f'missing {report}: no reviews/{report}.review.json')
+    for item in data['invalid']:
+        print(f"invalid {item['report']}: {'; '.join(item['errors'])}")
+
+
+def main(argv=None) -> int:
+    common.utf8_stdout()
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest='command', required=True)
+    p_check = sub.add_parser('check')
+    p_check.add_argument('files', nargs='+')
+    p_bundle = sub.add_parser('bundle')
+    p_bundle.add_argument('--reports', required=True)
+    p_bundle.add_argument('--out', required=True)
+    p_bundle.add_argument('--dir', default='docs/pbi')
+    args = ap.parse_args(argv)
+
+    if args.command == 'check':
+        bad = False
+        for name in args.files:
+            errors = check_file(name)
+            bad = bad or bool(errors)
+            print(f"{name}\t{'ok' if not errors else '; '.join(errors)}")
+        return EXIT_INVALID if bad else EXIT_OK
+
+    reports = [r.strip() for r in args.reports.split(',') if r.strip()]
+    if not reports:
+        print('role_results: --reports is empty', file=sys.stderr)
+        return EXIT_USAGE
+    data = bundle(reports, Path(args.dir))
+    common.write_json(args.out, data)
+    print_bundle(data)
+    print(f'bundle: {Path(args.out).as_posix()}')
+    return EXIT_INVALID if data['missing'] or data['invalid'] else EXIT_OK
+
+
+if __name__ == '__main__':
+    sys.exit(main())
