@@ -41,7 +41,7 @@ Runs when the design decision is run, after map.
 3. Ask for the send approval (above) and run `lint_run.py survey docs/pbi --name survey --mode model|ast-only`.
 4. The script writes `docs/pbi/notes/survey.md` (and `docs/pbi/notes/survey-all.md`): the lowest scores, the functions of `function_lines` lines or more, the weak questions with their files, and the `bug-hunt` leads with their fix text. Read only the section headings and the leads; give the rest to the design through the note's path.
 5. Check each `bug-hunt` lead yourself: open the file at the place and decide whether the bug is real.
-   - Real and inside the range: put it in the spec's Implementation Decisions (fix it in this run).
+   - Real and inside the range: write its fix as its own PBI, titled `Survey fix: <the lead>`, so it can be left out alone. At Approve it is its own choice (`## Approve` in `designer.md`): fix it in this run, or not. When the answer leaves it out, drop that PBI before build (and rewrite `docs/pbi/waves.json`) and list the lead under "Found, not in this run".
    - Real and outside the range: list it at Approve under "Found, not in this run". Add a PBI only when the user asks. Never widen the range on your own.
    - Not real: drop it.
 6. For each PBI whose Targets name a file with a long function or a confirmed weak point, add one or two `jevlint:` lines to its Notes, for example `jevlint: setupItemDrag is 178 lines; if you touch it, split it by role, do not grow it.` Nothing else from the survey goes into PBIs.
@@ -51,11 +51,13 @@ Runs when the design decision is run, after map.
 
 Runs once, after every PBI has passed and after the test stage (`appendix/tests-at-end.md`), before the review stage. Start it by running `flow.py` again for the `lint-recheck` rows; do not reuse the status from Start or from STATUS.md.
 
+First decide whether it is needed. A diagnosis finds nothing new in a change that does not touch code, so skip it when no changed file has one of the `extensions`, or when `git diff -w --ignore-blank-lines <base> -- <those files>` shows only comment lines. Record `stage lint-recheck after verify: <component> skip (no code change: <what changed>)` and go on to review. Otherwise:
+
 1. Make the list of changed files: `lint_run.py files docs/pbi --name recheck --base <base> --new <files the PBIs created> [--sensitive <targets of sensitive PBIs>]`.
 2. Ask for the send approval (above). Before contents that the survey sent are cached by jevlint and cost nothing, so most of the cost is the changed files.
 3. Run `lint_run.py recheck docs/pbi --name recheck --base <base> --mode model|ast-only`. It checks the merge-base out into a temporary `git worktree` outside the repository (no `node_modules` is linked; never link one), audits the before side there, audits the working tree, removes the worktree, and writes `docs/pbi/jevlint/recheck.md` through `lint_compare.py`. It prints `worse <n> (bug-hunt <n>, ast <n>, question <n>, score <n>)`.
 4. Check each row yourself: open the file and confirm the claim.
-   - A confirmed `bug-hunt` row, or a function that newly reached `function_lines` lines (`action` `rework-candidate`), in a file a PBI's Targets name: rework that PBI (`appendix/rework.md`), counted toward the limit.
+   - A confirmed `bug-hunt` row, or a function that newly reached `function_lines` lines (`action` `rework-candidate`), in a file a PBI's Targets name: a rework candidate for that PBI. A fix after the diagnosis is a new change the user approves on its own: once every row is checked, end the episode with one question (kind `decision`, with `state`) listing each candidate with its PBI, file and claim, and two choices per row: rework (`appendix/rework.md`, counted toward the limit) or report only. A row answered "report only" is handled like an `action` `report` row below.
    - A row with `action` `report` (a score drop, a weaker question, a long function that grew, another AST measure, any row in `report_only_paths`): no rework. Put the path of `docs/pbi/jevlint/recheck.md` and these rows in the review prompt (`prompts/final-review.md`, `Lint recheck`) and in the completion report.
    - A row in a file no PBI owns: the completion report's findings.
 5. When a reworked PBI passes again, compare its files once more with `--mode ast-only` (make a list with `--paths <its files>` and `--new <the files it created>`, and name it `recheck-<n>`). A second model run needs a new approval.
