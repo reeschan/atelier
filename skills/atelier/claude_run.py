@@ -28,6 +28,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 
 # 設定ごとの道具（--tools に渡す）。default は agents/pbi-worker.md の tools から、headless で使えないもの
 # （MCP の道具と ToolSearch）を除いたもの。PowerShell の道具は Windows だけにある
@@ -119,7 +122,8 @@ def main() -> None:
     start = now()
     with open(out_json, 'wb') as out, open(err, 'wb') as errf:
         code = subprocess.run([*launcher, *build_args(args.model, effort, args.setting)],
-                              input=task.encode('utf-8'), stdout=out, stderr=errf, env=build_env()).returncode
+                              input=task.encode('utf-8'), stdout=out, stderr=errf, env=build_env(),
+                              creationflags=NO_WINDOW).returncode
     run = {'start': start, 'end': now(), 'exit': code, 'model': args.model, 'effort': effort,
            'setting': args.setting}
     (base / f'{args.report}.run.json').write_text(json.dumps(run, ensure_ascii=False) + '\n', encoding='utf-8')

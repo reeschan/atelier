@@ -26,6 +26,9 @@ import agents as agents_module
 import common
 import flow
 
+# Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 HEADER = 'tool\tstatus\tinstall\tfallback'
 # confirm のスキルの出所 (repo と、設計で合わせた fork の main)
 CONFIRM_REPO = 'https://github.com/reeschan/answer-me-with-any'
@@ -60,7 +63,7 @@ def run(command: list[str], args: list[str]) -> subprocess.CompletedProcess | No
     try:
         return subprocess.run([*command, *args], capture_output=True, text=True, encoding='utf-8',
                               env=dict(agents_module.cli_env(command[-1], os.environ), NO_COLOR='1', FORCE_COLOR='0'),
-                              timeout=TIMEOUT)
+                              timeout=TIMEOUT, creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired:
         return None
 

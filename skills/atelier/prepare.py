@@ -32,6 +32,9 @@ import templates
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+# Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 HERE = Path(__file__).resolve().parent
 JEV = HERE / "jev" / "jev.py"  # 同梱の Jev クライアント
 QUALITY_LOW = 0.6  # targets_named / off_limits_named / criteria_checkable / commands_runnable がこれ未満なら警告
@@ -40,7 +43,7 @@ OUTSIDE_HIGH = 0.4  # needs_outside_context がこれより大きければ警告
 
 def call_jev(config, gate, text_file, out_file):
     r = subprocess.run([sys.executable, str(JEV), str(config), gate, str(text_file)],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8", creationflags=NO_WINDOW)
     out_file.write_text(r.stdout or json.dumps({"error": r.stderr[-300:]}), encoding="utf-8")
     try:
         data = json.loads(r.stdout)
@@ -208,7 +211,7 @@ def main():
         cmd += ["--now", args.now]
     if args.tier:
         cmd += ["--only", args.only, "--tier", args.tier]
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", creationflags=NO_WINDOW)
     if r.returncode != 0:
         sys.exit(f"select_model.py が失敗した: {r.stderr[-500:]}")
 

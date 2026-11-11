@@ -46,6 +46,9 @@ import agents as agents_module
 import common
 import lint_compare
 
+# Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 DEFAULT_EXTENSIONS = ('.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.py')
 # 許可があっても外のモデルに送らないファイル (名前で見る)
 SECRET_PATTERNS = ('.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx', 'id_rsa*', 'credentials*', 'secrets*',
@@ -66,7 +69,8 @@ def out_dir(pbi: Path) -> Path:
 
 
 def git(root: Path, *args: str) -> str:
-    done = subprocess.run(['git', *args], cwd=root, capture_output=True, text=True, encoding='utf-8')
+    done = subprocess.run(['git', *args], cwd=root, capture_output=True, text=True, encoding='utf-8',
+                          creationflags=NO_WINDOW)
     if done.returncode != 0:
         raise RuntimeError(f'git {" ".join(args)}: {done.stderr.strip()}')
     return done.stdout
@@ -168,7 +172,8 @@ def jevlint_command(home: Path) -> list[str]:
 def run_jevlint(command: list[str], cwd: Path, args: list[str]) -> str:
     # 見つけた jevlint のディレクトリを PATH の先頭に置き、その版の Node で動かす (agents.cli_env)
     env = dict(agents_module.cli_env(command[-1], os.environ), NO_COLOR='1', FORCE_COLOR='0')
-    done = subprocess.run([*command, *args], cwd=cwd, capture_output=True, text=True, encoding='utf-8', env=env)
+    done = subprocess.run([*command, *args], cwd=cwd, capture_output=True, text=True, encoding='utf-8', env=env,
+                          creationflags=NO_WINDOW)
     if done.returncode != 0:
         raise RuntimeError(f'jevlint {args[0]} failed ({done.returncode}): {(done.stderr or done.stdout).strip()[-400:]}')
     return ANSI.sub('', done.stdout)
@@ -350,8 +355,9 @@ def cmd_recheck(args, pbi: Path, root: Path, command: list[str]) -> int:
             return 0
         before = judge(command, tree, old, old_send, args.mode, preset) if old else {'files': []}
     finally:
-        subprocess.run(['git', 'worktree', 'remove', '--force', str(tree)], cwd=root, capture_output=True)
-        subprocess.run(['git', 'worktree', 'prune'], cwd=root, capture_output=True)
+        subprocess.run(['git', 'worktree', 'remove', '--force', str(tree)], cwd=root, capture_output=True,
+                       creationflags=NO_WINDOW)
+        subprocess.run(['git', 'worktree', 'prune'], cwd=root, capture_output=True, creationflags=NO_WINDOW)
         shutil.rmtree(scratch, ignore_errors=True)
     after = judge(command, root, files, send, args.mode, preset)
     before_path, after_path = base / f'{args.name}.before.json', base / f'{args.name}.after.json'
