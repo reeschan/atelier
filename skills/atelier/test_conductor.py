@@ -1275,6 +1275,72 @@ class ConductorTest(unittest.TestCase):
         self.assertIsNotNone(started)
         self.assertLess(started, time.time())
 
+    # ---- roles ----
+
+    def write_home_roles(self, roles):
+        self.write_abs(os.path.join(self.home, 'agents.json'), json.dumps({'roles': roles}))
+
+    def test_roles_take_run_then_repo_then_home_and_log_the_source(self):
+        """役割の値はキーごとに run → repo → home → 既定の順で取り、roles: の行と running・history に出所を残す。"""
+        self.write_home_roles({'designer': {'model': 'sonnet'}, 'tester': {'model': 'haiku'},
+                               'reviewer': {'other': {'effort': 'max'}}})
+        self.write_json('docs/pbi/roles.json', {'roles': {'designer': {'model': 'fable'},
+                                                          'reviewer': {'deep': {'model': 'sonnet'}}}})
+        rc, out = self.con('start', '--goal', 'roles', '--role', 'reviewer.deep=opus',
+                           '--role', 'reviewer.other.effort=low')
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('next')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.line(out, 'roles'),
+                         'designer fable (repo), reviewer.deep opus (run), reviewer.other sonnet (default)/low (run), '
+                         'tester haiku (home)')
+        self.assertIn('model=fable', self.line(out, 'launch'))
+        self.assertIn('deep=opus other=sonnet/low', self.request(out))
+        running = self.read_json(RUN)['running']
+        self.assertEqual(running['roles']['designer']['model'], {'value': 'fable', 'from': 'repo'})
+        self.assertEqual(running['roles']['designer']['permission_mode'], {'value': 'auto', 'from': 'default'})
+        self.assertEqual(running['roles']['reviewer.other']['effort'], {'value': 'low', 'from': 'run'})
+
+        self.run_fake(out)
+        self.con('done')
+        history = self.read_json(RUN)['history']
+        self.assertEqual(history[-1]['roles']['tester']['model'], {'value': 'haiku', 'from': 'home'})
+
+    def test_invalid_role_value_falls_to_the_next_layer_with_a_warning(self):
+        """不正な値はその層を飛ばして次の層の値を使い、使った値と出所を warn に書く。"""
+        self.write_home_roles({'designer': {'model': 'sonnet'}})
+        self.write_json('docs/pbi/roles.json', {'roles': {'designer': {'model': ''}}})
+        self.con('start', '--goal', 'bad roles')
+        rc, out = self.con('next')
+        self.assertEqual(rc, 0, out)
+        self.assertIn("warn roles.designer.model (repo): '' is not valid; using 'sonnet' (home)", out)
+        self.assertIn('designer sonnet (home)', self.line(out, 'roles'))
+
+        # 役割が辞書でなければ、その層の役割ごと飛ばす
+        self.write_json('docs/pbi/roles.json', {'roles': {'tester': 'haiku'}})
+        self.con('start', '--goal', 'bad tester', '--force')
+        rc, out = self.con('next')
+        self.assertIn('warn roles.tester (repo): not an object; skipped', out)
+        self.assertIn('tester sonnet (default)', self.line(out, 'roles'))
+
+    def test_start_refuses_an_unknown_role(self):
+        """--role の役割かキーが表に無ければ、run を作らずに exit 2。"""
+        for given in ('builder=opus', 'tester.permission_mode=auto', 'designer'):
+            rc, out = self.con('start', '--goal', 'x', '--role', given)
+            self.assertEqual(rc, 2, f'{given}: {out}')
+            self.assertIn('--role', out)
+        self.assertFalse(os.path.isfile(self.path(RUN)))
+
+    def test_headless_run_uses_the_logged_designer_model(self):
+        """run は running に残した値で設計者を起こす (start --role の model が --model に渡る)。"""
+        self.con('start', '--goal', 'headless roles', '--launch', 'headless', '--role', 'designer=sonnet',
+                 '--role', 'designer.effort=high')
+        rc, out = self.con('run')
+        self.assertEqual(rc, 10, out)
+        args = json.loads(self.read(self.log).splitlines()[0])['args']
+        self.assertEqual(args[args.index('--model') + 1], 'sonnet')
+        self.assertEqual(args[args.index('--effort') + 1], 'high')
+
 
 if __name__ == '__main__':
     unittest.main()

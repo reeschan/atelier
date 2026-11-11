@@ -4,7 +4,17 @@ Read this when the build stage picks `build.runners`: `## Common rules` first, t
 
 ## Common rules
 
-**Order.** Try each PBI's `route` from its head. A runner that is unusable (its "Unusable when" below) is not a failed PBI: record it with `record_run.py <report> --attempt <position> --outcome unavailable` before moving on (the next run overwrites the raw logs), take the next step, and update the PBI's model and note in STATUS.md. `prepare.py` has already matched external runners against agents.json and the CLIs it found; steps for a missing runner, an unused runner or an unselected model are listed as dropped and never enter a route.
+**Order.** Launch each PBI's `route` head. `prepare.py` has already matched external runners against agents.json and the CLIs it found; steps for a missing runner, an unused runner or an unselected model are listed as dropped and never enter a route.
+
+**When a runner is unusable** (its "Unusable when" below), the PBI has not failed, and the user picks what runs instead. Every other model costs tokens the user did not approve, so you leave the choice to them:
+
+1. Record it with `record_run.py <report> --attempt <position> --outcome unavailable` right away (the next run overwrites the raw logs).
+2. Retry the same step once. When the retry is usable, go on as usual.
+3. When it is unusable again, hold the PBI and let the other PBIs of the wave finish and be reconciled.
+4. End the episode with one question of kind `decision`, with `state`, for every PBI of the wave held this way. Per PBI: the runner and model, why it is unusable, and the choices: one of the remaining steps of its route (name each), wait and retry the same step later, or hold the PBI. When a usage limit is the cause, add the choice to route the rest of the run without that model (below).
+5. After the `Answer:`, launch what was picked and update the PBI's model and note in STATUS.md.
+
+A tier up or building it yourself never answers an unusable runner; those come only from `appendix/rework.md`.
 
 **One worker per attempt.** Every attempt starts a new worker, reworks included. Never continue an earlier conversation (`opencode run -c`, `codex exec resume`, `dsh --session-id`); the report file and the rework note carry what is needed. The only message to a running worker is a continue after `NEEDS_CONTEXT` (`appendix/verify.md`).
 
@@ -31,7 +41,7 @@ How to work and report: read docs/pbi/worker.md first and follow it.
 - They read AGENTS.md or nothing, never CLAUDE.md. Put the conventions a PBI needs in the PBI.
 - Read only `.last.md` (5 lines). Never read `.jsonl`, `.log` or `.json` whole; take the items named below with `grep -m` or `tail -n`.
 - `record_run.py` reads tokens, cost, steps and time from each runner's logs. Never add them by hand.
-- After one unusable run, retry once; then take the next step. When a usage limit is the cause, write "<runner> <model>: limit reached (<time>)" at the top of STATUS.md and, for the rest of the session, route again with `--skip <model>` (several models joined by commas). Only that model's steps drop out. When the runner itself is broken (authentication, connection), use `--skip <runner>`.
+- When a usage limit makes a runner unusable, write "<runner> <model>: limit reached (<time>)" at the top of STATUS.md. When the user picks routing without it, route the rest of the run with `--skip <model>` (several models joined by commas); only that model's steps drop out. When the runner itself is broken (authentication, connection), the choice is `--skip <runner>`.
 - Two or more at once: start each one 30 seconds after the previous (`sleep 30;`, `sleep 60;` ... in front), because opencode and dsh share local state.
 
 ## agent (Agent tool)
@@ -75,7 +85,7 @@ PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<skill>/opencode.config.json" opencode ru
 
 **Known issues** (checked 2026-10 with opencode 2.0.x).
 
-- A denial still exits 0. `grep -c 'rule which prevents' <report>.jsonl` of 1 or more means something was denied (a `"tool"` event with `"status":"error"`). When only verify commands were denied, run them yourself; when the work did not progress, take the next step.
+- A denial still exits 0. `grep -c 'rule which prevents' <report>.jsonl` of 1 or more means something was denied (a `"tool"` event with `"status":"error"`). When only verify commands were denied, run them yourself; when the work did not progress, treat the runner as unusable (`## Common rules`, When a runner is unusable).
 - Free models report cost 0.
 
 ## codex
@@ -205,4 +215,4 @@ python <skill>/jev_mcp.py --http --port 7830 --root <absolute repository path>  
 - `jev_gate` calls `jev/jev.py` on the server side. The API key stays in the server's environment; only prose is sent.
 - HTTP listens on 127.0.0.1 only. It refuses a Host other than 127.0.0.1, localhost or [::1] and a foreign Origin (403), and a POST that is not `application/json` (415). There is no authentication, so never expose it to other machines.
 
-**Unusable when.** `.last.md` never comes, or the status is `NEEDS_CONTEXT` or `BLOCKED`: take the next step or rework, as with any runner. Remove a `.claim.json` left behind only after confirming the client has stopped.
+**Unusable when.** `.last.md` never comes, or the status is `NEEDS_CONTEXT` or `BLOCKED`: treat it as unusable (`## Common rules`) or rework, as with any runner. Remove a `.claim.json` left behind only after confirming the client has stopped.

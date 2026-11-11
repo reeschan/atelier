@@ -53,7 +53,15 @@ Checked on 2026-10-21 with opencode 2.0.29, codex-cli 0.153.4, agy 1.4.4 and dsh
 
 ## roles
 
-The role models are `roles` in home's `agents.json`, beside the runners. An invalid value (not a non-empty string; `null` is allowed for effort only) falls back to its default, and `next` prints one `warn roles.` line per value it replaced. Effort `null` leaves the runner's own level.
+The role models come from three layers, strongest first, and each key (model, effort, permission_mode) is taken from the first layer that sets it:
+
+1. **run**: `conductor.py start --role <role>[.<key>]=<value>` (repeatable; the key defaults to `model`, and `none` sets effort to `null`), for this run only. The roles are `designer`, `reviewer.deep`, `reviewer.other` and `tester`.
+2. **repo**: `docs/pbi/roles.json`, the same `{"roles": {...}}` shape as below, for every run in this repository.
+3. **home**: `roles` in home's `agents.json`, beside the runners.
+
+A key no layer sets takes its default. An invalid value (not a non-empty string; `null` is allowed for effort only) is skipped and the next layer's value is used; `next` prints one `warn roles.<role>.<key> (<layer>)` line naming the value it used and where it came from. Effort `null` leaves the runner's own level.
+
+Every `next` that launches an episode prints `roles: designer opus (repo), reviewer.deep opus (default), ...`, and keeps each value with its layer in `running.roles` and the episode's `history` entry of `docs/pbi/conductor/run.json`. A headless `run` launches the designer with the values `next` kept.
 
 - `designer`: `{"model", "effort", "permission_mode"}`. Defaults: model `opus`, effort `null`, `permission_mode` `auto` (passed to `claude -p` for a headless designer).
 - `reviewer`: `{"deep": {"model", "effort"}, "other": {"model", "effort"}}`. `deep` defaults to model `opus` with effort `null`; `other` defaults to model `sonnet` with effort `high`. A review stage that is not deep uses `other`. When the stage's model equals the model that built the PBI, use the other stage.

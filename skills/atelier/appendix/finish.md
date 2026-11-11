@@ -29,6 +29,8 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
    node <skill>/rtk/rtk-mode.mjs off
    ```
 
+5. When `docs/pbi/adapters.json` has `map.decision` `repo`, run `python <skill>/omm_cache.py export docs/pbi --base <base>`. It copies the stored `.omm/` into the working tree; exit 2 (no stored scan, or an untracked `.omm/` already there) leaves the working tree as it is. Say in the report where `.omm/` is or why it is not, that the user commits it, and that it shows the merge-base, so `omm-pr-scan` can bring it up to the change.
+
 ## The completion report
 
 Write it to `docs/pbi/REPORT.md` first, in the user's language. The gates after finish run on that file. The bundled templates have none; a template that adds yomiyasu as an external component (`gate.yomiyasu`, `appendix/engine.md`) polishes a Japanese report's wording when the yomiyasu skill is installed: call it on the file, apply its wording fixes, and keep numbers, ids, paths, commands and pasted tables as they are. Then write its path (`docs/pbi/REPORT.md`) in the `report` of the episode result and end the finish episode with status `done`; inline, send the file's text to the user. Once `docs/pbi/REPORT.md` exists, close the work: write the done memory (`appendix/memory.md`, "Finish"). A run that stops before the report keeps its handoff, so `resume` still finds it.
@@ -42,7 +44,7 @@ Open with one line that restates the user's goal in your own words, as at the st
   - the stage records from STATUS.md, as they are (`appendix/engine.md`)
   - the two tables of `python <skill>/model_report.py`, pasted as they are: runs, outcome breakdown, unavailable rate, tokens, cost and API equivalent, time, and the provisional grades. The grades are a guide for a person to adjust later; add no reading of them here. Whether a rotate group split evenly shows in the run counts
   - runs whose archive copy failed (`archive.ok` false in `runs.jsonl`)
-  - how many times a route moved to its next step, and why
+  - every unusable runner: the PBI, the cause, and what the user picked instead
   - PBIs where you overrode the decision table, and how they ended
   - where Jev was skipped, and the number of handoffs
   - the stats per role: the table of `docs/pbi/stats/roles.json` (caller, designer, worker, reviewer, tester)

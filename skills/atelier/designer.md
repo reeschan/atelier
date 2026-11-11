@@ -116,8 +116,9 @@ Build, verify and fix repeat per PBI until each PBI passes or stops. With tests 
 After route and its gates, write the approval to `docs/pbi/notes/approve.md` and the design record through `appendix/adapters.md` (`## Confirm`). Per PBI: id, title, tier, route head, review level, the reason, dropped steps, dependencies, quality warnings. Also:
 
 - one line per stage from the flow table: the component picked, or the fallback with its reason
-- the priority-template line from `prepare.py` with the warning when a template overrides the opus tier, open assumptions from the design stage, and expired priority applications (`appendix/priority-templates.md`)
-- the leads from the lint survey under "Found, not in this run" (`appendix/lint.md`), and the tests-at-end `deferred` and `test_paths` you drafted
+- the priority-template line from `prepare.py` with the warning when a template overrides the opus tier, and expired priority applications (`appendix/priority-templates.md`)
+- the open questions from the design stage, one `ask` block each (`appendix/design.md`, `## Design: unknowns`)
+- the leads from the lint survey: each `Survey fix:` PBI as its own choice (fix it in this run, or not), and the leads outside the range under "Found, not in this run" (`appendix/lint.md`); the tests-at-end `deferred` and `test_paths` you drafted
 - one line per recommended tool `tools_check.py` did not find: its install and its fallback, asked as a choice in the approve text. When the approve answer chooses to install, end with a question (kind `decision`, with `state`) for the install; after its `Answer:`, end with `done`, next build wave 1. Otherwise the fallback runs
 - the question for each optional stage with an `ask-user` row placed after route or later (security, by default): whether to run it this time (`appendix/optional.md`); the model-check chart and its rules, when that stage ran
 
