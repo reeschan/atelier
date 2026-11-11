@@ -124,6 +124,41 @@ class OmmCacheTest(unittest.TestCase):
         self.assertTrue(os.path.isdir(os.path.join(self.repo, '.omm', 'mine')))
         self.assertFalse(os.path.exists(os.path.join(self.repo, '.omm', 'overall-architecture')))
 
+    def store_and_track_an_old_omm(self):
+        """scan を置き場所に入れ、作業ツリーには git が追う古い .omm/ を置く。"""
+        self.scan()
+        self.assertEqual(self.run_cli('store').returncode, 0)
+        os.makedirs(os.path.join(self.repo, '.omm', 'old'))
+        with open(os.path.join(self.repo, '.omm', 'old', 'a.md'), 'w', encoding='utf-8') as f:
+            f.write('old')
+        self.git('add', '.omm')
+        self.git('commit', '-q', '-m', 'old omm')
+
+    def test_export_replaces_a_clean_tracked_omm(self):
+        """git が追っていて手元の変更が無い .omm/ は置き換える。"""
+        self.store_and_track_an_old_omm()
+        placed = self.run_cli('export')
+        self.assertEqual(placed.returncode, 0, placed.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.repo, '.omm', 'old')))
+        self.assertTrue(os.path.isfile(os.path.join(self.repo, '.omm', 'overall-architecture', 'description.md')))
+        self.assertEqual([n for n in os.listdir(self.repo) if n.startswith('.omm.')], [])
+
+    def test_export_leaves_a_tracked_omm_with_local_changes_alone(self):
+        """git が追う .omm/ に手元の変更か追っていないファイルがあれば、上書きしない。"""
+        self.store_and_track_an_old_omm()
+        with open(os.path.join(self.repo, '.omm', 'old', 'a.md'), 'w', encoding='utf-8') as f:
+            f.write('edited')
+        edited = self.run_cli('export')
+        self.assertEqual(edited.returncode, 2)
+        self.assertIn('local changes', edited.stderr)
+        self.git('checkout', '--', '.omm')
+        with open(os.path.join(self.repo, '.omm', 'new.md'), 'w', encoding='utf-8') as f:
+            f.write('mine')
+        untracked = self.run_cli('export')
+        self.assertEqual(untracked.returncode, 2)
+        self.assertTrue(os.path.isfile(os.path.join(self.repo, '.omm', 'new.md')))
+        self.assertTrue(os.path.isfile(os.path.join(self.repo, '.omm', 'old', 'a.md')))
+
 
 if __name__ == '__main__':
     unittest.main()
