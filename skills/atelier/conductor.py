@@ -1696,8 +1696,8 @@ def running_resumable(running: dict) -> bool:
 def designer_command(runner: str = 'agent'):
     """設計者を起こすコマンドの先頭と、見つからないときの理由 (見つかれば理由は None)。
 
-    ATELIER_DESIGNER_CMD (JSON の文字列の配列) があれば、実行先によらずそれ。無ければ codex は runner_cli.find_command、
-    agent と claude は claude_run.claude_command()。
+    ATELIER_DESIGNER_CMD (JSON の文字列の配列) があれば、実行先によらずそれ。無ければ codex と claude は
+    runner_cli.find_command (start の検査と同じ探し方)、agent は claude_run.claude_command()。
     ただし claude_command は見つからないと終了するので、先に場所を確かめて、無ければ理由を返す。
     """
     given = os.environ.get('ATELIER_DESIGNER_CMD')
@@ -1709,8 +1709,9 @@ def designer_command(runner: str = 'agent'):
         if isinstance(words, list) and words and all(isinstance(word, str) and word.strip() for word in words):
             return list(words), None
         return None, 'ATELIER_DESIGNER_CMD is not a JSON array of strings'
-    if runner == 'codex':
-        return runner_cli.find_command('codex')
+    if runner in ('codex', 'claude'):
+        # start が確かめたのと同じ場所 (agents.json の path を含む) から探す
+        return runner_cli.find_command(runner)
     configured = os.environ.get('PBI_CLAUDE_BIN')
     found = configured or shutil.which('claude')
     if not found or not Path(found).is_file():

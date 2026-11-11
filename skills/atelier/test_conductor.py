@@ -1517,6 +1517,27 @@ class ConductorTest(unittest.TestCase):
         self.assertIn("warn roles.designer.runner (repo): 'opencode' is not valid; using 'agent' (default)", out)
         self.assertIn('designer opus (default)', self.line(out, 'roles'))
 
+    def test_codex_effort_is_passed_as_an_escaped_toml_string(self):
+        """effort の \\ や " は TOML の基本文字列としてエスケープして渡し、設定した値のまま codex に届く。"""
+        self.codex_start('--role', 'designer.effort=a\\b"c')
+        self.con('run')
+        args = json.loads(self.read(self.log).splitlines()[0])['args']
+        self.assertIn('model_reasoning_effort="a\\\\b\\"c"', args)
+
+    def test_claude_designer_found_only_through_agents_json_runs(self):
+        """agents.json の path だけで見つかる claude の設計者も、start が通れば run で起こせる。"""
+        from pathlib import Path
+        from test_claude_run import make_wrapper
+        wrapper = make_wrapper(Path(self.tmp), Path(self.fake))
+        self.write_home_runners({'claude': {'enabled': True, 'path': str(wrapper)}})
+        only = {'ATELIER_DESIGNER_CMD': '', 'PBI_CLAUDE_BIN': '', 'PATH': os.path.dirname(sys.executable)}
+        rc, out = self.con('start', '--goal', 'claude designer', '--role', 'designer.runner=claude', env=only)
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('run', env=only)
+        self.assertEqual(rc, 10, out)
+        args = json.loads(self.read(self.log).splitlines()[0])['args']
+        self.assertIn('-p', args)
+
 
 if __name__ == '__main__':
     unittest.main()

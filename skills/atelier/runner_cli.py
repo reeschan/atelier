@@ -2,8 +2,8 @@
 
 conductor.py (設計者) と role_run.py (レビュー担当・テスト担当) が使う。
 
-- 実行先の CLI は、環境変数 ATELIER_<RUNNER>_CMD (JSON の文字列の配列。テストの差し替え口)、home の agents.json の
-  runners.<runner>.path、PATH の <runner> の順に探す。
+- 実行先の CLI は、環境変数 ATELIER_<RUNNER>_CMD (JSON の文字列の配列。テストの差し替え口)、claude なら PBI_CLAUDE_BIN、
+  home の agents.json の runners.<runner>.path、PATH の <runner> の順に探す。
 - 使えるかは、agents.json で enabled が true で、CLI が見つかること。
 - codex は `-a never exec --json -s <サンドボックス>` で起こし、shared-memory の道具の承認を `-c` で自動にする
   (ユーザーの ~/.codex/config.toml は書き換えない)。
@@ -52,6 +52,12 @@ def find_command(runner: str, home=None):
         if isinstance(words, list) and words and all(isinstance(w, str) and w.strip() for w in words):
             return list(words), None
         return None, f'ATELIER_{runner.upper()}_CMD is not a JSON array of strings'
+    if runner == 'claude' and os.environ.get('PBI_CLAUDE_BIN'):
+        # claude_run.py と同じ場所の指定 (作業者の claude と同じ実行ファイルを使う)
+        configured = os.environ['PBI_CLAUDE_BIN']
+        if Path(configured).is_file():
+            return [configured], None
+        return None, f'claude not found (PBI_CLAUDE_BIN {configured})'
     path = runner_entry(runner, home).get('path')
     if isinstance(path, str) and path and Path(path).is_file():
         return [path], None
@@ -90,7 +96,9 @@ def codex_args(model: str, effort, sandbox: str, last_path) -> list:
     args = ['-a', 'never', 'exec', '--skip-git-repo-check', '--json', '-m', model, '-s', sandbox,
             '-c', CODEX_MCP_APPROVAL]
     if effort:
-        args += ['-c', f'model_reasoning_effort="{effort}"']
+        # TOML の基本文字列として書く (\ などをエスケープし、設定した値のまま渡す。受けない値は codex が断る)
+        quoted = json.dumps(str(effort), ensure_ascii=False).replace('\x7f', '\\u007f')
+        args += ['-c', f'model_reasoning_effort={quoted}']
     return args + ['-o', Path(last_path).as_posix(), '-']
 
 
