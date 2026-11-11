@@ -931,7 +931,7 @@ def question_lines(run: dict) -> list:
         lines.append('then: ' + command('answer', '--text', '"..."'))
         if q.get('relaunch'):
             lines.append('relaunch: ' + q['relaunch'])
-    return lines
+    return with_warnings(lines, run.get('garbled') or [])
 
 
 def closed_lines(run: dict) -> list:
@@ -1075,6 +1075,7 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
                      ' (switch to the other when it equals the built model)'),
         'tester': model_label(roles['tester']),
         'agent_tool': 'no' if designer_runner(roles) == 'codex' else 'yes',
+        'text_rule': runner_cli.CODEX_TEXT_RULE if designer_runner(roles) == 'codex' else None,
         'continue_from': pending.get('continue_from'), 'answer': pending.get('answer'),
         'conductor_answer': pending.get('conductor_answer'), 'sent_by': pending.get('sent_by'),
         'result': result.as_posix(), 'alive': alive.as_posix(), 'ctx_probe': ctx_probe,
@@ -1313,6 +1314,17 @@ def process_done(paths: Paths, run: dict) -> tuple:
     summary = data.get('summary')
     if errors:
         return fail(paths, run, running, '; '.join(errors), 'invalid', summary)
+    code, lines = settle_result(paths, run, running, data, summary)
+    garbled = garbled_warnings(data)
+    if garbled:
+        # wait・status・切り離した run の呼び手にも届くよう、答えるまで run.json に残す
+        run['garbled'] = merge_warnings(run.get('garbled') or [], garbled)[-GARBLED_KEEP:]
+        save(paths, run)
+    return code, with_warnings(lines, garbled) if lines else lines
+
+
+def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -> tuple:
+    """形の正しい出番の結果で状態を進める。(終了コード, 出す行) を返す。"""
     status = data['status']
     episode = running['episode']
     if status == 'error':
@@ -1389,6 +1401,29 @@ def process_done(paths: Paths, run: dict) -> tuple:
     run['running'] = None
     save(paths, run)
     return EXIT_OK, ready_lines(run)
+
+
+# ? が 3 つ以上続くか U+FFFD がある文は、書くときに日本語などが失われたものとみなす (Windows PowerShell の管)
+GARBLED = re.compile('\\?{3,}|\ufffd')
+GARBLED_KEEP = 3  # run.json に残す化けの warn の数 (出す行は 8 行まで)
+
+
+def garbled_warnings(data: dict) -> list:
+    """結果の要約と、問い・状態のファイルに文字化けがあれば warn の行を返す。読めないファイルは見ない。"""
+    question = data.get('question') if isinstance(data.get('question'), dict) else {}
+    texts = [('summary', '\n'.join(str(line) for line in data.get('summary') or [])),
+             ('question.summary', str(question.get('summary') or ''))]
+    for path in (question.get('path'), data.get('state')):
+        if isinstance(path, str) and path:
+            try:
+                texts.append((path, Path(path).read_text(encoding='utf-8', errors='replace')))
+            except OSError:
+                pass
+    places = [name for name, text in texts if GARBLED.search(text)]
+    if not places:
+        return []
+    return [f"warn garbled: '???' in {', '.join(places)}; non-ASCII text was lost when it was written "
+            '(Windows PowerShell pipe). Have the designer rewrite them']
 
 
 def cmd_done(args, paths: Paths) -> int:
@@ -1566,6 +1601,7 @@ def cmd_answer(args, paths: Paths) -> int:
         run.setdefault('answers', []).append({'seq': q['seq'], 'kind': kind, 'path': answer.as_posix(),
                                               'revise': bool(args.revise), 'at': iso_now()})
         run['question'] = None
+        run.pop('garbled', None)  # 答えに書き直しの頼みを載せたので、化けの warn は消す
         run['failures'] = None  # どの答えのあとも数を 0 に戻す
         if run.get('handoff'):
             run['handoff']['count'] = 0
@@ -1610,7 +1646,7 @@ def status_lines(run: dict) -> list:
     else:
         lines += closed_lines(run)[1:]
     lines += [f"episodes: {int(run.get('seq') or 0)}", cost_line(run)]
-    return lines
+    return with_warnings(lines, run.get('garbled') or [])
 
 
 def status_none_lines(paths: Paths) -> list:
@@ -1696,8 +1732,8 @@ def running_resumable(running: dict) -> bool:
 def designer_command(runner: str = 'agent'):
     """設計者を起こすコマンドの先頭と、見つからないときの理由 (見つかれば理由は None)。
 
-    ATELIER_DESIGNER_CMD (JSON の文字列の配列) があれば、実行先によらずそれ。無ければ codex は runner_cli.find_command、
-    agent と claude は claude_run.claude_command()。
+    ATELIER_DESIGNER_CMD (JSON の文字列の配列) があれば、実行先によらずそれ。無ければ codex と claude は
+    runner_cli.find_command (start の検査と同じ探し方)、agent は claude_run.claude_command()。
     ただし claude_command は見つからないと終了するので、先に場所を確かめて、無ければ理由を返す。
     """
     given = os.environ.get('ATELIER_DESIGNER_CMD')
@@ -1709,8 +1745,9 @@ def designer_command(runner: str = 'agent'):
         if isinstance(words, list) and words and all(isinstance(word, str) and word.strip() for word in words):
             return list(words), None
         return None, 'ATELIER_DESIGNER_CMD is not a JSON array of strings'
-    if runner == 'codex':
-        return runner_cli.find_command('codex')
+    if runner in ('codex', 'claude'):
+        # start が確かめたのと同じ場所 (agents.json の path を含む) から探す
+        return runner_cli.find_command(runner)
     configured = os.environ.get('PBI_CLAUDE_BIN')
     found = configured or shutil.which('claude')
     if not found or not Path(found).is_file():
@@ -2175,6 +2212,7 @@ def run_episodes(args, paths: Paths) -> int:
             else:
                 episodes += 1
                 done_code, lines, stopping = settle_episode(paths, run, code, out_json)
+                warns = merge_warnings(warns, warnings_in(lines))
                 stopping = stopping or (args.max_episodes is not None and episodes >= args.max_episodes)
                 final = (done_code if stopping else EXIT_OK, with_warnings(lines, warns)) if stopping else None
         if final is not None:

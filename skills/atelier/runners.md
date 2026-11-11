@@ -101,6 +101,9 @@ codex exec -m <model> -c model_reasoning_effort='"<effort>"' -s workspace-write 
 
 - `-o` writes the last message (the 5 lines of `worker.md`) to `.last.md`.
 - Use the route's effort, never above `high` (no xhigh or max).
+- Put this line in the prompt, before `How to work and report:`, so that Japanese and other non-ASCII text survives on Windows:
+
+  Writing files: On Windows, Windows PowerShell 5.1 sends text piped into another program (`@'...'@ | python -`) as US-ASCII, so every non-ASCII character arrives as `?`. Write files with apply_patch, or write a script to a `.py` file saved as UTF-8 (apply_patch, or `Set-Content -Encoding utf8`; Windows PowerShell 5.1 saves in the ANSI code page by default) and run `python <file>`. Keep non-ASCII text out of PowerShell pipes; when you need one, run `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` first in the same command.
 
 **Unusable when.**
 
@@ -232,6 +235,7 @@ A reviewer or tester whose role value ends in `@<runner>` (the `Roles:` line of 
 4. `role_run.py` puts the line "Read `<skill>/agents/atelier-<role>.md` and follow it" first in the prompt file, launches the runner (codex: `-a never exec -s danger-full-access`, shared-memory approval automatic; claude: `claude_run.py --folder roles`; dsh: `dsh_run.py --folder roles`; opencode and agy as in their sections) and writes its logs to `docs/pbi/roles/<name>.*`. Its exit code is the child's.
 5. The result is the review JSON or test result at its usual path, checked by `role_results.py` as always. A missing result, or a sign from the runner's "Unusable when" table, is an unusable runner (`## Common rules`); retry once, then ask (kind `decision`).
 
+- On codex the role runs with no sandbox and no approvals by default, because the verify commands need the network and the user's toolchain (fnm's Node, pnpm, uv's Python), which `workspace-write` blocks. The role reads the diff and the repository, so text in them can steer it. When the verify commands run inside the sandbox, pass `--sandbox workspace-write`. `read-only` is refused: the role must write its result file.
 - A runner without a Skill tool cannot call the review skill of the final review. Replace the Skill line of `prompts/final-review.md` with "Read `<path of the skill's SKILL.md>` and follow it. If it needs subagents, write BLOCKED." A `BLOCKED` result goes to the next row (`appendix/review.md`).
 - When both reviewer stages equal the model that built the attempt, use the default pair instead (opus for deep, sonnet at high effort otherwise) on `agent`, and say so in the stage record.
 

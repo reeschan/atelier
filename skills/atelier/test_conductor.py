@@ -46,7 +46,8 @@ with open(os.environ['FAKE_DESIGNER_LOG'], 'a', encoding='utf-8') as log:
 time.sleep(float(os.environ.get('FAKE_DESIGNER_SLEEP') or 0))
 episode, seq = re.search(r'^Episode: (\w+) \(seq (\d+)\)', prompt, re.M).groups()
 result_path = re.search(r'^Result: .*?write (\S+)', prompt, re.M).group(1)
-data = {'schema': 'atelier.episode/1', 'episode': episode, 'seq': int(seq), 'summary': [f'fake {episode}']}
+data = {'schema': 'atelier.episode/1', 'episode': episode, 'seq': int(seq),
+        'summary': [os.environ.get('FAKE_SUMMARY') or f'fake {episode}']}
 if episode == 'design' and not re.search(r'^Answer: ', prompt, re.M):
     state = Path('docs/pbi/CONTEXT_STATE.md')
     state.parent.mkdir(parents=True, exist_ok=True)
@@ -1447,12 +1448,15 @@ class ConductorTest(unittest.TestCase):
         self.con('start', '--goal', 'plain')
         rc, out = self.con('next')
         self.assertIn('Agent tool: yes', self.request(out))
+        self.assertNotIn('Writing files:', self.request(out))
         self.assertIn('subagent_type=atelier-designer model=opus', self.line(out, 'launch'))
         self.codex_start('--force')
         rc, out = self.con('run')
         self.assertEqual(rc, 10, out)
         prompts = sorted(p for p in os.listdir(self.path('docs/pbi/conductor/episodes')) if p.endswith('.prompt.md'))
-        self.assertIn('Agent tool: no', self.read(f'docs/pbi/conductor/episodes/{prompts[-1]}'))
+        codex_prompt = self.read(f'docs/pbi/conductor/episodes/{prompts[-1]}')
+        self.assertIn('Agent tool: no', codex_prompt)
+        self.assertIn('Writing files: On Windows', codex_prompt)
 
     def test_codex_designer_failure_is_a_launch_failure(self):
         """codex の turn.failed と 0 以外の終了は、起動の失敗 (retry) になる。"""
@@ -1516,6 +1520,69 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn("warn roles.designer.runner (repo): 'opencode' is not valid; using 'agent' (default)", out)
         self.assertIn('designer opus (default)', self.line(out, 'roles'))
+
+    def test_garbled_question_and_summary_are_warned(self):
+        """問いのファイルや要約に ? が 3 つ以上続けば warn garbled を出す。化けていなければ出さない。"""
+        self.con('start', '--goal', 'garbled')
+        rc, out = self.con('next')
+        self.write(STATE, '# state\nImmediate next action: ask\n')
+        self.write('docs/pbi/notes/q.md', '# ?????\n\n????????????\n')
+        self.result(out, status='question', state=STATE, summary=['design: ??????'],
+                    question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': '???????'})
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+        warn = next((line for line in out.splitlines() if line.startswith('warn garbled:')), '')
+        for place in ('summary', 'question.summary', 'docs/pbi/notes/q.md'):
+            self.assertIn(place, warn)
+        self.assertNotIn(STATE, warn)
+        # 答えるまで status と wait にも残る (切り離した run の呼び手にも届く)
+        for command in ('status', 'wait'):
+            rc, out = self.con(command, *(['--timeout', '0'] if command == 'wait' else []))
+            self.assertIn('warn garbled:', out, command)
+        self.con('answer', '--text', 'rewrite the files')
+        rc, out = self.con('status')
+        self.assertNotIn('warn garbled', out)
+
+        self.con('start', '--goal', 'clean', '--force')
+        rc, out = self.con('next')
+        self.write('docs/pbi/notes/q.md', '# 設計の問い\n\nどれにしますか?\n')
+        self.result(out, status='question', state=STATE, summary=['design: 問いがある'],
+                    question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': '進めますか?'})
+        rc, out = self.con('done')
+        self.assertEqual(rc, 10, out)
+        self.assertNotIn('warn garbled', out)
+
+    def test_run_keeps_garbled_warnings_of_episodes_it_moved_past(self):
+        """run が次の出番へ進んでも、途中の出番の warn garbled は最後に出す行と status に残る。"""
+        self.con('start', '--goal', 'garbled run', '--launch', 'headless')
+        rc, out = self.con('run')
+        self.assertEqual(rc, 10, out)
+        self.con('answer', '--text', 'go')
+        rc, out = self.con('run', env={'FAKE_SUMMARY': 'design ????????'})
+        self.assertEqual(out.splitlines()[0], 'state: finished', out)
+        self.assertIn('warn garbled:', out)
+        self.assertIn('warn garbled:', self.con('status')[1])
+
+    def test_codex_effort_is_passed_as_an_escaped_toml_string(self):
+        """effort の \\ や " は TOML の基本文字列としてエスケープして渡し、設定した値のまま codex に届く。"""
+        self.codex_start('--role', 'designer.effort=a\\b"c')
+        self.con('run')
+        args = json.loads(self.read(self.log).splitlines()[0])['args']
+        self.assertIn('model_reasoning_effort="a\\\\b\\"c"', args)
+
+    def test_claude_designer_found_only_through_agents_json_runs(self):
+        """agents.json の path だけで見つかる claude の設計者も、start が通れば run で起こせる。"""
+        from pathlib import Path
+        from test_claude_run import make_wrapper
+        wrapper = make_wrapper(Path(self.tmp), Path(self.fake))
+        self.write_home_runners({'claude': {'enabled': True, 'path': str(wrapper)}})
+        only = {'ATELIER_DESIGNER_CMD': '', 'PBI_CLAUDE_BIN': '', 'PATH': os.path.dirname(sys.executable)}
+        rc, out = self.con('start', '--goal', 'claude designer', '--role', 'designer.runner=claude', env=only)
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('run', env=only)
+        self.assertEqual(rc, 10, out)
+        args = json.loads(self.read(self.log).splitlines()[0])['args']
+        self.assertIn('-p', args)
 
 
 if __name__ == '__main__':

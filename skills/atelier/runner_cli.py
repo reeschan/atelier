@@ -2,8 +2,8 @@
 
 conductor.py (設計者) と role_run.py (レビュー担当・テスト担当) が使う。
 
-- 実行先の CLI は、環境変数 ATELIER_<RUNNER>_CMD (JSON の文字列の配列。テストの差し替え口)、home の agents.json の
-  runners.<runner>.path、PATH の <runner> の順に探す。
+- 実行先の CLI は、環境変数 ATELIER_<RUNNER>_CMD (JSON の文字列の配列。テストの差し替え口)、claude なら PBI_CLAUDE_BIN、
+  home の agents.json の runners.<runner>.path、PATH の <runner> の順に探す。
 - 使えるかは、agents.json で enabled が true で、CLI が見つかること。
 - codex は `-a never exec --json -s <サンドボックス>` で起こし、shared-memory の道具の承認を `-c` で自動にする
   (ユーザーの ~/.codex/config.toml は書き換えない)。
@@ -23,6 +23,10 @@ CODEX_SANDBOXES = ('read-only', 'workspace-write', 'danger-full-access')
 # dsh の作業者・入れ子の codex・ユーザーの道具 (fnm の Node・pnpm) が動かない
 CODEX_DEFAULT_SANDBOX = 'danger-full-access'
 CODEX_MCP_APPROVAL = 'mcp_servers.shared-memory.default_tools_approval_mode="auto"'
+# codex がファイルを書くときの決まり。codex のシェルは Windows PowerShell 5.1 で、外のコマンドへ渡す文字を
+# $OutputEncoding (既定 US-ASCII) で符号化するので、日本語が ? (0x3F) になる。設計者の依頼文と role_run.py が
+# 渡し、runners.md の codex の節にも同じ文がある (test_role_run が一致を確かめる)
+CODEX_TEXT_RULE = "On Windows, Windows PowerShell 5.1 sends text piped into another program (`@'...'@ | python -`) as US-ASCII, so every non-ASCII character arrives as `?`. Write files with apply_patch, or write a script to a `.py` file saved as UTF-8 (apply_patch, or `Set-Content -Encoding utf8`; Windows PowerShell 5.1 saves in the ANSI code page by default) and run `python <file>`. Keep non-ASCII text out of PowerShell pipes; when you need one, run `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` first in the same command."
 
 
 def runners_for(part: str) -> tuple:
@@ -52,6 +56,12 @@ def find_command(runner: str, home=None):
         if isinstance(words, list) and words and all(isinstance(w, str) and w.strip() for w in words):
             return list(words), None
         return None, f'ATELIER_{runner.upper()}_CMD is not a JSON array of strings'
+    if runner == 'claude' and os.environ.get('PBI_CLAUDE_BIN'):
+        # claude_run.py と同じ場所の指定 (作業者の claude と同じ実行ファイルを使う)
+        configured = os.environ['PBI_CLAUDE_BIN']
+        if Path(configured).is_file():
+            return [configured], None
+        return None, f'claude not found (PBI_CLAUDE_BIN {configured})'
     path = runner_entry(runner, home).get('path')
     if isinstance(path, str) and path and Path(path).is_file():
         return [path], None
@@ -90,7 +100,9 @@ def codex_args(model: str, effort, sandbox: str, last_path) -> list:
     args = ['-a', 'never', 'exec', '--skip-git-repo-check', '--json', '-m', model, '-s', sandbox,
             '-c', CODEX_MCP_APPROVAL]
     if effort:
-        args += ['-c', f'model_reasoning_effort="{effort}"']
+        # TOML の基本文字列として書く (\ などをエスケープし、設定した値のまま渡す。受けない値は codex が断る)
+        quoted = json.dumps(str(effort), ensure_ascii=False).replace('\x7f', '\\u007f')
+        args += ['-c', f'model_reasoning_effort={quoted}']
     return args + ['-o', Path(last_path).as_posix(), '-']
 
 

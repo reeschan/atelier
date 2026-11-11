@@ -14,6 +14,7 @@ Goal: {goal}
 Workflow: {workflow}
 Roles: reviewer {reviewer}; tester {tester} (a value ending in @<runner> runs on that runner through role_run.py; the rest on agent)
 Agent tool: {agent_tool} (no: launch every role and worker through scripts, runners.md "Without the Agent tool")
+{?text_rule}Writing files: {text_rule}
 Context probe: {ctx_probe} (run it at every boundary to measure your own context)
 State: docs/pbi/STATUS.md and docs/pbi/conductor/run.json (read only the parts you need)
 Files are the source of truth: every role hands over through files at fixed paths. A subagent's reply may be empty; when the file is there, go on.
