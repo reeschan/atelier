@@ -84,7 +84,8 @@ def run_codex(args, base: Path, text: str) -> int:
     argv = [*command_or_fail('codex'),
             *runner_cli.codex_args(args.model, args.effort, args.sandbox, base / f'{args.name}.last.md')]
     with open(base / f'{args.name}.jsonl', 'wb') as out, open(base / f'{args.name}.err', 'wb') as err:
-        return subprocess.run(argv, input=text.encode('utf-8'), stdout=out, stderr=err,
+        task = f'Writing files: {runner_cli.CODEX_TEXT_RULE}\n' + text
+        return subprocess.run(argv, input=task.encode('utf-8'), stdout=out, stderr=err,
                               creationflags=NO_WINDOW, check=False).returncode
 
 

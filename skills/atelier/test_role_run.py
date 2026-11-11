@@ -78,9 +78,10 @@ class RoleRunTest(unittest.TestCase):
         self.assertIn('model_reasoning_effort="high"', args)
         self.assertIn('mcp_servers.shared-memory.default_tools_approval_mode="auto"', args)
         self.assertEqual(args[-1], '-')
-        first = call['stdin'].splitlines()[0]
-        self.assertTrue(first.startswith('Read ') and first.endswith('agents/atelier-reviewer.md and follow it '
-                                                                      'as your instructions.'), first)
+        first, second = call['stdin'].splitlines()[:2]
+        self.assertTrue(first.startswith('Writing files: On Windows'), first)
+        self.assertTrue(second.startswith('Read ') and second.endswith('agents/atelier-reviewer.md and follow it '
+                                                                        'as your instructions.'), second)
         self.assertIn('Review PBI-001.', call['stdin'])
         for suffix in ('jsonl', 'err', 'last.md', 'run.json'):
             self.assertTrue((self.roles / f'PBI-001.review.{suffix}').is_file(), suffix)
@@ -95,6 +96,12 @@ class RoleRunTest(unittest.TestCase):
             self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra')
         text = (self.roles / 'PBI-001.review.prompt.md').read_text(encoding='utf-8')
         self.assertEqual(text.count('atelier-reviewer.md'), 1)
+
+    def test_runners_md_carries_the_same_text_rule(self):
+        """Claude の設計者が codex の作業者に渡す決まり (runners.md) は、role_run と設計者の依頼文の決まりと同じ文。"""
+        import runner_cli
+        text = (HERE / 'runners.md').read_text(encoding='utf-8')
+        self.assertIn(f'Writing files: {runner_cli.CODEX_TEXT_RULE}', text)
 
     def test_sandbox_can_be_narrowed(self):
         self.prompt()

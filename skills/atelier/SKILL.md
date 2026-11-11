@@ -38,6 +38,7 @@ With launch `agent` (headless is below):
 4. Run `python <skill>/conductor.py done`. Call it even when the designer's reply was empty: the result is in the file.
 5. Show the user the lines it printed, one or two lines.
 6. Exit 10: a question is waiting, go to Questions. Exit 12: the episode failed, run the `then:` line it prints and launch again. Exit 2: the state or the command is wrong, show the `error:` line and stop.
+   - A `warn garbled:` line means a file or summary lost its non-ASCII text (`???`). Show the line; when a question is waiting, its file may be unreadable, so tell the user and pass on their answer together with the wish to have the designer rewrite the named files.
 7. Back to 1.
 
 ## Running

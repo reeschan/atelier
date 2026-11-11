@@ -23,6 +23,10 @@ CODEX_SANDBOXES = ('read-only', 'workspace-write', 'danger-full-access')
 # dsh の作業者・入れ子の codex・ユーザーの道具 (fnm の Node・pnpm) が動かない
 CODEX_DEFAULT_SANDBOX = 'danger-full-access'
 CODEX_MCP_APPROVAL = 'mcp_servers.shared-memory.default_tools_approval_mode="auto"'
+# codex がファイルを書くときの決まり。codex のシェルは Windows PowerShell 5.1 で、外のコマンドへ渡す文字を
+# $OutputEncoding (既定 US-ASCII) で符号化するので、日本語が ? (0x3F) になる。設計者の依頼文と role_run.py が
+# 渡し、runners.md の codex の節にも同じ文がある (test_role_run が一致を確かめる)
+CODEX_TEXT_RULE = "On Windows, Windows PowerShell 5.1 sends text piped into another program (`@'...'@ | python -`) as US-ASCII, so every non-ASCII character arrives as `?`. Write files with apply_patch, or write a script to a `.py` file and run `python <file>`. Keep non-ASCII text out of PowerShell pipes; when you need one, run `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` first in the same command."
 
 
 def runners_for(part: str) -> tuple:
