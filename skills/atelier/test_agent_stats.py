@@ -3,6 +3,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,27 @@ from unittest import mock
 
 import agent_stats
 import common
+
+HERE = Path(__file__).resolve().parent
+SCRIPT = HERE / "agent_stats.py"
+EXAMPLES = HERE / "examples" / "stats"
+
+
+def run_cli(*args, cwd=None):
+    """agent_stats.py を CLI として外から動かす (内部の関数は呼ばない)。"""
+    return subprocess.run([sys.executable, str(SCRIPT), *map(str, args)], cwd=cwd,
+                          capture_output=True, text=True, encoding="utf-8",
+                          env=dict(os.environ, PYTHONUTF8="1"))
+
+
+def example_run():
+    """見本の run.json。"""
+    return json.loads((EXAMPLES / "run.json").read_text(encoding="utf-8"))
+
+
+def example_session_id():
+    """見本の projects にある会話記録の id。"""
+    return next((EXAMPLES / "projects").glob("*/*.jsonl")).stem
 
 
 def row(rid, ts, model="claude-haiku-5-5", inp=2, out=10, read=0, w5=0, w1=0):
@@ -273,7 +295,232 @@ class LongPathTest(unittest.TestCase):
         self.assertEqual(s["by_pbi"]["PBI-007"]["agents"], 1)
 
     def test_shown_strips_prefix(self):
-        self.assertEqual(agent_stats.shown(agent_stats.long_path(self.meta)), str(self.meta))
+        r"""--all の出力 (project_dir) に \\?\ の接頭辞が残らない。"""
+        r = run_cli("--all", "--projects", self.root)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(self.project, r.stdout)
+        self.assertNotIn("\\\\?\\", r.stdout)
+
+
+class CtxCliTest(unittest.TestCase):
+    """--ctx の 3 つの入口 (--agent・--session・見つからないとき) を、CLI の出力と終了コードで確かめる。"""
+
+    def setUp(self):
+        self.projects = EXAMPLES / "projects"
+        self.prefix = "ATELIER." + example_run()["run_id"][:8] + "."
+
+    def write_agent_session(self, projects, folder, sid, aid, w1):
+        """projects/<folder>/ に 1 セッションと 1 サブエージェントを作り、agent の jsonl を返す。"""
+        sub = projects / folder / sid / "subagents"
+        sub.mkdir(parents=True)
+        write_jsonl(projects / folder / f"{sid}.jsonl", [row("main", "2026-11-10T00:00:00Z", w1=1)])
+        jl = sub / f"agent-{aid}.jsonl"
+        write_jsonl(jl, [row(aid, "2026-11-10T00:00:01Z", inp=10, w1=w1)])
+        (sub / f"agent-{aid}.meta.json").write_text(
+            json.dumps({"description": f"{self.prefix}{aid}"}), encoding="utf-8")
+        return jl
+
+    def test_ctx_agent_flat_subagents_and_meta(self):
+        """subagents/ に平らに置いた agent-*.jsonl と meta.json から、description の先頭で選んで測る。"""
+        r = run_cli("--ctx", "--agent", self.prefix, "--projects", self.projects)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # 見本の 1 リクエストは input 10 + cache_read 100 + 書き 0
+        self.assertEqual(r.stdout.strip(), "context=110 peak=110 requests=1")
+
+    def test_ctx_session(self):
+        """--ctx --session は会話記録の id で測り、--all や --agent との同時指定は使い方の誤り。"""
+        sid = example_session_id()
+        r = run_cli("--ctx", "--session", sid, "--projects", self.projects)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "context=110 peak=110 requests=1")
+        for extra in (["--all"], ["--session", sid, "--agent", self.prefix]):
+            bad = run_cli("--ctx", *extra, "--projects", self.projects)
+            self.assertEqual(bad.returncode, 2, bad.stdout + bad.stderr)
+
+    def test_ctx_unknown_exit_3(self):
+        """見つからない --agent と --session は context=unknown を出して終了コード 3。"""
+        for args in (["--agent", "NOPE"], ["--session", "missing-session"]):
+            r = run_cli("--ctx", *args, "--projects", self.projects)
+            self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+            self.assertEqual(r.stdout.strip(), "context=unknown")
+
+    def test_ctx_agent_in_other_project_folder(self):
+        """--agent は今のディレクトリではなく --projects の下の全プロジェクトから、いちばん新しいものを選ぶ。"""
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        projects = root / "projects"
+        older = self.write_agent_session(projects, "C--old", "11111111-1111-4111-8111-111111111111", "old", w1=1000)
+        newer = self.write_agent_session(projects, "C--new", "22222222-2222-4222-8222-222222222222", "new", w1=7000)
+        os.utime(older, (1_700_000_000, 1_700_000_000))
+        os.utime(newer, (1_700_000_100, 1_700_000_100))
+        elsewhere = root / "elsewhere"
+        elsewhere.mkdir()
+        r = run_cli("--ctx", "--agent", self.prefix, "--projects", projects, cwd=elsewhere)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # 新しい方 (input 10 + 書き 1h 7000) を選ぶ
+        self.assertEqual(r.stdout.strip(), "context=7010 peak=7010 requests=1")
+
+    def test_agent_flag_requires_ctx(self):
+        """--agent を --ctx なしで渡すと使い方の誤り (終了コード 2)。"""
+        r = run_cli("--agent", self.prefix, "--projects", self.projects)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+
+
+class RunRolesCliTest(unittest.TestCase):
+    """--out <dir> --run <run.json> が役割ごとの数と費用を <dir>/roles.json に書くことを CLI で確かめる。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.home = self.dir / "home"
+        self.home.mkdir()
+        # 見本の claude-sonnet-4-5 は同梱の単価表に無いので、一時 home の単価表で与える
+        (self.home / "prices.json").write_text(json.dumps({"checked_at": "2026-12-01", "models": {
+            "claude-sonnet-4-5": {"input": 3, "output": 15, "cache_read": 0.3,
+                                  "cache_write_5m": 3.75, "cache_write_1h": 6}}}), encoding="utf-8")
+        self.per_request = (10 * 3 + 20 * 15 + 100 * 0.3) / 1_000_000  # 見本の 1 リクエストの費用
+
+    def run_roles(self, projects, run, out):
+        return run_cli("--out", out, "--run", run, "--projects", projects, "--home", self.home)
+
+    def roles(self, out):
+        return json.loads((out / "roles.json").read_text(encoding="utf-8"))
+
+    def add_agent(self, sub, aid, desc):
+        """見本と同じ 1 リクエストのサブエージェントを、description を変えて足す。"""
+        write_jsonl(sub / f"agent-{aid}.jsonl",
+                    [row(aid, "2026-11-10T00:00:09Z", model="claude-sonnet-4-5", inp=10, out=20, read=100)])
+        (sub / f"agent-{aid}.meta.json").write_text(json.dumps({"description": desc}), encoding="utf-8")
+
+    def test_out_run_splits_by_role(self):
+        """見本の 4 役割を数え、役割の決め方 (TEST/.review/.security/.design/PBI-/その他) を結果で固定する。"""
+        out = self.dir / "out"
+        r = self.run_roles(EXAMPLES / "projects", EXAMPLES / "run.json", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        data = self.roles(out)
+        self.assertEqual(data["run_id"], example_run()["run_id"])
+        roles = data["roles"]
+        for name in ("caller", "designer", "worker", "reviewer"):
+            self.assertEqual(roles[name]["requests"], 1, name)
+            self.assertEqual(roles[name]["tokens"], 130, name)
+            self.assertAlmostEqual(roles[name]["usd"], self.per_request, places=9, msg=name)
+        for name in ("tester", "other"):
+            self.assertEqual(roles[name]["requests"], 0, name)
+
+        # 役割の決め方を、見本に agent を足した結果から確かめる (description はこの run の印を先頭に置く)
+        stats = self.dir / "stats"
+        shutil.copytree(EXAMPLES, stats)
+        sub = next((stats / "projects").glob("*/*/subagents"))
+        prefix = "ATELIER." + example_run()["run_id"][:8] + "."
+        for aid, desc in [("t1", f"{prefix}TEST PBI-902 verify"), ("r2", f"{prefix}PBI-902.security review"),
+                          ("r3", f"{prefix}PBI-902.design review"), ("r4", f"{prefix}REVIEW PBI-902"),
+                          ("p2", f"{prefix}PBI-902 build"), ("o1", f"{prefix}note 調査メモ")]:
+            self.add_agent(sub, aid, desc)
+        out2 = self.dir / "out2"
+        r2 = self.run_roles(stats / "projects", stats / "run.json", out2)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        roles = self.roles(out2)["roles"]
+        self.assertEqual({k: v["requests"] for k, v in roles.items()},
+                         {"caller": 1, "designer": 1, "worker": 2, "reviewer": 4, "tester": 1, "other": 1})
+        self.assertAlmostEqual(roles["tester"]["usd"], self.per_request, places=9)
+
+    def test_out_run_ignores_another_runs_subagents(self):
+        """同じセッションに別の run の設計者とその子、前の run の呼び出し側のリクエストがあっても数えない。"""
+        stats = self.dir / "stats"
+        shutil.copytree(EXAMPLES, stats)
+        main = next((stats / "projects").glob("*/*.jsonl"))
+        write_jsonl(main, [row("req-old", "2026-11-09T23:00:00Z", model="claude-sonnet-4-5", inp=10, out=20, read=100),
+                           json.loads(main.read_text(encoding="utf-8"))])
+        sub = next((stats / "projects").glob("*/*/subagents"))
+        # 別の run (start --force の前の run など) の設計者と、その子 (この run の印を持たない)
+        self.add_agent(sub, "x1", "ATELIER.ffffffff.1 design")
+        self.add_agent(sub, "x2", "PBI-902 build")
+        (sub / "agent-x2.meta.json").write_text(
+            json.dumps({"description": "PBI-902 build", "parentAgentId": "x1"}), encoding="utf-8")
+        # この run の設計者 (d1) の子は、印を持たなくても数える
+        self.add_agent(sub, "n1", "note nested")
+        (sub / "agent-n1.meta.json").write_text(
+            json.dumps({"description": "note nested", "parentAgentId": "d1"}), encoding="utf-8")
+
+        out = self.dir / "out"
+        r = self.run_roles(stats / "projects", stats / "run.json", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        roles = self.roles(out)["roles"]
+        self.assertEqual({k: v["requests"] for k, v in roles.items()},
+                         {"caller": 1, "designer": 1, "worker": 1, "reviewer": 1, "tester": 0, "other": 1})
+
+    def test_out_run_session_id_handling(self):
+        """history の session_id が無い・数値・見つからない・重なっても落ちず、同じセッションは 1 度だけ数える。"""
+        run = example_run()
+        sid = example_session_id()
+        run["history"] = [
+            {"seq": 1, "session_id": None},
+            {"seq": 2, "session_id": 90210},
+            {"seq": 3, "session_id": "missing-session"},
+            "壊れた行",
+            {"seq": 4, "session_id": sid},
+            {"seq": 5, "session_id": sid},
+        ]
+        run_path = self.dir / "run.json"
+        run_path.write_text(json.dumps(run, ensure_ascii=False), encoding="utf-8")
+        out = self.dir / "out"
+        r = self.run_roles(EXAMPLES / "projects", run_path, out)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        roles = self.roles(out)["roles"]
+        # 実在する 1 セッション (メイン) + 設計者の agent = designer 2 件。重なった history の行は増やさない
+        self.assertEqual(roles["designer"]["requests"], 2)
+        self.assertEqual(roles["caller"]["requests"], 0)
+        self.assertEqual(roles["worker"]["requests"], 1)
+        self.assertEqual(roles["reviewer"]["requests"], 1)
+
+
+    def test_out_run_cuts_at_finished_or_aborted(self):
+        """run.json に finished_at か aborted_at があれば、呼び出し側のリクエストと選んだ子をその時刻までで切る。"""
+        for key in ("finished_at", "aborted_at"):
+            with self.subTest(key=key):
+                stats = self.dir / f"stats-{key}"
+                shutil.copytree(EXAMPLES, stats)
+                main = next((stats / "projects").glob("*/*.jsonl"))
+                late = row("req-late", "2026-11-11T00:00:00Z", model="claude-sonnet-4-5", inp=10, out=20, read=100)
+                write_jsonl(main, [json.loads(l) for l in main.read_text(encoding="utf-8").splitlines() if l.strip()]
+                            + [late])
+                sub = next((stats / "projects").glob("*/*/subagents"))
+                prefix = "ATELIER." + example_run()["run_id"][:8] + "."
+                write_jsonl(sub / "agent-late.jsonl", [row("late", "2026-11-11T00:00:00Z", model="claude-sonnet-4-5")])
+                (sub / "agent-late.meta.json").write_text(
+                    json.dumps({"description": f"{prefix}PBI-903 build"}), encoding="utf-8")
+                run = example_run()
+                run[key] = "2026-11-10T00:01:00Z"
+                (stats / "run.json").write_text(json.dumps(run, ensure_ascii=False), encoding="utf-8")
+                out = self.dir / f"out-{key}"
+                r = self.run_roles(stats / "projects", stats / "run.json", out)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                roles = self.roles(out)["roles"]
+                self.assertEqual({k: v["requests"] for k, v in roles.items()},
+                                 {"caller": 1, "designer": 1, "worker": 1, "reviewer": 1, "tester": 0, "other": 0})
+
+    def test_out_run_fallback_only_for_metas_without_spawn_depth(self):
+        """時刻だけで拾う救済は spawnDepth の無い旧形式だけ。spawnDepth があって子孫でないものは数えない。"""
+        stats = self.dir / "stats"
+        shutil.copytree(EXAMPLES, stats)
+        sub = next((stats / "projects").glob("*/*/subagents"))
+        self.add_agent(sub, "old1", "旧形式 note")
+        self.add_agent(sub, "new1", "Explore unrelated repo")
+        (sub / "agent-new1.meta.json").write_text(
+            json.dumps({"description": "Explore unrelated repo", "spawnDepth": 1}), encoding="utf-8")
+        self.add_agent(sub, "new2", "PBI-777 build other project")
+        (sub / "agent-new2.meta.json").write_text(
+            json.dumps({"description": "PBI-777 build other project", "spawnDepth": 1}), encoding="utf-8")
+        self.add_agent(sub, "kid", "note child")
+        (sub / "agent-kid.meta.json").write_text(
+            json.dumps({"description": "note child", "spawnDepth": 2, "parentAgentId": "d1"}), encoding="utf-8")
+        out = self.dir / "out"
+        r = self.run_roles(stats / "projects", stats / "run.json", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        roles = self.roles(out)["roles"]
+        # 旧形式 old1 と、設計者の子 kid の 2 件が other。worker は見本の 1 件のまま
+        self.assertEqual({k: v["requests"] for k, v in roles.items()},
+                         {"caller": 1, "designer": 1, "worker": 1, "reviewer": 1, "tester": 0, "other": 2})
 
 
 if __name__ == "__main__":

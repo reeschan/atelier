@@ -4,7 +4,7 @@ Read this when every PBI has passed, and the review stage or its gate picks `rev
 
 ## Whole check (always first)
 
-The lint recheck (`appendix/lint.md`) has run before this, and its confirmed regressions are reworked first. Whatever component is picked, look at the whole `git diff --stat`, read the parts that cross PBIs (shared types, settings, callers), and run every PBI's verify commands once more, with output to files as in `appendix/verify.md`.
+The lint recheck (`appendix/lint.md`) has run before this, and its confirmed regressions are reworked first. Whatever component is picked, look at the whole `git diff --stat` and read the parts that cross PBIs (shared types, settings, callers). The running part is the tester's whole check (`prompts/tester.md`, kind `final`): it runs every PBI's verify commands once more, with output to files as in `appendix/verify.md`, then the deferred commands. Reconcile its test-result. The stat and the parts that cross PBIs stay yours.
 
 ## Gate
 
@@ -20,13 +20,14 @@ The lint recheck (`appendix/lint.md`) has run before this, and its confirmed reg
    - `skip`: run no review skill and record the reason.
    - `off`: the phase is turned off in agents.json. Record it.
    - setting: `auto`, `off`, or a skill name from agents.json (`appendix/adapters.md`). A skill name replaces the template's review components for that phase when it is in the skill list.
-3. Pass each `warn` line under the table to the user in one line.
+3. Put the `warn` lines under the table together in one question result (kind `decision`) and end the episode. Inline, pass each one to the user in one line.
 
 ## Run a review skill
 
 1. Take a baseline: `git rev-parse HEAD` and `git status --porcelain -- . ':!docs/pbi/reviews' ':!.claude/worktrees'`. The numstat file must exist first; the pathspec leaves out the result file.
 2. Before you start it, check that STATUS.md has a stage record for every stage and optional stage `flow.py` placed before review (lint-recheck included). A missing record means the stage was skipped by mistake: run it now (its fallback when the tool cannot run) and then go on.
-   Start the subagent with `prompts/final-review.md`, filled in. Put the lint recheck's `report` rows and the path of `docs/pbi/jevlint/recheck.md` on its `Lint recheck` line (`appendix/lint.md`). The built-in `code-review` gets the argument `medium`; the others get none. Base, head and spec go in the prompt, never in the argument.
+   Start the `atelier-reviewer` subagent with `prompts/final-review.md`, filled in. Put the lint recheck's `report` rows and the path of `docs/pbi/jevlint/recheck.md` on its `Lint recheck` line (`appendix/lint.md`). The built-in `code-review` gets the argument `medium`; the others get none. Base, head and spec go in the prompt, never in the argument.
+   - The children of a skill the reviewer calls are at depth 3 and have no Agent tool. When the skill needs children of its own, record `fallback` with the reason and run the built-in review (`## Built-in review`) instead.
 3. When it returns, take the same two values again. When HEAD or the status changed, discard the result, record `fallback` with the reason, and use the next row.
 4. Read line 1 of the result file. `BLOCKED` means the skill asked a question: record `fallback` and use the next row. Otherwise go to `## Findings`.
 5. A skill named in agents.json is the user's choice; you do not check where it sends code. With `auto`, security runs only the built-in `security-review`, which stays inside Claude Code.
@@ -43,10 +44,12 @@ Some skills prove each finding by a run and give no severity (pstack's `interrog
 - The repro is the finding's command. Keep its output in `docs/pbi/reviews/final.review.repro.md` when it is longer than one line.
 - The Intent goes on line 2 as `intent: <one line>`, after the counts. Add the dropped count to the stage record: `findings 0,2,0 dropped 3`.
 
+Reconcile only once every result is in: the tester's test-result, the review skill's result and, when it runs, the security review's result.
+
 ## Findings
 
 1. Check each finding yourself: open the file at the line and confirm the claim. A reviewer's report is not proof.
 2. A confirmed finding in a file that a PBI's targets name becomes a rework of that PBI (`appendix/rework.md`), counted toward the limit. Review again once every reworked PBI passes.
 3. A confirmed finding in a file that no PBI owns goes into the findings of the completion report.
 4. A remark about taste or wording is not a reason for rework. Drop it.
-5. A confirmed conflict between the change and an accepted decision record (an ADR, in the repository's decisions folder) is never dropped, even when the user prefers the code. It ends one of two ways: rework the code, or a new record that supersedes the old one. Writing that record is the user's call; put it under Waiting on you.
+5. A confirmed conflict between the change and an accepted decision record (an ADR, in the repository's decisions folder) is never dropped, even when the user prefers the code. It ends one of two ways: rework the code, or a new record that supersedes the old one. Writing that record is the user's call: end the episode with a question (kind `decision`). Inline, put it under Waiting on you.

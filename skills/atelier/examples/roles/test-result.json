@@ -1,0 +1,11 @@
+{
+  "schema": "atelier.test-result/1",
+  "kind": "wave",
+  "commands": [
+    {"command": "python -m pytest skills/atelier -q", "code": 1}
+  ],
+  "failing": [
+    {"test": "test_example.py::test_empty", "file": "skills/atelier/test_example.py", "pbi": "PBI-001", "cause": "regression", "why": "the new default breaks the empty case"}
+  ],
+  "recommendation": "rework"
+}

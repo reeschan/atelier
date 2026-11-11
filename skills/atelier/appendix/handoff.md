@@ -1,14 +1,16 @@
 # Appendix: rtk mode, handoff and resume
 
+Under the conductor, a handoff is an episode result with status handoff. The conductor starts a new designer at once, so never ask the user for `/clear` and resume. The Hand off and Resume below are for inline (the fallback) only. In a conductor run, do not write `Run id` into `HANDOFF.md`: `docs/pbi/.kiln/run_id` stays on disk. Measure with the command on the request's `Context probe:` line; inline, with no such line, use `python <skill>/agent_stats.py --ctx` (below).
+
 Read this at every wave boundary, and when the argument is `resume` (or `resume <repository path>`).
 
 ## Kiln
 
-Kiln is on by default. Read `appendix/kiln.md` first and use its soft / peak / aux / handoff lines (the run's `docs/pbi/kiln.json`, else the template's) instead of the fixed 150,000 / 250,000 below. Measure at stage boundaries as well as wave boundaries, and log every decision with `kiln_log.py`. Still follow this file's Hand off and Resume procedures at the handoff line. On handoff, write the run's id (`docs/pbi/.kiln/run_id`) into `HANDOFF.md`; on resume, keep that same id so `.kiln/compact-events.jsonl` stays one run. When Kiln is off (`docs/pbi/kiln.json` says `"enabled": false`), keep the fixed thresholds in this file.
+Kiln is on by default. Read `appendix/kiln.md` first and use its soft / peak / aux / handoff lines (the run's `docs/pbi/kiln.json`, else the template's) instead of the fixed 150,000 / 250,000 below. Measure at stage boundaries as well as wave boundaries, and log every decision with `kiln_log.py`. Still follow this file's Hand off and Resume procedures at the handoff line. On handoff, inline, write the run's id (`docs/pbi/.kiln/run_id`) into `HANDOFF.md`; under the conductor, do not write it into `HANDOFF.md`. On resume, keep that same id so `.kiln/compact-events.jsonl` stays one run. When Kiln is off (`docs/pbi/kiln.json` says `"enabled": false`), keep the fixed thresholds in this file.
 
 ## Measure at a wave boundary
 
-When every PBI of the wave is reviewed and STATUS.md is up to date, measure the context before starting the next wave:
+When every PBI of the wave is reviewed and STATUS.md is up to date, measure the context before starting the next wave. Run the command on the request's `Context probe:` line; inline, with no such line, run:
 
 ```bash
 python <skill>/agent_stats.py --ctx
@@ -33,6 +35,8 @@ node <skill>/rtk/rtk-mode.mjs on
 
 ## Hand off
 
+Inline only. Under the conductor, write the state tablet and end the episode with status `handoff` instead (`appendix/episodes.md`, `## Kiln`).
+
 1. Write `docs/pbi/HANDOFF.md` in at most 40 lines. The first two lines are always `Repository: <absolute path of the repository, or the worktree's work root>` and `Branch: <branch>`. Then: the next wave (PBIs and route heads), skipped runners and why, decisions you overrode, design decisions not yet in a PBI (add them to a PBI or the spec first), warnings for later PBIs found in review, the stage records from STATUS.md, and whether `docs/pbi/adapters.json` exists. When Kiln is on, add a line `Run id: <run_id>` with the id in `docs/pbi/.kiln/run_id` (`kiln_log.py` creates it on its first line). If it has not run yet, log the handoff now, which creates the id: `python <skill>/kiln_log.py docs/pbi --role designer --boundary wave --phase handoff --tokens <context> --action handoff`.
 2. Write the handoff memory in the workspace (`appendix/memory.md`, "Hand off"): the gist of HANDOFF.md, the work key, the workspace scope, the absolute repository path and the branch.
 3. Append `{"event": "handoff", "context": <value>, "done": <done>, "remaining": <remaining>}` to jev-log.
@@ -41,6 +45,8 @@ node <skill>/rtk/rtk-mode.mjs on
    - "After `/clear`, `/atelier resume` continues from here. In a session started without a folder, type `/atelier resume <path>`."
 
 ## Resume
+
+Inline only.
 
 1. **Find the repository.** When the working directory has `docs/pbi/STATUS.md`, that is it. Otherwise (a session started without a folder runs in an empty folder the app made), try in order:
    1. the path in the argument (`resume <repository path>`)

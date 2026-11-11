@@ -11,6 +11,8 @@
 # 2026-10-23 に外部の実行先 claude (Claude Code の headless、既定と読む・書くだけの設定) を足した
 # 2026-11-08 に v4 に合わせて足した: lint_run.py と lint_compare.py (jevlint の下調べと見直し。ファイルの中身を Jev に送るのは送る直前の許可のあとだけ)、
 # omm_cache.py (oh-my-mermaid の omm-scan の結果をリポジトリの外の .omm-cache に置く)、kiln_log.py (Kiln の記録。sac-strategic-compact は任意)、setup に tools_check.py
+# 2026-11-11 に v6 に合わせて描き直した: オーケストレーターを 呼び出し側・進行役 (conductor.py)・設計者 (出番ごとに新規) に分け、
+# レビュー担当・テスト担当と role_results.py の束を足した。Codex・Grok は AGENTS.md から conductor.py を headless で回す
 direction: right
 
 vars: {
@@ -54,7 +56,23 @@ cc: Claude Code {
   class: zone
   icon: https://cdn.simpleicons.org/anthropic/__MONO__
 
-  orch: "Orchestrator\nmain session: design, PBIs, review, rework, handoff" {
+  caller: "Caller (your session)\nruns conductor.py, passes its lines and questions" {
+    class: svc
+    icon: https://cdn.simpleicons.org/claude
+  }
+  conductor: "conductor.py (conductor, no model)\nrun.json, one episode at a time, 4 stop points" {
+    class: svc
+    icon: https://cdn.simpleicons.org/python
+  }
+  orch: "Designer (atelier-designer, Opus)\nnew per episode: design, PBIs, judge, handoff" {
+    class: svc
+    icon: https://cdn.simpleicons.org/claude
+  }
+  reviewer: "Reviewer (atelier-reviewer)\none per report, not the builder's model" {
+    class: svc
+    icon: https://cdn.simpleicons.org/claude
+  }
+  tester: "Tester (atelier-tester, Sonnet)\ntests at end, final run" {
     class: svc
     icon: https://cdn.simpleicons.org/claude
   }
@@ -62,7 +80,7 @@ cc: Claude Code {
     class: svc
     icon: https://cdn.simpleicons.org/python
   }
-  verify: "verify.py + unchanged.py\nrun checks, hash untouched files" {
+  verify: "verify.py + unchanged.py + role_results.py\nrun checks, hash untouched files, bundle reviews" {
     class: svc
     icon: https://cdn.simpleicons.org/python
   }
@@ -161,6 +179,11 @@ jevmcp: "jev-mcp (jev_mcp.py, 127.0.0.1)\ntasks: claim, submit, verify\nJev: rou
   icon: https://cdn.simpleicons.org/modelcontextprotocol/__MONO__
 }
 
+othercaller: "Codex / Grok (AGENTS.md)\ncaller via conductor.py, needs the claude CLI" {
+  shape: hexagon
+  style.stroke-dash: 3
+}
+
 harness: "MCP client (optional)\nuses tasks, routing, runs, records" {
   shape: hexagon
   style.stroke-dash: 3
@@ -207,16 +230,26 @@ repo: Target repository {
   }
 }
 
-dev <-> cc.orch: task / approval / resume
+dev <-> cc.caller: task / approval
+cc.caller <-> cc.conductor: "start, next, done, answer, run, wait"
+cc.conductor -> cc.orch: "episode prompt (Agent or claude -p)"
+cc.orch -> cc.conductor: "episode.result.json"
+dev <-> othercaller: task / approval {style.stroke-dash: 4}
+othercaller -> cc.conductor: "start --launch headless,\nrun --detach, wait" {style.stroke-dash: 4}
+cc.orch -> cc.reviewer: report
+cc.reviewer -> cc.verify: "verify.py → review.json"
+cc.verify -> cc.orch: "bundle of the wave"
+cc.orch -> cc.tester: tests at end
+cc.tester -> repo.pbi: "test-result.json"
 cc.orch -> cc.prepare: facts
 cc.prepare -> jev: brief, PBI quality
 cc.orch <-> jev: report on mismatch, rework note
-cc.orch -> cc.verify: checks
 cc.orch -> cc.worker: PBI path
 cc.orch -> runners: "" {style.stroke-dash: 4}
 cc.worker -> repo.code
 runners -> repo.code {style.stroke-dash: 4}
-cc.orch -> repo.pbi: status, HANDOFF
+cc.orch -> repo.pbi: "STATUS, waves.json, reports"
+cc.conductor -> repo.pbi: "conductor/run.json, episodes/"
 cc.orch <-> memory: write refs, handoff {style.stroke-dash: 4}
 cc.worker -> memory: get refs {style.stroke-dash: 4}
 cc.prepare -> repo.routing: reads

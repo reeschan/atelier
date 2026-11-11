@@ -1,0 +1,17 @@
+{
+  "schema": "atelier.review/1",
+  "report": "EX-1",
+  "pbi": "PBI-001",
+  "reviewer": {"model": "opus", "effort": "high"},
+  "verify": {"failed": []},
+  "criteria": [
+    {"n": 1, "verdict": "pass", "why": "verify 1 exited 0"},
+    {"n": 2, "verdict": "deferred", "why": "runs at the end of the wave"},
+    {"n": 3, "verdict": "fail", "why": "the output has no summary line"}
+  ],
+  "findings": [
+    {"severity": "major", "file": "skills/atelier/example.py", "line": 42, "why": "an empty list is not handled", "repro": "python skills/atelier/example.py --empty"}
+  ],
+  "recommendation": "rework",
+  "built": {"runner": "agent", "model": "sonnet"}
+}

@@ -1,0 +1,13 @@
+{
+  "schema": "atelier.review/1",
+  "report": "PBI-901",
+  "pbi": "PBI-901",
+  "reviewer": {"model": "opus", "effort": null},
+  "verify": {"failed": []},
+  "criteria": [
+    {"n": 1, "verdict": "pass", "why": "verify 1 exited 0"},
+    {"n": 2, "verdict": "pass", "why": "verify 2 exited 0"}
+  ],
+  "findings": [],
+  "recommendation": "pass"
+}

@@ -211,6 +211,25 @@ class ReferencesTest(unittest.TestCase):
         self.assertIn('appendix/rework.md', names)
         self.assertIn('agents/pbi-worker.md', names)
 
+    def test_new_instruction_files_are_scanned(self):
+        '''新しい指示文 (designer.md・episodes.md・役の定義・prompts) も検査の対象に入ること。'''
+        names = {document.relative_to(HERE).as_posix() for document in documents()}
+        self.assertIn('designer.md', names)
+        self.assertIn('appendix/episodes.md', names)
+        self.assertIn('prompts/tester.md', names)
+        self.assertIn('prompts/designer-episode.md', names)
+        self.assertTrue(
+            any(re.fullmatch(r'agents/atelier-[\w-]+\.md', name) for name in names),
+            'agents/atelier-*.md が 1 つも対象に入っていない',
+        )
+
+    def test_example_files_named_by_docs_exist(self):
+        '''指示文が例として指す examples/ のファイルが実在すること。'''
+        for name in ('episode', 'review', 'test-result'):
+            path = HERE / 'examples' / 'roles' / f'{name}.json'
+            self.assertTrue(path.is_file(), path.relative_to(HERE).as_posix())
+        self.assertTrue((HERE / 'examples' / 'stats' / 'run.json').is_file())
+
     def test_references_exist(self):
         '''切れた参照がないこと (スキル外に置くファイル名だけの参照は除く)。'''
         missing = missing_refs(self.refs)

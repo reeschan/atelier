@@ -5,13 +5,14 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
 ## Before the report
 
 1. Promote refs (`appendix/memory.md`, "Finish"). Close the work (the done memory) only after the report is written: see the end of `## The completion report`.
-2. Collect the session's stats (read only; nothing changes). After a handoff, also collect the earlier session with `--session <ID>`.
+2. Collect the session's stats per role (read only; nothing changes). After a handoff, also collect the earlier session with `--session <ID>`.
 
    ```bash
-   python <skill>/agent_stats.py --out docs/pbi/stats | head -n 40
+   python <skill>/agent_stats.py --out docs/pbi/stats --run docs/pbi/conductor/run.json | head -n 40
    ```
 
-   - The summary opens with reads and turns per agent: requests, cache reads, share, average per request and the largest context, for the orchestrator and each subagent.
+   - The command writes `docs/pbi/stats/roles.json` and prints a table per role (caller, designer, worker, reviewer, tester): requests, tokens and cost.
+   - In an inline run, when `docs/pbi/conductor/run.json` is missing, use `python <skill>/agent_stats.py --out docs/pbi/stats | head -n 40` as before; its summary opens with reads and turns per agent: requests, cache reads, share, average per request and the largest context, for the orchestrator and each subagent.
    - A cache rebuild is a request that read less than half of what was cached just before and wrote anew. Past the TTL it counts as "TTL expired"; expired under a 5m TTL but within 1 hour, it counts as "a 1h TTL would have prevented it".
    - For earlier work, use `--all` (every session, PBI subagents included) or `--session <ID>`.
    - Per-PBI models, tokens and cost are in `runs.jsonl`. The jev-log line at the end holds only the count of cache rebuilds and the number of `runs.jsonl` rows.
@@ -30,7 +31,7 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
 
 ## The completion report
 
-Write it to `docs/pbi/REPORT.md` first, in the user's language. The gates after finish run on that file. The bundled templates have none; a template that adds yomiyasu as an external component (`gate.yomiyasu`, `appendix/engine.md`) polishes a Japanese report's wording when the yomiyasu skill is installed: call it on the file, apply its wording fixes, and keep numbers, ids, paths, commands and pasted tables as they are. Then send the file's text to the user. Once `docs/pbi/REPORT.md` exists, close the work: write the done memory (`appendix/memory.md`, "Finish"). A run that stops before the report keeps its handoff, so `resume` still finds it.
+Write it to `docs/pbi/REPORT.md` first, in the user's language. The gates after finish run on that file. The bundled templates have none; a template that adds yomiyasu as an external component (`gate.yomiyasu`, `appendix/engine.md`) polishes a Japanese report's wording when the yomiyasu skill is installed: call it on the file, apply its wording fixes, and keep numbers, ids, paths, commands and pasted tables as they are. Then write its path (`docs/pbi/REPORT.md`) in the `report` of the episode result and end the finish episode with status `done`; inline, send the file's text to the user. Once `docs/pbi/REPORT.md` exists, close the work: write the done memory (`appendix/memory.md`, "Finish"). A run that stops before the report keeps its handoff, so `resume` still finds it.
 
 Open with one line that restates the user's goal in your own words, as at the start, then three headings, in this order:
 
@@ -44,7 +45,7 @@ Open with one line that restates the user's goal in your own words, as at the st
   - how many times a route moved to its next step, and why
   - PBIs where you overrode the decision table, and how they ended
   - where Jev was skipped, and the number of handoffs
-  - the stats summary: the orchestrator's share and the top 3 subagents by reads
+  - the stats per role: the table of `docs/pbi/stats/roles.json` (caller, designer, worker, reviewer, tester)
   - rtk savings (tokens and rate, top commands), or "rtk: off (context below the threshold)"
   - the lint recheck: the path of `docs/pbi/jevlint/recheck.md`, its `report` rows, the reworks it caused, and each send to an outside model: the stage, the file count and the user's answer from `adapters.json` `sends`, the files from `docs/pbi/jevlint/<name>.send.txt`, and the tokens, cost and provider from `docs/pbi/jevlint/<name>.dry-run.json`
   - the lint survey's leads under "Found, not in this run", and the map's source (cache folder, scan, or fallback prompt)
