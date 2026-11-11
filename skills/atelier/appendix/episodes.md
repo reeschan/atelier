@@ -8,7 +8,7 @@ The contract between the conductor (`conductor.py`), the designer (`designer.md`
 |---|---|---|---|
 | Caller (Claude Code, Codex, Grok …) | the user | the user's session | nothing but `conductor.py` calls and answers |
 | Conductor (`conductor.py`, a script) | the caller | none | `docs/pbi/conductor/run.json`, the episode prompts, `answers/<seq>-<kind>.md` |
-| Designer (`agents/atelier-designer.md`) | the caller (agent) or `conductor.py run` (headless); description `ATELIER.<run>.<seq> <episode>` (`<run>`: the first 8 characters of `run_id`, printed by the conductor) | home `agents.json` `roles.designer` (opus) | the spec, the PBIs, `docs/pbi/waves.json`, records, the episode result, the `.alive` file |
+| Designer (`agents/atelier-designer.md`) | the caller (agent) or `conductor.py run` (headless); description `ATELIER.<run>.<seq> <episode>` (`<run>`: the first 8 characters of `run_id`, printed by the conductor) | `roles.designer` (opus), from run, repo or home (`appendix/setup.md`, `## roles`) | the spec, the PBIs, `docs/pbi/waves.json`, records, the episode result, the `.alive` file |
 | Worker (`agents/pbi-worker.md`) | the designer; description `PBI-<n> <short text>` | the PBI's `route.json` | the change and `docs/pbi/reports/<report>.md` |
 | Reviewer (`agents/atelier-reviewer.md`) | the designer, one per report, once every worker of the wave has returned; description from `prompts/pbi-review.md` | `roles.reviewer`: `deep` (opus) when the review stage is deep, else `other` (sonnet, effort high); never the model that built it | `docs/pbi/reviews/<report>.review.json` |
 | Tester (`agents/atelier-tester.md`) | the designer; description from `prompts/tester.md` | `roles.tester` (sonnet) | `docs/pbi/verify/tests/<name>.test-result.json` |

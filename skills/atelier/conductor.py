@@ -1,7 +1,7 @@
 """進行役: 設計者の出番を 1 つずつ回す (LLM ではないスクリプト)。run の状態を <dir>/conductor/run.json に持つ。
 
 使い方 (リポジトリのルートで):
-  python <このディレクトリ>/conductor.py start --goal TEXT|--goal-file F [--workflow N] [--launch agent|headless] [--force] [--dir docs/pbi]
+  python <このディレクトリ>/conductor.py start --goal TEXT|--goal-file F [--workflow N] [--launch agent|headless] [--role R[.K]=V ...] [--force] [--dir docs/pbi]
   python <このディレクトリ>/conductor.py next [--relaunch] [--dir docs/pbi]
   python <このディレクトリ>/conductor.py done [--dir docs/pbi]
   python <このディレクトリ>/conductor.py answer (--reply F | --text T | --approve [--choices 1=a,2=b] | --revise (--text T | --reply F)) [--dir docs/pbi]
@@ -647,54 +647,174 @@ _RELEASED = set()
 
 
 # ---- roles ----
+# 役割の値は、キーごとに強い順の層から取る: run (start --role) → repo (docs/pbi/roles.json) → home (agents.json) → 既定。
+# 取った値の出所は running.roles と history に残し、next の roles: の行に出す。
+
+ROLE_PARTS = ('designer', 'reviewer.deep', 'reviewer.other', 'tester')
+ROLE_KEYS = ('model', 'effort', 'permission_mode')
+
+
+def _default_part(name: str) -> dict:
+    head, _, stage = name.partition('.')
+    part = DEFAULT_ROLES[head]
+    return dict(part[stage] if stage else part)
+
 
 def _valid_str(value) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def _role_part(given, default: dict, name: str, warns: list) -> dict:
-    """1 つの役割 (か reviewer の段) の値を確かめ、不正な値は既定にして warn を足す。"""
-    if given is None:
-        return dict(default)
-    if not isinstance(given, dict):
-        warns.append(f'warn roles.{name}: not an object; using the default')
-        return dict(default)
-    part = {}
-    for key, value in default.items():
-        got = given.get(key, value)
-        ok = _valid_str(got) if key != 'effort' else (got is None or _valid_str(got))
-        if not ok:
-            warns.append(f'warn roles.{name}.{key}: {got!r} is not valid; using {value!r}')
-            got = value
-        part[key] = got
-    return part
+def _valid_role_value(key: str, value) -> bool:
+    return _valid_str(value) if key != 'effort' else (value is None or _valid_str(value))
 
 
-def load_roles():
-    """home の agents.json の roles。(roles, warn の行)。"""
+def _layer_part(roles, name: str, source: str, warns: list):
+    """ある層の roles の中の 1 つの役割 (か reviewer の段) の辞書。無ければ None。辞書でなければ warn を足して None。"""
+    if roles is None:
+        return None
+    node = roles
+    path = []
+    for step in name.split('.'):
+        path.append(step)
+        if not isinstance(node, dict):
+            return None
+        node = node.get(step)
+        if node is None:
+            return None
+        if not isinstance(node, dict):
+            warns.append(f"warn roles.{'.'.join(path)} ({source}): not an object; skipped")
+            return None
+    return node
+
+
+def resolve_roles(layers: list):
+    """layers は強い順の [(出所, roles の辞書か None)]。(roles, 出所, warn の行) を返す。
+
+    roles と出所は agents.json の roles と同じ形 (designer・reviewer.deep・reviewer.other・tester)。
+    不正な値はその層を飛ばして次の層の値を使い、warn に使った値と出所を書く。
+    """
     warns = []
+    roles = {'designer': None, 'reviewer': {}, 'tester': None}
+    sources = {'designer': None, 'reviewer': {}, 'tester': None}
+    for name in ROLE_PARTS:
+        default = _default_part(name)
+        parts = [(source, _layer_part(given, name, source, warns)) for source, given in layers]
+        value, origin = {}, {}
+        for key, fallback in default.items():
+            bad = []
+            value[key], origin[key] = fallback, 'default'
+            for source, part in parts:
+                if part is None or key not in part:
+                    continue
+                if _valid_role_value(key, part[key]):
+                    value[key], origin[key] = part[key], source
+                    break
+                bad.append((source, part[key]))
+            for source, got in bad:
+                warns.append(f'warn roles.{name}.{key} ({source}): {got!r} is not valid; '
+                             f'using {value[key]!r} ({origin[key]})')
+        head, _, stage = name.partition('.')
+        if stage:
+            roles[head][stage], sources[head][stage] = value, origin
+        else:
+            roles[head], sources[head] = value, origin
+    return roles, sources, warns
+
+
+def parse_role_args(items) -> dict:
+    """start --role の値 (`<役割>[.<キー>]=<値>`、キーの既定は model、effort の none は null) を roles の形にする。"""
+    given = {}
+    for item in items or []:
+        name, sep, value = item.partition('=')
+        if not sep or not value.strip():
+            raise Refused(f'--role {item!r}: give <role>[.<key>]=<value>')
+        part, key = name, 'model'
+        for candidate in ROLE_KEYS:
+            if name.endswith('.' + candidate):
+                part, key = name[:-len(candidate) - 1], candidate
+        if part not in ROLE_PARTS:
+            raise Refused(f"--role {item!r}: the role is one of {', '.join(ROLE_PARTS)}")
+        if key not in _default_part(part):
+            raise Refused(f'--role {item!r}: {part} has no {key}')
+        value = value.strip()
+        if key == 'effort' and value.lower() in ('none', 'null'):
+            value = None
+        head, _, stage = part.partition('.')
+        target = given.setdefault(head, {})
+        if stage:
+            target = target.setdefault(stage, {})
+        target[key] = value
+    return given
+
+
+def _home_roles():
     data = common.load_json(common.resolve_home(None) / 'agents.json', {})
-    given = data.get('roles') if isinstance(data, dict) else None
-    if given is not None and not isinstance(given, dict):
-        warns.append('warn roles: not an object; using the defaults')
-        given = None
-    given = given or {}
-    reviewer = given.get('reviewer')
-    if reviewer is not None and not isinstance(reviewer, dict):
-        warns.append('warn roles.reviewer: not an object; using the default')
-        reviewer = None
-    reviewer = reviewer or {}
-    roles = {
-        'designer': _role_part(given.get('designer'), DEFAULT_ROLES['designer'], 'designer', warns),
-        'reviewer': {stage: _role_part(reviewer.get(stage), DEFAULT_ROLES['reviewer'][stage], f'reviewer.{stage}', warns)
-                     for stage in ('deep', 'other')},
-        'tester': _role_part(given.get('tester'), DEFAULT_ROLES['tester'], 'tester', warns),
-    }
-    return roles, warns
+    return data.get('roles') if isinstance(data, dict) else None
+
+
+def _repo_roles(paths):
+    data = common.load_json(paths.base / 'roles.json', {}) if paths is not None else {}
+    return data.get('roles') if isinstance(data, dict) else None
+
+
+def load_roles(paths=None, run=None):
+    """run の --role、repo の docs/pbi/roles.json、home の agents.json の roles を重ねる。(roles, 出所, warn の行)。"""
+    layers = [('run', (run or {}).get('roles')), ('repo', _repo_roles(paths)), ('home', _home_roles())]
+    warns = []
+    for source, given in layers:
+        if given is not None and not isinstance(given, dict):
+            warns.append(f'warn roles ({source}): not an object; skipped')
+    layers = [(source, given if isinstance(given, dict) else None) for source, given in layers]
+    roles, sources, more = resolve_roles(layers)
+    return roles, sources, warns + more
 
 
 def model_label(part: dict) -> str:
     return part['model'] + (f"/{part['effort']}" if part.get('effort') else '')
+
+
+def role_label(part: dict, origin: dict) -> str:
+    """`sonnet/high (home)`。model と effort の出所が違えば `sonnet (home)/high (run)`。"""
+    if not part.get('effort') or origin['effort'] == origin['model']:
+        return f"{model_label(part)} ({origin['model']})"
+    return f"{part['model']} ({origin['model']})/{part['effort']} ({origin['effort']})"
+
+
+def roles_line(roles: dict, sources: dict) -> str:
+    labels = []
+    for name in ROLE_PARTS:
+        head, _, stage = name.partition('.')
+        part = roles[head][stage] if stage else roles[head]
+        origin = sources[head][stage] if stage else sources[head]
+        labels.append(f'{name} {role_label(part, origin)}')
+    return 'roles: ' + ', '.join(labels)
+
+
+def roles_record(roles: dict, sources: dict) -> dict:
+    """running.roles と history に残す形: 役割ごとに {キー: {"value", "from"}}。"""
+    record = {}
+    for name in ROLE_PARTS:
+        head, _, stage = name.partition('.')
+        part = roles[head][stage] if stage else roles[head]
+        origin = sources[head][stage] if stage else sources[head]
+        record[name] = {key: {'value': part[key], 'from': origin[key]} for key in part}
+    return record
+
+
+def roles_from_record(record) -> dict | None:
+    """running.roles から roles の形に戻す。形が違えば None。"""
+    try:
+        roles = {'designer': None, 'reviewer': {}, 'tester': None}
+        for name in ROLE_PARTS:
+            part = {key: record[name][key]['value'] for key in _default_part(name)}
+            head, _, stage = name.partition('.')
+            if stage:
+                roles[head][stage] = part
+            else:
+                roles[head] = part
+        return roles
+    except (KeyError, TypeError):
+        return None
 
 
 # ---- 依頼文 ----
@@ -801,6 +921,7 @@ def cmd_start(args, paths: Paths) -> int:
             raise Refused(f'{args.goal_file}: {error}')
     else:
         goal = args.goal
+    given_roles = parse_role_args(args.role)
     warns = []
     carried = {}  # 前の run の止められなかった pid (新しい run の stuck_pids に引き継ぐ)
     with Lock(paths):
@@ -838,6 +959,8 @@ def cmd_start(args, paths: Paths) -> int:
             'pending': {'episode': 'design', 'wave': None, 'pbis': None, 'continue_from': None, 'answer': None},
             'running': None, 'question': None, 'history': [],
         }
+        if given_roles:
+            run['roles'] = given_roles
         if carried.get('stuck_pids'):
             run['stuck_pids'] = carried['stuck_pids']
         save(paths, run)
@@ -874,7 +997,7 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
             stale.unlink()
         except OSError:
             pass
-    roles, warns = load_roles()
+    roles, sources, warns = load_roles(paths, run)
     session_id = str(uuid.uuid4())
     description = f'ATELIER.{run_short}.{seq} {episode}'
     if launcher == 'headless':
@@ -909,11 +1032,12 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
         'continue_from': pending.get('continue_from'), 'answer': pending.get('answer'),
         'conductor_answer': pending.get('conductor_answer'), 'sent_by': pending.get('sent_by'),
         'prompt': prompt.as_posix(), 'result': result.as_posix(), 'alive': alive.as_posix(),
+        'roles': roles_record(roles, sources),
     }
     run['pending'] = None
     run['state'] = 'running'
     model = roles['designer']['model']
-    return ['state: running', *warns, f'episode: {episode} seq {seq}',
+    return ['state: running', *warns, f'episode: {episode} seq {seq}', roles_line(roles, sources),
             f'launch: {launcher} subagent_type={"general-purpose" if fallback else "atelier-designer"} '
             f'model={model} description="{description}"',
             f'prompt: {prompt.as_posix()}', f'result: {result.as_posix()}', 'then: ' + command('done')]
@@ -1011,7 +1135,7 @@ def cmd_next(args, paths: Paths) -> int:
 def history_add(run: dict, running: dict, status: str, summary) -> None:
     run.setdefault('history', []).append({
         'seq': running.get('seq'), 'episode': running.get('episode'), 'wave': running.get('wave'),
-        'launcher': running.get('launcher'), 'status': status,
+        'launcher': running.get('launcher'), 'status': status, 'roles': running.get('roles'),
         'summary': summary if isinstance(summary, list) else []})
 
 
@@ -1778,8 +1902,11 @@ def launch_designer(paths: Paths, run: dict, running: dict, warns: list) -> tupl
     if problem:
         code, lines = fail(paths, run, running, problem, 'launch-failed')
         return None, code, with_warnings(lines, warns)
-    roles, role_warns = load_roles()
-    warns[:] = merge_warnings(warns, role_warns)
+    # next が running に残した値で起こす (next と run の間に roles.json が変わっても、出した行と同じ値)
+    roles = roles_from_record(running.get('roles'))
+    if roles is None:
+        roles, _, role_warns = load_roles(paths, run)
+        warns[:] = merge_warnings(warns, role_warns)
     try:
         argv = designer_argv(launcher, running, roles['designer'])
         task = run_input(running.get('prompt') or '')
@@ -1983,6 +2110,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument('--goal-file', help='目標のファイル')
     p.add_argument('--workflow', help='ワークフローの名前')
     p.add_argument('--launch', choices=('agent', 'headless'), default='agent', help='起動のしかた (既定 agent)')
+    p.add_argument('--role', action='append', metavar='ROLE[.KEY]=VALUE',
+                   help='この run だけの役割の値 (designer=opus、reviewer.other.effort=high)。repo と home より強い')
     p.add_argument('--force', action='store_true', help='今の run.json を run.<日時>.json に退けて始める')
     p = add('next', '次の出番の依頼文を書き、起動のしかたを出す')
     p.add_argument('--relaunch', action='store_true', help='running で止まった出番を、子を止めて新しい seq で起こし直す')

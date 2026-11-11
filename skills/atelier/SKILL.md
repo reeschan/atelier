@@ -18,7 +18,7 @@ You are the caller: the session the user talks to. Atelier's designer does the w
 
 1. Home has no `agents.json`: finish `setup` first (`appendix/setup.md`).
 2. Write the user's goal in two or three lines, in their language, and say them. Do not wait for a reply; the approval of the PBI list is where the user corrects them.
-3. Put that text in a file and run `python <skill>/conductor.py start --goal-file <file>`. When the user names a template, add `--workflow <name>`.
+3. Put that text in a file and run `python <skill>/conductor.py start --goal-file <file>`. When the user names a template, add `--workflow <name>`. When the user names a model for a role in this run, add `--role <role>=<model>` (`appendix/setup.md`, `## roles`).
    - `--launch agent` (the default) when you are a Claude Code main session.
    - `--launch headless` when you are already inside a subagent: one level of the Agent tool is gone.
    - Not Claude Code (Codex, Grok, or any caller reading AGENTS.md): always `start --launch headless`, then `run --detach` and repeated `wait --timeout 300` as below; the `claude` CLI is required.
