@@ -202,8 +202,17 @@ class ConductorTest(unittest.TestCase):
         self.write_json('docs/pbi/design-record.json', {
             'schema': 'atelier.design-record/1', 'design_id': 'test', 'revision': 1,
             'targets': ['PBI-001'], 'concerns': []})
-        self.write('docs/pbi/notes/approve.draft.md',
-                   '---\ntitle: test\n---\n# PBI list\n\n' + '\n'.join(decisions) + '\n')
+        # 承認の原稿の 7 つの節 (appendix/approve.md)。ask の囲みは決めることに、ほかの行は結論に置く
+        asks = '\n'.join(decisions) if '```ask' in decisions else 'なし'
+        summary = '' if '```ask' in decisions else '\n'.join(decisions)
+        self.write('docs/pbi/notes/approve.draft.md', '\n'.join([
+            '---', 'title: test', '---', '## 結論', summary, '', '## 今の流れ', '```flow', 'A -> B', '```', '',
+            '## この run のあとの流れ', '```flow', '- A -> B', '+ A -> C (PBI-001)', '```', '',
+            '## 決めること', asks, '', '## PBI', '| PBI | 何をするか | 終わると何ができるか | 先に要る PBI |',
+            '|---|---|---|---|', '| PBI-001 | C を足す | C が使える | なし |', '',
+            '## 影響範囲', '点検しなかった (小さな変更のため)。', '',
+            '## 作る人と見直し', '| PBI | 作るモデル | 見直しの深さ |', '|---|---|---|', '| PBI-001 | sonnet | ふつう |',
+            '']))
         p = subprocess.run([sys.executable, DESIGN_RECORD, 'markdown', '--draft', 'docs/pbi/notes/approve.draft.md',
                             '--dir', 'docs/pbi'], cwd=self.tmp, capture_output=True, env=self.env, timeout=60)
         self.assertEqual(p.returncode, 0, p.stderr.decode('utf-8', errors='replace'))
