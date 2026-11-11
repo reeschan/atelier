@@ -251,7 +251,7 @@ class JevMcpTest(unittest.TestCase):
         [row] = self.rows()
         # jev-mcp が組み立てた行ではなく、record_run.py の列がそのまま入る
         self.assertEqual(set(row), {'schema', 'recorded_at', 'repo', 'work_key', 'pbi', 'report', 'attempt',
-                                    'rework', 'tier', 'runner', 'model', 'effort', 'models_seen', 'time', 'steps',
+                                    'step', 'rework', 'tier', 'runner', 'model', 'effort', 'models_seen', 'time', 'steps',
                                     'tokens', 'cost_reported', 'cost_api_equiv', 'prices_checked_at',
                                     'prices_home_checked_at', 'verify', 'unchanged', 'memory', 'prompt',
                                     'base_commit', 'input', 'judged', 'archive'})

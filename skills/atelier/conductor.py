@@ -51,6 +51,7 @@ from pathlib import Path
 
 import common
 import claude_run
+import design_record
 import role_results
 
 SCHEMA = 'atelier.run/1'
@@ -747,22 +748,30 @@ def parse_role_args(items) -> dict:
     return given
 
 
-def _home_roles():
-    data = common.load_json(common.resolve_home(None) / 'agents.json', {})
-    return data.get('roles') if isinstance(data, dict) else None
+_UNREADABLE = object()
 
 
-def _repo_roles(paths):
-    data = common.load_json(paths.base / 'roles.json', {}) if paths is not None else {}
+def _roles_in(path: Path):
+    """ファイルの roles。ファイルが無ければ None、在るのに読めない・JSON でなければ _UNREADABLE。"""
+    if not path.exists():
+        return None
+    data = common.load_json(path, _UNREADABLE)
+    if data is _UNREADABLE:
+        return _UNREADABLE
     return data.get('roles') if isinstance(data, dict) else None
 
 
 def load_roles(paths=None, run=None):
     """run の --role、repo の docs/pbi/roles.json、home の agents.json の roles を重ねる。(roles, 出所, warn の行)。"""
-    layers = [('run', (run or {}).get('roles')), ('repo', _repo_roles(paths)), ('home', _home_roles())]
+    repo = _roles_in(paths.base / 'roles.json') if paths is not None else None
+    layers = [('run', (run or {}).get('roles')), ('repo', repo),
+              ('home', _roles_in(common.resolve_home(None) / 'agents.json'))]
     warns = []
     for source, given in layers:
-        if given is not None and not isinstance(given, dict):
+        if given is _UNREADABLE:
+            # 書き損じた設定で上書きが黙って消えないよう、読めなかったことを出す
+            warns.append(f'warn roles ({source}): unreadable; skipped')
+        elif given is not None and not isinstance(given, dict):
             warns.append(f'warn roles ({source}): not an object; skipped')
     layers = [(source, given if isinstance(given, dict) else None) for source, given in layers]
     roles, sources, more = resolve_roles(layers)
@@ -802,11 +811,13 @@ def roles_record(roles: dict, sources: dict) -> dict:
 
 
 def roles_from_record(record) -> dict | None:
-    """running.roles から roles の形に戻す。形が違えば None。"""
+    """running.roles から roles の形に戻す。形が違う・値が不正なら None (呼び出し側が load_roles で取り直す)。"""
     try:
         roles = {'designer': None, 'reviewer': {}, 'tester': None}
         for name in ROLE_PARTS:
             part = {key: record[name][key]['value'] for key in _default_part(name)}
+            if not all(_valid_role_value(key, value) for key, value in part.items()):
+                return None
             head, _, stage = name.partition('.')
             if stage:
                 roles[head][stage] = part
@@ -1396,6 +1407,11 @@ def approve_reply(draft_path: str, choices: dict) -> str:
         else:
             picked = UNANSWERED
         body += [line, f'   → {picked}', '']
+    # 下書きの ```ask の囲みも、決定の行の番号の続きで 1 つずつ決定にする (選ばなかった問いは未回答)
+    for number, ask in enumerate(design_record.draft_asks(draft), start=max(numbers, default=0) + 1):
+        numbers.add(number)
+        picked = f'**{choices[number]}**' if number in choices else UNANSWERED
+        body += [f"{number}. [ask] {ask['question']}", f'   → {picked}', '']
     unknown = sorted(set(choices) - numbers)
     if unknown:
         raise Refused(f"--choices: no decision {', '.join(map(str, unknown))} in {draft_path}")

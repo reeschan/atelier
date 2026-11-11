@@ -212,6 +212,20 @@ class DesignRecordTest(unittest.TestCase):
         os.remove(os.path.join(self.pbi, 'design-record.json'))
         self.assertEqual(self.check('reply-answered.md').returncode, 2)
 
+    def test_a_draft_ask_missing_from_the_reply_is_unanswered(self):
+        """--draft の ```ask の問いが返信の決定に無ければ未回答 (5)。--draft が無ければ数えない。"""
+        with open(self.path('reply-answered.md'), encoding='utf-8') as f:
+            text = f.read()
+        start = text.index('## 決定')
+        bare = text[:start] + text[text.index('## コメント'):]
+        with open(self.path('reply-bare.md'), 'w', encoding='utf-8', newline='\n') as f:
+            f.write(bare)
+        result = self.check('reply-bare.md', '--draft', self.path('draft.md'))
+        self.assertEqual(result.returncode, 5, result.stdout)
+        self.assertIn('ask\t-\tmissing\t-\tOMM の置き場所はどちらですか', result.stdout)
+        self.assertEqual(self.approvals(), [])
+        self.assertEqual(self.check('reply-bare.md', '--dry-run').returncode, 0)
+
 
 if __name__ == '__main__':
     unittest.main()
