@@ -55,7 +55,7 @@ def find_command(runner: str, home=None):
         except ValueError:
             words = None
         if isinstance(words, list) and words and all(isinstance(w, str) and w.strip() for w in words):
-            return list(words), codex_home_problem() if runner == 'codex' else None
+            return list(words), codex_home_problem(words) if runner == 'codex' else None
         return None, f'ATELIER_{runner.upper()}_CMD is not a JSON array of strings'
     if runner == 'claude' and os.environ.get('PBI_CLAUDE_BIN'):
         # claude_run.py と同じ場所の指定 (作業者の claude と同じ実行ファイルを使う)
@@ -98,14 +98,17 @@ def codex_home() -> Path:
     return Path(given) if given else Path.home() / '.codex'
 
 
-def codex_home_problem():
+def codex_home_problem(words=()):
     """CODEX_HOME が設定もサインインも無いフォルダなら、その理由。問題が無ければ None。
 
     空のフォルダを CODEX_HOME にすると、codex は設定もサインインも無いまま起動して落ちる。サインインは auth.json の
-    ほか keyring にも置けるので (config.toml の cli_auth_credentials_store)、config.toml があるホームは断らない。
+    ほか keyring にも置けるので (config.toml か、コマンドの -c の cli_auth_credentials_store)、config.toml がある
+    ホームと、コマンド (words) が置き場を選んでいるときは断らない。
     """
     given = os.environ.get('CODEX_HOME')
     if not given or os.environ.get('OPENAI_API_KEY'):
+        return None
+    if any('cli_auth_credentials_store' in str(word) for word in words):
         return None
     home = Path(given)
     if (home / 'auth.json').is_file() or (home / 'config.toml').is_file():
