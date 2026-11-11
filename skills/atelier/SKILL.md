@@ -69,7 +69,10 @@ With launch `agent` (headless is below):
 
 Any command (`next`, `done`, `run`, `wait`, `status`) may print `warn` lines. Show them as they are.
 
-- `warn garbled:` means a file or summary lost its non-ASCII text (`???`), agent or headless alike. The line stays in `status` and `wait` until the next answer. When a question is waiting, its file may be unreadable: tell the user, and put the wish to have the designer rewrite the named files in the answer you pass on.
+- `warn garbled:` means a file or summary lost its non-ASCII text (`???`), agent or headless alike. The line stays in `status` and `wait` until the next answer. When a question is waiting, its file may be unreadable: tell the user, and have it rewritten before anyone answers it:
+  - kind `approve`: `answer --revise --text "Rewrite <the named files> as UTF-8 and show the approval again."` The design comes back as a new approve; the user approves only the readable list.
+  - any other kind: `answer --text "Do not decide yet. Rewrite <the named files> as UTF-8, then ask this question again."`
+  - Then go on with the loop as usual; the user answers the rewritten question.
 
 ## Resume
 
