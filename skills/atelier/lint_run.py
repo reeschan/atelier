@@ -25,6 +25,7 @@ recheck: マージ基点を一時的な git worktree (スクラッチ) に出し
             断る (終了コード 3)。使ったら used を真にする (次に送るときは、また聞く)
 
 jevlint の場所は agents.find_cli (home の agents.json の tools.jevlint.path、PATH、fnm・nvm の Node の版)。
+流すときはそのディレクトリを PATH の先頭に置く (agents.cli_env)。シェルの PATH の Node の版に左右されない。
 .py のパスなら、いまの Python で動かす。jevlint fix・pr・commits・baseline は使わない。
 終了コード: 0 = 正常、2 = 引数・入力の誤り、jevlint が見つからない・失敗した、3 = 送る許可の記録が無い。
 """
@@ -44,6 +45,9 @@ from pathlib import Path
 import agents as agents_module
 import common
 import lint_compare
+
+# Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 DEFAULT_EXTENSIONS = ('.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.py')
 # 許可があっても外のモデルに送らないファイル (名前で見る)
@@ -65,7 +69,8 @@ def out_dir(pbi: Path) -> Path:
 
 
 def git(root: Path, *args: str) -> str:
-    done = subprocess.run(['git', *args], cwd=root, capture_output=True, text=True, encoding='utf-8')
+    done = subprocess.run(['git', *args], cwd=root, capture_output=True, text=True, encoding='utf-8',
+                          creationflags=NO_WINDOW)
     if done.returncode != 0:
         raise RuntimeError(f'git {" ".join(args)}: {done.stderr.strip()}')
     return done.stdout
@@ -165,8 +170,10 @@ def jevlint_command(home: Path) -> list[str]:
 
 
 def run_jevlint(command: list[str], cwd: Path, args: list[str]) -> str:
-    env = dict(os.environ, NO_COLOR='1', FORCE_COLOR='0')
-    done = subprocess.run([*command, *args], cwd=cwd, capture_output=True, text=True, encoding='utf-8', env=env)
+    # 見つけた jevlint のディレクトリを PATH の先頭に置き、その版の Node で動かす (agents.cli_env)
+    env = dict(agents_module.cli_env(command[-1], os.environ), NO_COLOR='1', FORCE_COLOR='0')
+    done = subprocess.run([*command, *args], cwd=cwd, capture_output=True, text=True, encoding='utf-8', env=env,
+                          creationflags=NO_WINDOW)
     if done.returncode != 0:
         raise RuntimeError(f'jevlint {args[0]} failed ({done.returncode}): {(done.stderr or done.stdout).strip()[-400:]}')
     return ANSI.sub('', done.stdout)
@@ -348,8 +355,9 @@ def cmd_recheck(args, pbi: Path, root: Path, command: list[str]) -> int:
             return 0
         before = judge(command, tree, old, old_send, args.mode, preset) if old else {'files': []}
     finally:
-        subprocess.run(['git', 'worktree', 'remove', '--force', str(tree)], cwd=root, capture_output=True)
-        subprocess.run(['git', 'worktree', 'prune'], cwd=root, capture_output=True)
+        subprocess.run(['git', 'worktree', 'remove', '--force', str(tree)], cwd=root, capture_output=True,
+                       creationflags=NO_WINDOW)
+        subprocess.run(['git', 'worktree', 'prune'], cwd=root, capture_output=True, creationflags=NO_WINDOW)
         shutil.rmtree(scratch, ignore_errors=True)
     after = judge(command, root, files, send, args.mode, preset)
     before_path, after_path = base / f'{args.name}.before.json', base / f'{args.name}.after.json'

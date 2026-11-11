@@ -91,13 +91,13 @@ function parseArgs(argv) {
 async function loadPlaywright() {
   try { return await import('playwright'); } catch { /* try the global install */ }
   try {
-    const root = execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['root', '-g'], { encoding: 'utf8', shell: process.platform === 'win32' }).trim();
+    const root = execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['root', '-g'], { encoding: 'utf8', shell: process.platform === 'win32', windowsHide: true }).trim();
     return createRequire(join(root, 'noop.js'))('playwright');
   } catch { return null; }
 }
 
 function hasFfmpeg() {
-  return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
+  return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true }).status === 0;
 }
 
 async function showCaption(page, text) {
@@ -176,7 +176,7 @@ async function main(argv) {
     mkdirSync(dirname(finalOut), { recursive: true });
     if (extname(finalOut).toLowerCase() === '.mp4') {
       const r = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', join(work, webm), '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart', finalOut], { stdio: 'inherit' });
+        '-movflags', '+faststart', finalOut], { stdio: 'inherit', windowsHide: true });
       if (r.status !== 0) throw new Error('ffmpeg failed');
     } else {
       copyFileSync(join(work, webm), finalOut);

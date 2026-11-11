@@ -253,6 +253,37 @@ class FindCliTest(Base):
         env = self.env(FNM_DIR=str(self.root / 'fnm'))
         self.assertFound(agents.find_cli('opencode', None, env), new)
 
+    def test_fnm_finds_a_version_outside_the_one_on_path(self):
+        # PATH の Node (v22・v26.8.1) には無く、fnm の v26.12.1 にだけ入っている
+        fnm = self.root / 'fnm' / 'node-versions'
+        for version in ('v22.0.0', 'v26.8.1'):
+            (fnm / version / 'installation').mkdir(parents=True)
+        cli = make_cli(fnm / 'v26.12.1' / 'installation', 'jevlint')
+        path = os.pathsep.join(str(fnm / v / 'installation') for v in ('v22.0.0', 'v26.8.1'))
+        env = {'PATH': path, 'FNM_DIR': str(self.root / 'fnm')}
+        self.assertFound(agents.find_cli('jevlint', None, env), cli)
+
+    def test_fnm_default_locations_are_searched_even_with_fnm_dir(self):
+        home = self.root / 'home'
+        cli = make_cli(home / '.local' / 'share' / 'fnm' / 'node-versions' / 'v26.12.1' / 'installation', 'jevlint')
+        env = self.env(FNM_DIR=str(self.root / 'other-fnm'), HOME=str(home))
+        self.assertFound(agents.find_cli('jevlint', None, env), cli)
+
+    def test_fnm_xdg_data_home_and_legacy_dir(self):
+        for parts in (('xdg', 'fnm'), ('home', '.fnm')):
+            with self.subTest(parts=parts):
+                base = self.root.joinpath(*parts)
+                cli = make_cli(base / 'node-versions' / 'v26.12.1' / 'installation', 'jevlint')
+                env = self.env(XDG_DATA_HOME=str(self.root / 'xdg'), HOME=str(self.root / 'home'))
+                self.assertFound(agents.find_cli('jevlint', None, env), cli)
+                shutil.rmtree(base)
+
+    def test_fnm_takes_the_newest_version_across_locations(self):
+        make_cli(self.root / 'a' / 'node-versions' / 'v22.0.0' / 'installation', 'jevlint')
+        new = make_cli(self.root / 'xdg' / 'fnm' / 'node-versions' / 'v26.12.1' / 'installation', 'jevlint')
+        env = self.env(FNM_DIR=str(self.root / 'a'), XDG_DATA_HOME=str(self.root / 'xdg'))
+        self.assertFound(agents.find_cli('jevlint', None, env), new)
+
     @unittest.skipUnless(os.name == 'nt', 'Windows の既定の場所')
     def test_fnm_uses_appdata_when_fnm_dir_is_absent(self):
         appdata = self.root / 'appdata'
@@ -443,3 +474,32 @@ class FilterStepsTest(Base):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CliEnvTest(Base):
+    def test_the_cli_directory_goes_first_and_is_not_repeated(self):
+        cli = make_cli(self.root / 'node' / 'v26.12.1', 'jevlint')
+        env = {'PATH': os.pathsep.join(['/a', str(cli.parent), '/b']), 'OTHER': 'x'}
+        result = agents.cli_env(str(cli), env)
+        self.assertEqual(result['PATH'].split(os.pathsep), [str(cli.parent.absolute()), '/a', '/b'])
+        self.assertEqual(result['OTHER'], 'x')
+        self.assertEqual(env['PATH'].split(os.pathsep)[1], str(cli.parent))  # 元の env は変えない
+
+    def test_keeps_the_case_of_the_path_key(self):
+        cli = make_cli(self.root / 'bin', 'jevlint')
+        result = agents.cli_env(str(cli), {'Path': '/a'})
+        self.assertNotIn('PATH', result)
+        self.assertEqual(result['Path'].split(os.pathsep)[0], str(cli.parent.absolute()))
+
+    @unittest.skipIf(os.name == 'nt', 'symlink')
+    def test_a_symlinked_cli_keeps_its_own_directory(self):
+        # fnm の installation/bin/jevlint は lib の下への symlink。node があるのは bin の方
+        target = make_file(self.root / 'lib', 'cli.js')
+        link_dir = self.root / 'bin'
+        link_dir.mkdir()
+        (link_dir / 'jevlint').symlink_to(target)
+        result = agents.cli_env(str(link_dir / 'jevlint'), {'PATH': ''})
+        self.assertEqual(result['PATH'], str(link_dir.absolute()))
+
+    def test_no_cli_leaves_the_env_as_is(self):
+        self.assertEqual(agents.cli_env(None, {'PATH': '/a'}), {'PATH': '/a'})

@@ -57,6 +57,9 @@ SCHEMA = 'atelier.run/1'
 SKILL = Path(__file__).resolve().parent
 TEMPLATE = SKILL / 'prompts' / 'designer-episode.md'
 
+# Windows で子プロセスのコンソールのウインドウを出さない (ほかのスクリプトと同じ。Windows 以外は 0)
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_ASK = 10
@@ -476,7 +479,7 @@ def process_started(pid: int):
             return boot + ticks / os.sysconf('SC_CLK_TCK')
         # /proc が無い POSIX (macOS・BSD) は ps の lstart (地方時) を読む
         out = subprocess.run(['ps', '-o', 'lstart=', '-p', str(pid)], capture_output=True, text=True,
-                             env=dict(os.environ, LC_ALL='C')).stdout
+                             env=dict(os.environ, LC_ALL='C'), creationflags=NO_WINDOW).stdout
         return time.mktime(time.strptime(out.strip(), '%a %b %d %H:%M:%S %Y'))
     except (OSError, ValueError, IndexError, StopIteration, AttributeError):
         return None
@@ -1265,7 +1268,8 @@ def approve_reply(draft_path: str, choices: dict) -> str:
 def check_reply(paths: Paths, answer: Path, draft: str):
     proc = subprocess.run([sys.executable, str(SKILL / 'design_record.py'), 'check-reply', '--reply', str(answer),
                            '--draft', draft, '--dir', str(paths.base)],
-                          capture_output=True, text=True, encoding='utf-8', errors='replace')
+                          capture_output=True, text=True, encoding='utf-8', errors='replace',
+                          creationflags=NO_WINDOW)
     out = (proc.stdout + proc.stderr).strip().splitlines()
     return proc.returncode, out[-1] if out else ''
 
@@ -1770,7 +1774,7 @@ def launch_designer(paths: Paths, run: dict, running: dict, warns: list) -> tupl
     try:
         with open(out_json, 'wb') as out, open(err_path, 'wb') as err:
             child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=out, stderr=err,
-                                     env=claude_run.build_env(), cwd=str(Path.cwd()))
+                                     env=claude_run.build_env(), cwd=str(Path.cwd()), creationflags=NO_WINDOW)
     except OSError as error:
         code, lines = fail(paths, run, running, f'cannot start the designer: {error}', 'launch-failed')
         return None, code, with_warnings(lines, warns)
