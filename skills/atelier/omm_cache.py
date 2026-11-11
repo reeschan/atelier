@@ -26,12 +26,16 @@ from pathlib import Path
 
 import common
 
+# Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 OMM = '.omm'
 PREFIX = 12
 
 
 def git(root: Path, *args: str) -> str:
-    done = subprocess.run(['git', *args], cwd=root, capture_output=True, text=True, encoding='utf-8')
+    done = subprocess.run(['git', *args], cwd=root, capture_output=True, text=True, encoding='utf-8',
+                          creationflags=NO_WINDOW)
     if done.returncode != 0:
         raise RuntimeError(f'git {" ".join(args)}: {done.stderr.strip()}')
     return done.stdout.strip()
@@ -52,7 +56,8 @@ def scan_dirs(pbi: Path, root: Path, commit: str) -> list[str]:
     dirs = data.get('scan_dirs') if isinstance(data, dict) else None
     if isinstance(dirs, list) and dirs and all(isinstance(d, str) and d for d in dirs):
         return dirs
-    has_src = subprocess.run(['git', 'cat-file', '-e', f'{commit}:src'], cwd=root, capture_output=True).returncode == 0
+    has_src = subprocess.run(['git', 'cat-file', '-e', f'{commit}:src'], cwd=root, capture_output=True,
+                             creationflags=NO_WINDOW).returncode == 0
     return ['src'] if has_src else ['.']
 
 
@@ -101,7 +106,8 @@ def cmd_lookup(args, pbi: Path) -> int:
 
 
 def remote_name(root: Path) -> str | None:
-    done = subprocess.run(['git', 'remote', 'get-url', 'origin'], cwd=root, capture_output=True, text=True)
+    done = subprocess.run(['git', 'remote', 'get-url', 'origin'], cwd=root, capture_output=True, text=True,
+                          creationflags=NO_WINDOW)
     url = done.stdout.strip()
     if done.returncode != 0 or not url:
         return None
@@ -113,7 +119,7 @@ def omm_version() -> str | None:
     found = shutil.which('omm')
     if not found:
         return None
-    done = subprocess.run([found, '--version'], capture_output=True, text=True)
+    done = subprocess.run([found, '--version'], capture_output=True, text=True, creationflags=NO_WINDOW)
     return f'omm {done.stdout.strip()}' if done.returncode == 0 and done.stdout.strip() else None
 
 
