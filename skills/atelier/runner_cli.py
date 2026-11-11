@@ -26,7 +26,7 @@ CODEX_MCP_APPROVAL = 'mcp_servers.shared-memory.default_tools_approval_mode="aut
 # codex がファイルを書くときの決まり。codex のシェルは Windows PowerShell 5.1 で、外のコマンドへ渡す文字を
 # $OutputEncoding (既定 US-ASCII) で符号化するので、日本語が ? (0x3F) になる。設計者の依頼文と role_run.py が
 # 渡し、runners.md の codex の節にも同じ文がある (test_role_run が一致を確かめる)
-CODEX_TEXT_RULE = "On Windows, Windows PowerShell 5.1 sends text piped into another program (`@'...'@ | python -`) as US-ASCII, so every non-ASCII character arrives as `?`. Write files with apply_patch, or write a script to a `.py` file and run `python <file>`. Keep non-ASCII text out of PowerShell pipes; when you need one, run `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` first in the same command."
+CODEX_TEXT_RULE = "On Windows, Windows PowerShell 5.1 sends text piped into another program (`@'...'@ | python -`) as US-ASCII, so every non-ASCII character arrives as `?`. Write files with apply_patch, or write a script to a `.py` file saved as UTF-8 (apply_patch, or `Set-Content -Encoding utf8`; Windows PowerShell 5.1 saves in the ANSI code page by default) and run `python <file>`. Keep non-ASCII text out of PowerShell pipes; when you need one, run `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` first in the same command."
 
 
 def runners_for(part: str) -> tuple:
