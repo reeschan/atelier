@@ -32,7 +32,8 @@ Do not stop to report anything else. Put what the user should know in the summar
 - One worker per PBI, started fresh for every attempt. It builds from the PBI file and its listed refs only (`worker.md`).
 - The build stage always runs `worker.md`, whatever the template. Templates change who designs, reviews and which model builds, never how a worker works.
 - Stages hand off through their artifacts in `docs/pbi/` and `docs/specs/`. Components never call each other.
-- Every stage ends with a fallback component, so a run never needs anything beyond Claude Code.
+- Every stage ends with a fallback component, so a run never needs anything beyond Claude Code. A stage is never dropped because a tool looks missing: when its first row cannot run, the next row (in the end the fallback) runs, and its stage record says `fallback`. Only a `when` that does not hold (`skip`) or the user's `off` leaves a stage out.
+- Whether a tool is installed comes from a fresh run of `flow.py` (status column) and `tools_check.py`, never from STATUS.md, HANDOFF.md, memory, or a bare `jevlint` / `which` / `Get-Command` in the shell. The shell's PATH may carry another Node version than the one the tool was installed under; the scripts search every fnm and nvm version and run the tool with its own directory first on PATH.
 - A review never runs on the model that built what it reviews (`appendix/verify.md`).
 - Running verify and reading the diff closely is the reviewer's job; running tests is the tester's job. You reconcile the bundle and the test-result.
 - A subagent's reply may be empty. Receive its work from the file at its fixed path; when the file is there, go on.

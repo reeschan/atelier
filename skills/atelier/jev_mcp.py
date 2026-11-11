@@ -41,6 +41,9 @@ import tempfile
 import threading
 from pathlib import Path
 
+# Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 HERE = Path(__file__).resolve().parent
 VERIFY = HERE / 'verify.py'
 JEV = HERE / 'jev' / 'jev.py'
@@ -199,7 +202,8 @@ def kill_tree(proc: subprocess.Popen):
     """プロセスグループごと止める。"""
     try:
         if os.name == 'nt':
-            subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True, timeout=15)
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True, timeout=15,
+                           creationflags=NO_WINDOW)
         else:
             os.killpg(proc.pid, signal.SIGKILL)
     except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -408,7 +412,8 @@ class Tasks:
         base = root / 'docs' / 'pbi'
         r = subprocess.run([sys.executable, str(VERIFY), m.group(1), '--dir', str(base), '--name', name,
                             '--timeout', str(int(timeout))],
-                           cwd=cwd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+                           cwd=cwd, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                           creationflags=NO_WINDOW)
         results = read_json(base / 'verify' / f'{name}.json')
         return {'code': r.returncode, 'table': r.stdout, 'stderr': r.stderr[-2000:],
                 'results': (results or {}).get('results')}
@@ -427,7 +432,8 @@ class Tasks:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write(text)
             r = subprocess.run([sys.executable, str(JEV), str(config), gate, tmp], cwd=root,
-                               capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
+                               capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300,
+                               creationflags=NO_WINDOW)
         finally:
             os.unlink(tmp)
         try:
@@ -512,7 +518,7 @@ class Tasks:
         prompt_path.write_text(f'{prompt.rstrip()}\n\nSummary file: `{rel}/{report}.last.md`\n', encoding='utf-8')
         # 前の実行の .last.md を、今回の結果と取り違えない
         last_path.unlink(missing_ok=True)
-        flags = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' \
+        flags = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP | NO_WINDOW} if os.name == 'nt' \
             else {'start_new_session': True}
         # 実行先によっては実際の cwd ではなく PWD を作業ディレクトリにするため、子の PWD も作業ルートにそろえる
         env = {**os.environ, 'PWD': str(cwd)}
@@ -616,7 +622,7 @@ class Tasks:
             try:
                 r = subprocess.run(argv, cwd=root, capture_output=True, text=True, encoding='utf-8',
                                    errors='replace', env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
-                                   timeout=RECORD_TIMEOUT)
+                                   timeout=RECORD_TIMEOUT, creationflags=NO_WINDOW)
             except OSError as error:
                 raise ToolError(f'record_run.py を起動できない: {error}') from None
             except subprocess.TimeoutExpired:

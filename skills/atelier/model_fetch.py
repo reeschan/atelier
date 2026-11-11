@@ -13,6 +13,9 @@ from pathlib import Path
 
 from common import AGENT, EXTERNAL_RUNNERS
 
+# Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 # dsh の同梱カタログ (このファイルと同じディレクトリ)
 CATALOG = Path(__file__).resolve().parent / 'dsh.models.json'
 
@@ -324,7 +327,7 @@ def _run_process(arguments: list, env: dict | None, timeout: float) -> subproces
     本体が握ったパイプのせいで後の communicate が戻らないことがある。そのため木ごと止める。
     """
     process = subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
-                               start_new_session=os.name != 'nt')
+                               start_new_session=os.name != 'nt', creationflags=NO_WINDOW)
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -344,7 +347,7 @@ def _kill_tree(process: subprocess.Popen) -> None:
     try:
         if os.name == 'nt':
             subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, creationflags=NO_WINDOW)
         else:
             os.killpg(process.pid, signal.SIGKILL)
     except (OSError, subprocess.TimeoutExpired):
