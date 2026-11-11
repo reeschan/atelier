@@ -8,11 +8,11 @@ Read this when the build stage picks `build.runners`: `## Common rules` first, t
 
 **When a runner is unusable** (its "Unusable when" below), the PBI has not failed, and the user picks what runs instead. Every other model costs tokens the user did not approve, so you leave the choice to them:
 
-1. Record it with `record_run.py <report> --attempt <position> --outcome unavailable` right away (the next run overwrites the raw logs).
-2. Retry the same step once. When the retry is usable, go on as usual.
+1. Record it with `record_run.py <report> --attempt <n> --step <position> --outcome unavailable` right away (the next run overwrites the raw logs). `--attempt` counts the runs of this report (1, 2, ...; never reused) and `--step` is the route position it ran; they differ after a retry or a step the user picked.
+2. Retry the same step once (the next `--attempt`, the same `--step`). When the retry is usable, go on as usual.
 3. When it is unusable again, hold the PBI and let the other PBIs of the wave finish and be reconciled.
 4. End the episode with one question of kind `decision`, with `state`, for every PBI of the wave held this way. Per PBI: the runner and model, why it is unusable, and the choices: one of the remaining steps of its route (name each), wait and retry the same step later, or hold the PBI. When a usage limit is the cause, add the choice to route the rest of the run without that model (below).
-5. After the `Answer:`, launch what was picked and update the PBI's model and note in STATUS.md.
+5. After the `Answer:`, launch what was picked (the next `--attempt`, its own `--step`) and update the PBI's model and note in STATUS.md.
 
 A tier up or building it yourself never answers an unusable runner; those come only from `appendix/rework.md`.
 
