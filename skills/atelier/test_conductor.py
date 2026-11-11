@@ -1341,6 +1341,25 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(args[args.index('--model') + 1], 'sonnet')
         self.assertEqual(args[args.index('--effort') + 1], 'high')
 
+    def test_an_unreadable_roles_file_is_named_in_a_warning(self):
+        """roles.json が JSON でなければ、その層を飛ばして warn roles (repo): unreadable を出す。"""
+        self.write('docs/pbi/roles.json', '{"roles": {"designer": ')
+        self.con('start', '--goal', 'broken roles')
+        rc, out = self.con('next')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('warn roles (repo): unreadable; skipped', out)
+        self.assertIn('designer opus (default)', self.line(out, 'roles'))
+
+    def test_a_kept_record_with_a_bad_value_is_not_used(self):
+        """running.roles の値が不正 (手で直した run.json など) なら roles_from_record は None を返し、run は取り直す。"""
+        roles, sources, _ = conductor.load_roles()
+        record = conductor.roles_record(roles, sources)
+        self.assertEqual(conductor.roles_from_record(record), roles)
+        record['designer']['model']['value'] = None
+        self.assertIsNone(conductor.roles_from_record(record))
+        record['designer']['model']['value'] = 'opus'
+        record['tester']['effort']['value'] = 3
+        self.assertIsNone(conductor.roles_from_record(record))
 
 if __name__ == '__main__':
     unittest.main()
