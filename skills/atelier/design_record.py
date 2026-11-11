@@ -15,7 +15,8 @@ markdown 設計の下書き (Markdown) に返信の封筒 reply-meta-<name>: <va
 check-reply 貼られた返信 (--reply、無ければ標準入力) を正本と照合する。\\r\\n を \\n にし、行頭で始まる最後の
         ```am-reply-meta フェンスだけを読む (返信の末尾にあるもの。`  > ` の引用の中は行頭ではないので読まない)。
         design_id・revision・record_hash を正本から計算した値と比べ、--draft を渡したときは draft_hash も比べる。
-        未選択の ask (答えが **—**) は未回答で、承認ではない。
+        未選択の ask (答えが **—**) は未回答で、承認ではない。--draft を渡したときは、下書きの ```ask の囲みの問いが
+        返信の決定に無いものも未回答に数える (決定を書かない返信で承認にしない)。
 
 hash: record_hash は正本を sort_keys・区切り (',', ':')・ensure_ascii=False の JSON にした UTF-8 の sha256。
       draft_hash は下書きから reply-meta- の行を除き、\\r\\n を \\n にした UTF-8 の sha256。
@@ -52,6 +53,8 @@ FENCE_OPEN = '```am-reply-meta'
 DECISION = re.compile(r'^(\d+)\. \[([^\]]*)\] (.*)$')
 ANSWER = re.compile(r'^ {3}[←→] (.*)$')
 UNANSWERED = '**—**'
+# 下書きの問いの囲み (answer-me-with-any の ask ブロック)
+ASK_OPEN = '```ask'
 SLICE_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
 READ = re.compile(r'^(.+):(\d+)(?:-(\d+))?$')
 
@@ -142,6 +145,34 @@ def split_reply(text: str) -> tuple[str, str | None]:
     if match is None:
         return text, None
     return text[:start], match.group(1)
+
+
+def draft_asks(draft: str) -> list[dict]:
+    """下書きの ```ask の囲みを順に読む。[{question, options}]。
+
+    問いは囲みの最初の空でない行。選択肢は `* ` (推奨) か `- ` で始まる行の、` | ` より前。
+    """
+    found = []
+    block = None
+    for line in normalize(draft).split('\n'):
+        if block is None:
+            if line.strip() == ASK_OPEN:
+                block = []
+            continue
+        if line.strip() == '```':
+            rows = [row.strip() for row in block if row.strip()]
+            if rows:
+                options = [row[2:].split(' | ')[0].strip() for row in rows[1:] if row[:2] in ('* ', '- ')]
+                found.append({'question': rows[0], 'options': options})
+            block = None
+            continue
+        block.append(line)
+    return found
+
+
+def same_question(a: str, b: str) -> bool:
+    """問いの文が同じか (空白の違いは見ない)。"""
+    return ' '.join(a.split()) == ' '.join(b.split())
 
 
 def decisions(body: str) -> list[dict]:
@@ -292,6 +323,10 @@ def cmd_check_reply(args) -> int:
         state = 'answered' if d['answered'] else 'unanswered'
         print(f"ask\t{d['number']}\t{state}\t{d['answer'] or '-'}\t{d['question']}")
     open_asks = [d for d in found if not d['answered']]
+    for ask in draft_asks(draft or ''):
+        if not any(same_question(ask['question'], d['question']) for d in found):
+            print(f"ask\t-\tmissing\t-\t{ask['question']}")
+            open_asks.append(ask)
     if open_asks:
         print(f"unanswered\t{len(open_asks)} ask(s) without an answer\tnot approved")
         return EXIT_UNANSWERED
