@@ -189,6 +189,16 @@ class RoleRunTest(unittest.TestCase):
                          extra_env={'CODEX_HOME': str(keyring_home)})
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_codex_home_allowed_when_the_command_picks_the_credentials_store(self):
+        """ATELIER_CODEX_CMD が -c cli_auth_credentials_store で置き場を選んでいれば、空のホームでも断らない。"""
+        self.prompt()
+        empty = self.tmp / 'empty-keyring-home'
+        empty.mkdir()
+        cmd = json.dumps([sys.executable, str(self.fake), '-c', 'cli_auth_credentials_store="keyring"'])
+        r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
+                         extra_env={'CODEX_HOME': str(empty), 'ATELIER_CODEX_CMD': cmd})
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_codex_home_without_sign_in_is_refused(self):
         self.prompt()
         empty = self.tmp / 'empty-home'
