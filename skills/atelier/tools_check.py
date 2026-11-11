@@ -11,7 +11,8 @@
 sac-strategic-compact、principle-test-behavior-not-implementation (pstack)、answer-me-with-html (Approve を HTML で見せる
 confirm のスキル。repo は answer-me-with-any、スキル名は answer-me-with-html。appendix/adapters.md の `## Confirm`)。
 jevlint は agents.find_cli で探し (home の agents.json の tools.jevlint.path、PATH、fnm・nvm の Node の版)、
-`jevlint auth list` に typesafe があるかを見る (キーの値は出ない)。
+`jevlint auth list` に typesafe があるかを見る (キーの値は出ない)。流すときは見つけた CLI のディレクトリを PATH の先頭に置く
+(agents.cli_env)。シェルで `jevlint` や `which jevlint` を叩いた結果は、PATH の Node の版しだいなので有無の根拠にしない。
 プラグインの置き場は PBI_PLUGINS_DIR、無ければ ~/.claude/plugins。スキルの置き場は --skills-dir、無ければ ~/.claude/skills。
 終了コード: 0 (無い道具があっても 0)。
 """
@@ -55,10 +56,11 @@ TIMEOUT = 30
 
 
 def run(command: list[str], args: list[str]) -> subprocess.CompletedProcess | None:
-    """コマンドを流す。上限の時間を超えたら None。"""
+    """コマンドを流す。CLI のディレクトリを PATH の先頭に置く (lint_run.py と同じ)。上限の時間を超えたら None。"""
     try:
         return subprocess.run([*command, *args], capture_output=True, text=True, encoding='utf-8',
-                              env=dict(os.environ, NO_COLOR='1', FORCE_COLOR='0'), timeout=TIMEOUT)
+                              env=dict(agents_module.cli_env(command[-1], os.environ), NO_COLOR='1', FORCE_COLOR='0'),
+                              timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         return None
 

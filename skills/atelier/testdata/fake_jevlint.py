@@ -1,7 +1,7 @@
 """テスト用の偽の jevlint。lint_run.py・tools_check.py のテストが home の agents.json の tools.jevlint.path で指す。
 
 ファイルの中の行で結果を決める: `score: N` (点、既定 90)、`fn: N` (その長さの関数)、`bug: X` (bug-hunt の合致、既定 0.9)。
-呼ばれるたびに FAKE_JEVLINT_LOG に {"args", "cwd"} を 1 行足す。FAKE_JEVLINT_KEYS が空なら auth list に typesafe を出さない。
+呼ばれるたびに FAKE_JEVLINT_LOG に {"args", "cwd", "path0" (PATH の先頭)} を 1 行足す。FAKE_JEVLINT_KEYS が空なら auth list に typesafe を出さない。
 """
 import json
 import os
@@ -13,7 +13,8 @@ def log(args):
     path = os.environ.get('FAKE_JEVLINT_LOG')
     if path:
         with open(path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'args': args, 'cwd': os.getcwd()}) + '\n')
+            f.write(json.dumps({'args': args, 'cwd': os.getcwd(),
+                                'path0': os.environ.get('PATH', '').split(os.pathsep)[0]}) + '\n')
 
 
 def report(path, ast_only):

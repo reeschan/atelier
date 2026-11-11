@@ -89,6 +89,14 @@ class LintRunTest(unittest.TestCase):
         self.assertEqual(sorted(self.lines('recheck.excluded.txt')),
                          ['src/b.ts\tsensitive (ast only)', 'src/notes.txt\textension', 'src/secrets.ts\tsecret'])
 
+    def test_jevlint_runs_with_its_own_directory_first_on_path(self):
+        # セッションの PATH に別の版の Node しか無くても、見つけた jevlint の版の Node で動かすため
+        self.make_recheck_list()
+        done = self.run_cli('recheck', '--name', 'recheck', '--base', 'main', '--mode', 'ast-only')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        heads = {os.path.normcase(c['path0']) for c in self.calls()}
+        self.assertEqual(heads, {os.path.normcase(os.path.dirname(os.path.abspath(FAKE)))})
+
     def test_model_needs_an_unused_approval(self):
         self.make_recheck_list()
         refused = self.run_cli('recheck', '--name', 'recheck', '--base', 'main', '--mode', 'model')
