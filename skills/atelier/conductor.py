@@ -53,6 +53,7 @@ import common
 import claude_run
 import design_record
 import role_results
+import runner_cli
 
 SCHEMA = 'atelier.run/1'
 SKILL = Path(__file__).resolve().parent
@@ -98,9 +99,10 @@ NEXT_ALLOWED = {
 }
 
 DEFAULT_ROLES = {
-    'designer': {'model': 'opus', 'effort': None, 'permission_mode': 'auto'},
-    'reviewer': {'deep': {'model': 'opus', 'effort': None}, 'other': {'model': 'sonnet', 'effort': 'high'}},
-    'tester': {'model': 'sonnet', 'effort': None},
+    'designer': {'runner': 'agent', 'model': 'opus', 'effort': None, 'permission_mode': 'auto'},
+    'reviewer': {'deep': {'runner': 'agent', 'model': 'opus', 'effort': None},
+                 'other': {'runner': 'agent', 'model': 'sonnet', 'effort': 'high'}},
+    'tester': {'runner': 'agent', 'model': 'sonnet', 'effort': None},
 }
 
 DECISION = re.compile(r'^(\d+)\. \[([^\]]*)\] (.*)$')
@@ -652,7 +654,7 @@ _RELEASED = set()
 # 取った値の出所は running.roles と history に残し、next の roles: の行に出す。
 
 ROLE_PARTS = ('designer', 'reviewer.deep', 'reviewer.other', 'tester')
-ROLE_KEYS = ('model', 'effort', 'permission_mode')
+ROLE_KEYS = ('runner', 'model', 'effort', 'permission_mode')
 
 
 def _default_part(name: str) -> dict:
@@ -665,7 +667,9 @@ def _valid_str(value) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def _valid_role_value(key: str, value) -> bool:
+def _valid_role_value(key: str, value, name: str = '') -> bool:
+    if key == 'runner':
+        return value in runner_cli.runners_for(name)
     return _valid_str(value) if key != 'effort' else (value is None or _valid_str(value))
 
 
@@ -707,7 +711,7 @@ def resolve_roles(layers: list):
             for source, part in parts:
                 if part is None or key not in part:
                     continue
-                if _valid_role_value(key, part[key]):
+                if _valid_role_value(key, part[key], name):
                     value[key], origin[key] = part[key], source
                     break
                 bad.append((source, part[key]))
@@ -740,6 +744,8 @@ def parse_role_args(items) -> dict:
         value = value.strip()
         if key == 'effort' and value.lower() in ('none', 'null'):
             value = None
+        if key == 'runner' and value not in runner_cli.runners_for(part):
+            raise Refused(f"--role {item!r}: {part} takes a runner of {', '.join(runner_cli.runners_for(part))}")
         head, _, stage = part.partition('.')
         target = given.setdefault(head, {})
         if stage:
@@ -778,15 +784,55 @@ def load_roles(paths=None, run=None):
     return roles, sources, warns + more
 
 
+def _label_pieces(part: dict) -> list:
+    """表示の部品 [(文字, キー)]: model、/effort (あれば)、@runner (agent でなければ)。"""
+    pieces = [(part['model'], 'model')]
+    if part.get('effort'):
+        pieces.append((f"/{part['effort']}", 'effort'))
+    if part.get('runner', 'agent') != 'agent':
+        pieces.append((f"@{part['runner']}", 'runner'))
+    return pieces
+
+
+def role_parts(roles: dict):
+    """(部分の名前, その値) を ROLE_PARTS の順に。"""
+    for name in ROLE_PARTS:
+        head, _, stage = name.partition('.')
+        yield name, roles[head][stage] if stage else roles[head]
+
+
+def check_role_runners(roles: dict) -> list:
+    """agent 以外の実行先が使えるかを確かめ、使えなければ Refused。モデルが一覧に無ければ warn の行を返す。"""
+    warns = []
+    for name, part in role_parts(roles):
+        runner = part.get('runner', 'agent')
+        if runner == 'agent':
+            continue
+        reason = runner_cli.unusable_reason(runner)
+        if reason:
+            raise Refused(f'roles.{name}.runner {runner}: {reason}')
+        if runner_cli.model_listed(runner, part['model']) is False:
+            warns.append(f"warn roles.{name}.model: {part['model']!r} is not in the {runner} model list; "
+                         'using it as given')
+    return warns
+
+
+def designer_runner(roles: dict) -> str:
+    return roles['designer'].get('runner', 'agent')
+
+
 def model_label(part: dict) -> str:
-    return part['model'] + (f"/{part['effort']}" if part.get('effort') else '')
+    """`sonnet/high`、agent 以外の実行先は `gpt-6.1-terra/high@codex`。"""
+    return ''.join(text for text, _ in _label_pieces(part))
 
 
 def role_label(part: dict, origin: dict) -> str:
-    """`sonnet/high (home)`。model と effort の出所が違えば `sonnet (home)/high (run)`。"""
-    if not part.get('effort') or origin['effort'] == origin['model']:
-        return f"{model_label(part)} ({origin['model']})"
-    return f"{part['model']} ({origin['model']})/{part['effort']} ({origin['effort']})"
+    """`sonnet/high (home)`。出所が違えば部品ごとに `sonnet (home)/high (run)`。"""
+    pieces = _label_pieces(part)
+    sources = {origin.get(key, 'default') for _, key in pieces}
+    if len(sources) == 1:
+        return f'{model_label(part)} ({sources.pop()})'
+    return ''.join(f"{text} ({origin.get(key, 'default')})" for text, key in pieces)
 
 
 def roles_line(roles: dict, sources: dict) -> str:
@@ -815,8 +861,10 @@ def roles_from_record(record) -> dict | None:
     try:
         roles = {'designer': None, 'reviewer': {}, 'tester': None}
         for name in ROLE_PARTS:
-            part = {key: record[name][key]['value'] for key in _default_part(name)}
-            if not all(_valid_role_value(key, value) for key, value in part.items()):
+            # runner の無い記録 (runner のキーができる前の run.json) は既定 (agent) で埋める
+            part = {key: record[name][key]['value'] if key in record[name] else default
+                    for key, default in _default_part(name).items()}
+            if not all(_valid_role_value(key, value, name) for key, value in part.items()):
                 return None
             head, _, stage = name.partition('.')
             if stage:
@@ -933,7 +981,9 @@ def cmd_start(args, paths: Paths) -> int:
     else:
         goal = args.goal
     given_roles = parse_role_args(args.role)
-    warns = []
+    # 指定された実行先が使えなければ run を作らない (黙って Claude で動かさない)
+    resolved, _, _ = load_roles(paths, {'roles': given_roles})
+    warns = check_role_runners(resolved)
     carried = {}  # 前の run の止められなかった pid (新しい run の stuck_pids に引き継ぐ)
     with Lock(paths):
         try:
@@ -948,7 +998,8 @@ def cmd_start(args, paths: Paths) -> int:
         if paths.run.exists():
             # 前の run の子 (runner と designer) を止めてから退ける。止められなければ warn にして進む
             if old is not None:
-                warns, stuck = stop_children(old)
+                stop_warns, stuck = stop_children(old)
+                warns = warns + stop_warns
                 if stuck:
                     carried['stuck_pids'] = [entry for entry in old.get('stuck_pids') or []
                                              if isinstance(entry, dict)]
@@ -1023,6 +1074,7 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
         'reviewer': (f"deep={model_label(reviewer['deep'])} other={model_label(reviewer['other'])}"
                      ' (switch to the other when it equals the built model)'),
         'tester': model_label(roles['tester']),
+        'agent_tool': 'no' if designer_runner(roles) == 'codex' else 'yes',
         'continue_from': pending.get('continue_from'), 'answer': pending.get('answer'),
         'conductor_answer': pending.get('conductor_answer'), 'sent_by': pending.get('sent_by'),
         'result': result.as_posix(), 'alive': alive.as_posix(), 'ctx_probe': ctx_probe,
@@ -1061,9 +1113,10 @@ def running_lines(run: dict) -> list:
             'relaunch: ' + command('next', '--relaunch')]
 
 
-def headless_lines(run: dict, warns=()) -> list:
-    """launch が headless の run の next: 起動の指示は出さず、起動する run を案内する。"""
-    return [f"state: {run.get('state')}", *warns, 'launch: headless', 'then: ' + command('run', '--detach')]
+def headless_lines(run: dict, warns=(), why=None) -> list:
+    """launch が headless の run (か agent 以外の設計者) の next: 起動の指示は出さず、起動する run を案内する。"""
+    launch_line = f'launch: headless ({why})' if why else 'launch: headless'
+    return [f"state: {run.get('state')}", *warns, launch_line, 'then: ' + command('run', '--detach')]
 
 
 def relaunch(paths: Paths, run: dict):
@@ -1134,6 +1187,12 @@ def cmd_next(args, paths: Paths) -> int:
             raise Refused(f'unknown state {state!r} in run.json')
         if run.get('launch') == 'headless':
             emit(headless_lines(run))
+            return EXIT_OK
+        roles, sources, role_warns = load_roles(paths, run)
+        runner = designer_runner(roles)
+        if runner != 'agent':
+            # Agent ツールで起こせない実行先の設計者は、run が起こす
+            emit(headless_lines(run, [*role_warns, roles_line(roles, sources)], f'designer runner {runner}'))
             return EXIT_OK
         lines = launch(paths, run)
         save(paths, run)
@@ -1634,10 +1693,11 @@ def running_resumable(running: dict) -> bool:
             and bool(running.get('prompt')))
 
 
-def designer_command():
+def designer_command(runner: str = 'agent'):
     """設計者を起こすコマンドの先頭と、見つからないときの理由 (見つかれば理由は None)。
 
-    ATELIER_DESIGNER_CMD (JSON の文字列の配列) があればそれ。無ければ claude_run.claude_command()。
+    ATELIER_DESIGNER_CMD (JSON の文字列の配列) があれば、実行先によらずそれ。無ければ codex は runner_cli.find_command、
+    agent と claude は claude_run.claude_command()。
     ただし claude_command は見つからないと終了するので、先に場所を確かめて、無ければ理由を返す。
     """
     given = os.environ.get('ATELIER_DESIGNER_CMD')
@@ -1649,6 +1709,8 @@ def designer_command():
         if isinstance(words, list) and words and all(isinstance(word, str) and word.strip() for word in words):
             return list(words), None
         return None, 'ATELIER_DESIGNER_CMD is not a JSON array of strings'
+    if runner == 'codex':
+        return runner_cli.find_command('codex')
     configured = os.environ.get('PBI_CLAUDE_BIN')
     found = configured or shutil.which('claude')
     if not found or not Path(found).is_file():
@@ -1678,8 +1740,15 @@ def agent_definition_json() -> dict:
     return {AGENT_ROLE: spec}
 
 
-def designer_argv(launcher: list, running: dict, designer: dict) -> list:
-    """claude -p の引数。定義が home に無ければ --agents を --agent の前に足す。"""
+def designer_argv(launcher: list, running: dict, designer: dict, last_path=None) -> list:
+    """claude -p の引数。定義が home に無ければ --agents を --agent の前に足す。
+
+    codex の設計者は codex exec の引数 (runner_cli.codex_args)。サンドボックスは permission_mode から取る。
+    """
+    if designer.get('runner') == 'codex':
+        return [*launcher, *runner_cli.codex_args(designer['model'], designer.get('effort'),
+                                                  runner_cli.codex_sandbox(designer.get('permission_mode')),
+                                                  last_path)]
     argv = [*launcher, '-p', '--output-format', 'json']
     if not agents_installed():
         argv += ['--agents', json.dumps(agent_definition_json())]
@@ -1691,10 +1760,15 @@ def designer_argv(launcher: list, running: dict, designer: dict) -> list:
     return argv
 
 
-def run_input(prompt_path) -> bytes:
-    """標準入力に渡す文: 依頼文のパスを読む指示と、依頼文の本文。"""
+def run_input(prompt_path, definition: bool = False) -> bytes:
+    """標準入力に渡す文: 依頼文のパスを読む指示と、依頼文の本文。
+
+    definition が真 (--agent の無い codex) なら、先頭に設計者の定義を読む行を付ける。
+    """
     text = Path(prompt_path).read_text(encoding='utf-8', errors='replace')
     head = f'{Path(prompt_path).as_posix()} を読み、その指示どおりに作業してください。\n\n'
+    if definition:
+        head = f'Read {AGENT_DEFINITION.as_posix()} and follow it as your instructions.\n' + head
     return (head + text).encode('utf-8')
 
 
@@ -1745,6 +1819,31 @@ def attach_cost(run: dict, running: dict, data) -> bool:
             changed = True
         break
     return changed
+
+
+def codex_problem(code, events: dict) -> str:
+    """codex の設計者の起動の失敗の理由。失敗でなければ空。turn.failed・error のイベントは終了コードより先に見る。"""
+    if events.get('failed'):
+        return f"designer codex failed: {fold(events['failed'], 200)}"
+    if code != 0:
+        return f'designer exit {code}'
+    return ''
+
+
+def attach_tokens(run: dict, running: dict, events: dict) -> bool:
+    """history のその seq の行に、codex の thread_id (session_id) とトークン数を足す。費用は足さない。"""
+    for row in reversed(run.get('history') or []):
+        if not isinstance(row, dict) or row.get('seq') != running.get('seq'):
+            continue
+        changed = False
+        if events.get('session_id'):
+            row['session_id'] = events['session_id']
+            changed = True
+        if events.get('tokens'):
+            row['tokens'] = events['tokens']
+            changed = True
+        return changed
+    return False
 
 
 def runner_argv(args, run: dict) -> list:
@@ -1914,18 +2013,19 @@ def launch_designer(paths: Paths, run: dict, running: dict, warns: list) -> tupl
     episode = str(running.get('episode') or 'design')
     out_json = paths.episode_file(seq, episode, '.json')
     err_path = paths.episode_file(seq, episode, '.err')
-    launcher, problem = designer_command()
-    if problem:
-        code, lines = fail(paths, run, running, problem, 'launch-failed')
-        return None, code, with_warnings(lines, warns)
     # next が running に残した値で起こす (next と run の間に roles.json が変わっても、出した行と同じ値)
     roles = roles_from_record(running.get('roles'))
     if roles is None:
         roles, _, role_warns = load_roles(paths, run)
         warns[:] = merge_warnings(warns, role_warns)
+    runner = designer_runner(roles)
+    launcher, problem = designer_command(runner)
+    if problem:
+        code, lines = fail(paths, run, running, problem, 'launch-failed')
+        return None, code, with_warnings(lines, warns)
     try:
-        argv = designer_argv(launcher, running, roles['designer'])
-        task = run_input(running.get('prompt') or '')
+        argv = designer_argv(launcher, running, roles['designer'], paths.episode_file(seq, episode, '.last.md'))
+        task = run_input(running.get('prompt') or '', definition=runner == 'codex')
     except OSError as error:
         code, lines = fail(paths, run, running, f'cannot read the prompt or the agent definition: {error}',
                            'launch-failed')
@@ -1978,13 +2078,19 @@ def settle_episode(paths: Paths, run: dict, code: int, out_json) -> tuple:
     active = run.get('running') or {}
     active.pop('child_pid', None)
     active.pop('child_pid_started', None)
-    data = output_json(out_json)
-    problem = launch_problem(code, data, out_json)
+    roles = roles_from_record(active.get('roles'))
+    codex = roles is not None and designer_runner(roles) == 'codex'
+    if codex:
+        events = runner_cli.codex_events(out_json)
+        problem = codex_problem(code, events)
+    else:
+        data = output_json(out_json)
+        problem = launch_problem(code, data, out_json)
     if problem:
         done_code, lines = fail(paths, run, active, problem, 'launch-failed')
     else:
         done_code, lines = process_done(paths, run)
-    if attach_cost(run, active, data):
+    if attach_tokens(run, active, events) if codex else attach_cost(run, active, data):
         save(paths, run)
     stopping = done_code != EXIT_OK or not lines or not str(lines[0]).startswith('state: ready')
     if stopping and run.get('runner_pid') == os.getpid():

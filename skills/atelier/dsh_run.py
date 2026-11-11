@@ -1,7 +1,7 @@
 """実行先 dsh（DeepSeek Harness の headless）で PBI を 1 件動かす。runners.md の「dsh」の節から呼ぶ。
 
   python <このディレクトリ>/dsh_run.py <報告名> --model <provider>/<model> [--effort <effort>] [--memory none|refs-only]
-      [--pbi-dir docs/pbi]
+      [--pbi-dir docs/pbi] [--folder dsh|roles]
 
 - 依頼文は <pbi-dir>/dsh/<報告名>.prompt.md（先に書いておく）。リポジトリのルートで実行する（そこが dsh の作業ルートになる）。
 - モデルと effort は、実行ごとの上書き設定 <pbi-dir>/dsh/<報告名>.patch.yml に書いて `--patch` で渡す
@@ -157,6 +157,8 @@ def main() -> None:
     ap.add_argument('--effort', default=None)
     ap.add_argument('--memory', choices=MEMORY, default='none')
     ap.add_argument('--pbi-dir', default='docs/pbi')
+    ap.add_argument('--folder', default='dsh', choices=('dsh', 'roles'),
+            help='依頼文とログの置き場 (<pbi-dir>/<folder>)。役割 (role_run.py) は roles')
     args = ap.parse_args()
 
     if not REPORT.match(args.report):
@@ -171,7 +173,7 @@ def main() -> None:
         if not MEMORY_URL.match(memory_url):
             fail(f'{MEMORY_URL_ENV} に使えない文字があります: {memory_url!r}')
 
-    base = Path(args.pbi_dir) / 'dsh'
+    base = Path(args.pbi_dir) / args.folder
     prompt = base / f'{args.report}.prompt.md'
     if not prompt.is_file():
         fail(f'依頼文がありません: {prompt}')

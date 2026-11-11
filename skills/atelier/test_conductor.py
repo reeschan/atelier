@@ -41,7 +41,8 @@ from pathlib import Path
 
 prompt = sys.stdin.read()
 with open(os.environ['FAKE_DESIGNER_LOG'], 'a', encoding='utf-8') as log:
-    log.write(json.dumps({'args': sys.argv[1:], 'api_key_seen': 'ANTHROPIC_API_KEY' in os.environ}) + '\n')
+    log.write(json.dumps({'args': sys.argv[1:], 'api_key_seen': 'ANTHROPIC_API_KEY' in os.environ,
+                          'head': prompt.splitlines()[0] if prompt else ''}) + '\n')
 time.sleep(float(os.environ.get('FAKE_DESIGNER_SLEEP') or 0))
 episode, seq = re.search(r'^Episode: (\w+) \(seq (\d+)\)', prompt, re.M).groups()
 result_path = re.search(r'^Result: .*?write (\S+)', prompt, re.M).group(1)
@@ -62,6 +63,18 @@ else:
 Path(result_path).parent.mkdir(parents=True, exist_ok=True)
 Path(result_path).write_text(json.dumps(data), encoding='utf-8')
 is_error = os.environ.get('FAKE_IS_ERROR') == '1'
+if 'exec' in sys.argv[1:]:
+    # codex exec --json の形: JSONL のイベントと、-o の最後の文
+    args = sys.argv[1:]
+    Path(args[args.index('-o') + 1]).write_text(f'fake {episode}\n', encoding='utf-8')
+    print(json.dumps({'type': 'thread.started', 'thread_id': 'fake-thread'}))
+    print(json.dumps({'type': 'turn.started'}))
+    if is_error:
+        print(json.dumps({'type': 'turn.failed', 'error': {'message': 'usage limit reached'}}))
+        sys.exit(1)
+    print(json.dumps({'type': 'turn.completed',
+                      'usage': {'input_tokens': 100, 'cached_input_tokens': 40, 'output_tokens': 7}}))
+    sys.exit(0)
 print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': is_error, 'session_id': 'fake-session',
                   'total_cost_usd': 0.25, 'result': 'Credit balance is too low' if is_error else 'fake'}))
 '''
@@ -1378,6 +1391,131 @@ class ConductorTest(unittest.TestCase):
         self.assertIn('1. [ask] Where does OMM go?', reply)
         self.assertIn('**cache**', reply)
         self.assertEqual(self.approvals(), 1)
+
+    # ---- 役割の実行先 ----
+
+    def write_home_runners(self, runners, models=None):
+        """home の agents.json に runners を書く (codex は偽の設計者のファイルを path にする)。models は {runner: [id]}。"""
+        self.write_abs(os.path.join(self.home, 'agents.json'), json.dumps({'runners': runners}))
+        for runner, ids in (models or {}).items():
+            self.write_abs(os.path.join(self.home, 'models', f'{runner}.json'),
+                           json.dumps({'runner': runner, 'models': [{'id': i} for i in ids]}))
+
+    def codex_start(self, *extra, models=None):
+        self.write_home_runners({'codex': {'enabled': True, 'path': self.fake}, 'agent': {'enabled': True}},
+                                models if models is not None else {'codex': ['gpt-6.1-terra']})
+        return self.con('start', '--goal', 'codex designer', '--role', 'designer.runner=codex',
+                        '--role', 'designer=gpt-6.1-terra', *extra)
+
+    def test_codex_designer_makes_next_point_to_headless(self):
+        """設計者の実行先が codex なら、launch agent の run でも next は起動させず run --detach を案内する。"""
+        rc, out = self.codex_start('--role', 'designer.effort=high')
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('next')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('launch: headless (designer runner codex)', out)
+        self.assertIn('designer gpt-6.1-terra/high@codex (run)', self.line(out, 'roles'))
+        self.assertIn('run --detach', self.line(out, 'then'))
+        self.assertEqual(self.read_json(RUN)['state'], 'ready')
+
+    def test_codex_designer_runs_on_codex_exec_and_keeps_tokens(self):
+        """run は codex exec で設計者を起こし (定義を読む行を先頭に)、JSONL の使用量と thread を history に残す。"""
+        rc, out = self.codex_start('--role', 'designer.effort=high')
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('run')
+        self.assertEqual(rc, 10, out)
+        row = json.loads(self.read(self.log).splitlines()[0])
+        args = row['args']
+        self.assertEqual(args[:3], ['-a', 'never', 'exec'])
+        for flag, value in (('-m', 'gpt-6.1-terra'), ('-s', 'danger-full-access')):
+            self.assertEqual(args[args.index(flag) + 1], value)
+        self.assertIn('--json', args)
+        self.assertIn('--skip-git-repo-check', args)
+        configs = [args[i + 1] for i, word in enumerate(args) if word == '-c']
+        self.assertIn('model_reasoning_effort="high"', configs)
+        self.assertIn('mcp_servers.shared-memory.default_tools_approval_mode="auto"', configs)
+        self.assertEqual(args[-1], '-')
+        self.assertIn('agents/atelier-designer.md', row['head'])
+        history = self.read_json(RUN)['history'][-1]
+        self.assertEqual(history['session_id'], 'fake-thread')
+        self.assertEqual(history['tokens'], {'input': 100, 'cached_input': 40, 'output': 7})
+        self.assertNotIn('cost_usd', history)
+        self.assertEqual(history['roles']['designer']['runner'], {'value': 'codex', 'from': 'run'})
+
+    def test_codex_designer_prompt_says_no_agent_tool(self):
+        """codex の設計者の依頼文は Agent tool: no、指定の無い run は Agent tool: yes。"""
+        self.con('start', '--goal', 'plain')
+        rc, out = self.con('next')
+        self.assertIn('Agent tool: yes', self.request(out))
+        self.assertIn('subagent_type=atelier-designer model=opus', self.line(out, 'launch'))
+        self.codex_start('--force')
+        rc, out = self.con('run')
+        self.assertEqual(rc, 10, out)
+        prompts = sorted(p for p in os.listdir(self.path('docs/pbi/conductor/episodes')) if p.endswith('.prompt.md'))
+        self.assertIn('Agent tool: no', self.read(f'docs/pbi/conductor/episodes/{prompts[-1]}'))
+
+    def test_codex_designer_failure_is_a_launch_failure(self):
+        """codex の turn.failed と 0 以外の終了は、起動の失敗 (retry) になる。"""
+        self.codex_start()
+        rc, out = self.con('run', env={'FAKE_IS_ERROR': '1'})
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('usage limit reached', out)
+
+    def test_codex_permission_mode_picks_the_sandbox(self):
+        """designer.permission_mode が codex のサンドボックスの名前ならその値を、それ以外は danger-full-access を渡す。"""
+        self.codex_start('--role', 'designer.permission_mode=workspace-write')
+        self.con('run')
+        args = json.loads(self.read(self.log).splitlines()[0])['args']
+        self.assertEqual(args[args.index('-s') + 1], 'workspace-write')
+
+    def test_role_runners_show_in_roles_line_and_prompt(self):
+        """レビュー担当とテスト担当の実行先は roles: の行と依頼文の Roles: の行に @<runner> で出る。"""
+        self.write_home_runners({'codex': {'enabled': True, 'path': self.fake},
+                                 'dsh': {'enabled': True, 'path': self.fake}},
+                                {'codex': ['gpt-6.1-terra'], 'dsh': ['deepseek-official/deepseek-flash']})
+        rc, out = self.con('start', '--goal', 'roles on runners', '--role', 'reviewer.deep.runner=codex',
+                           '--role', 'reviewer.deep=gpt-6.1-terra', '--role', 'tester.runner=dsh',
+                           '--role', 'tester=deepseek-official/deepseek-flash')
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('next')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('reviewer.deep gpt-6.1-terra@codex (run)', self.line(out, 'roles'))
+        self.assertIn('tester deepseek-official/deepseek-flash@dsh (run)', self.line(out, 'roles'))
+        request = self.request(out)
+        self.assertIn('deep=gpt-6.1-terra@codex', request)
+        self.assertIn('tester deepseek-official/deepseek-flash@dsh', request)
+        # 設計者が agent なら Agent ツールで起動する (headless に回さない)
+        self.assertIn('subagent_type=atelier-designer', self.line(out, 'launch'))
+
+    def test_start_refuses_unusable_runners(self):
+        """無効・見つからない実行先と、設計者に使えない実行先は、run を作らずに exit 2。"""
+        self.write_home_runners({'opencode': {'enabled': False, 'path': self.fake},
+                                 'codex': {'enabled': True, 'path': os.path.join(self.tmp, 'no-codex.exe')},
+                                 'dsh': {'enabled': True, 'path': self.fake}})
+        only_python = {'PATH': os.path.dirname(sys.executable)}
+        cases = (('reviewer.other.runner=opencode', 'disabled'), ('designer.runner=codex', 'not found'),
+                 ('designer.runner=dsh', 'designer'), ('tester.runner=mcp', 'tester'))
+        for given, word in cases:
+            rc, out = self.con('start', '--goal', 'x', '--role', given, env=only_python)
+            self.assertEqual(rc, 2, f'{given}: {out}')
+            self.assertIn(word, out, given)
+        self.assertFalse(os.path.isfile(self.path(RUN)))
+
+    def test_unlisted_model_only_warns(self):
+        """モデルが実行先の一覧に無ければ warn を出して始める。"""
+        rc, out = self.codex_start(models={'codex': ['gpt-6.1-sol']})
+        self.assertEqual(rc, 0, out)
+        self.assertIn('warn roles.designer.model', out)
+        self.assertIn('gpt-6.1-terra', out)
+
+    def test_invalid_runner_in_a_layer_falls_through(self):
+        """repo の roles.json の受け付けない runner は、その層を飛ばして次の層の値を使う。"""
+        self.write_json('docs/pbi/roles.json', {'roles': {'designer': {'runner': 'opencode'}}})
+        self.con('start', '--goal', 'bad runner')
+        rc, out = self.con('next')
+        self.assertEqual(rc, 0, out)
+        self.assertIn("warn roles.designer.runner (repo): 'opencode' is not valid; using 'agent' (default)", out)
+        self.assertIn('designer opus (default)', self.line(out, 'roles'))
 
 
 if __name__ == '__main__':

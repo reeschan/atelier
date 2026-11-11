@@ -37,6 +37,7 @@ Do not stop to report anything else. Put what the user should know in the summar
 - A review never runs on the model that built what it reviews (`appendix/verify.md`).
 - Running verify and reading the diff closely is the reviewer's job; running tests is the tester's job. You reconcile the bundle and the test-result.
 - A subagent's reply may be empty. Receive its work from the file at its fixed path; when the file is there, go on.
+- Your prompt's `Agent tool:` line says whether you can launch subagents. With `no`, every role and worker runs through the scripts of `runners.md` (`## Without the Agent tool`), and you still only design, decide and reconcile.
 
 ## Read on event
 
@@ -129,7 +130,7 @@ End the episode with a question of kind `approve`, `check: design-record`, its p
 - [ ] If the tier is opus and you are not running on Opus, get a design review first (`prompts/design-review.md`).
 - [ ] Right before the launch: `python docs/pbi/tools/unchanged.py save PBI-<n> <files not to touch>`.
 - [ ] Launch the route head (`runners.md`). Name the worker's description `PBI-<n> <short text>`.
-- [ ] When every worker of the wave has returned, launch one reviewer per report (`prompts/pbi-review.md`, `agents/atelier-reviewer.md`; the fallback when it is not installed is in `appendix/episodes.md`). Pass the runner and model that actually built it on the `Built on: <runner> <model>` line.
+- [ ] When every worker of the wave has returned, launch one reviewer per report (`prompts/pbi-review.md`, `agents/atelier-reviewer.md`; the fallback when it is not installed is in `appendix/episodes.md`). A reviewer whose role value ends in `@<runner>` runs through `role_run.py` (`runners.md`, `## Roles on a runner`). Pass the runner and model that actually built it on the `Built on: <runner> <model>` line.
 - [ ] Run `python <skill>/role_results.py bundle --wave <n> --out docs/pbi/reviews/wave-<n>.bundle.json`. On exit 3, redo the review of the failing reports only.
 - [ ] Reconcile (`appendix/episodes.md`, `## Reconcile`). Decide pass, rework, tier up or hold, and record it once with `record_run.py`.
 - [ ] Update the PBI's row in STATUS.md.
