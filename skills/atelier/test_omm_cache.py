@@ -97,6 +97,30 @@ class OmmCacheTest(unittest.TestCase):
         self.assertIn('tracked', result.stderr)
         self.assertTrue(os.path.isdir(os.path.join(self.repo, '.omm')))
 
+    def test_export_copies_the_stored_omm_into_the_working_tree(self):
+        """export は当たりの .omm/ を作業ツリーへ写し、置き場所にも残す。外れのときは何も写さず 2。"""
+        missed = self.run_cli('export')
+        self.assertEqual(missed.returncode, 2)
+        self.assertFalse(os.path.exists(os.path.join(self.repo, '.omm')))
+        self.scan()
+        self.assertEqual(self.run_cli('store').returncode, 0)
+        placed = self.run_cli('export')
+        self.assertEqual(placed.returncode, 0, placed.stderr)
+        self.assertEqual(placed.stdout.strip(), f"placed {os.path.join(self.repo, '.omm')}")
+        self.assertTrue(os.path.isfile(os.path.join(self.repo, '.omm', 'overall-architecture', 'description.md')))
+        self.assertEqual(self.run_cli('lookup').stdout.split()[0], 'hit')
+
+    def test_export_leaves_an_untracked_omm_alone(self):
+        """作業ツリーに git が追っていない .omm/ があれば上書きしない。"""
+        self.scan()
+        self.assertEqual(self.run_cli('store').returncode, 0)
+        os.makedirs(os.path.join(self.repo, '.omm', 'mine'))
+        result = self.run_cli('export')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('not tracked', result.stderr)
+        self.assertTrue(os.path.isdir(os.path.join(self.repo, '.omm', 'mine')))
+        self.assertFalse(os.path.exists(os.path.join(self.repo, '.omm', 'overall-architecture')))
+
 
 if __name__ == '__main__':
     unittest.main()
