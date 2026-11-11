@@ -1360,6 +1360,25 @@ class ConductorTest(unittest.TestCase):
         record['designer']['model']['value'] = 'opus'
         record['tester']['effort']['value'] = 3
         self.assertIsNone(conductor.roles_from_record(record))
+    def test_approve_answers_each_draft_ask_block(self):
+        """下書きの ```ask の囲みも決定になる。選ばなければ未回答で承認にならず、--choices で選べば進む。"""
+        asks = ['```ask', 'Where does OMM go?', '* cache | outside', '- repo | inside', '```']
+        self.con('start', '--goal', 'approve ask blocks')
+        rc, out = self.con('next')
+        meta, rc, out = self.ask_approve(out, asks)
+        self.assertEqual(rc, 10, out)
+
+        rc, out = self.con('answer', '--approve')
+        self.assertNotEqual(out.splitlines()[0], 'state: ready', out)
+        self.assertEqual(self.approvals(), 0)
+
+        rc, out = self.con('answer', '--approve', '--choices', '1=cache')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        reply = self.read('docs/pbi/conductor/answers/1-approve.md')
+        self.assertIn('1. [ask] Where does OMM go?', reply)
+        self.assertIn('**cache**', reply)
+        self.assertEqual(self.approvals(), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

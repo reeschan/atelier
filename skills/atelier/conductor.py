@@ -51,6 +51,7 @@ from pathlib import Path
 
 import common
 import claude_run
+import design_record
 import role_results
 
 SCHEMA = 'atelier.run/1'
@@ -1406,6 +1407,11 @@ def approve_reply(draft_path: str, choices: dict) -> str:
         else:
             picked = UNANSWERED
         body += [line, f'   → {picked}', '']
+    # 下書きの ```ask の囲みも、決定の行の番号の続きで 1 つずつ決定にする (選ばなかった問いは未回答)
+    for number, ask in enumerate(design_record.draft_asks(draft), start=max(numbers, default=0) + 1):
+        numbers.add(number)
+        picked = f'**{choices[number]}**' if number in choices else UNANSWERED
+        body += [f"{number}. [ask] {ask['question']}", f'   → {picked}', '']
     unknown = sorted(set(choices) - numbers)
     if unknown:
         raise Refused(f"--choices: no decision {', '.join(map(str, unknown))} in {draft_path}")
