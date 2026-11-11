@@ -112,6 +112,7 @@ stage review: review.code-review run (diff 412 lines > 300) findings 0,2,1
 - States: not started, running, in review, done, held, limit reached. Add a row for new work found on the way.
 - The rework limit after the slash is the template's `fix.max_rework`.
 - The version line lets a resume notice that the skill changed in between.
+- `Tools missing` is a snapshot of one `tools_check.py` run, not the truth for later. On resume, and right before a stage whose rows need a tool (map, lint-survey, lint-recheck), run `flow.py` again (and `tools_check.py` when a row needs a CLI) and rewrite the line from that output. When STATUS.md and a fresh run disagree, the fresh run wins.
 
 ## Stage records
 

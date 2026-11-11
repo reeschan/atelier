@@ -97,6 +97,22 @@ def find_cli(runner, agents, env=None) -> str | None:
     return default_location(runner, env, os.name)
 
 
+def cli_env(cli, env=None) -> dict:
+    """CLI を流すときの環境変数。その CLI のディレクトリを PATH の先頭に置く。
+
+    fnm・nvm の版の下で見つけた CLI (`#!/usr/bin/env node` の shim や、node.exe を探す .cmd) が、
+    いまの PATH に載っている別の版の Node で動かないようにする。PATH の大小文字 (Windows の Path) は保つ。
+    """
+    env = dict(os.environ if env is None else env)
+    directory = str(Path(cli).absolute().parent) if cli else None  # resolve しない (bin の symlink の先は node の無い lib)
+    if not directory:
+        return env
+    key = next((k for k in env if k.upper() == 'PATH'), 'PATH')
+    rest = [p for p in env.get(key, '').split(os.pathsep) if p and p != directory]
+    env[key] = os.pathsep.join([directory, *rest])
+    return env
+
+
 def default_location(runner, env, os_name) -> str | None:
     """WINDOWS_DEFAULT_LOCATIONS にある実行先の、インストーラの既定の場所。Windows 以外・無ければ None。"""
     if os_name != 'nt' or runner not in WINDOWS_DEFAULT_LOCATIONS:
@@ -173,11 +189,10 @@ def _node_cli(runner, env) -> str | None:
 
 
 def _fnm_cli(runner, env) -> str | None:
-    base = _fnm_base(env)
-    if base is None:
-        return None
-    installations = sorted((base / 'node-versions').glob('*/installation'),
-                           key=lambda p: _version_key(p.parent.name), reverse=True)
+    installations = []
+    for base in _fnm_bases(env):
+        installations += (base / 'node-versions').glob('*/installation')
+    installations.sort(key=lambda p: _version_key(p.parent.name), reverse=True)
     for installation in installations:
         found = _first_file(installation, runner, cli_suffixes(os.name))
         if found is None:
@@ -217,16 +232,27 @@ def _version_key(name):
     return tuple(parts)
 
 
-def _fnm_base(env):
-    """fnm のディレクトリ。FNM_DIR・(Windows) APPDATA/fnm・~/.local/share/fnm の順。"""
-    value = env.get('FNM_DIR')
-    if value:
-        return Path(value)
-    if os.name == 'nt':
-        appdata = env.get('APPDATA')
-        return Path(appdata) / 'fnm' if appdata else None
-    home = env.get('HOME')
-    return Path(home) / '.local' / 'share' / 'fnm' if home else None
+def _fnm_bases(env) -> list:
+    """fnm のディレクトリの候補 (重複なし)。FNM_DIR・XDG_DATA_HOME/fnm・(Windows) APPDATA/fnm・
+    ~/.local/share/fnm・~/.fnm (古い既定) の順。
+
+    セッションの PATH や FNM_DIR が別の版を指していても、入っている版をすべて見るため、FNM_DIR があっても既定の場所も見る。
+    """
+    candidates = []
+    if env.get('FNM_DIR'):
+        candidates.append(Path(env['FNM_DIR']))
+    if env.get('XDG_DATA_HOME'):
+        candidates.append(Path(env['XDG_DATA_HOME']) / 'fnm')
+    if os.name == 'nt' and env.get('APPDATA'):
+        candidates.append(Path(env['APPDATA']) / 'fnm')
+    home = env.get('HOME') or env.get('USERPROFILE')
+    if home:
+        candidates += [Path(home) / '.local' / 'share' / 'fnm', Path(home) / '.fnm']
+    bases = []
+    for candidate in candidates:
+        if candidate not in bases:
+            bases.append(candidate)
+    return bases
 
 
 def _nvm_dir(env):

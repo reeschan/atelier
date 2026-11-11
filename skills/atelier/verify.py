@@ -34,6 +34,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 LINE = re.compile(r"^\s*(\d+)[.:)]\s+(?P<rest>\S.*?)\s*$")
 
@@ -89,7 +92,7 @@ def run_one(bash, cmd, log, timeout, tail_n):
     """コマンドを 1 つ流してログに書き、終了コードと表に出す末尾を返す。"""
     try:
         r = subprocess.run([bash, "-c", cmd], capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=timeout)
+                           errors="replace", timeout=timeout, creationflags=NO_WINDOW)
         output, code = (r.stdout or "") + (r.stderr or ""), r.returncode
     except subprocess.TimeoutExpired:
         output, code = f"(タイムアウト {timeout} 秒)", "timeout"

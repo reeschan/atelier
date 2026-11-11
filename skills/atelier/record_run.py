@@ -57,6 +57,9 @@ import agent_stats
 import common
 import flow
 
+# Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 HERE = Path(__file__).resolve().parent
 SCHEMA = 1
 OUTCOMES = ('合格', '差し戻し', '昇格', '使えず', '保留')
@@ -602,7 +605,8 @@ def file_version(path: Path) -> str | None:
 
 def head_commit(cwd: Path) -> str | None:
     try:
-        r = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=cwd, capture_output=True, text=True, timeout=10)
+        r = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=cwd, capture_output=True, text=True, timeout=10,
+                           creationflags=NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:
