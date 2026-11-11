@@ -46,7 +46,8 @@ with open(os.environ['FAKE_DESIGNER_LOG'], 'a', encoding='utf-8') as log:
 time.sleep(float(os.environ.get('FAKE_DESIGNER_SLEEP') or 0))
 episode, seq = re.search(r'^Episode: (\w+) \(seq (\d+)\)', prompt, re.M).groups()
 result_path = re.search(r'^Result: .*?write (\S+)', prompt, re.M).group(1)
-data = {'schema': 'atelier.episode/1', 'episode': episode, 'seq': int(seq), 'summary': [f'fake {episode}']}
+data = {'schema': 'atelier.episode/1', 'episode': episode, 'seq': int(seq),
+        'summary': [os.environ.get('FAKE_SUMMARY') or f'fake {episode}']}
 if episode == 'design' and not re.search(r'^Answer: ', prompt, re.M):
     state = Path('docs/pbi/CONTEXT_STATE.md')
     state.parent.mkdir(parents=True, exist_ok=True)
@@ -1534,6 +1535,13 @@ class ConductorTest(unittest.TestCase):
         for place in ('summary', 'question.summary', 'docs/pbi/notes/q.md'):
             self.assertIn(place, warn)
         self.assertNotIn(STATE, warn)
+        # 答えるまで status と wait にも残る (切り離した run の呼び手にも届く)
+        for command in ('status', 'wait'):
+            rc, out = self.con(command, *(['--timeout', '0'] if command == 'wait' else []))
+            self.assertIn('warn garbled:', out, command)
+        self.con('answer', '--text', 'rewrite the files')
+        rc, out = self.con('status')
+        self.assertNotIn('warn garbled', out)
 
         self.con('start', '--goal', 'clean', '--force')
         rc, out = self.con('next')
@@ -1543,6 +1551,17 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.con('done')
         self.assertEqual(rc, 10, out)
         self.assertNotIn('warn garbled', out)
+
+    def test_run_keeps_garbled_warnings_of_episodes_it_moved_past(self):
+        """run が次の出番へ進んでも、途中の出番の warn garbled は最後に出す行と status に残る。"""
+        self.con('start', '--goal', 'garbled run', '--launch', 'headless')
+        rc, out = self.con('run')
+        self.assertEqual(rc, 10, out)
+        self.con('answer', '--text', 'go')
+        rc, out = self.con('run', env={'FAKE_SUMMARY': 'design ????????'})
+        self.assertEqual(out.splitlines()[0], 'state: finished', out)
+        self.assertIn('warn garbled:', out)
+        self.assertIn('warn garbled:', self.con('status')[1])
 
     def test_codex_effort_is_passed_as_an_escaped_toml_string(self):
         """effort の \\ や " は TOML の基本文字列としてエスケープして渡し、設定した値のまま codex に届く。"""
