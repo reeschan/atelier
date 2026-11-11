@@ -16,13 +16,15 @@ store: 作業ツリーの .omm/ を置き場所へ移し、fingerprint.json を�
   確かめる。.omm/ を git が追っているリポジトリでは何も動かさず終了コード 2。
 check: 作業ツリーに .omm/ があれば `left <パス>` で終了コード 1、無ければ `none` で 0。
 export: 当たりの置き場所の .omm/ を作業ツリーへ写し (置き場所には残す)、`placed <パス>` を出す。ユーザーが
-  リポジトリに置くと選んだときに finish で使う。作業ツリーに git が追っていない .omm/ があれば上書きせず終了コード 2。
-  git が追っている .omm/ は置き換える (git で戻せる)。
+  リポジトリに置くと選んだときに finish で使う。作業ツリーの .omm/ は、git が追っていて手元の変更も追っていない
+  ファイルも無いときだけ置き換える (git で戻せる)。それ以外は上書きせず終了コード 2。写しは横の一時フォルダに
+  作ってから入れ替え、途中で失敗したら元の .omm/ を戻す。
 終了コード: 0 = 正常、1 = (check) .omm/ が残っている、2 = 引数・git・入力の誤り (export の外れを含む)。
 """
 import argparse
 import datetime
 import hashlib
+import os
 import shutil
 import subprocess
 import sys
@@ -187,10 +189,32 @@ def cmd_export(args, pbi: Path) -> int:
         if not git(root, 'ls-files', '--', OMM):
             print(f'error {target} is already in the working tree and not tracked; leave it as it is', file=sys.stderr)
             return 2
-        shutil.rmtree(target)
-    shutil.copytree(folder / OMM, target)
+        if git(root, 'status', '--porcelain', '--untracked-files=all', '--', OMM):
+            print(f'error {target} has local changes or untracked files; leave it as it is', file=sys.stderr)
+            return 2
+    place(folder / OMM, target)
     print(f'placed {target}')
     return 0
+
+
+def place(source: Path, target: Path) -> None:
+    """source を target に写す。横の一時フォルダに写してから入れ替え、失敗したら元の target を戻す。"""
+    fresh = target.with_name(f'{target.name}.export-{os.getpid()}')
+    old = target.with_name(f'{target.name}.replaced-{os.getpid()}')
+    shutil.copytree(source, fresh)
+    try:
+        if target.exists():
+            target.rename(old)
+        try:
+            fresh.rename(target)
+        except OSError:
+            if old.exists():
+                old.rename(target)
+            raise
+    except OSError:
+        shutil.rmtree(fresh, ignore_errors=True)
+        raise
+    shutil.rmtree(old, ignore_errors=True)
 
 
 def main(argv=None) -> int:
