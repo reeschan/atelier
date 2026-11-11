@@ -239,6 +239,18 @@ class SelectModelTest(unittest.TestCase):
         code, _ = run(SMALL, ALL_ZERO, '--skip', 'agent')
         self.assertNotEqual(code, 0)
 
+    def test_skip_takes_a_model_id_without_a_slash(self):
+        """routing に出てくる / の無いモデル ID (codex の gpt-6-astra など) も --skip で外せる。"""
+        with temp_dir() as d:
+            path = os.path.join(d, 'routing.json')
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(multi_runner_routing(), f)
+            code, out = run(SMALL, ALL_ZERO, '--routing', path, '--skip', 'gpt-6-astra')
+            self.assertEqual(code, 0, out)
+            self.assertNotIn('gpt-6-astra', [s['model'] for s in out['route']])
+            code, _ = run(SMALL, ALL_ZERO, '--routing', path, '--skip', 'gpt-6-astr')
+            self.assertNotEqual(code, 0)
+
     def test_all_writes_route_files_and_prints_table(self):
         with temp_dir() as d:
             os.makedirs(os.path.join(d, 'jev'))
