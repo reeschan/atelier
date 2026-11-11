@@ -65,3 +65,19 @@ PR #36 で main に入ったもの。すべて **入っている**。
 | B. 作成を聞いて、断ったらコードで続ける (以前の grill) | miss のとき scan の前に `decision` で「作るか」を聞く。断ったら代わりの依頼文 (コードと依存から書く) | `appendix/map.md` の Run 3 の前に問いを足す。置き場所そのものは A のまま (リポジトリ外) にもできる |
 
 B は「置き場所」というより「作る前に聞くか」の違いなので、A の置き場所のまま B の「聞く」だけを足す組み合わせもある。
+
+## 5. 決めたことと取り入れた形 (2026-11-11)
+
+ユーザーと決めた内容。実装はブランチ `claude/atelier-handoff`。
+
+| 項目 | 決めたこと | 取り入れた形 |
+|---|---|---|
+| 調査 | 今のままにする | 変更なし |
+| モデル | 設計案に合わせる。自分で作るとトークンがかかるので、基本は聞く | 使えない runner は 1 回だけやり直し、だめなら PBI を止める。wave の他の PBI が終わったら `decision` を 1 回だけ出し、route の残りの段・待つ・止めるから選んでもらう。段上げ・自分で作るはしない (`runners.md`) |
+| OMM | 設計案を基本にし、コミットするかも聞く | キャッシュが無いとき、scan の前に `decision` で repo・cache・skip から選んでもらい、`adapters.json` に残す。repo でも run の間は外のキャッシュに置き、finish で `omm_cache.py export` が作業ツリーへ写す。コミットはユーザーがする (`appendix/map.md`、`appendix/finish.md`) |
+| 修正 | 2 つとも取り入れる | survey で見つけた範囲内の直しは独立した PBI (`Survey fix:`) にし、Approve で別の選択肢にする。recheck で見つけた差し戻しの候補は、差し戻す前に `decision` で聞く (`appendix/lint.md`) |
+| 診断 | 必要かの判定は入れる。聞くのは外のモデルへ送るときだけ (今のまま) | recheck の最初に、コードに変更が無ければ skip する (`appendix/lint.md`) |
+| 不明 | 聞く | PBI の分け方・インターフェース・データモデルが変わる不明点は plan の前に `decision` でまとめて 1 回聞く。それ以外は Approve に `ask` ブロックで載せる (`appendix/design.md` `## Design: unknowns`) |
+| 役割 | 取り入れる | 値はキーごとに run (`start --role`)・repo (`docs/pbi/roles.json`)・home (`agents.json`)・既定の順に取る。`next` が `roles:` の行を出し、`run.json` の `running.roles` と history に出所を残す (`conductor.py`、`appendix/setup.md`) |
+| `context_prep`・比較 | 取り入れない | — |
+| decision の問いの見せ方 | Approve だけを HTML にし、ほかの問いはチャットのままにする | 変更なし |
