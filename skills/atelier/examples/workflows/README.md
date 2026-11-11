@@ -2,7 +2,7 @@
 
 [日本語](README.ja.md)
 
-This is how the author runs atelier day to day: the bundled `jev-routed` plus other people's skills (pstack, mattpocock-skills, yomiyasu, founder-skill, design-studio, ui-video, security-audit) and the recommended tools (oh-my-mermaid, jevlint, sac-strategic-compact). `recommended.json` holds only the template and, for each skill, how to install and register it. None of the other people's skills is copied into this repository.
+This is how the author runs atelier day to day: the bundled `jev-routed` plus other people's skills (pstack, mattpocock-skills, yomiyasu, founder-skill, design-studio, ui-video, unslop, security-audit) and the recommended tools (oh-my-mermaid, jevlint, sac-strategic-compact). `recommended.json` holds only the template and, for each skill, how to install and register it. None of the other people's skills is copied into this repository.
 
 <!-- image: the whole flow (recommended-flow-light.png / recommended-flow-dark.png) goes here -->
 
@@ -20,7 +20,7 @@ flowchart TD
     Q1 -->|AST only| LSN
     LSM --> LSN[open and check each lead]
     LSN --> GR[design: grilling<br/>spec docs/specs/slug.md]
-    GR --> UI[ui-design<br/>design-studio and ui-video when screens change]
+    GR --> UI[ui-design<br/>new look: design-studio and ui-video<br/>retouch of existing screens: unslop]
     UI --> MC{{model-check: use statechart?}}
   end
   DD -->|no| PL
@@ -69,7 +69,8 @@ flowchart TD
 | map (after understand) | `map.builtin` (calls omm-scan, or the fallback prompt) | the work is designed |
 | lint-survey (after understand) | `lint-survey.jevlint` → `lint-survey.builtin` (fallback prompt) | the work is designed |
 | design | `design.mattpocock-skills-grilling` → `design.builtin` | the work is designed |
-| ui-design (after design) | `ui-design.design-studio`, `ui-design.ui-video` | the work adds a screen or changes a look or a flow |
+| ui-design (after design) | `ui-design.design-studio`, `ui-design.ui-video` | `ui-change`: the work adds a screen or a flow, or a new look from a new direction |
+| ui-design (after design) | `ui-design.unslop` | `ui-retouch`: the work only fixes how existing screens look (AI-looking signs). Never in the same run as the row above |
 | model-check (after design) | `model-check.pstack-statechart` | asked every run |
 | plan | `plan.builtin`, gate `gate.jev` | always |
 | route | `route.jev`, gates `gate.pstack-blast-radius`, `gate.pstack-architect` | the gates per PBI (tight coupling, opus tier) |

@@ -43,7 +43,8 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 | `tier-opus` | the PBI's `route.json` has tier `opus`. Per PBI, so only in a gate after route |
 | `coupling-high` | the PBI's `route.json` has `scores.coupling` 2. Per PBI, so only in a gate after route |
 | `deep` | in a gate after route: the PBI's `route.json` has review `deep`. In the review stage: any PBI does |
-| `ui-change` | the request adds a screen, changes how one looks, or changes a user flow (`appendix/optional.md`) |
+| `ui-change` | the request adds a screen or a user flow, or gives screens a new look from a new direction; not when `ui-retouch` holds (`appendix/optional.md`) |
+| `ui-retouch` | the request only fixes how existing screens look (AI-looking signs, polish), adding no screen or flow. Never with `ui-change` in the same run (`appendix/optional.md`) |
 | `user-facing` | the request adds or changes something end users see or pay for (`appendix/optional.md`) |
 | `ask-user` | the user said yes when asked this run; always ask, never decide alone. Optional stages only (`appendix/optional.md`) |
 

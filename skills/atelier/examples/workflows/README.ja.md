@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-作者がふだん atelier を回している構成です。同梱の `jev-routed` に、ほかの人のスキル (pstack・mattpocock-skills・yomiyasu・founder-skill・design-studio・ui-video・security-audit) と推奨の道具 (oh-my-mermaid・jevlint・sac-strategic-compact) を足しています。見本の `recommended.json` が持つのは、テンプレートと、スキルごとの入れ方・登録のしかただけです。ほかの人のスキルの中身は、このリポジトリに入れていません。
+作者がふだん atelier を回している構成です。同梱の `jev-routed` に、ほかの人のスキル (pstack・mattpocock-skills・yomiyasu・founder-skill・design-studio・ui-video・unslop・security-audit) と推奨の道具 (oh-my-mermaid・jevlint・sac-strategic-compact) を足しています。見本の `recommended.json` が持つのは、テンプレートと、スキルごとの入れ方・登録のしかただけです。ほかの人のスキルの中身は、このリポジトリに入れていません。
 
 <!-- 画像: 流れの全体 (recommended-flow-light.png / recommended-flow-dark.png) をここに置く -->
 
@@ -20,7 +20,7 @@ flowchart TD
     Q1 -->|AST だけ| LSN
     LSM --> LSN[候補を 1 件ずつ開いて確かめる]
     LSN --> GR[design: grilling で詰める<br/>仕様 docs/specs/slug.md]
-    GR --> UI[ui-design<br/>design-studio と ui-video: 画面が変わるとき]
+    GR --> UI[ui-design<br/>新しい見た目: design-studio と ui-video<br/>いまある画面の手直し: unslop]
     UI --> MC{{model-check: statechart を使う?}}
   end
   DD -->|しない| PL
@@ -69,7 +69,8 @@ flowchart TD
 | map (understand のあと) | `map.builtin` (中で omm-scan を呼ぶ。無ければ代わりの依頼文) | 設計するとき |
 | lint-survey (understand のあと) | `lint-survey.jevlint` → `lint-survey.builtin` (代わりの依頼文) | 設計するとき |
 | design | `design.mattpocock-skills-grilling` → `design.builtin` | 設計するとき |
-| ui-design (design のあと) | `ui-design.design-studio`、`ui-design.ui-video` | 画面を足す・見た目や操作の流れを変えるとき |
+| ui-design (design のあと) | `ui-design.design-studio`、`ui-design.ui-video` | `ui-change`: 画面や操作の流れを足す・新しい方向性で見た目を作るとき |
+| ui-design (design のあと) | `ui-design.unslop` | `ui-retouch`: いまある画面の見た目 (AI っぽさ) を直すだけのとき。上の行と同じ回には流さない |
 | model-check (design のあと) | `model-check.pstack-statechart` | 毎回聞いて、はいのとき |
 | plan | `plan.builtin`、関所 `gate.jev` | いつも |
 | route | `route.jev`、関所 `gate.pstack-blast-radius`・`gate.pstack-architect` | 関所は PBI ごと (結合が強い・opus の段) |
