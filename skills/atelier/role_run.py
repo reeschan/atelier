@@ -1,13 +1,13 @@
 """レビュー担当・テスト担当を、agent 以外の実行先で 1 回動かす。runners.md の「Roles on a runner」の節から呼ぶ。
 
   python <このディレクトリ>/role_run.py <名前> --role reviewer|tester --runner codex|claude|dsh|opencode|agy
-      --model <model> [--effort <effort>] [--pbi-dir docs/pbi]
+      --model <model> [--effort <effort>] [--sandbox read-only|workspace-write|danger-full-access] [--pbi-dir docs/pbi]
 
 - 依頼文は設計者が <pbi-dir>/roles/<名前>.prompt.md に書いておく (prompts/pbi-review.md・prompts/tester.md の prompt の部分)。
   先頭に「agents/atelier-<役割>.md を読んで従う」の行が無ければ足して書き直す (外部の実行先には定義を読む仕組みが無い)。
 - 名前はレビューなら <報告名>.review、テストなら test-<結果の名前>。
 - 実行先ごとの起動:
-    codex:    codex -a never exec --json -s danger-full-access (shared-memory の承認は自動) を標準入力の依頼で。
+    codex:    codex -a never exec --json -s <--sandbox、既定 danger-full-access> (shared-memory の承認は自動) を標準入力の依頼で。
               ログは <名前>.jsonl・.err・.last.md (-o)
     claude:   claude_run.py <名前> --folder roles (claude -p。MCP なし)。ログは <名前>.json・.err・.run.json
     dsh:      dsh_run.py <名前> --folder roles。ログは <名前>.jsonl・.err・.final.md・.run.json
@@ -36,8 +36,9 @@ NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
 MODEL = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/:\[\]-]{0,127}$')
 EFFORT = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$')
 # 役割はソースを変えず結果の JSON だけを書くが、verify のコマンド (pnpm・ユーザーの Node) を動かすので
-# サンドボックスでは塞がれる (workspace-write は fnm・uv の下の実行ファイルとネットワークを通さない)
-CODEX_SANDBOX = 'danger-full-access'
+# サンドボックスでは塞がれる (workspace-write は fnm・uv の下の実行ファイルとネットワークを通さない)。
+# 既定は開けておき、verify が中で動くリポジトリでは --sandbox で絞れる
+CODEX_SANDBOX = runner_cli.CODEX_DEFAULT_SANDBOX
 
 
 def now() -> str:
@@ -76,15 +77,15 @@ def run_script(script: str, args) -> int:
             '--folder', 'roles']
     if args.effort:
         argv += ['--effort', args.effort]
-    return subprocess.run(argv, creationflags=NO_WINDOW).returncode
+    return subprocess.run(argv, creationflags=NO_WINDOW, check=False).returncode
 
 
 def run_codex(args, base: Path, text: str) -> int:
     argv = [*command_or_fail('codex'),
-            *runner_cli.codex_args(args.model, args.effort, CODEX_SANDBOX, base / f'{args.name}.last.md')]
+            *runner_cli.codex_args(args.model, args.effort, args.sandbox, base / f'{args.name}.last.md')]
     with open(base / f'{args.name}.jsonl', 'wb') as out, open(base / f'{args.name}.err', 'wb') as err:
         return subprocess.run(argv, input=text.encode('utf-8'), stdout=out, stderr=err,
-                              creationflags=NO_WINDOW).returncode
+                              creationflags=NO_WINDOW, check=False).returncode
 
 
 def run_opencode(args, base: Path, prompt: Path) -> int:
@@ -96,7 +97,7 @@ def run_opencode(args, base: Path, prompt: Path) -> int:
     env['PATH'] = str(Path(words[0]).parent) + os.pathsep + env.get('PATH', '')
     with open(base / f'{args.name}.jsonl', 'wb') as out, open(base / f'{args.name}.err', 'wb') as err:
         return subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err, env=env,
-                              creationflags=NO_WINDOW).returncode
+                              creationflags=NO_WINDOW, check=False).returncode
 
 
 def run_agy(args, base: Path, prompt: Path) -> int:
@@ -104,7 +105,7 @@ def run_agy(args, base: Path, prompt: Path) -> int:
             '--mode', 'accept-edits', '--output-format', 'json', '--print-timeout', '3600s']
     with open(base / f'{args.name}.json', 'wb') as out, open(base / f'{args.name}.err', 'wb') as err:
         return subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
-                              creationflags=NO_WINDOW).returncode
+                              creationflags=NO_WINDOW, check=False).returncode
 
 
 def main() -> None:
@@ -116,6 +117,8 @@ def main() -> None:
     ap.add_argument('--runner', required=True)
     ap.add_argument('--model', required=True)
     ap.add_argument('--effort', default=None)
+    ap.add_argument('--sandbox', default=CODEX_SANDBOX, choices=runner_cli.CODEX_SANDBOXES,
+                    help='codex のサンドボックス (既定 danger-full-access)。ほかの実行先では使わない')
     ap.add_argument('--pbi-dir', default='docs/pbi')
     args = ap.parse_args()
 
