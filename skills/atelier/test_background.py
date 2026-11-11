@@ -19,7 +19,7 @@ class BackgroundTest(unittest.TestCase):
 
     def bg(self, *args):
         p = subprocess.run([sys.executable, str(BG), *args], cwd=self.tmp, capture_output=True, text=True,
-                           encoding='utf-8', errors='replace', timeout=60)
+                           encoding='utf-8', errors='replace', timeout=60, check=False)
         return p.returncode, p.stdout + p.stderr
 
     def test_start_returns_at_once_and_wait_reports_done_with_the_exit_code(self):
