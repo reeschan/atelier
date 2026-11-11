@@ -16,6 +16,8 @@ Read this when the build stage picks `build.runners`: `## Common rules` first, t
 
 A tier up or building it yourself never answers an unusable runner; those come only from `appendix/rework.md`.
 
+**Runner state.** Every runner CLI writes its own sessions, logs and caches in its own home (`~/.codex`, `~/.claude`, `DSH_HOME`, opencode's data folder). That is not writing outside the work root: never ask about it, and never point `CODEX_HOME` or another CLI home at a folder of your own. An empty home has no sign-in and no settings, and the runner exits before it starts (`role_run.py` and `conductor.py` refuse a `CODEX_HOME` with no sign-in in it).
+
 **One worker per attempt.** Every attempt starts a new worker, reworks included. Never continue an earlier conversation (`opencode run -c`, `codex exec resume`, `dsh --session-id`); the report file and the rework note carry what is needed. The only message to a running worker is a continue after `NEEDS_CONTEXT` (`appendix/verify.md`).
 
 **The prompt.** Every runner gets the same prompt. Never copy the PBI into it; pass paths.
@@ -169,6 +171,7 @@ python <skill>/dsh_run.py <report> --model <model> [--effort <effort>] [--memory
 **Known issues** (checked 2026-10 with dsh 0.2.0-rc).
 
 - Builds that use named pipes (`npm run build`) can fail inside the sandbox. When only verify commands fail, run them yourself.
+- The sandbox may refuse to start child processes (seen on Windows with `pnpm run test:unit`), so a tester or reviewer on dsh may not finish its commands. `start` warns; run those roles on codex.
 - Cost is not reported (null); the provider bills the account directly.
 
 ## claude (Claude Code headless)
@@ -243,7 +246,7 @@ A reviewer or tester whose role value ends in `@<runner>` (the `Roles:` line of 
 
 Your prompt says `Agent tool: no` when you run on a runner that has no Agent tool (codex). Then:
 
-- A role on `agent` (a value with no `@<runner>`) runs through `role_run.py --runner claude --model <model>`.
+- A role on `agent` (a value with no `@<runner>`) runs through `role_run.py --runner claude --model <model>`. `start` refuses a codex designer with roles left on `agent` when the claude runner is disabled or missing; `claude -p` may also be refused by the organization (403 `oauth_not_allowed_for_organization`), so give every role a runner.
 - A PBI whose route step is `agent` runs on the claude runner: write the prompt to `docs/pbi/claude/<report>.prompt.md`, run `python <skill>/claude_run.py <report> --model <model> [--effort <effort>]`, and record it with `record_run.py <report> --attempt <n> --outcome ... --runner claude --model <model>`. The design review of `prompts/design-review.md` runs the same way, as report `PBI-<n>.design`.
 - These `claude -p` children have no MCP tools: copy the refs into the prompt as for external runners.
 - Launch every long child (workers, roles) detached and wait for it; a shell command of yours may have a time limit:

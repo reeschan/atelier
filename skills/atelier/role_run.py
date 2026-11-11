@@ -67,7 +67,7 @@ def with_definition(prompt: Path, role: str) -> str:
 
 def command_or_fail(runner: str) -> list:
     words, reason = runner_cli.find_command(runner)
-    if words is None:
+    if words is None or reason:
         fail(reason)
     return words
 

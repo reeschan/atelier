@@ -47,14 +47,19 @@ class RoleRunTest(unittest.TestCase):
         (self.home / '.config' / 'deepseek').mkdir(parents=True)
         (self.home / '.config' / 'deepseek' / 'deepseek.key').write_text('sk-test\n', encoding='utf-8')
         self.cmd = json.dumps([sys.executable, str(self.fake)])
+        self.codex_home = self.tmp / 'codex-home'
+        self.codex_home.mkdir()
+        (self.codex_home / 'auth.json').write_text('{}', encoding='utf-8')
+        (self.codex_home / 'config.toml').write_text('[mcp_servers.shared-memory]\nurl = "x"\n', encoding='utf-8')
 
     def prompt(self, name='PBI-001.review'):
         (self.roles / f'{name}.prompt.md').write_text(PROMPT, encoding='utf-8')
 
     def run_cli(self, *args, exit_code=0, extra_env=None):
-        env = {k: v for k, v in os.environ.items() if not k.startswith('ATELIER_') and k != 'PBI_CLAUDE_BIN'}
+        env = {k: v for k, v in os.environ.items() if not k.startswith('ATELIER_') and k not in ('PBI_CLAUDE_BIN', 'OPENAI_API_KEY')}
         env.update(FAKE_LOG=str(self.log), FAKE_EXIT=str(exit_code), ATELIER_HOME=str(self.home / 'atelier'),
                    ATELIER_CODEX_CMD=self.cmd, ATELIER_OPENCODE_CMD=self.cmd, ATELIER_AGY_CMD=self.cmd,
+                   CODEX_HOME=str(self.codex_home),
                    PBI_CLAUDE_BIN=str(make_wrapper(self.tmp, self.fake)), FAKE_CLAUDE_LOG=str(self.log),
                    PBI_DSH_NODE=sys.executable, PBI_DSH_BIN=str(self.fake), FAKE_DSH_LOG=str(self.log),
                    USERPROFILE=str(self.home), HOME=str(self.home))
@@ -172,6 +177,37 @@ class RoleRunTest(unittest.TestCase):
                          extra_env={'ATELIER_CODEX_CMD': '', 'PATH': os.path.dirname(sys.executable)})
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn('codex not found', r.stderr)
+
+
+    def test_codex_home_with_only_a_config_is_allowed(self):
+        """auth.json が無くても config.toml があれば断らない (サインインは keyring にも置ける)。"""
+        self.prompt()
+        keyring_home = self.tmp / 'keyring-home'
+        keyring_home.mkdir()
+        (keyring_home / 'config.toml').write_text('cli_auth_credentials_store = "keyring"\n', encoding='utf-8')
+        r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
+                         extra_env={'CODEX_HOME': str(keyring_home)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_codex_home_allowed_when_the_command_picks_the_credentials_store(self):
+        """ATELIER_CODEX_CMD が -c cli_auth_credentials_store で置き場を選んでいれば、空のホームでも断らない。"""
+        self.prompt()
+        empty = self.tmp / 'empty-keyring-home'
+        empty.mkdir()
+        cmd = json.dumps([sys.executable, str(self.fake), '-c', 'cli_auth_credentials_store="keyring"'])
+        r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
+                         extra_env={'CODEX_HOME': str(empty), 'ATELIER_CODEX_CMD': cmd})
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_codex_home_without_sign_in_is_refused(self):
+        self.prompt()
+        empty = self.tmp / 'empty-home'
+        empty.mkdir()
+        r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
+                         extra_env={'CODEX_HOME': str(empty)})
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('no sign-in', r.stderr)
+        self.assertFalse(self.log.exists())
 
 
 if __name__ == '__main__':
