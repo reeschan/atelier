@@ -123,7 +123,7 @@ After route and its gates, write the approval to `docs/pbi/notes/approve.md` and
 - one line per recommended tool `tools_check.py` did not find: its install and its fallback, asked as a choice in the approve text. When the approve answer chooses to install, end with a question (kind `decision`, with `state`) for the install; after its `Answer:`, end with `done`, next build wave 1. Otherwise the fallback runs
 - the question for each optional stage with an `ask-user` row placed after route or later (security, by default): whether to run it this time (`appendix/optional.md`); the model-check chart and its rules, when that stage ran
 
-End the episode with a question of kind `approve`, `check: design-record`, its path `docs/pbi/notes/approve.md`. With the `confirm` adapter `off` there is no design record: leave `check` out of the question. When the `Answer:` line comes, it is either a reply that passed `design_record.py check-reply` (approved: go on) or a revise request (`answer --revise`): fix the plan, raise the revision, and end with kind `approve` again.
+End the episode with a question of kind `approve`, `check: design-record`, its path `docs/pbi/notes/approve.md`. Add the envelope (`design_record.py markdown`) as the last change to that file; `done` refuses a draft whose `reply-meta-draft_hash` no longer matches it. With the `confirm` adapter `off` there is no design record: leave `check` out of the question. When the `Answer:` line comes, it is either a reply that passed `design_record.py check-reply` (approved: go on) or a revise request (`answer --revise`): fix the plan, raise the revision, and end with kind `approve` again.
 
 ## One PBI
 

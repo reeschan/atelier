@@ -120,6 +120,13 @@ class ConductorTest(unittest.TestCase):
                         CLAUDE_CONFIG_DIR=os.path.join(self.user, '.claude'),
                         ATELIER_DESIGNER_CMD=json.dumps([sys.executable, self.fake]),
                         FAKE_DESIGNER_LOG=self.log)
+        # codex のホーム: サインインと shared-memory の MCP の設定がある (本物の ~/.codex は読まない)
+        self.codex_home = os.path.join(self.tmp, 'codex-home')
+        self.write_abs(os.path.join(self.codex_home, 'auth.json'), '{}')
+        self.write_abs(os.path.join(self.codex_home, 'config.toml'),
+                       '[mcp_servers.shared-memory]\nurl = "http://127.0.0.1:7820/mcp"\n')
+        self.env['CODEX_HOME'] = self.codex_home
+        self.env.pop('OPENAI_API_KEY', None)
         for name in ('FAKE_DESIGNER_SLEEP', 'FAKE_IS_ERROR'):
             self.env.pop(name, None)
 
@@ -1403,7 +1410,9 @@ class ConductorTest(unittest.TestCase):
                            json.dumps({'runner': runner, 'models': [{'id': i} for i in ids]}))
 
     def codex_start(self, *extra, models=None):
-        self.write_home_runners({'codex': {'enabled': True, 'path': self.fake}, 'agent': {'enabled': True}},
+        # codex の設計者は agent の役割を claude -p で起こすので、claude も使えるようにしておく
+        self.write_home_runners({'codex': {'enabled': True, 'path': self.fake}, 'agent': {'enabled': True},
+                                 'claude': {'enabled': True, 'path': self.fake}},
                                 models if models is not None else {'codex': ['gpt-6.1-terra']})
         return self.con('start', '--goal', 'codex designer', '--role', 'designer.runner=codex',
                         '--role', 'designer=gpt-6.1-terra', *extra)
@@ -1583,6 +1592,75 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(rc, 10, out)
         args = json.loads(self.read(self.log).splitlines()[0])['args']
         self.assertIn('-p', args)
+
+
+    # ---- 実行先の隔離と承認の封筒 ----
+
+    def test_codex_home_without_sign_in_is_refused(self):
+        """CODEX_HOME が空のフォルダ (サインインが無い) なら、codex の設計者は start で断る。"""
+        empty = os.path.join(self.tmp, 'empty-codex-home')
+        os.makedirs(empty)
+        self.env['CODEX_HOME'] = empty
+        rc, out = self.codex_start()
+        self.assertEqual(rc, 2, out)
+        self.assertIn('no sign-in', out)
+
+    def test_mcp_approval_only_when_codex_config_has_shared_memory(self):
+        """config.toml に shared-memory が無ければ、承認の -c を渡さない (中身の無い表で codex が落ちるため)。"""
+        self.write_abs(os.path.join(self.codex_home, 'config.toml'), 'model = "x"\n')
+        self.codex_start()
+        self.con('run')
+        args = json.loads(self.read(self.log).splitlines()[0])['args']
+        self.assertFalse(any('shared-memory' in word for word in args), args)
+
+    def test_codex_designer_prompt_says_runner_state_is_not_outside(self):
+        """依頼文は、実行先の CLI が自分の場所に書くのは外への書き込みでないこと、CODEX_HOME を動かさないことを言う。"""
+        self.con('start', '--goal', 'state')
+        rc, out = self.con('next')
+        request = self.request(out)
+        self.assertIn('Runner state:', request)
+        self.assertIn('leave `CODEX_HOME`', request)
+
+    def test_codex_designer_with_agent_roles_needs_claude(self):
+        """codex の設計者で agent の役割が残り、claude が無効なら start は役割の名前を出して断る。"""
+        self.write_home_runners({'codex': {'enabled': True, 'path': self.fake}})
+        rc, out = self.con('start', '--goal', 'x', '--role', 'designer.runner=codex', '--role', 'designer=gpt-6.1-terra',
+                           '--role', 'reviewer.deep.runner=codex', '--role', 'reviewer.deep=gpt-6.1-terra')
+        self.assertEqual(rc, 2, out)
+        self.assertIn('reviewer.other, tester', out)
+        self.assertIn('claude -p', out)
+        rc, out = self.con('start', '--goal', 'x', '--role', 'designer.runner=codex', '--role', 'designer=gpt-6.1-terra',
+                           *[word for part in ('reviewer.deep', 'reviewer.other', 'tester')
+                             for word in ('--role', f'{part}.runner=codex', '--role', f'{part}=gpt-6.1-terra')])
+        self.assertEqual(rc, 0, out)
+
+    def test_dsh_role_warns_about_its_sandbox(self):
+        self.write_home_runners({'dsh': {'enabled': True, 'path': self.fake}})
+        rc, out = self.con('start', '--goal', 'x', '--role', 'tester.runner=dsh',
+                           '--role', 'tester=deepseek-official/deepseek-flash')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('warn roles.tester.runner dsh', out)
+
+    def test_approve_draft_changed_after_its_envelope_is_a_failure(self):
+        """封筒を付けたあとで承認の下書きを書き換えた結果は、done が失敗 (retry) にする。"""
+        self.con('start', '--goal', 'envelope')
+        rc, out = self.con('next')
+        self.setup_approve()
+        self.append('docs/pbi/notes/approve.md', '\nedited after the envelope\n')
+        self.result(out, status='question', question={'kind': 'approve', 'path': 'docs/pbi/notes/approve.md',
+                                                      'summary': 'approve 1 PBI', 'check': 'design-record'})
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('changed after its envelope', out)
+
+    def test_workflow_line_only_when_named(self):
+        """--workflow を渡さない run の依頼文には Workflow の行を出さない (既定の名前を探させない)。"""
+        self.con('start', '--goal', 'no workflow')
+        rc, out = self.con('next')
+        self.assertNotIn('Workflow:', self.request(out))
+        self.con('start', '--goal', 'named', '--workflow', 'jev-routed', '--force')
+        rc, out = self.con('next')
+        self.assertIn('Workflow: jev-routed', self.request(out))
 
 
 if __name__ == '__main__':
