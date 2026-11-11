@@ -15,22 +15,29 @@ Sort by the report's status line and by the exit codes from `verify.py`. Ask the
 
 ## Check
 
-Do not take the worker's report, or Jev's triage, on trust.
+The reviewer (`prompts/pbi-review.md`) does this; it runs the verify commands, judges each acceptance criterion and reads the diff. Inline, you do it:
 
-1. Run the verify commands and read only the table. Read a log, with Grep or tail, only for the numbers whose output you need.
-
-   ```bash
-   python <skill>/verify.py PBI-<n> --name <report> [--only 2,4]
-   ```
-
-   When `verify.py` cannot read the commands (exit code 2), run them in one Bash call, each redirected to its own log.
-   With tests at the end on, add `--skip-deferred`; the deferred numbers run at the end of the wave (`appendix/tests-at-end.md`).
+1. Run `python <skill>/verify.py PBI-<n> --name <report> --skip-deferred`, and read only the table; open a log only for the numbers whose output you need.
+   - With tests at the end on, `--skip-deferred` leaves those numbers for the end of the wave (`appendix/tests-at-end.md`).
+   - When `verify.py` exits 2 (it cannot read the commands), run them by hand in one call, each to its own log.
 2. Judge each acceptance criterion: pass or fail.
-3. Look at `git diff --stat`, then read the diff. List only the problems that should block the merge: file, line, why, how to reproduce.
-   - Check the diff against the CLAUDE.md files that apply to the changed files. A broken rule there is a finding with the cause `convention`.
-   - A PBI with review `deep`: read the whole diff, focused on authentication, permissions, input validation, how data can be lost, and contracts between modules.
-   - A diff over 300 lines, a `deep` PBI when you are not running on Opus, and a `deep` PBI built on the model you run on: give the review to a `pbi-worker` subagent with `prompts/pbi-review.md`, on Opus unless the attempt you judge was built on Opus; then on Sonnet at high effort. A reviewer on the model that built the change shares its blind spots. Use its result as input, not as the decision.
-4. Passing criteria do not prove the absence of bugs that the criteria cannot catch. When you find one, put a small script that shows it in `docs/pbi/tools/` and use it as the repro in the rework note.
+3. Read `git diff --stat`, then the diff; list only what should block the merge: file, line, why and a repro.
+   - A broken rule in a CLAUDE.md file that applies to the changed files is a finding with the cause `convention`.
+4. A bug that the acceptance criteria cannot catch gets a small script in `docs/pbi/tools/`, and that script is the repro.
+
+## Reconcile
+
+Reconcile the wave from the bundle table. The designer does this (inline, you do it), once every review of the wave is written:
+
+```bash
+python <skill>/role_results.py bundle --wave <n> --out docs/pbi/reviews/wave-<n>.bundle.json
+```
+
+- Open `docs/pbi/reviews/<report>.review.json` only for a row with `open`.
+- Verify passes or fails by the bundle's `verify` column, which comes from `docs/pbi/verify/<report>.json`; never by the review.
+- Exit code 3: redo the review of that report only, then bundle again.
+- Confirm each finding by opening the file yourself.
+- The rows and the rest of the rules are in `appendix/episodes.md` (`## Reconcile`).
 
 ## Decide and record
 

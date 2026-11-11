@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "deferred": [
+    "unittest discover"
+  ],
+  "test_paths": [
+    "skills/atelier/test_*.py",
+    "skills/atelier/studio/test_*.py",
+    "skills/atelier/jev/test_*.py"
+  ],
+  "principle": "principle-test-behavior-not-implementation"
+}

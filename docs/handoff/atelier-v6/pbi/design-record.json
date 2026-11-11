@@ -1,0 +1,25 @@
+{
+  "schema": "atelier.design-record/1",
+  "design_id": "atelier-v6",
+  "revision": 1,
+  "targets": [
+    "PBI-001",
+    "PBI-002",
+    "PBI-003",
+    "PBI-004",
+    "PBI-005",
+    "PBI-006",
+    "PBI-007",
+    "PBI-008",
+    "PBI-009",
+    "PBI-010",
+    "PBI-011",
+    "PBI-012",
+    "PBI-013"
+  ],
+  "concerns": [
+    "notes/launch-default.slice.json",
+    "notes/version-name.slice.json",
+    "notes/headless-permission.slice.json"
+  ]
+}

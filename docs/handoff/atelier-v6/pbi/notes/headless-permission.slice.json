@@ -1,0 +1,17 @@
+{
+  "schema": "atelier.design-slice/1",
+  "id": "headless-permission",
+  "question": "headless の設計者の permission_mode の既定を auto にしてよいか",
+  "reads": [
+    {
+      "path": "docs/specs/atelier-v6.md",
+      "lines": [
+        70,
+        72
+      ]
+    }
+  ],
+  "unknown": [
+    "auto が使えるプラン・環境か"
+  ]
+}

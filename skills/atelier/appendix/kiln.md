@@ -13,7 +13,7 @@ Read this at Start, at every stage and wave boundary, and before writing any sub
 | Soft | Cool at the next stage or wave boundary | designer 120000 / implementer 60000 |
 | Peak | Must cool before the next stage starts (implementer: stop at a clean point) | designer 180000 / implementer 90000 |
 | Aux | Turn on rtk mode | 150000 |
-| Handoff | Write HANDOFF.md and stop for `/clear` and resume | 250000 |
+| Handoff | End the episode with `handoff` (inline: write HANDOFF.md and stop for `/clear` and resume) | 250000 |
 
 The lines come from the run copy `docs/pbi/kiln.json` (example `examples/kiln.json`), else the template's `kiln`. Write the run copy at Start only when it is missing; keep an existing `docs/pbi/kiln.json` unless the user explicitly approves replacing it. Claude Code's system prompt and this skill's body take a few tens of thousands of tokens before any work, so lines far below the defaults only make every boundary cool down.
 
@@ -28,20 +28,22 @@ When it is missing, offer the install once at Approve (one line with the URL). N
 
 ## Run id
 
-One run keeps one `run_id` on every line of `docs/pbi/.kiln/compact-events.jsonl`. `kiln_log.py` keeps it in `docs/pbi/.kiln/run_id` and creates it on the first line. On handoff, write it into `docs/pbi/HANDOFF.md` as `Run id: <run_id>` (`appendix/handoff.md`). On resume, pass it back once with `kiln_log.py --run-id <run_id>` when `docs/pbi/.kiln/run_id` is missing; never start another id after `/clear`.
+One run keeps one `run_id` on every line of `docs/pbi/.kiln/compact-events.jsonl`. `kiln_log.py` keeps it in `docs/pbi/.kiln/run_id` and creates it on the first line. Inline, on handoff, write it into `docs/pbi/HANDOFF.md` as `Run id: <run_id>` (`appendix/handoff.md`); under the conductor, do not write `Run id` into `HANDOFF.md`, and leave `docs/pbi/.kiln/run_id` on disk. Inline, on resume, pass it back once with `kiln_log.py --run-id <run_id>` when `docs/pbi/.kiln/run_id` is missing; never start another id after `/clear`.
 
 ## Designer (the orchestrator)
 
 At every stage boundary and wave boundary, never while a worker attempt runs:
 
-1. Measure: `python <skill>/agent_stats.py --ctx`.
+1. Measure with the command on the request's `Context probe:` line; when the request has no such line, `python <skill>/agent_stats.py --ctx`.
+   - `context=unknown` (exit code 3) twice in a row: hand off after every 3 PBIs you reconcile.
 2. Decide and log in one step: `python <skill>/kiln_log.py docs/pbi --role designer --boundary phase|wave --phase <stage> --tokens <context> --task-id <W-n>`. It prints the action from the lines: `noop`, `aux_on`, `suggest`, `compact` or `handoff`. Pass `--action` and `--note` when you choose differently (for example, waiting for a subagent before cooling).
 3. Act:
    - `noop`: go on.
    - `aux_on`: turn on rtk mode (`appendix/handoff.md`, `## rtk mode`).
-   - `suggest` or `compact`: write the state tablet `docs/pbi/CONTEXT_STATE.md` (below), then run `/compact` with keep-instructions (what to keep: paths, ids, the next action), not a discard list. `suggest` may wait for the next boundary; `compact` may not.
-   - `handoff`: follow `appendix/handoff.md`, `## Hand off`, with the state tablet beside HANDOFF.md.
-4. After a cool-down or a resume, read the task, STATUS.md and the state tablet only. Do not redo finished stages from memory of the chat.
+   - Under the conductor, `suggest`, `compact` and `handoff` all mean: write the state tablet `docs/pbi/CONTEXT_STATE.md` (below) and end the episode with status `handoff` (`appendix/episodes.md`, `## Kiln`). Never use `/compact`.
+   - Inline, `suggest` or `compact`: write the state tablet, then run `/compact` with keep-instructions (what to keep: paths, ids, the next action), not a discard list. `suggest` may wait for the next boundary; `compact` may not.
+   - Inline, `handoff`: follow `appendix/handoff.md`, `## Hand off`, with the state tablet beside HANDOFF.md.
+4. After a `Continue from:` or an inline resume, read the task, STATUS.md and the state tablet only. Do not redo finished stages from memory of the chat.
 
 ### State tablet
 

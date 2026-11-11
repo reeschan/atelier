@@ -17,7 +17,7 @@ Atelier (旧名 **pbi-orchestration-jev**) は、開発を**ワークフロー�
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="Atelier のアーキテクチャ図。開発者が Claude Code のオーケストレーターに作業を頼み、承認し、引き継ぎのあとに再開する。オーケストレーターは facts を prepare.py に渡し、prepare.py は Jev にゲート 1 (brief と PBI の品質) を聞き、select_model.py で段と route を決める。そのとき home (~/.config/atelier) の振り分け・適用・agents.json と docs/pbi/routing.json を読み、使えない実行先の手順を外す。PBI は、全段の既定の実行先である pbi-worker (Agent ツール) か、setup で選び routing.json に書いた外部の実行先 (opencode・Codex・Antigravity・DeepSeek Harness・Claude Code の headless) に渡り、対象リポジトリのソースコードを変える。オーケストレーターは verify.py と unchanged.py で検証し、Jev には文章だけで、報告と検証が食い違うときの仕分けと差し戻し文の点検を聞き、状態と HANDOFF を docs/pbi/ に記録する。任意の shared-memory の MCP が作業ごとの ref と引き継ぎのメモリを持ち、pbi-worker は ref を get するだけ。setup_agents.py と model_fetch.py が実行先の CLI を検出し、実行先ごとのモデルの一覧を home の agents.json と models/ に控える。開発者は手元の編集画面 (studio/serve.py。エージェントとモデル・振り分け・優先テンプレートと適用・開発フローの 4 タブ) で、それらを home の中だけで読み書きする。templates.py は優先テンプレートと、元になるデータであるローカルの overrides.json を持ち、任意の優先テンプレートの Web ページ (claude.ai の Artifact) はそれと同期するだけ。フェーズ・アダプターは、任意の呼び出し先のスキルが入っていれば使う。設計では、オーケストレーターが mattpocock-skills の grilling を呼ぶ。全 PBI のあとは adapter_gate.py が PBI と agents.json の adapters の設定を読んで、最終レビューとセキュリティレビューを使うかを決め、general-purpose のレビュー用のサブエージェントが mattpocock-skills の code-review か built-in の /code-review・/security-review を呼んで、指摘を docs/pbi/reviews/ に書く。任意の jev-mcp (jev_mcp.py、127.0.0.1) を使うと、MCP クライアントがタスクを受け取って返し、Jev の手順の route (select_model.py)・run (runners.md の渡し方で実行先を 1 回動かす)・record (record_run.py) を使える。jev-mcp は home の振り分けと agents.json を読み、docs/pbi/ に依頼文・報告・runs を書く。 lint_run.py と lint_compare.py は、lint の下調べと見直しで jevlint を流し、ソースコードとマージ基点の worktree を読みます。ファイルの中身を Jev (jevlint のプロバイダー) に送るのは、送るたびにユーザーが許したあとだけです。omm_cache.py は、リポジトリの外の .omm-cache に置いた oh-my-mermaid の走査の結果を使い回し、無いときは omm-scan のスキルを呼びます。kiln_log.py は、Kiln で冷ますかの判断を docs/pbi/.kiln/ に記録し、sac-strategic-compact が入っていればその手順に従います。setup は推奨の道具を tools_check.py で確かめます。">
+  <img src="assets/architecture-light.svg" alt="Atelier のアーキテクチャ図。開発者は呼び出し側 (自分の Claude Code のセッション、または AGENTS.md を読む Codex・Grok。claude CLI が要る) に作業を頼み、承認する。呼び出し側は conductor.py を回すだけで、LLM ではないこの進行役が run の状態を docs/pbi/conductor/run.json に持ち、出番ごとに新しい設計者 (atelier-designer、Opus。Agent ツールか claude -p) を起こす。出番は episode.result.json で終わる。設計者は報告ごとにレビュー担当 (atelier-reviewer、作ったモデルとは別) に渡し、レビュー担当は verify.py を流して review.json を書く。role_results.py が波のレビューを束ねて設計者に返し、テスト担当 (atelier-tester、Sonnet) が最後にテストを回して test-result.json を書く。設計者は facts を prepare.py に渡し、prepare.py は Jev にゲート 1 (brief と PBI の品質) を聞き、select_model.py で段と route を決める。そのとき home (~/.config/atelier) の振り分け・適用・agents.json と docs/pbi/routing.json を読み、使えない実行先の手順を外す。PBI は、全段の既定の実行先である pbi-worker (Agent ツール) か、setup で選び routing.json に書いた外部の実行先 (opencode・Codex・Antigravity・DeepSeek Harness・Claude Code の headless) に渡り、対象リポジトリのソースコードを変える。設計者は Jev に文章だけで、報告と検証が食い違うときの仕分けと差し戻し文の点検を聞き、STATUS・waves.json・報告を docs/pbi/ に記録する。任意の shared-memory の MCP が作業ごとの ref と引き継ぎのメモリを持ち、pbi-worker は ref を get するだけ。setup_agents.py と model_fetch.py が実行先の CLI を検出し、実行先ごとのモデルの一覧を home の agents.json と models/ に控える。開発者は手元の編集画面 (studio/serve.py。エージェントとモデル・振り分け・優先テンプレートと適用・開発フローの 4 タブ) で、それらを home の中だけで読み書きする。templates.py は優先テンプレートと、元になるデータであるローカルの overrides.json を持ち、任意の優先テンプレートの Web ページ (claude.ai の Artifact) はそれと同期するだけ。フェーズ・アダプターは、任意の呼び出し先のスキルが入っていれば使う。設計では、設計者が mattpocock-skills の grilling を呼ぶ。全 PBI のあとは adapter_gate.py が PBI と agents.json の adapters の設定を読んで、最終レビューとセキュリティレビューを使うかを決め、general-purpose のレビュー用のサブエージェントが mattpocock-skills の code-review か built-in の /code-review・/security-review を呼んで、指摘を docs/pbi/reviews/ に書く。任意の jev-mcp (jev_mcp.py、127.0.0.1) を使うと、MCP クライアントがタスクを受け取って返し、Jev の手順の route (select_model.py)・run (runners.md の渡し方で実行先を 1 回動かす)・record (record_run.py) を使える。jev-mcp は home の振り分けと agents.json を読み、docs/pbi/ に依頼文・報告・runs を書く。 lint_run.py と lint_compare.py は、lint の下調べと見直しで jevlint を流し、ソースコードとマージ基点の worktree を読みます。ファイルの中身を Jev (jevlint のプロバイダー) に送るのは、送るたびにユーザーが許したあとだけです。omm_cache.py は、リポジトリの外の .omm-cache に置いた oh-my-mermaid の走査の結果を使い回し、無いときは omm-scan のスキルを呼びます。kiln_log.py は、Kiln で冷ますかの判断を docs/pbi/.kiln/ に記録し、sac-strategic-compact が入っていればその手順に従います。setup は推奨の道具を tools_check.py で確かめます。">
 </picture>
 
 図のソースは `assets/architecture.d2` です ([D2](https://d2lang.com) で描いています)。
@@ -49,6 +49,39 @@ Atelier (旧名 **pbi-orchestration-jev**) は、開発を**ワークフロー�
 - 実行の合否 (合格・差し戻し・昇格・使えず・保留) を決めるたびに、`record_run.py` が `docs/pbi/runs.jsonl` に 1 行を足します。実行先・モデル・effort・トークン・コスト・ステップ数・時間・検証の結果はログから読み、オーケストレーターが渡すのは結果とレビュー指摘の件数だけです。読めない値は null のままにします。その実行の生ログはリポジトリの外の保全先にコピーします。保全先は環境変数 `PBI_RUNS_ARCHIVE` (同期するフォルダを指せば、ほかの場所にも残せます)、無ければ `~/.claude/pbi-runs` です。`model_report.py` はモデル別に集計し (`--archive` でリポジトリをまたいで)、後から人が調整する目安として仮の評価 A〜D を付けます。振り分けは変えません。
 - 外のハーネスのための記録も残します。差し戻し・昇格・保留には原因 (`spec`・`convention`・`scope`・`memory`・`model`・`env`) を付け、どの行にも `docs/pbi/worker.md` の版・元のコミット・実装担当が読まなかった ref を入れます。終わりに `export_cases.py` が PBI ごとに正規化した case を `docs/pbi/cases.jsonl` と保全先に書きます。中身は、実装担当に注入したもの (system prompt・効いていた CLAUDE.md の規約・ref)、PBI の節、試行ごとの結果、採点にだけ使う差し戻しの期待値です。Atelier はこれでプロンプトを組み立てません。harness2 などの外のハーネスが読んで PBI を作り直し、指示の直し方を出します (`skills/atelier/appendix/cases.md`)。
 - 費用は参考値です。同梱の `prices.json` は見本の単価表で、home の `prices.json` で上書き・追加できます。`agent_stats.py --cost` は設計者の費用を API 換算の USD で出し、`model_report.py` は費用の分からない実行の件数を出します (合計には足しません)。
+
+## v6: 設計者は Atelier の中に
+
+v6 では、ユーザーと話す**呼び出し側** (Claude Code・Codex・Grok など) から設計者を切り離しました。呼び出し側は進行役の `conductor.py` を呼ぶだけで、PBI・差分・レビューは読みません。設計者は出番ごとに新しく起動され、前の出番の会話を持ちません。
+
+```mermaid
+flowchart TD
+  U[ユーザー] <--> C[呼び出し側<br/>Claude Code・Codex・Grok …]
+  C -- "start / next / done / answer / run / wait" --> K[進行役<br/>conductor.py<br/>docs/pbi/conductor/run.json]
+  K -- "出番ごとに新しく起動<br/>(agent か claude -p)" --> D[設計者<br/>atelier-designer・Opus]
+  D --> W[作業者<br/>pbi-worker・route のモデル]
+  D --> R[レビュー担当<br/>atelier-reviewer]
+  D --> T[テスト担当<br/>atelier-tester・Sonnet]
+  R -- "reviews/&lt;報告名&gt;.review.json" --> B[(束<br/>role_results.py bundle<br/>verify の JSON を自分で読む)]
+  B --> D
+  T -- "test-result.json" --> D
+  D -- "出番の結果<br/>episode.result.json" --> K
+```
+
+| 役割 | 何をするか | 置き場・モデル |
+|---|---|---|
+| 呼び出し側 | ユーザーと話し、`conductor.py` を呼び、出番の数行と問いをユーザーに渡し、答えを `answer` で返す。PBI・差分・レビューは読まない | ユーザーのセッション (Claude Code・Codex・Grok など) |
+| 進行役 | run の状態を `docs/pbi/conductor/run.json` に持ち、次の出番と依頼文を決める (LLM ではないスクリプト) | `conductor.py` |
+| 設計者 | 初回の設計 (understand〜route) と承認の下書き、レビュー担当の束の照合、テスト担当の結果の照合。作業者・レビュー担当・テスト担当を動かす | `agents/atelier-designer.md` (Opus) |
+| 作業者 | PBI とその ref だけから 1 件を作って報告する | `agents/pbi-worker.md` (route のモデル) |
+| レビュー担当 | 1 報告に 1 人。`verify.py` を流し、受け入れ条件と差分を確かめ、`reviews/<報告名>.review.json` を書く | `agents/atelier-reviewer.md` (作ったモデルとは別) |
+| テスト担当 | 波のあとに回したテスト、テストの工程の下調べ、最後の通し。`verify/tests/<名前>.test-result.json` を書く | `agents/atelier-tester.md` (Sonnet) |
+
+- ファイルが正です。役割どうしの受け渡しはすべてディスクのファイルで行い、サブエージェントの返事が空でも、決まったパスのファイルがあれば先へ進みます。
+- 止まる場所は 4 つです: 承認、差し戻しの上限 (または設計の見直し)、壊す操作の前、外への送信の前。波の境目の引き継ぎは止まる場所ではなくなり、出番の `handoff` になりました。設計者は出番の途中で Kiln の線を越えたら状態の板を書いて `handoff` で終わり、進行役が `Continue from:` を付けて新しい設計者を起こします (ユーザーの `/clear` と resume は要りません)。Agent も `claude` も無いときの inline の後ろ盾では、今までどおり呼び出し側のセッションが設計者になり、下の引き継ぎと Kiln の記述がそのまま当てはまります。
+- 設計者・レビュー担当・テスト担当・作業者の定義は `agents/` にあります。`mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/*.md ~/.claude/agents/` で 4 つとも置きます。置かないときは後ろ盾 (general-purpose と、headless の `--agents`) で動きます。
+- Codex や Grok のように AGENTS.md を読む呼び出し側には、次の 1 段落をそのまま書けます。`python <skill>/conductor.py start --launch headless` で run を始め、`python <skill>/conductor.py run --detach` で設計者を切り離して起こします。`python <skill>/conductor.py wait --timeout 300` を状態が running でなくなるまで繰り返し、問いが返ったら `python <skill>/conductor.py answer` で答え、進み具合は `python <skill>/conductor.py status` で見ます。その PC に `claude` CLI が要ります (無ければ Atelier は使えません)。
+- 用語は [skills/atelier/CONTEXT.md](skills/atelier/CONTEXT.md)、工程と部品の契約は下の「工程・部品・テンプレート」と [docs/specs/atelier-workflow.md](docs/specs/atelier-workflow.md)、v6 の設計は [docs/specs/atelier-v6.md](docs/specs/atelier-v6.md) にあります。
 
 ## 工程・部品・テンプレート
 
@@ -338,7 +371,7 @@ cp skills/atelier/examples/templates/cheap-all-tiers.json ~/.config/atelier/temp
 ```sh
 git clone https://github.com/reeschan/atelier.git
 cp -r atelier/skills/atelier ~/.claude/skills/
-mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/pbi-worker.md ~/.claude/agents/
+mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/*.md ~/.claude/agents/
 ```
 
 ### pbi-orchestration-jev からの移行
@@ -350,7 +383,7 @@ mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/pbi-worker.md ~/.c
 - rtk のフック: rtk のフックを入れている場合は、`settings.json` のパスを `skills/atelier/rtk/rtk-gate.mjs` に変えてください。
 - 作業中のもの: 各リポジトリの `docs/pbi/` は変わりません。`/atelier resume` で続きから再開できます。
 
-`pbi-worker` は実装担当とレビュー用のサブエージェントの定義です。Claude Code を再起動すると使えるようになります。置かないときは general-purpose で動きます (メモリの search を止める仕組みが無くなるだけです)。
+`agents/*.md` には、設計者 (`atelier-designer`)・レビュー担当 (`atelier-reviewer`)・テスト担当 (`atelier-tester`)・作業者 (`pbi-worker`) の定義が入っています。Claude Code を再起動すると使えるようになります。置かないときは後ろ盾 (general-purpose と、headless の `--agents`) で動きます (メモリの search を止める仕組みなど、一部の守りが無くなるだけです)。
 
 Jev の API キーは次のどちらかに置きます (クライアントはこの順で探します)。
 
@@ -445,19 +478,25 @@ Claude Code で、複数ファイルにまたがる実装を頼むときに呼�
 
 ```
 skills/atelier/
-├── SKILL.md                    # スキル本文 (オーケストレーターが従うワークフローのエンジン)
+├── SKILL.md                    # 呼び出し側の手順 (進行役を回し、設計者を出番ごとに起こす)
+├── designer.md                 # 設計者の手順 (出番ごとに新しく起動され、状態はファイルで受け渡す)
 ├── CONTEXT.md                  # 用語集 (英語と日本語の対訳)
 ├── flow.py                     # 開発フローのテンプレートを解決・検証し、工程ごとの計画を表で出す
 ├── component.py                # 入れたスキルを外部部品として home に登録する
+├── conductor.py                # 進行役: run の状態を持ち、設計者の出番を 1 つずつ回す
+├── role_results.py             # 出番・レビュー・テスト結果の JSON を確かめ、波のレビューを束ねる
 ├── workflows/                  # 同梱のテンプレート (jev-routed・high-model)
 ├── components/                 # コンポーネントの定義 (各工程に差す部品と、その手順の doc。このスキルと Claude Code の built-in だけ)
 ├── runners.md                  # opencode / Codex / Antigravity / dsh への渡し方
 ├── dsh_run.py                  # DeepSeek Harness の headless で PBI を 1 件動かす
 ├── claude_run.py               # Claude Code の headless で PBI を 1 件動かす
 ├── worker.md                   # 実装担当の進め方と報告の形
-├── appendix/                   # 場面ごとに読む付録: engine、工程の手順 (design・plan・verify・review・rework・finish・optional・map・lint・tests-at-end)、cases・handoff・kiln・memory・jev・setup・adapters・priority-templates
-├── prompts/                    # サブエージェントへの依頼文 (設計の見直し・PBI のレビュー・最終レビュー)、すべてのサブエージェントに渡す Kiln のブロック、map と lint の代わりの依頼文
-├── agents/pbi-worker.md        # 実装担当・レビュー用のサブエージェントの定義 (~/.claude/agents に置く)
+├── appendix/                   # 場面ごとに読む付録: engine、episodes (appendix/episodes.md) と工程の手順 (design・plan・verify・review・rework・finish・optional・map・lint・tests-at-end)、cases・handoff・kiln・memory・jev・setup・adapters・priority-templates
+├── prompts/                    # 依頼文: 設計者の出番 (prompts/designer-episode.md)、サブエージェント (設計の見直し・PBI のレビュー・最終レビュー・テスト (prompts/tester.md))、すべてのサブエージェントに渡す Kiln のブロック、map と lint の代わりの依頼文
+├── agents/pbi-worker.md        # 作業者の定義 (~/.claude/agents に置く)
+├── agents/atelier-designer.md  # 設計者の定義 (Opus)
+├── agents/atelier-reviewer.md  # レビュー担当の定義
+├── agents/atelier-tester.md    # テスト担当の定義 (Sonnet)
 ├── prepare.py                  # Jev のゲート 1 と決定表を 1 回で実行し、表だけを出す
 ├── verify.py                   # PBI の検証コマンドを実行し、終了コードと末尾だけを表で出す。--deferred はテストを最後にまとめるときの検査を波ごとに 1 回流す
 ├── lint_run.py                 # lint の下調べと見直しの jevlint: ファイルの一覧、送信の許可、マージ基点の worktree

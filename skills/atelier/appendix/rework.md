@@ -26,8 +26,8 @@ The limit is the template's `fix.max_rework` (2 in the bundled templates). Each 
 
 Stop a PBI when it still fails after the last allowed rework, or when it needs a third continue. Raise its tier, rewrite the PBI or build it yourself only when the user picks that.
 
-- PBIs that do not depend on it keep running. PBIs that depend on it are held.
-- Tell the user, then wait:
+- PBIs of the same wave that do not depend on it keep running; PBIs that depend on it are held.
+- End the episode with a question (kind `rework-limit`) once every running attempt in the same wave has returned and been reconciled; do not end the episode with an attempt still running. Put this in the question's draft:
   - which PBI stopped, and on which model
   - what failed on each attempt
   - the likely cause: the PBI said too little, the model fell short, or the design is wrong
