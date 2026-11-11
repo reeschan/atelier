@@ -1341,6 +1341,44 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(args[args.index('--model') + 1], 'sonnet')
         self.assertEqual(args[args.index('--effort') + 1], 'high')
 
+    def test_an_unreadable_roles_file_is_named_in_a_warning(self):
+        """roles.json が JSON でなければ、その層を飛ばして warn roles (repo): unreadable を出す。"""
+        self.write('docs/pbi/roles.json', '{"roles": {"designer": ')
+        self.con('start', '--goal', 'broken roles')
+        rc, out = self.con('next')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('warn roles (repo): unreadable; skipped', out)
+        self.assertIn('designer opus (default)', self.line(out, 'roles'))
+
+    def test_a_kept_record_with_a_bad_value_is_not_used(self):
+        """running.roles の値が不正 (手で直した run.json など) なら roles_from_record は None を返し、run は取り直す。"""
+        roles, sources, _ = conductor.resolve_roles([])  # 本物の home を読まない
+        record = conductor.roles_record(roles, sources)
+        self.assertEqual(conductor.roles_from_record(record), roles)
+        record['designer']['model']['value'] = None
+        self.assertIsNone(conductor.roles_from_record(record))
+        record['designer']['model']['value'] = 'opus'
+        record['tester']['effort']['value'] = 3
+        self.assertIsNone(conductor.roles_from_record(record))
+    def test_approve_answers_each_draft_ask_block(self):
+        """下書きの ```ask の囲みも決定になる。選ばなければ未回答で承認にならず、--choices で選べば進む。"""
+        asks = ['```ask', 'Where does OMM go?', '* cache | outside', '- repo | inside', '```']
+        self.con('start', '--goal', 'approve ask blocks')
+        rc, out = self.con('next')
+        meta, rc, out = self.ask_approve(out, asks)
+        self.assertEqual(rc, 10, out)
+
+        rc, out = self.con('answer', '--approve')
+        self.assertNotEqual(out.splitlines()[0], 'state: ready', out)
+        self.assertEqual(self.approvals(), 0)
+
+        rc, out = self.con('answer', '--approve', '--choices', '1=cache')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        reply = self.read('docs/pbi/conductor/answers/1-approve.md')
+        self.assertIn('1. [ask] Where does OMM go?', reply)
+        self.assertIn('**cache**', reply)
+        self.assertEqual(self.approvals(), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

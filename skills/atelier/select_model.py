@@ -7,8 +7,9 @@ facts.json: {"files_changed", "files_new", "files_deleted", "modules", "criteria
 Jev 応答: ゲート brief（novelty / coupling / ambiguity）の API 応答。
 --tier: 決定表を飛ばして段を指定する（tier up で route を出し直すとき）。--all では --only と一緒のときだけ受け付ける。
 --skip: route から外す実行先（このセッションで上限・拒否が出た実行先、昇格で外す opencode）。agent は外せない。
-        runner 名（opencode など）はその runner の手順を全部、モデル ID（/ を含む値。opencode/glm-5.3-flash-free など）は
-        その model の手順だけを外す。
+        runner 名（opencode など）はその runner の手順を全部、モデル ID はその model の手順だけを外す。モデル ID は
+        / を含む値（opencode/glm-5.3-flash-free など）か、routing・適用中の優先テンプレートの手順に出てくる値
+        （codex の gpt-6-astra など）。どれでもない値は打ち間違いとして止める。
 --pbi: 交互グループを回す数（PBI の番号）。省くと facts のファイル名の PBI-<番号> から取り、取れなければ 0。
 --all: <dir>/PBI-*.facts.json と <dir>/jev/PBI-*.brief.json を全部判定し、<dir>/PBI-*.route.json に書いて、
        標準出力には 1 PBI 1 行の表だけを出す（オーケストレーターの文脈を細く保つため）。
@@ -159,6 +160,28 @@ def load_routing(path) -> dict:
     if err:
         sys.exit(f'{path}: {err}')
     return table
+
+
+def known_models(routing: dict, home: Path) -> set:
+    """routing と適用中の優先テンプレートの手順に出てくるモデル ID（agent の手順は除く）。--skip の確かめに使う。"""
+    found = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            if isinstance(node.get('model'), str) and node.get('runner') != 'agent':
+                found.add(node['model'])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(routing)
+    application = templates.load_overrides(home).get('application')
+    name = application.get('template') if isinstance(application, dict) else None
+    if isinstance(name, str):
+        walk(templates.load_template(home, name))
+    return found
 
 
 def find_routing(explicit: str | None, all_dir: str | None, home: Path) -> tuple[dict, str]:
@@ -402,8 +425,6 @@ def main():
         sys.exit(f'--tier は {"/".join(TIERS)} のどれか')
     skip_s = pop_opt(args, '--skip')
     skip = frozenset(s for s in (skip_s or '').split(',') if s)
-    if {s for s in skip if '/' not in s} - set(RUNNERS):
-        sys.exit(f'--skip は {"/".join(RUNNERS)} のどれかかモデル ID（/ を含む値）（カンマ区切り）')
     pbi_s = pop_opt(args, '--pbi')
     if pbi_s is not None and not pbi_s.isdigit():
         sys.exit('--pbi は 0 以上の整数')
@@ -424,6 +445,10 @@ def main():
     if all_dir and forced and not only:
         sys.exit('--tier は --all では --only と一緒に使う')
     routing, _ = find_routing(pop_opt(args, '--routing'), all_dir, home)
+    unknown = {s for s in skip if s not in RUNNERS and '/' not in s and s not in known_models(routing, home)}
+    if unknown:
+        sys.exit(f'--skip は {"/".join(RUNNERS)} のどれかかモデル ID（カンマ区切り。agent は外せない）: '
+                 f'{",".join(sorted(unknown))}')
     if all_dir:
         run_all(Path(all_dir), today, skip, routing, home, now, only=only, tier=forced)
         return

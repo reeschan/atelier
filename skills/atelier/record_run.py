@@ -2,12 +2,13 @@
 その実行の生ログをリポジトリの外の保全先にコピーする (appendix/verify.md、合否を決めた直後に 1 回)。
 
 使い方 (リポジトリのルートで):
-  python <このディレクトリ>/record_run.py <報告名> --attempt N --outcome pass|rework|tier-up|unavailable|hold
+  python <このディレクトリ>/record_run.py <報告名> --attempt N [--step S] --outcome pass|rework|tier-up|unavailable|hold
       [--findings 重大,中,軽微] [--runner R --model M --effort E --tier T] [--work-key KEY] [--repo NAME]
       [--dir docs/pbi] [--projects DIR] [--prices FILE] [--home DIR]
 
-報告名は PBI-007 か PBI-007.rework-1。--attempt は route の何番目か (1 始まり。使えずで次へ回したら増やす)。
-実行先・モデル・effort・段は docs/pbi/<PBI>.route.json の route[attempt-1] から取る。昇格などで route.json と
+報告名は PBI-007 か PBI-007.rework-1。--attempt はその報告の何回目の実行か (1 始まり、報告ごとに重ならない)。
+--step は route の何番目で動かしたか (既定は --attempt と同じ)。同じ段のやり直しや、利用者が選んだ段で動かしたときは
+--attempt と --step が食い違うので両方を渡す。実行先・モデル・effort・段は docs/pbi/<PBI>.route.json の route[step-1] から取る。昇格などで route.json と
 違う実行先で動かしたときは --runner / --model / --effort / --tier で渡す。
 
 判断による値は --outcome と --findings と --cause の 3 つだけで、行の judged に分けて入れる。--cause は差し戻し・
@@ -628,6 +629,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('report')
     ap.add_argument('--attempt', type=int, required=True)
+    ap.add_argument('--step', type=int, help='route の何番目で動かしたか (既定は --attempt)')
     ap.add_argument('--outcome', required=True)
     ap.add_argument('--findings')
     ap.add_argument('--cause', help=f'差し戻し・昇格・保留の原因: {", ".join(CAUSES)} (カンマで複数)')
@@ -647,6 +649,10 @@ def main():
         fail(f'--outcome は {" / ".join(OUTCOME_ALIASES)} (または {" / ".join(OUTCOMES)}) のどれか')
     if args.attempt < 1:
         fail('--attempt は 1 以上')
+    if args.step is None:
+        args.step = args.attempt
+    if args.step < 1:
+        fail('--step は 1 以上')
     findings = parse_findings(args.findings)
     causes = parse_causes(args.cause)
     pbi, rework = m.group(1), int(m.group(2) or 0)
@@ -662,13 +668,13 @@ def main():
     except (OSError, ValueError):
         pass
     route = route_doc.get('route') or []
-    step = route[args.attempt - 1] if args.attempt <= len(route) else {}
+    step = route[args.step - 1] if args.step <= len(route) else {}
     runner = args.runner or step.get('runner')
     model = args.model or step.get('model')
     effort = args.effort if args.effort is not None else step.get('effort')
     tier = args.tier or route_doc.get('tier')
     if not runner or not model:
-        fail(f'{pbi}.route.json に attempt {args.attempt} の実行先が無い。--runner と --model で渡す')
+        fail(f'{pbi}.route.json に step {args.step} の実行先が無い。--runner と --model で渡す')
 
     prices = common.load_prices(common.resolve_home(args.home), Path(args.prices))
     transcript = None
@@ -715,6 +721,7 @@ def main():
         'schema': SCHEMA,
         'recorded_at': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
         'repo': repo, 'work_key': key, 'pbi': pbi, 'report': args.report, 'attempt': args.attempt,
+        'step': args.step,
         'rework': rework, 'tier': tier, 'runner': runner, 'model': model, 'effort': effort,
         'models_seen': got.get('models_seen'),
         'time': got['time'], 'steps': got['steps'], 'tokens': got['tokens'],
