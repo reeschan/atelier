@@ -357,6 +357,17 @@ class RecordRunTest(unittest.TestCase):
                          [(1, GLM_FREE['model'], '使えず'), (2, DS_FREE['model'], '合格')])
         self.assertEqual(rows[0]['steps'], 0)
 
+    def test_a_retry_of_the_same_step_keeps_its_model(self):
+        """--step で route の段を選ぶ。同じ段のやり直しは attempt だけが増え、利用者が選んだ段はその段のモデル。"""
+        self.write_opencode('PBI-007', [])
+        self.assertEqual(self.record('PBI-007', 1, '使えず').returncode, 0)
+        self.assertEqual(self.record('PBI-007', 2, '使えず', '--step', '1').returncode, 0)
+        self.write_opencode('PBI-007', [step_finish(1792117910000, 1, 1, 0, 0, 0, 0.0)])
+        self.assertEqual(self.record('PBI-007', 3, '合格', '--step', '2').returncode, 0)
+        rows = self.rows()
+        self.assertEqual([(r['attempt'], r['step'], r['model']) for r in rows],
+                         [(1, 1, GLM_FREE['model']), (2, 1, GLM_FREE['model']), (3, 2, DS_FREE['model'])])
+
     def test_duplicate_record_is_rejected(self):
         self.write_opencode('PBI-007', [])
         self.assertEqual(self.record('PBI-007', 1, '使えず').returncode, 0)
