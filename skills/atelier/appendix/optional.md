@@ -6,7 +6,7 @@ Read this when the template has an `optional` list and one of its rows is picked
 
 | Stage | Placed after (default) | What it adds | Artifact |
 |---|---|---|---|
-| `ui-design` | `design` | the look of the screens the work adds or changes: direction, theme, page and component mockups, a walkthrough video | `docs/pbi/ui/<slug>/` |
+| `ui-design` | `design` | for `ui-change`: the look of the screens the work adds, from a new direction: theme, page and component mockups, a walkthrough video. For `ui-retouch`: an audit of the AI-looking signs on screens that already exist, the direction taken from the product, and the scope to fix (`## UI retouch`) | `docs/pbi/ui/<slug>/` (a retouch writes `docs/pbi/ui/<slug>/audit.md`) |
 | `marketing` | `understand` | who the work is for and how they react: a simulated user panel, objections, positioning, a launch note | `docs/pbi/marketing/<slug>.md` |
 | `security` | `review` | a security audit of the changed code: trust boundaries, confirmed vulnerabilities with source evidence, leads that need validation | `docs/pbi/security/<slug>.md` (a summary; the skill keeps its full output where it says) |
 | `model-check` | `design` | a checked model of how the system moves between states: the rules the user agrees to, a statechart in the reader's words, the shortest path to each state that breaks a rule | `docs/pbi/model-check/<slug>/` |
@@ -23,11 +23,14 @@ Read this when the template has an `optional` list and one of its rows is picked
 
 | Value | Holds when |
 |---|---|
-| `ui-change` | the request adds a screen, changes how one looks, or changes a user flow |
+| `ui-change` | the request adds a screen or a user flow, or gives screens a new look from a new direction. Not when `ui-retouch` holds |
+| `ui-retouch` | the request only fixes how screens that already exist look: AI-looking signs, polish, spacing, color, type, copy tone. It adds no screen and no user flow, and keeps the product's features and content |
 | `user-facing` | the request adds or changes something end users see or pay for |
 | `ask-user` | the user said yes when asked |
 
-You decide `ui-change` and `user-facing` from the request, like `clearly-complex`. When you cannot tell, end the episode with a question of kind `decision` (inline: AskUserQuestion) before the first row of that stage runs, and save the answer in `docs/pbi/adapters.json` as `{"<stage>": {"decision": "run|skip", "asked": true}}`. When the design decision (`appendix/design.md`) also needs asking at that point, put both in the same question (kind `decision`). An optional stage placed before design (marketing, by default) is asked about on its own.
+`ui-change` and `ui-retouch` are one decision with three answers: `ui-change`, `ui-retouch`, or neither. Both never hold in the same run: a component that makes a new look (design-studio) and one that audits and fixes an existing look (unslop) would set two directions for the same screens. A request that adds screens and also touches up existing ones is `ui-change`; mention the retouch to the design skill as part of the request. Rows with `ui-change` and rows with `ui-retouch` can sit in the same `ui-design` stage, and only the rows of the answer run.
+
+You decide `ui-change`, `ui-retouch` and `user-facing` from the request, like `clearly-complex`. When you cannot tell, end the episode with a question of kind `decision` (inline: AskUserQuestion) before the first row of that stage runs, and save the answer in `docs/pbi/adapters.json` as `{"<stage>": {"decision": "run|skip", "asked": true}}`. For `ui-design`, also save which one held: `{"ui-design": {"decision": "run", "when": "ui-change|ui-retouch", "asked": true}}`; ask it as one question with the three answers. When the design decision (`appendix/design.md`) also needs asking at that point, put both in the same question (kind `decision`). An optional stage placed before design (marketing, by default) is asked about on its own.
 
 `ask-user` never decides on its own: ask every run, once, even when the answer seems obvious. For a stage placed after `route` or later (security, by default), put the question in the PBI list approval (Approve in `designer.md`), so the run does not stop again later. For a stage placed after `plan` or earlier (model-check, by default), ask before its first row with a question of kind `decision` (inline: AskUserQuestion), because the approval comes after route. When the design decision is asked at that point too, put both in the same question (kind `decision`). Only optional stages take `ask-user`; `flow.py` rejects it elsewhere. Save the answer in `docs/pbi/adapters.json` the same way, so a resume does not ask again. With no answer, the stage does not run.
 
@@ -50,16 +53,34 @@ You decide `ui-change` and `user-facing` from the request, like `clearly-complex
 - The first run downloads TLC and Java with mise (about 300 MB, into mise's install folder) and needs the network; the command needs a TypeScript runtime (Node 22.18 or later). When mise has no TLC yet, the question that asks whether to run the stage also says what will be downloaded, from where, about how large, where it goes and how to remove it (`mise uninstall`); a yes to the stage is the permission. When something is missing, record `fallback (<what is missing>)`, say it in one line, draw the statechart by hand in the spec as a Mermaid `stateDiagram-v2` in the reader's words, and let the user check it at the approval.
 - Each rule the user agrees to is a decision: put it in the spec. A broken rule is a design finding: fix the design, or put the rule's path in the spec as a known bug the work fixes, and check again once.
 
+## UI retouch
+
+The `ui-retouch` rows (`ui-design.unslop`, heydamir/unslop) audit screens that already exist and decide what to fix. The edits themselves are built as PBIs, like any other change.
+
+- Give the skill the screens the request names: the files that render them, and the route or URL to open in the running app (the dev server, or a page you can screenshot). Ask it for its steps up to the direction only: look at the screen, audit it against its list of signs, decide how much to change (heavy, light, or none), and write the direction. Its passes, its story video and paid image generation are not run here (the component's `forbid` says so); the passes become PBIs.
+- The skill stops to show the audit and the direction and waits for an answer. That stop is the approval of the direction: ask it with AskUserQuestion once, together with the design decision when that is asked at the same point. A changed direction is written back before going on.
+- Write `docs/pbi/ui/<slug>/audit.md`:
+  - **Screens**: each screen, the files that render it, and the screenshot paths (saved in the artifact folder).
+  - **Audit**: one line per sign, `<sign> — <where it lives (file:line or the element)>`, numbered `A1`, `A2`, …
+  - **Verdict**: heavy, light (polish mode: keep the palette, type, layout and visual) or none, and why in one line.
+  - **Direction**: the skill's five lines, as approved.
+  - **Scope**: which audit lines are fixed in this run and in which pass (spacing, color, icons, copy, type, layout, details, visuals, motion), with the target values the skill gives (its tokens). Out of scope: the lines left as they are and the bigger ideas the skill suggested, one line each.
+- With the verdict none, the stage ends there: put the refinements it suggests in the spec only when the user agrees, and record `run (ui-retouch: no slop)`.
+- Copy the skill's credit (CC BY 4.0, Damir Sokolovsky, the repository link) into the top of `docs/pbi/ui/<slug>/audit.md`.
+- Keep the audit lines and the scope in your context; leave the screenshots as paths.
+
 ## How later stages use it
 
 - **design** (when `marketing` runs before it): read the marketing note's conclusions and put the user-facing decisions in the spec.
 - **plan**: a PBI that builds a screen links its mockup and theme files in its Notes, so its worker builds to them. The acceptance criteria name the mockup when the screen must match it.
+- **plan** (after a `ui-retouch` row): split the scope by pass and by screen, keeping the skill's order (spacing before color, copy before type and layout, visuals and motion last), and make a later pass depend on the earlier one when they touch the same files. Each PBI lists the audit lines it fixes (`A3`, `A7`) in its acceptance criteria and links `docs/pbi/ui/<slug>/audit.md` in its Notes, with the direction and the target values. Out-of-scope lines stay out of every PBI.
 - **plan** (after `model-check`): the PBI that owns a rule gets an acceptance criterion for it, and each broken rule's path becomes a test that replays it step by step against the real code. The PBI links the chart in its Notes.
 - **review**: the reviewer compares the built screens with the mockups when the PBI links them.
+- **review** (after a `ui-retouch` row): render the changed screens again and check each audit line in scope is gone and no new sign from the skill's list appeared. A line still there sends its PBI back like a review finding.
 - **fix** (after `security`): a confirmed finding in a file a PBI changed sends that PBI back like a review finding (it counts toward the rework limit). A confirmed finding outside the PBIs' files, and every lead that needs validation, goes to the completion report under findings; do not fix them in this run.
 - **Approve**: show the model-check chart (`chart.mmd` as a `mermaid` block) and its rules with the PBI list, so a reader who does not read code can check the behavior.
 - **finish**: the completion report lists the artifacts under the changes, with paths.
 
 ## Records
 
-Write a stage record for each row, as for any stage: `stage ui-design after design: ui-design.design-studio run (ui-change: new settings page)`. An optional stage that did not run gets one line: `stage marketing after understand: skip (user-facing: internal refactor)`.
+Write a stage record for each row, as for any stage: `stage ui-design after design: ui-design.design-studio run (ui-change: new settings page)`, `stage ui-design after design: ui-design.unslop run (ui-retouch: restyle the top page)`. A row whose `when` is the other half of the pair gets `skip (ui-retouch holds)` or `skip (ui-change holds)`. An optional stage that did not run gets one line: `stage marketing after understand: skip (user-facing: internal refactor)`.
