@@ -312,6 +312,23 @@ def parse_draft(draft: str) -> list[dict]:
     return sections
 
 
+def ask_blocks(rows) -> list[tuple[tuple[int, str], list[tuple[int, str]]]]:
+    """節の行から ask の囲みを順に取り出す。[((開きの行番号, 開きの行), [(行番号, 中の行)])]。"""
+    # 開きの行も中の行も言語 ask を持ち、閉じの行は持たない (parse_draft)。ask の行が途切れたら次の開きは新しい囲み
+    blocks = []
+    inside = False
+    for number, line, lang in rows:
+        if lang != 'ask':
+            inside = False
+            continue
+        if not inside:
+            blocks.append(((number, line), []))
+            inside = True
+            continue
+        blocks[-1][1].append((number, line))
+    return blocks
+
+
 def table_headers(rows) -> list[list[str]]:
     """囲みの外の表の見出しの行 (次の行が区切りの行) を、セルの並びにして返す。"""
     plain = [(n, line) for n, line, lang in rows if lang is None]
@@ -359,10 +376,9 @@ def lint_draft(draft: str) -> tuple[list[tuple[int, str, str]], list[tuple[int, 
         section = found.get(index)
         if section is None:
             continue
-        has_fence = any(FENCE.match(line) and FENCE.match(line).group(2).lower() in DIAGRAMS
-                        for _, line, _ in section['rows'])
-        if not has_fence:
-            errors.append((section['line'], f'節「{section_name(section["title"])}」に図が無い',
+        body = [line for _, line in diagram_rows(section) if line.strip() and not FENCE.match(line)]
+        if not body:
+            errors.append((section['line'], f'節「{section_name(section["title"])}」に図が無いか、図が空',
                            '```flow で利用者から見た流れを描く (ファイルだけを変える run は ```tree)'))
         elif index == SECTION_AFTER and not any(CHANGE_MARK.match(line) for _, line in diagram_rows(section)):
             errors.append((section['line'], 'あとの流れの図に変わる所の印 (+ ・- ・~ ) が無い',
@@ -379,16 +395,25 @@ def lint_draft(draft: str) -> tuple[list[tuple[int, str, str]], list[tuple[int, 
                 break
     section = found.get(SECTION_DECISIONS)
     if section is not None:
-        asks = [(n, line) for n, line, lang in section['rows'] if lang == 'ask']
+        asks = ask_blocks(section['rows'])
         plain = [line.strip().lstrip('-* ').rstrip('。.').lower() for _, line, lang in section['rows']
                  if lang is None and line.strip() and not FENCE.match(line)]
         if not asks and not any(text in NO_DECISIONS for text in plain):
             errors.append((section['line'], '決めることに問い (ask) も「なし」も無い',
                            '問いが無ければ「なし」の 1 行を書く'))
-        for number, line in asks:
-            if OPTION.match(line) and '|' not in line:
-                errors.append((number, '選択肢に「| 選ぶと何が変わるか」の補足が無い',
-                               line.rstrip() + ' | 選ぶと何が変わるか'))
+        for opener, body in asks:
+            number, line = opener
+            if line.strip() != ASK_OPEN:
+                # 返事の照合 (draft_asks) が読むのは ```ask の囲みだけ。ほかの形の問いは答えを求められずに通ってしまう
+                errors.append((number, f'問いの囲み「{line.strip()}」は返事の照合で読まれない', ASK_OPEN))
+            rows = [(n, row) for n, row in body if row.strip()]
+            if not rows or not any(OPTION.match(row) for _, row in rows[1:]):
+                errors.append((number, '問い (ask) に問いの文か選択肢が無い', '1 行目に問いの文、次の行から * か - の選択肢'))
+            for n, row in rows[1:]:
+                note = row.split(' | ', 1)
+                if OPTION.match(row) and (len(note) < 2 or not note[1].strip()):
+                    errors.append((n, '選択肢に「| 選ぶと何が変わるか」の補足が無い',
+                                   note[0].rstrip() + ' | 選ぶと何が変わるか'))
     for section in sections:
         for number, line, _ in section['rows']:
             for pattern, term, rewording in INTERNAL_TERMS:

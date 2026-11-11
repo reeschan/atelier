@@ -316,6 +316,35 @@ class ApprovalDraftLintTest(unittest.TestCase):
         text = self.good.replace('- リポジトリの中 | 誰でも同じ図を見られる。差分が毎回出る', '- リポジトリの中')
         self.assert_error(text, self.line_of(text, '- リポジトリの中'), '|')
 
+    def test_blank_note_after_the_separator_is_an_error(self):
+        text = self.good.replace('- リポジトリの中 | 誰でも同じ図を見られる。差分が毎回出る', '- リポジトリの中 |  ')
+        self.assert_error(text, self.line_of(text, '- リポジトリの中 |  '), '|')
+
+    def test_ask_fence_the_reply_check_cannot_read_is_an_error(self):
+        """返事の照合 (check-reply --draft) が読むのは ```ask だけ。~~~ask などは答えを求められずに通るので止める。"""
+        for opener, closer in (('~~~ask', '~~~'), (':::ask', ':::'), ('````ask', '````'), ('```ask multi', '```')):
+            with self.subTest(opener=opener):
+                ask = '```ask\n図の置き場所はどちらにしますか'
+                text = self.good.replace(ask, ask.replace('```ask', opener))
+                text = text.replace('差分が毎回出る\n```', '差分が毎回出る\n' + closer)
+                self.assert_error(text, self.line_of(text, opener), opener)
+
+    def test_empty_ask_block_is_an_error(self):
+        empty = self.replace_section('## 決めること', '## PBI', '## 決めること\n```ask\n```\n\n')
+        self.assert_error(empty, self.line_of(empty, '```ask'), '選択肢')
+        question_only = self.replace_section('## 決めること', '## PBI', '## 決めること\n```ask\n置き場所は?\n```\n\n')
+        self.assert_error(question_only, self.line_of(question_only, '```ask'), '選択肢')
+
+    def test_two_ask_blocks_are_checked_apart(self):
+        second = '\n```ask\n点検しますか\n* する | 時間がかかる\n- しない\n```\n'
+        text = self.good.replace('## PBI\n', second + '\n## PBI\n')
+        result = self.assert_error(text, self.line_of(text, '- しない'), '|')
+        self.assertEqual(len([r for r in result.stderr.splitlines() if r.startswith('✗ L')]), 1, result.stderr)
+
+    def test_empty_diagram_is_an_error(self):
+        text = self.replace_section('## 今の流れ', '## この run のあとの流れ', '## 今の流れ\n```flow\n```\n\n')
+        self.assert_error(text, self.line_of(text, '## 今の流れ'), '図')
+
     def test_empty_decisions_is_an_error_and_none_passes(self):
         empty = self.replace_section('## 決めること', '## PBI', '## 決めること\n\n')
         self.assert_error(empty, self.line_of(empty, '## 決めること'), 'なし')
