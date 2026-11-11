@@ -1,117 +1,79 @@
 ---
 name: atelier
-description: Use for implementation work that spans several files and should be split into PBIs, routed to the right model, built by workers, verified and reviewed. Arguments: resume, setup, setup --recommended, models, templates. Not for a one-file fix.
+description: Use for implementation work that spans several files and should be split into PBIs, routed to the right model, built by workers, verified and reviewed. Arguments: resume, setup, setup --recommended, models, templates. Not for a one-file fix. The caller only talks with the user; Atelier's designer does the work.
 ---
 
-# Atelier
+# Atelier: the caller
 
-You are the orchestrator. You run one workflow template: nine stages and the optional stages placed between them, each filled by a component. Workers build; you design, decide and accept. Reply in the user's language. Terms are defined in `CONTEXT.md`.
+You are the caller: the session the user talks to. Atelier's designer does the work, and the conductor (`conductor.py`) hands it one episode at a time. You keep the run going and carry words between the user and Atelier. Terms are in `CONTEXT.md`, the contract in `appendix/episodes.md`.
 
-## When to stop
+## You are the caller
 
-Stop and wait for the user only at these five points:
-
-1. The approval of the PBI list (`## Approve`).
-2. A PBI reaches the rework limit, or a fix turns out to be a redesign (`appendix/rework.md`).
-3. Before a destructive operation: deleting data, a force push, or a change outside the repository. Writing refs, handoffs and promotions to shared-memory is not destructive.
-4. The handoff at a wave boundary (`appendix/handoff.md`).
-5. Right before jevlint sends file contents to an outside model, every time (`appendix/lint.md`, `## The send approval`).
-
-Do not stop to report anything else. Put a one- or two-line status in the same message as your next action.
-
-## Invariants
-
-- Pass or fail comes from the exit codes of the verify commands. Counts come from `docs/pbi/STATUS.md`. A PBI's model comes from its `route.json`.
-- One worker per PBI, started fresh for every attempt. It builds from the PBI file and its listed refs only (`worker.md`).
-- The build stage always runs `worker.md`, whatever the template. Templates change who designs, reviews and which model builds, never how a worker works.
-- Stages hand off through their artifacts in `docs/pbi/` and `docs/specs/`. Components never call each other.
-- Every stage ends with a fallback component, so a run never needs anything beyond Claude Code.
-- A review never runs on the model that built what it reviews (`appendix/verify.md`).
-
-## Read on event
-
-| Event | Read |
-|---|---|
-| Argument `resume`, or the end of a wave | `appendix/handoff.md` |
-| Kiln (on by default): every stage and wave boundary, and every subagent or worker prompt (it carries `prompts/kiln-chamber.md`) | `appendix/kiln.md` |
-| Tests at the end (on by default), `docs/pbi/tests-at-end.json` | `appendix/tests-at-end.md` |
-| The `map` stage (OMM); the `lint-survey` or `lint-recheck` stage, or any jevlint run | `appendix/map.md`; `appendix/lint.md` |
-| Argument `setup`, `setup --recommended`, `models` or `templates`, or home has no `agents.json` | `appendix/setup.md` |
-| Picking a component, a `when` you cannot decide, a `read-skill` component, writing a stage record, the user asks to add a skill to the workflow | `appendix/engine.md` |
-| The template has an `optional` list (`ui-design`, `marketing`, `security`, `model-check` rows in the flow table) | `appendix/optional.md` |
-| A component is picked | its `doc` column in the flow table |
-| Choosing the work key, writing refs, handing off, promoting at the end | `appendix/memory.md` |
-| Priority templates: the start-time sync, applying or editing one in chat, an expired application | `appendix/priority-templates.md` |
-| Asking Jev directly (report triage, rework check) | `appendix/jev.md` |
-| Recording the cause of a rework, tier up or hold; writing the cases at finish | `appendix/cases.md` |
-| The `adapters` setting in agents.json (turns a design or review stage off, names a skill for it, or the `confirm` view of Approve) | `appendix/adapters.md` |
+- You design nothing, build nothing and review nothing.
+- Do not read the PBI, the spec or the diff. Read only the lines the commands print.
+- Pass those lines on as they are, one or two lines, in the user's language. Do not expand a PBI's content in your own words.
+- Your whole job: run the conductor, launch the designer when it says to, show its question to the user, and hand the answer back.
 
 ## Start
 
-Open your first message with the user's goal, the problem it solves and the smallest change that reaches it, in your own words, in two or three lines. Do not wait for a reply; the approval of the PBI list is where the user corrects it. Restate the goal in the spec, and in the completion report.
+1. Home has no `agents.json`: finish `setup` first (`appendix/setup.md`).
+2. Write the user's goal in two or three lines, in their language, and say them. Do not wait for a reply; the approval of the PBI list is where the user corrects them.
+3. Put that text in a file and run `python <skill>/conductor.py start --goal-file <file>`. When the user names a template, add `--workflow <name>`.
+   - `--launch agent` (the default) when you are a Claude Code main session.
+   - `--launch headless` when you are already inside a subagent: one level of the Agent tool is gone.
+   - Not Claude Code (Codex, Grok, or any caller reading AGENTS.md): always `start --launch headless`, then `run --detach` and repeated `wait --timeout 300` as below; the `claude` CLI is required.
+4. Exit 2 on `start` means an unfinished run: continue it (`resume`). Run `--force` only when the user says to.
+5. Go to the loop.
 
-1. Run `python <skill>/flow.py docs/pbi` (create `docs/pbi/` first). It resolves the template (`docs/pbi/workflow.json`, then home, then bundled; the default is `jev-routed`) and prints one row per candidate: stage, component, invoke, where, memory, when, status, doc. When the user names a template (for example "use recommended"), add `--workflow <name>` here and to every later `flow.py` call (`--decide` too), and write it in STATUS.md.
-   - On `error` lines, show them to the user in one line each, run again with `--workflow jev-routed`, and note the fallback in the approval list.
-2. Write `docs/pbi/STATUS.md` (format in `appendix/engine.md`). Update one line with Edit each time a state changes.
-3. Copy `<skill>/worker.md` to `docs/pbi/worker.md` and `<skill>/unchanged.py` to `docs/pbi/tools/unchanged.py`. External runners cannot read outside the repository.
-4. Run the start-time sync of priority templates (`appendix/priority-templates.md`).
-5. Write the missing run copies from the template: `tests-at-end.json` (`appendix/tests-at-end.md`), `kiln.json`, `lint.json` (`"enabled": false` turns an option off). Run `python <skill>/tools_check.py` and keep its rows that are not `ok` for Approve.
+## The loop
 
-## Run the stages
+With launch `agent` (headless is below):
 
-Go through the stages in this order. Take the design decision (`appendix/design.md`) right after understand; map and lint-survey run only when it is run. For each stage, take the first row that is usable and whose `when` holds (`appendix/engine.md`), follow its `doc`, and write its stage record. Then run every usable row of the optional stages placed after it (`<stage> after <stage>` rows, `appendix/optional.md`), then of the gates after it; after route, `flow.py docs/pbi --decide` says which PBIs each gate row runs for.
+1. Run `python <skill>/conductor.py next`.
+2. On `state: running` with a `launch:` line, launch the designer with the Agent tool:
+   - `subagent_type` and `model` from the `launch:` line, and the `description="ATELIER.<run>.<seq> <episode>"` as it is;
+   - the prompt is `Read <the prompt: path> and follow it.`
+   - On a `warn agents:` line, launch with `general-purpose`: the prompt file already starts with the definition to read.
+3. When the Agent tool runs in the background, call `done` only after the completion notice.
+4. Run `python <skill>/conductor.py done`. Call it even when the designer's reply was empty: the result is in the file.
+5. Show the user the lines it printed, one or two lines.
+6. Exit 10: a question is waiting, go to Questions. Exit 12: the episode failed, run the `then:` line it prints and launch again. Exit 2: the state or the command is wrong, show the `error:` line and stop.
+7. Back to 1.
 
-| Stage | Default component does | Artifact |
-|---|---|---|
-| understand | look at the code and memory in scope | `docs/pbi/notes/` |
-| design | decide whether to design; write the spec | `docs/specs/<slug>.md` |
-| plan | split into PBIs, write facts and briefs | `docs/pbi/PBI-<n>.md`, `.facts.json`, `.brief.md` |
-| route | Jev gate 1 and the decision table, through `prepare.py` | `docs/pbi/PBI-<n>.route.json` |
-| build | run each PBI's worker on its route, wave by wave | the change and `docs/pbi/reports/<report>.md` |
-| verify | triage the report, run `verify.py`, judge and record each PBI | `docs/pbi/verify/<report>.json` |
-| review | review the whole diff once all PBIs pass | `docs/pbi/reviews/final.review.md` |
-| fix | write a rework note and send the PBI back to build | `docs/pbi/PBI-<n>.rework-<k>.md` |
-| finish | promote refs, collect stats, write the completion report | the report |
+## Running
 
-Build, verify and fix repeat per PBI until each PBI passes or stops. With tests at the end on, the test stage of `appendix/tests-at-end.md` runs after the last wave; lint-recheck (`after verify`) runs after that, before review. Review runs once, after all PBIs; a confirmed finding (from review, or from the security stage when it runs) sends its PBI back to fix. The rework limit is the template's `fix.max_rework`.
+- `next` on a going episode prints `state: running since <time>`: do not launch the designer.
+- Wait for the completion notice.
+- Launch again with `next --relaunch` only when you can tell it stopped: `alive:` is older than the Kiln line, or you reopened the caller and its child is gone.
+- Otherwise leave it alone: a second caller may own the episode.
 
-## Approve
+## headless
 
-After route and its gates, show the user the PBI list and wait for approval. Per PBI: id, title, tier, route head, review level, the reason, dropped steps, dependencies, quality warnings. Also:
+- `run --detach` starts the designer and returns at once.
+- Repeat `python <skill>/conductor.py wait --timeout 300` until it prints a state other than running, then read its lines.
+- With launch `headless`, `next` prints `launch: headless` and `then: ... run --detach`: run that line and do not launch the designer.
+- `--launch` is taken by `start` and `run` only. `next` does not take it.
+- A `decision` question with a `relaunch:` line (`no-agent-tool`): run that line, then follow the headless steps.
 
-- one line per stage from the flow table: the component picked, or the fallback with its reason
-- the priority-template line from `prepare.py` with the warning when a template overrides the opus tier, open assumptions from the design stage, and expired priority applications (`appendix/priority-templates.md`)
-- the leads from the lint survey under "Found, not in this run" (`appendix/lint.md`), and the tests-at-end `deferred` and `test_paths` you drafted
-- one line per recommended tool `tools_check.py` did not find: its install and its fallback. If the user wants to install, stop there and resume after; otherwise the fallback runs
-- show it through the confirm adapter unless it is `off`: the same Markdown to the skill or to chat, and only a reply `design_record.py check-reply` matches is the approval (`appendix/adapters.md`, `## Confirm`)
-- the question for each optional stage with an `ask-user` row placed after route or later (security, by default): whether to run it this time (`appendix/optional.md`); the model-check chart and its rules, when that stage ran
+## Questions
 
-## One PBI
+`next` and `done` end with exit 10 while the run waits on the user: `question: <kind> <path>`, `summary:`, and the `then:`, `approve:` and `revise:` lines.
 
-- [ ] If the tier is opus and you are not running on Opus, get a design review first (`prompts/design-review.md`).
-- [ ] Right before the launch: `python docs/pbi/tools/unchanged.py save PBI-<n> <files not to touch>`.
-- [ ] Launch the route head (`runners.md`). Name the worker's description `PBI-<n> <short text>`.
-- [ ] Triage the report, run `verify.py`, judge each acceptance criterion, read the diff (`appendix/verify.md`).
-- [ ] Decide pass, rework, tier up or hold, and record it once with `record_run.py`.
-- [ ] Update the PBI's row in STATUS.md.
+- `approve`: show the file at the `question:` path as it is (or through the `confirm` skill when the adapters name one: `appendix/adapters.md` (`## Confirm`); `adapter_gate.py` prints the confirm row), with the `summary:`. Save the user's reply to a file and run `python <skill>/conductor.py answer --reply <file>`.
+- `check-reply exit 4` (a reply with no fence): an approval is `answer --approve --choices ...`, a request to change the list is `answer --revise --text ...`. A revise comes back as a new design episode; that is normal.
+- Exit 3 (the reply does not match the draft) or 5 (a choice left unanswered): show it and ask the user again.
+- Other kinds (`rework-limit`, `destructive`, `send-approval`, `decision`): take the answer as text and run `answer --text`.
 
-Run PBIs with no unfinished dependency together as a wave, at most 5 at once, never two that touch the same file. With tests at the end on, verify with `--skip-deferred` and record at the end of the wave (`appendix/tests-at-end.md`). After each wave, measure the context and log it with `kiln_log.py` (`appendix/kiln.md`, `appendix/handoff.md`).
+## Resume
 
-## Keep the context small
+- `resume` is `python <skill>/conductor.py status` and then `next`. The state is on disk; `/clear` is not needed.
+- `status` printing `inline: v5 run` means a v5 run: continue with `designer.md` and `appendix/handoff.md`.
+- A session started without a folder: find the work root as `appendix/handoff.md` says under Resume, step 1.
 
-Everything in your context is re-read on every later turn, which makes the orchestrator the largest cost of a run.
+## Fallback inline
 
-- Every subagent writes details to a file and returns a few lines and the path: workers the 5 lines in `worker.md`, reviewers counts and one line per finding.
-- Scripts do the mechanical steps (`prepare.py`, `verify.py`, `record_run.py`). Read only their tables.
-- Send long output (tests, builds, `git diff`) to `docs/pbi/verify/` and look at the exit code and the last 20 lines.
-- Check a file's size with `wc -lc` before reading it; over 500 lines, use Grep or offset and limit. Write a PBI once and pass its path; write multi-line text with the Write tool, not a heredoc.
-- Batch independent tool calls in one turn.
+No nested Agent tool and no `claude` on the machine: follow `designer.md` yourself. You then ask the user directly where the designer would end with a question, and use `appendix/handoff.md` for `/clear` and resume.
 
-## Working memory
+## Arguments
 
-Only when the shared-memory MCP (`search`, `get`, `write`) is connected; details in `appendix/memory.md`.
-
-- You search widely to design; workers read only the refs their PBI lists. Treat facts in the repository's CLAUDE.md files as known and never copy them into refs or PBIs.
-- Search at most once each in `repo:<repo>` and `global`, always with a scope.
-- A ref holds one fact used by two or more PBIs, a handoff or a review warning. Write all refs in one parallel turn and put their ids in the PBIs' Refs section.
-- Without the MCP, or when writes are not allowed, put the facts in the PBI's Notes and say so in the completion report.
+For `setup`, `setup --recommended`, `models` or `templates`, follow `appendix/setup.md` yourself, then `resume` when a run was going.

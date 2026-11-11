@@ -1,0 +1,11 @@
+{
+  "schema": "atelier.episode/1",
+  "episode": "design",
+  "seq": 1,
+  "status": "done",
+  "summary": [
+    "Wrote 3 PBIs and the wave plan.",
+    "Wave 1 builds PBI-001."
+  ],
+  "next": {"episode": "build", "wave": 1}
+}

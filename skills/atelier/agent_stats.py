@@ -10,6 +10,10 @@
   python agent_stats.py --out docs/pbi/stats  # <out>/<session>.json に書く (同じセッションは上書き)
   python agent_stats.py --json                # 要約の代わりに JSON を標準出力へ
   python agent_stats.py --ctx                 # 今のディレクトリのセッションの、最後のリクエストの文脈の大きさを 1 行で出す
+  python agent_stats.py --ctx --session <id>  # そのセッションの会話記録の文脈の大きさ (headless の設計者用。無ければ context=unknown、終了コード 3)
+  python agent_stats.py --ctx --agent <説明の先頭>  # description がそれで始まる最新のサブエージェントの文脈の大きさ (無ければ context=unknown、終了コード 3)
+  python agent_stats.py --out <dir> --run <run.json>  # 設計者のセッションを集め、役割ごとの数と費用を <dir>/roles.json に書く
+  python agent_stats.py --projects <dir>      # 会話記録の根を差し替える (既定 ~/.claude/projects。どのモードでも効く)
   python agent_stats.py --cost                # 設計者・サブエージェント・advisor の費用を API 換算 (USD) で出す
   python agent_stats.py --cost --home <dir>   # 単価表 (prices.json) を置いた home を指定する
 
@@ -248,6 +252,194 @@ def latest_session():
     return max(files, key=lambda p: p.stat().st_mtime)
 
 
+def find_session_quiet(session_id):
+    """find_session と同じ探し方で、見つからなければ None を返す (終了しない)。"""
+    hits = list(long_path(PROJECTS).glob(f"*/{session_id}.jsonl"))
+    return hits[0] if hits else None
+
+
+def agent_metas(prefix):
+    """全プロジェクトの subagents から、description が prefix で始まるものの (meta.json, jsonl) を集める。
+
+    入れ子のサブエージェントも同じ subagents/ に平らに入るので、再帰はしない。対になる jsonl が無いものは除く。
+    """
+    out = []
+    for m in long_path(PROJECTS).glob("*/*/subagents/agent-*.meta.json"):
+        if not str(read_meta(m).get("description", "")).startswith(prefix):
+            continue
+        jl = m.with_name(m.name.removesuffix(".meta.json") + ".jsonl")
+        if jl.exists():
+            out.append((m, jl))
+    return out
+
+
+def find_agent_jsonl(prefix):
+    """description が prefix で始まるサブエージェントのうち、jsonl が最後に更新されたもの。無ければ None。"""
+    hits = agent_metas(prefix)
+    return max(hits, key=lambda h: h[1].stat().st_mtime)[1] if hits else None
+
+
+def role_of(description, prefix=None):
+    """サブエージェントの description から役割 (designer・tester・reviewer・worker・other) を決める。上から順に判定する。
+
+    prefix (この run の `ATELIER.<run>.`) を渡すと、その印を外した残りで役割を決める
+    (`ATELIER.<run>.TEST …` のような、run の印を先頭に置いた形)。残りが番号で始まる
+    `ATELIER.<run>.<seq> <出番>` は設計者。
+    """
+    d = description or ""
+    if prefix and d.startswith(prefix):
+        rest = d[len(prefix):]
+        return "designer" if rest[:1].isdigit() else role_of(rest)
+    words = d.split()
+    first = words[0] if words else ""
+    if d.startswith("ATELIER."):
+        return "designer"
+    if d.startswith("TEST"):
+        return "tester"
+    if ".review" in d or ".security" in d or first.endswith(".design") or d.startswith("REVIEW"):
+        return "reviewer"
+    if d.startswith("PBI-"):
+        return "worker"
+    return "other"
+
+
+ROLES = ("caller", "designer", "worker", "reviewer", "tester", "other")
+
+
+def run_prefix(run):
+    """run.json の run_id の先頭 8 文字から、設計者の description の印 (`ATELIER.<run>.`) を作る。"""
+    return f"ATELIER.{str(run.get('run_id') or '')[:8]}."
+
+
+def run_sessions(run):
+    """run.json の history から設計者のセッションの会話記録を集める。(会話記録, メインの役割) のリスト。
+
+    headless は履歴の session_id のセッション (メインが designer)。
+    agent は description が ATELIER.<run_id の先頭 8 文字>. で始まるサブエージェントを持つセッション (メインが caller)。
+    """
+    found = {}
+    for e in run.get("history") or []:
+        sid = e.get("session_id") if isinstance(e, dict) else None
+        main = find_session_quiet(sid) if sid else None
+        if main is not None:
+            found.setdefault(main, "designer")
+    for m, _ in agent_metas(run_prefix(run)):
+        main = m.parent.parent.with_suffix(".jsonl")
+        if main.exists():
+            found.setdefault(main, "caller")
+    return list(found.items())
+
+
+def run_end(run):
+    """run.json の finished_at か aborted_at の時刻 (秒)。どちらも無い・読めないときは None。両方あれば遅いほう。"""
+    times = []
+    for key in ("finished_at", "aborted_at"):
+        v = run.get(key)
+        if isinstance(v, str):
+            try:
+                times.append(parse_ts(v))
+            except ValueError:
+                pass
+    return max(times) if times else None
+
+
+def caller_run_agents(sub, prefix, end=None):
+    """agent のセッションの subagents/ から、この run のサブエージェントを選ぶ。
+
+    入れ子も同じ subagents/ に平らに入る。description が prefix で始まるものと、その子孫 (meta.json の
+    parentAgentId をたどる) を選ぶ。親を書かない古い形の meta.json (見本) は、この run の設計者が始まった後に
+    動いたものをこの run のものとみなす (この救済は meta に spawnDepth の無い旧形式だけ。spawnDepth のあるものは
+    設計者の子孫だけを数える)。end があれば、選んだものの時刻をそこまでで切る。戻り値は (選んだもの [(jsonl, meta, リクエスト)], 設計者の最初の時刻 か None)。
+    """
+    items = []
+    for jl in sorted(sub.glob("agent-*.jsonl")):
+        meta_path = jl.with_suffix(".meta.json")
+        meta = read_meta(meta_path) if meta_path.exists() else {}
+        items.append((jl, meta, load_requests(jl)))
+    id_of = lambda jl: jl.stem.removeprefix("agent-")
+    qualified = {id_of(jl) for jl, meta, _ in items
+                 if str(meta.get("description", "")).startswith(prefix)}
+    # 子孫 (この run の設計者から起きた作業者・レビュー担当・テスト担当) をたどる。一巡で足りないことがあるので繰り返す
+    changed = True
+    while changed:
+        changed = False
+        for jl, meta, _ in items:
+            parent = str(meta.get("parentAgentId") or "").removeprefix("agent-")
+            if id_of(jl) not in qualified and parent and parent in qualified:
+                qualified.add(id_of(jl))
+                changed = True
+    first = min((reqs[0]["ts"] for jl, meta, reqs in items if id_of(jl) in qualified and reqs), default=None)
+    chosen = []
+    for jl, meta, reqs in items:
+        if id_of(jl) in qualified:
+            chosen.append((jl, meta, reqs))
+            continue
+        if meta.get("parentAgentId") or "spawnDepth" in meta:
+            # 別の run の設計者の子など、親か spawnDepth があるのにこの run の設計者の子孫でないもの
+            continue
+        desc = str(meta.get("description", ""))
+        if first is not None and reqs and reqs[0]["ts"] >= first and not desc.startswith("ATELIER."):
+            chosen.append((jl, meta, reqs))
+    if end is not None:
+        chosen = [(jl, meta, [r for r in reqs if r["ts"] <= end]) for jl, meta, reqs in chosen]
+        chosen = [c for c in chosen if c[2]]
+    return chosen, first
+
+
+def caller_requests(reqs, start, end=None):
+    """呼び出し側のリクエストのうち、この run の設計者を起動したターン以降のものだけを返す。
+
+    設計者の最初のリクエストより前の最後の呼び出し側リクエストは、その設計者を起動したターンなので含める
+    (見本のメインは設計者の 1 秒前にある)。
+    """
+    cut = start
+    before = [r["ts"] for r in reqs if r["ts"] <= cut]
+    if before:
+        cut = max(before)
+    return [r for r in reqs if r["ts"] >= cut and (end is None or r["ts"] <= end)]
+
+
+def role_stats(sessions, prices, prefix=None, end=None):
+    """会話記録 (と、そのサブエージェント) のリクエストを役割ごとに数える。
+
+    呼び出し側のセッション (agent) は、この run の設計者 (description が prefix で始まる) とその子孫だけを数え、
+    呼び出し側のリクエストも設計者を起動したターンから数える (前の run や関係ない作業を混ぜない)。
+    end (run.json の finished_at か aborted_at) があれば、呼び出し側のリクエストと選んだサブエージェントをその時刻までで切る。
+    headless の設計者のセッションは今までどおり、subagents/ の全部を数える。
+    """
+    roles = {r: [] for r in ROLES}
+    for main, main_role in sessions:
+        reqs = load_requests(main)
+        sub = main.with_suffix("") / "subagents"
+        if main_role == "caller" and prefix:
+            chosen, first = caller_run_agents(sub, prefix, end)
+            if first is not None:
+                reqs = caller_requests(reqs, first, end)
+            for _, meta, agent_reqs in chosen:
+                roles[role_of(meta.get("description", ""), prefix)] += agent_reqs
+        else:
+            for jl in sorted(sub.glob("agent-*.jsonl")):
+                meta_path = jl.with_name(jl.name.removesuffix(".jsonl") + ".meta.json")
+                meta = read_meta(meta_path) if meta_path.exists() else {}
+                roles[role_of(meta.get("description", ""))] += load_requests(jl)
+        roles[main_role] += reqs
+    out = {}
+    for r, reqs in roles.items():
+        c = cost_of(reqs, prices)
+        out[r] = {"requests": len(reqs), "tokens": sum(q[k] for q in reqs for k in TOKEN_KEYS),
+                  "usd": None if c["unpriced"] else c["usd"]}
+    return out
+
+
+def roles_table(roles):
+    lines = ["| 役割 | リクエスト | トークン | 費用 (USD) |", "|---|---:|---:|---:|"]
+    for r in ROLES:
+        v = roles[r]
+        usd = "不明" if v["usd"] is None else f"{v['usd']:.4f}"
+        lines.append(f"| {r} | {fmt(v['requests'])} | {fmt(v['tokens'])} | {usd} |")
+    return "\n".join(lines)
+
+
 def pbi_sessions():
     out = []
     for main in long_path(PROJECTS).glob("*/*.jsonl"):
@@ -413,7 +605,10 @@ def main():
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--session")
     g.add_argument("--all", action="store_true")
-    g.add_argument("--ctx", action="store_true")
+    ap.add_argument("--ctx", action="store_true")
+    ap.add_argument("--agent", help="--ctx と一緒に使う: description がこの文字列で始まる最新のサブエージェントを測る")
+    ap.add_argument("--run", help="--out と一緒に使う: run.json のパス。設計者のセッションを集めて役割ごとに分ける")
+    ap.add_argument("--projects", help="会話記録の根 (既定 ~/.claude/projects)")
     ap.add_argument("--out")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--cost", action="store_true", help="設計者とサブエージェントの費用を API 換算で出す")
@@ -422,9 +617,40 @@ def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
+    global PROJECTS
+    if args.projects:
+        PROJECTS = Path(args.projects)
+    if args.ctx and (args.all or (args.session and args.agent)):
+        ap.error("--ctx は --all や、--session と --agent の同時指定とは使えない")
+    if args.agent and not args.ctx:
+        ap.error("--agent は --ctx と一緒に使う")
+    if args.run and not args.out:
+        ap.error("--run は --out と一緒に使う")
+
     if args.ctx:
-        a = analyze(load_requests(cwd_session()))
+        if args.session:
+            path = find_session_quiet(args.session)
+        elif args.agent is not None:
+            path = find_agent_jsonl(args.agent)
+        else:
+            path = cwd_session()
+        if path is None:
+            print("context=unknown")
+            sys.exit(3)
+        a = analyze(load_requests(path))
         print(f"context={a['last_context']} peak={a['peak_context']} requests={a['requests']}")
+        return
+    if args.run:
+        run = common.load_json(Path(args.run), None)
+        if not isinstance(run, dict):
+            sys.exit(f"run.json を読めない: {args.run}")
+        prices = common.load_prices(common.resolve_home(args.home))
+        roles = role_stats(run_sessions(run), prices, run_prefix(run), run_end(run))
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "roles.json").write_text(
+            json.dumps({"run_id": run.get("run_id"), "roles": roles}, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(roles_table(roles))
         return
     if args.all:
         paths = pbi_sessions()

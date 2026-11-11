@@ -20,7 +20,7 @@ Take this decision right after understand, before the optional stages placed aft
 3. Decide from the request and a short look at the repository:
    - **Clearly complex** (run without asking): the request adds a new concept, an external interface or a data-model change, and the work likely spans 2 or more modules.
    - **Clearly simple** (skip without asking): the direction is already set (a spec exists, or the work continues earlier work), or the work stays in one module with 3 or fewer PBIs and adds no new concept.
-   - **Otherwise**: ask once with AskUserQuestion, before the split, whether to run the design step. Save the answer in `docs/pbi/adapters.json` as `{"design": {"decision": "run|skip", "asked": true}}`. On resume, read it and do not ask again. Do not store it in `docs/pbi/state.json`, which the web sync overwrites.
+   - **Otherwise**: end the episode with a question (kind `decision`) before the split, asking whether to run the design step; the answer comes in the next launch's `Answer:` (inline: ask once with AskUserQuestion). Save the answer in `docs/pbi/adapters.json` as `{"design": {"decision": "run|skip", "asked": true}}`. On resume, read it and do not ask again. Do not store it in `docs/pbi/state.json`, which the web sync overwrites.
 
 ## Design: run
 

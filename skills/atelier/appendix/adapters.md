@@ -34,21 +34,17 @@ For `setup --recommended`:
    - On no, or when the `claude` command is missing, show the commands and stop.
 3. Ask once with AskUserQuestion how to use the template:
    - make it the default: `python <skill>/component.py example use <name> --as jev-routed --replace`;
-   - keep it as its own template: `python <skill>/component.py example use <name>` (then the user asks for it by name; `## Start` in SKILL.md passes `--workflow <name>`).
+   - keep it as its own template: `python <skill>/component.py example use <name>` (then the user asks for it by name; `## Start` in `designer.md` passes `--workflow <name>`).
    Run the choice and show any `error` line. A row with `differs` means a component of that id was registered with other settings: show the `component.py remove <id> --workflow <name>` command for each and stop.
 4. After it succeeds, tell the user to run `/reload-plugins` or restart Claude Code when anything was installed. Until then the new skills are not listed.
 
 ## Confirm
 
-`confirm` is not a stage. It only changes how `## Approve` in SKILL.md shows the PBI list, and it is separate from Kiln's `kiln.json`. Its values are the same: `auto` (default) looks for the skill `answer-me-with-html`, a skill name looks for that skill, `off` keeps today's list in chat with no record and no check.
+`confirm` is not a stage. It only changes how `## Approve` in `designer.md` shows the PBI list, and it is separate from Kiln's `kiln.json`. Its values are the same: `auto` (default) looks for the skill `answer-me-with-html`, a skill name looks for that skill, `off` keeps today's list in chat with no record: an approve question without `check`, where any reply approves.
 
 1. Write one slice per concern the design left open: `python <skill>/design_record.py slice <id> --question <q> --read <path>:<start>-<end> --unknown <u>` (`docs/pbi/notes/<id>.slice.json`: the question, the lines read and what is unknown, never file contents). Then the record: `python <skill>/design_record.py write --id <design id> --target PBI-<n> ... --concern notes/<id>.slice.json ...` (`docs/pbi/design-record.json`, schema `atelier.design-record/1`). The revision goes up only when the targets or concerns change.
 2. Write the Approve list as one Markdown draft in `docs/pbi/notes/approve.md`, open questions as `ask` blocks, and run `python <skill>/design_record.py markdown --draft docs/pbi/notes/approve.md`. It adds the `reply-meta-` lines (design_id, revision, record_hash, draft_hash).
-3. Read the `confirm` row of `adapter_gate.py`. On `skill`, and only when that skill is in your skill list, follow its steps with that Markdown. Otherwise show the same Markdown in chat. Never run or write the skill's CLI yourself.
-4. Save the reply the user pastes to `docs/pbi/notes/reply-<revision>.md` and run `python <skill>/design_record.py check-reply --reply <that file> --draft docs/pbi/notes/approve.md`:
-   - exit 0: approved and recorded in `docs/pbi/design-approvals.jsonl`; go on to build.
-   - exit 3: a value differs or the revision is old. Stop, show the current revision again, and say the reply belongs to another version. It is not an authentication failure.
-   - exit 4: no fence; the reply is not tied to any revision. Treat it as a comment and ask again.
-   - exit 5: an ask was left unselected. That is no answer and no approval; ask those questions.
+3. End the episode with a question of kind `approve`, `check: design-record`, its path `docs/pbi/notes/approve.md`. With the `confirm` adapter `off` there is no design record: leave `check` out. Showing the Markdown in chat, or following the `confirm` skill's route (`answer-me-with-html`), belongs to the caller; never run or write the skill's CLI yourself.
+4. The reply check (`design_record.py check-reply`) is the caller's, through `conductor.py answer`. The next launch has an `Answer:` line and no `Continue from:`, holding either a reply that passed or a revise request from `answer --revise`. On a reply, the list is approved: go on to build. On a revise request, change what it asks, raise the revision, and end with kind `approve` again.
 
-When `tools_check.py` shows `answer-me-with-html` as missing and confirm is not `off`, show its install line once at Approve. Install only after the user says yes; until then, and on no, the chat fallback runs.
+When `tools_check.py` shows `answer-me-with-html` as missing and confirm is not `off`, put its install line once in the approve text (`designer.md`, `## Approve`), with its fallback, as a choice. When the approve answer chooses to install, end with a question of kind `decision`, with `state`, for the install; after its `Answer:`, install it and end with `done`, next build wave 1. Otherwise the chat fallback runs.
