@@ -213,3 +213,17 @@ _Avoid_: hook, integration
 **callee (呼び出し先)**:
 Another skill that a component calls. It never decides pass or fail, and never calls this skill back.
 _Avoid_: external skill, dependency
+
+## Approval
+
+**approval draft (承認の原稿)**:
+The Markdown the designer writes to `docs/pbi/notes/approve.md` for the user to approve the run: seven fixed sections in a fixed order (`appendix/approve.md`), checked by `design_record.py lint`.
+_Avoid_: approval list, 承認の一覧, 下書き
+
+**before / after flow (今の流れ・あとの流れ)**:
+The two diagrams of an approval draft: the flow as the user sees it today, and the same flow after the run, with each changed line marked (`+`, `-`, `~`) and the PBI number in the node it changes.
+_Avoid_: 設計図, 構成図
+
+**internal term (内部の言葉)**:
+A word only Atelier's insides use (route, tier, stage, a quality score's name, a component's name). Text the user reads rewords it or explains it on the same line.
+_Avoid_: jargon, 専門用語

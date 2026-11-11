@@ -4,13 +4,17 @@
 使い方 (リポジトリのルートで):
   python <このディレクトリ>/design_record.py slice <id> --question Q [--read PATH:START-END ...] [--unknown U ...] [--dir docs/pbi]
   python <このディレクトリ>/design_record.py write --id ID --target PBI-<n> [--target ...] [--concern notes/<id>.slice.json ...] [--dir docs/pbi]
+  python <このディレクトリ>/design_record.py lint --draft FILE
   python <このディレクトリ>/design_record.py markdown --draft FILE [--dir docs/pbi]
   python <このディレクトリ>/design_record.py check-reply [--reply FILE] [--draft FILE] [--dry-run] [--dir docs/pbi]
 
 slice   docs/pbi/notes/<id>.slice.json に、問い・読んだ path と行・unknown だけを書く。ファイルの本文は入れない。
 write   正本を書く。中身は schema・design_id・revision・targets・concerns だけ (schema 1)。同じ id の正本があり、
         targets か concerns が変わったときだけ revision を 1 上げる。別の id なら 1 から。concerns のファイルが無ければ 2。
-markdown 設計の下書き (Markdown) に返信の封筒 reply-meta-<name>: <value> (design_id・revision・record_hash・draft_hash) を
+lint    承認の原稿 (appendix/approve.md) を点検する。7 つの節の名前と順・前後の図・あとの図の印・PBI の表の見出し・
+        ask の置き場所と選択肢の補足を見る。誤りは標準エラーに `✗ L<行>` と `例:` の行で全部出し、終了コード 6。
+        説明の無い内部の言葉は `! L<行> <言葉> → <言い換えの案>` の警告で、終了コードは 0 のまま。正本は読まない。
+markdown 先に lint と同じ点検をし、誤りがあれば何も出さずに 6 で止める。通れば、設計の下書き (Markdown) に返信の封筒 reply-meta-<name>: <value> (design_id・revision・record_hash・draft_hash) を
         frontmatter として足して標準出力に出す。skill に渡すのも、skill が無いときチャットに出すのも、この同じ Markdown。
 check-reply 貼られた返信 (--reply、無ければ標準入力) を正本と照合する。\\r\\n を \\n にし、行頭で始まる最後の
         ```am-reply-meta フェンスだけを読む (返信の末尾にあるもの。`  > ` の引用の中は行頭ではないので読まない)。
@@ -63,6 +67,7 @@ EXIT_USAGE = 2
 EXIT_MISMATCH = 3
 EXIT_UNBOUND = 4
 EXIT_UNANSWERED = 5
+EXIT_DRAFT = 6
 
 
 def fail(msg: str, code: int = EXIT_USAGE) -> None:
@@ -212,6 +217,197 @@ def compare(meta: dict, record: dict, draft: str | None) -> list[str]:
     return problems
 
 
+# 承認の原稿の点検 (designer.md、`## Approve`)。節は決まった名前で決まった順。日本語と英語のどちらの名前でも受ける
+APPROVAL_SECTIONS = [('結論', 'Summary'), ('今の流れ', 'Before'), ('この run のあとの流れ', 'After'),
+                     ('決めること', 'Decisions'), ('PBI', 'PBIs'), ('影響範囲', 'Impact'),
+                     ('作る人と見直し', 'Who builds')]
+SECTION_BEFORE, SECTION_AFTER, SECTION_DECISIONS, SECTION_PBI = 1, 2, 3, 4
+PBI_HEADERS = (['PBI', '何をするか', '終わると何ができるか', '先に要る PBI'],
+               ['PBI', 'What it does', 'What works after', 'Needs'])
+DIAGRAMS = ('flow', 'tree', 'er', 'sequence')
+NO_DECISIONS = ('なし', 'none')
+HEADING = re.compile(r'^##\s+(.*?)\s*$')
+PANEL_ID = re.compile(r'^[A-Z]\s+(?=\S)')
+PANEL_ATTRS = re.compile(r'\s*\{[^}]*\}\s*$')
+FENCE = re.compile(r'^\s*(```+|~~~+|:::)\s*([A-Za-z-]*)')
+CHANGE_MARK = re.compile(r'^\s*[+~-] ')
+TABLE_ROW = re.compile(r'^\s*\|(.*)\|\s*$')
+OPTION = re.compile(r'^\s*[*-] ')
+EXPLAINED = re.compile(r'[(（]')
+# 説明なしに出ると、atelier の外の人に通じない言葉と、その言い換えの案。言い換えは機械に任せきれないので警告だけにする。
+# 英字の語は前後が英数字でないことで区切る (\b は日本語の文字も語の一部に数え、「routeの」に当たらないため)。
+# 漢字 1 字の語は前後が漢字でないときだけ当てる (「段階」「手段」「波線」に当てないため)
+_KANJI = '一-龥々'
+_A, _Z = r'(?<![A-Za-z0-9_])', r'(?![A-Za-z0-9_])'
+
+
+def _word(pattern: str) -> str:
+    return _A + '(?:' + pattern + ')' + _Z
+
+
+def _kanji(char: str) -> str:
+    return f'(?<![{_KANJI}]){char}(?![{_KANJI}])'
+
+
+INTERNAL_TERMS = [
+    (re.compile(_word('route'), re.I), 'route', 'どのモデルにどの順で頼むか'),
+    (re.compile(_word('tiers?'), re.I), 'tier', 'モデルの格 (opus・sonnet など)'),
+    (re.compile(_word('stages?') + '|' + _kanji('段'), re.I), '段 (stage)',
+     '設計者の作業の段階 (理解・設計・計画など)。載せるなら何をしたかを書く'),
+    (re.compile(_word('waves?') + '|' + _kanji('波'), re.I), '波 (wave)', '同時に進める PBI のまとまり'),
+    (re.compile(_word(r'criteria_\w+|rework_quality|names_condition')), '品質の点数の名前',
+     '点数は載せず、判断が要るなら何が足りないかを言葉で書く'),
+    (re.compile(_word('novelty|coupling|ambiguity'), re.I), 'novelty・coupling・ambiguity',
+     '新しさ・ほかの部分とのつながり・あいまいさ (モデルを選ぶ目安)'),
+    (re.compile(_A + r'(?:understand|design|map|lint-survey|lint-recheck|plan|route|gate|build|review|verify|'
+                r'fix|finish)\.[\w-]+'), '部品の名前', '何をする段階かを言葉で書く (例えば「影響範囲の点検」)'),
+    (re.compile(r'優先テンプレート|' + _word('priority[ -]templates?'), re.I), '優先テンプレート',
+     'どのモデルを先に使うかの決まり'),
+    (re.compile(_word('blast[ -]radius'), re.I), 'blast radius', '影響範囲の点検'),
+    (re.compile(_word(r'P-\d+')), '課題の番号', '番号でなく、その課題の中身を言葉で書く'),
+    (re.compile('封筒|' + _word('envelope|reply-meta'), re.I), '封筒 (reply-meta)', '照合情報'),
+]
+
+
+def draft_lines(draft: str) -> list[tuple[int, str]]:
+    """frontmatter を除いた本文の行を (ファイルの行番号, 行) で返す。"""
+    lines = normalize(draft).split('\n')
+    start = 0
+    if lines and lines[0].strip() == '---':
+        end = next((i for i in range(1, len(lines)) if lines[i].strip() == '---'), None)
+        if end is not None:
+            start = end + 1
+    return [(i + 1, lines[i]) for i in range(start, len(lines))]
+
+
+def section_name(title: str) -> str:
+    return PANEL_ID.sub('', PANEL_ATTRS.sub('', title)).strip()
+
+
+def section_index(title: str) -> int | None:
+    name = section_name(title)
+    return next((i for i, names in enumerate(APPROVAL_SECTIONS) if name in names), None)
+
+
+def parse_draft(draft: str) -> list[dict]:
+    """本文を `##` の節に分ける。囲み (```・:::) の中の `##` は見出しにしない。
+    [{title, line, rows: [(行番号, 行, 囲みの言語 or None)]}]。最初の見出しの前の行は title None の節に入る。"""
+    sections = [{'title': None, 'line': 1, 'rows': []}]
+    fence, lang = None, None
+    for number, line in draft_lines(draft):
+        match = FENCE.match(line)
+        if fence is None and match:
+            fence, lang = match.group(1), match.group(2).lower()
+            sections[-1]['rows'].append((number, line, lang))
+            continue
+        if fence is not None and match and line.strip() == fence:
+            fence, lang = None, None
+            sections[-1]['rows'].append((number, line, None))
+            continue
+        heading = HEADING.match(line) if fence is None else None
+        if heading:
+            sections.append({'title': heading.group(1), 'line': number, 'rows': []})
+            continue
+        sections[-1]['rows'].append((number, line, lang if fence is not None else None))
+    return sections
+
+
+def table_headers(rows) -> list[list[str]]:
+    """囲みの外の表の見出しの行 (次の行が区切りの行) を、セルの並びにして返す。"""
+    plain = [(n, line) for n, line, lang in rows if lang is None]
+    headers = []
+    for (_, line), (_, below) in zip(plain, plain[1:]):
+        head, rule = TABLE_ROW.match(line), TABLE_ROW.match(below)
+        if head and rule and set(rule.group(1).replace('|', '').strip()) <= set('-: '):
+            headers.append([cell.strip() for cell in head.group(1).split('|')])
+    return headers
+
+
+def lint_draft(draft: str) -> tuple[list[tuple[int, str, str]], list[tuple[int, str, str]]]:
+    """承認の原稿を点検する。(誤り, 警告)。どちらも (行番号, 何が違うか, 例か言い換えの案) の並び。"""
+    errors, warnings = [], []
+    sections = parse_draft(draft)
+    names = ' → '.join(f'## {ja}' for ja, _ in APPROVAL_SECTIONS)
+    found = {}
+    last = -1
+    for section in sections[1:]:
+        index = section_index(section['title'])
+        if index is None:
+            errors.append((section['line'], f'承認の原稿に無い節「{section["title"]}」',
+                           f'決まった 7 つの節 ({names}) のどれかに入れる。段ごとの記録は載せない'))
+            continue
+        if index in found:
+            errors.append((section['line'], f'節「{section_name(section["title"])}」が 2 つある', '1 つにまとめる'))
+            continue
+        if index < last:
+            errors.append((section['line'], f'節「{section_name(section["title"])}」の順が違う',
+                           f'節は {names} の順に置く'))
+        found[index] = section
+        last = max(last, index)
+    body = draft_lines(draft)
+    end_line = body[-1][0] if body else 1
+    for index, (ja, en) in enumerate(APPROVAL_SECTIONS):
+        if index not in found:
+            later = [found[i]['line'] for i in found if i > index]
+            place = f'## {APPROVAL_SECTIONS[index - 1][0]} のあと' if index else 'ページの最初'
+            errors.append((min(later) if later else end_line, f'節「{ja}」({en}) が無い', f'## {ja} を{place}に置く'))
+
+    def diagram_rows(section):
+        return [(n, line) for n, line, lang in section['rows'] if lang in DIAGRAMS]
+
+    for index in (SECTION_BEFORE, SECTION_AFTER):
+        section = found.get(index)
+        if section is None:
+            continue
+        has_fence = any(FENCE.match(line) and FENCE.match(line).group(2).lower() in DIAGRAMS
+                        for _, line, _ in section['rows'])
+        if not has_fence:
+            errors.append((section['line'], f'節「{section_name(section["title"])}」に図が無い',
+                           '```flow で利用者から見た流れを描く (ファイルだけを変える run は ```tree)'))
+        elif index == SECTION_AFTER and not any(CHANGE_MARK.match(line) for _, line in diagram_rows(section)):
+            errors.append((section['line'], 'あとの流れの図に変わる所の印 (+ ・- ・~ ) が無い',
+                           '+ 返事を照合する (PBI-003)'))
+    section = found.get(SECTION_PBI)
+    if section is not None and not any(h in PBI_HEADERS for h in table_headers(section['rows'])):
+        errors.append((section['line'], 'PBI の表の見出しが「' + ' | '.join(PBI_HEADERS[0]) + '」でない',
+                       '| ' + ' | '.join(PBI_HEADERS[0]) + ' |'))
+    for section in sections:
+        index = section_index(section['title']) if section['title'] is not None else None
+        for number, line, lang in section['rows']:
+            if lang == 'ask' and index != SECTION_DECISIONS:
+                errors.append((number, '問い (ask) が決めることの節の外にある', '問いは ## 決めること にまとめる'))
+                break
+    section = found.get(SECTION_DECISIONS)
+    if section is not None:
+        asks = [(n, line) for n, line, lang in section['rows'] if lang == 'ask']
+        plain = [line.strip().lstrip('-* ').rstrip('。.').lower() for _, line, lang in section['rows']
+                 if lang is None and line.strip() and not FENCE.match(line)]
+        if not asks and not any(text in NO_DECISIONS for text in plain):
+            errors.append((section['line'], '決めることに問い (ask) も「なし」も無い',
+                           '問いが無ければ「なし」の 1 行を書く'))
+        for number, line in asks:
+            if OPTION.match(line) and '|' not in line:
+                errors.append((number, '選択肢に「| 選ぶと何が変わるか」の補足が無い',
+                               line.rstrip() + ' | 選ぶと何が変わるか'))
+    for section in sections:
+        for number, line, _ in section['rows']:
+            for pattern, term, rewording in INTERNAL_TERMS:
+                match = pattern.search(line)
+                if match and not EXPLAINED.search(line[match.end():]):
+                    warnings.append((number, term, rewording))
+    errors.sort(key=lambda e: e[0])
+    return errors, warnings
+
+
+def report_lint(errors: list, warnings: list) -> None:
+    for number, what, example in errors:
+        print(f'✗ L{number} {what}\n  例: {example}', file=sys.stderr)
+    for number, term, rewording in warnings:
+        print(f'! L{number} {term} → {rewording}', file=sys.stderr)
+    if errors:
+        print(f'✗ {len(errors)} errors in the approval draft: fix each line and run again', file=sys.stderr)
+
+
 def load_record(base: Path) -> dict:
     record = common.load_json(base / RECORD_NAME)
     if not valid_record(record):
@@ -285,9 +481,22 @@ def read_stdin() -> str:
     return sys.stdin.buffer.read().decode('utf-8-sig', errors='replace')
 
 
+def cmd_lint(args) -> int:
+    errors, warnings = lint_draft(read_text(args.draft))
+    report_lint(errors, warnings)
+    if errors:
+        return EXIT_DRAFT
+    print(f'ok	{len(warnings)} warning(s)')
+    return EXIT_OK
+
+
 def cmd_markdown(args) -> int:
     record = load_record(Path(args.dir))
     draft = read_text(args.draft)
+    errors, warnings = lint_draft(draft)
+    report_lint(errors, warnings)
+    if errors:
+        return EXIT_DRAFT
     entries = meta_entries(record, draft)
     errors = check_meta(entries)
     if errors:
@@ -358,15 +567,18 @@ def main(argv=None) -> int:
     wr.add_argument('--concern', action='append', default=[])
     md = sub.add_parser('markdown')
     md.add_argument('--draft', required=True)
+    li = sub.add_parser('lint')
+    li.add_argument('--draft', required=True)
     ck = sub.add_parser('check-reply')
     ck.add_argument('--reply')
     ck.add_argument('--draft')
     ck.add_argument('--dry-run', action='store_true')
-    for parser in (sl, wr, md, ck):
+    for parser in (sl, wr, md, li, ck):
         parser.add_argument('--dir', default='docs/pbi')
     args = ap.parse_args(argv)
     common.utf8_stdout()
-    handlers = {'slice': cmd_slice, 'write': cmd_write, 'markdown': cmd_markdown, 'check-reply': cmd_check_reply}
+    handlers = {'slice': cmd_slice, 'write': cmd_write, 'markdown': cmd_markdown, 'lint': cmd_lint,
+                'check-reply': cmd_check_reply}
     return handlers[args.command](args)
 
 
