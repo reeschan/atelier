@@ -29,6 +29,8 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
    node <skill>/rtk/rtk-mode.mjs off
    ```
 
+5. When `docs/pbi/adapters.json` has `map.decision` `repo`, run `python <skill>/omm_cache.py export docs/pbi --base <base>`. It copies the stored `.omm/` into the working tree; exit 2 (no stored scan, or an untracked `.omm/` already there) leaves the working tree as it is. Say in the report where `.omm/` is or why it is not, that the user commits it, and that it shows the merge-base, so `omm-pr-scan` can bring it up to the change.
+
 ## The completion report
 
 Write it to `docs/pbi/REPORT.md` first, in the user's language. The gates after finish run on that file. The bundled templates have none; a template that adds yomiyasu as an external component (`gate.yomiyasu`, `appendix/engine.md`) polishes a Japanese report's wording when the yomiyasu skill is installed: call it on the file, apply its wording fixes, and keep numbers, ids, paths, commands and pasted tables as they are. Then write its path (`docs/pbi/REPORT.md`) in the `report` of the episode result and end the finish episode with status `done`; inline, send the file's text to the user. Once `docs/pbi/REPORT.md` exists, close the work: write the done memory (`appendix/memory.md`, "Finish"). A run that stops before the report keeps its handoff, so `resume` still finds it.

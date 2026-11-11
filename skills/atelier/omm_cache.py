@@ -3,6 +3,7 @@
   python omm_cache.py lookup <pbi-dir> --base REF [--cache-dir DIR] [--home DIR]
   python omm_cache.py store  <pbi-dir> --base REF [--perspectives a,b] [--note TEXT] [--cache-dir DIR] [--home DIR]
   python omm_cache.py check  <pbi-dir>
+  python omm_cache.py export <pbi-dir> --base REF [--cache-dir DIR] [--home DIR]
 
 置き場所: --cache-dir、home の agents.json の omm.cache_dir、無ければメインの clone の親フォルダの .omm-cache。
 その下の <メインの clone の名前>/<フィンガープリントの先頭 12 桁>/ に .omm/ と fingerprint.json を置く。
@@ -14,7 +15,10 @@ lookup: `hit <フォルダ>` か `miss <作るフォルダ>` を 1 行出す (�
 store: 作業ツリーの .omm/ を置き場所へ移し、fingerprint.json を書き、作業ツリーに .omm/ が残っていないことを
   確かめる。.omm/ を git が追っているリポジトリでは何も動かさず終了コード 2。
 check: 作業ツリーに .omm/ があれば `left <パス>` で終了コード 1、無ければ `none` で 0。
-終了コード: 0 = 正常、1 = (check) .omm/ が残っている、2 = 引数・git・入力の誤り。
+export: 当たりの置き場所の .omm/ を作業ツリーへ写し (置き場所には残す)、`placed <パス>` を出す。ユーザーが
+  リポジトリに置くと選んだときに finish で使う。作業ツリーに git が追っていない .omm/ があれば上書きせず終了コード 2。
+  git が追っている .omm/ は置き換える (git で戻せる)。
+終了コード: 0 = 正常、1 = (check) .omm/ が残っている、2 = 引数・git・入力の誤り (export の外れを含む)。
 """
 import argparse
 import datetime
@@ -95,13 +99,17 @@ def locate(args, pbi: Path) -> tuple[Path, Path, str, dict]:
     return root, folder, commit, found
 
 
-def cmd_lookup(args, pbi: Path) -> int:
-    _root, folder, _commit, found = locate(args, pbi)
+def is_hit(folder: Path, found: dict) -> bool:
+    """置き場所の記録が今のフィンガープリントと合い、.omm/ が在るか。"""
     stored = common.load_json(folder / 'fingerprint.json', {})
     same = isinstance(stored, dict) and (stored.get('trees') == found
                                          or (list(found) == ['src'] and stored.get('src_tree') == found['src']))
-    hit = same and (folder / OMM).is_dir()
-    print(f'{"hit" if hit else "miss"} {folder}')
+    return same and (folder / OMM).is_dir()
+
+
+def cmd_lookup(args, pbi: Path) -> int:
+    _root, folder, _commit, found = locate(args, pbi)
+    print(f'{"hit" if is_hit(folder, found) else "miss"} {folder}')
     return 0
 
 
@@ -169,10 +177,26 @@ def cmd_check(_args, pbi: Path) -> int:
     return 0
 
 
+def cmd_export(args, pbi: Path) -> int:
+    root, folder, _commit, found = locate(args, pbi)
+    if not is_hit(folder, found):
+        print(f'error no stored {OMM}/ for this base in {folder} (run the map stage first)', file=sys.stderr)
+        return 2
+    target = root / OMM
+    if target.exists():
+        if not git(root, 'ls-files', '--', OMM):
+            print(f'error {target} is already in the working tree and not tracked; leave it as it is', file=sys.stderr)
+            return 2
+        shutil.rmtree(target)
+    shutil.copytree(folder / OMM, target)
+    print(f'placed {target}')
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='command', required=True)
-    for name in ('lookup', 'store', 'check'):
+    for name in ('lookup', 'store', 'check', 'export'):
         p = sub.add_parser(name)
         p.add_argument('pbi_dir')
         if name != 'check':
@@ -189,7 +213,8 @@ def main(argv=None) -> int:
         print(f'{args.pbi_dir}: not a directory', file=sys.stderr)
         return 2
     try:
-        return {'lookup': cmd_lookup, 'store': cmd_store, 'check': cmd_check}[args.command](args, pbi)
+        return {'lookup': cmd_lookup, 'store': cmd_store, 'check': cmd_check,
+                'export': cmd_export}[args.command](args, pbi)
     except (RuntimeError, OSError) as error:
         print(f'error {error}', file=sys.stderr)
         return 2
