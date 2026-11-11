@@ -1,7 +1,7 @@
 """レビュー担当・テスト担当を、agent 以外の実行先で 1 回動かす。runners.md の「Roles on a runner」の節から呼ぶ。
 
   python <このディレクトリ>/role_run.py <名前> --role reviewer|tester --runner codex|claude|dsh|opencode|agy
-      --model <model> [--effort <effort>] [--sandbox read-only|workspace-write|danger-full-access] [--pbi-dir docs/pbi]
+      --model <model> [--effort <effort>] [--sandbox workspace-write|danger-full-access] [--pbi-dir docs/pbi]
 
 - 依頼文は設計者が <pbi-dir>/roles/<名前>.prompt.md に書いておく (prompts/pbi-review.md・prompts/tester.md の prompt の部分)。
   先頭に「agents/atelier-<役割>.md を読んで従う」の行が無ければ足して書き直す (外部の実行先には定義を読む仕組みが無い)。
@@ -39,6 +39,7 @@ EFFORT = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$')
 # サンドボックスでは塞がれる (workspace-write は fnm・uv の下の実行ファイルとネットワークを通さない)。
 # 既定は開けておき、verify が中で動くリポジトリでは --sandbox で絞れる
 CODEX_SANDBOX = runner_cli.CODEX_DEFAULT_SANDBOX
+ROLE_SANDBOXES = tuple(s for s in runner_cli.CODEX_SANDBOXES if s != 'read-only')
 
 
 def now() -> str:
@@ -118,7 +119,8 @@ def main() -> None:
     ap.add_argument('--runner', required=True)
     ap.add_argument('--model', required=True)
     ap.add_argument('--effort', default=None)
-    ap.add_argument('--sandbox', default=CODEX_SANDBOX, choices=runner_cli.CODEX_SANDBOXES,
+    # read-only は除く: 役割は結果の JSON を書くので、書けないサンドボックスでは終わらない
+    ap.add_argument('--sandbox', default=CODEX_SANDBOX, choices=ROLE_SANDBOXES,
                     help='codex のサンドボックス (既定 danger-full-access)。ほかの実行先では使わない')
     ap.add_argument('--pbi-dir', default='docs/pbi')
     args = ap.parse_args()

@@ -113,6 +113,10 @@ class RoleRunTest(unittest.TestCase):
         r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
                          '--sandbox', 'open')
         self.assertEqual(r.returncode, 2, r.stderr)
+        # read-only では結果の JSON を書けないので断る
+        r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
+                         '--sandbox', 'read-only')
+        self.assertEqual(r.returncode, 2, r.stderr)
 
     def test_exit_code_is_passed_through(self):
         self.prompt('test-final')
