@@ -99,14 +99,19 @@ def codex_home() -> Path:
 
 
 def codex_home_problem():
-    """CODEX_HOME が指す場所にサインインが無ければ、その理由。問題が無ければ None。
+    """CODEX_HOME が設定もサインインも無いフォルダなら、その理由。問題が無ければ None。
 
-    空のフォルダを CODEX_HOME にすると、codex は設定もサインインも無いまま起動して落ちる。
+    空のフォルダを CODEX_HOME にすると、codex は設定もサインインも無いまま起動して落ちる。サインインは auth.json の
+    ほか keyring にも置けるので (config.toml の cli_auth_credentials_store)、config.toml があるホームは断らない。
     """
     given = os.environ.get('CODEX_HOME')
-    if not given or os.environ.get('OPENAI_API_KEY') or (Path(given) / 'auth.json').is_file():
+    if not given or os.environ.get('OPENAI_API_KEY'):
         return None
-    return (f'CODEX_HOME {given} has no sign-in (auth.json); leave CODEX_HOME unset so codex uses its own home')
+    home = Path(given)
+    if (home / 'auth.json').is_file() or (home / 'config.toml').is_file():
+        return None
+    return (f'CODEX_HOME {given} has no sign-in and no config.toml; '
+            'leave CODEX_HOME unset so codex uses its own home')
 
 
 MCP_TABLE = re.compile(r'^\s*\[mcp_servers\.(?:"shared-memory"|\'shared-memory\'|shared-memory)\]', re.M)

@@ -179,6 +179,16 @@ class RoleRunTest(unittest.TestCase):
         self.assertIn('codex not found', r.stderr)
 
 
+    def test_codex_home_with_only_a_config_is_allowed(self):
+        """auth.json が無くても config.toml があれば断らない (サインインは keyring にも置ける)。"""
+        self.prompt()
+        keyring_home = self.tmp / 'keyring-home'
+        keyring_home.mkdir()
+        (keyring_home / 'config.toml').write_text('cli_auth_credentials_store = "keyring"\n', encoding='utf-8')
+        r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
+                         extra_env={'CODEX_HOME': str(keyring_home)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_codex_home_without_sign_in_is_refused(self):
         self.prompt()
         empty = self.tmp / 'empty-home'
