@@ -60,7 +60,7 @@ class RoleRunTest(unittest.TestCase):
                    USERPROFILE=str(self.home), HOME=str(self.home))
         env.update(extra_env or {})
         return subprocess.run([sys.executable, str(SCRIPT), *args], cwd=self.repo, capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', env=env, timeout=120)
+                              encoding='utf-8', errors='replace', env=env, timeout=120, check=False)
 
     def calls(self):
         return [json.loads(line) for line in self.log.read_text(encoding='utf-8').splitlines() if line.strip()]
@@ -78,9 +78,10 @@ class RoleRunTest(unittest.TestCase):
         self.assertIn('model_reasoning_effort="high"', args)
         self.assertIn('mcp_servers.shared-memory.default_tools_approval_mode="auto"', args)
         self.assertEqual(args[-1], '-')
-        first = call['stdin'].splitlines()[0]
-        self.assertTrue(first.startswith('Read ') and first.endswith('agents/atelier-reviewer.md and follow it '
-                                                                      'as your instructions.'), first)
+        first, second = call['stdin'].splitlines()[:2]
+        self.assertTrue(first.startswith('Writing files: On Windows'), first)
+        self.assertTrue(second.startswith('Read ') and second.endswith('agents/atelier-reviewer.md and follow it '
+                                                                        'as your instructions.'), second)
         self.assertIn('Review PBI-001.', call['stdin'])
         for suffix in ('jsonl', 'err', 'last.md', 'run.json'):
             self.assertTrue((self.roles / f'PBI-001.review.{suffix}').is_file(), suffix)
@@ -95,6 +96,27 @@ class RoleRunTest(unittest.TestCase):
             self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra')
         text = (self.roles / 'PBI-001.review.prompt.md').read_text(encoding='utf-8')
         self.assertEqual(text.count('atelier-reviewer.md'), 1)
+
+    def test_runners_md_carries_the_same_text_rule(self):
+        """Claude の設計者が codex の作業者に渡す決まり (runners.md) は、role_run と設計者の依頼文の決まりと同じ文。"""
+        import runner_cli
+        text = (HERE / 'runners.md').read_text(encoding='utf-8')
+        self.assertIn(f'Writing files: {runner_cli.CODEX_TEXT_RULE}', text)
+
+    def test_sandbox_can_be_narrowed(self):
+        self.prompt()
+        r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
+                         '--sandbox', 'workspace-write')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        args = self.calls()[0]['args']
+        self.assertEqual(args[args.index('-s') + 1], 'workspace-write')
+        r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
+                         '--sandbox', 'open')
+        self.assertEqual(r.returncode, 2, r.stderr)
+        # read-only では結果の JSON を書けないので断る
+        r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
+                         '--sandbox', 'read-only')
+        self.assertEqual(r.returncode, 2, r.stderr)
 
     def test_exit_code_is_passed_through(self):
         self.prompt('test-final')
