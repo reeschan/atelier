@@ -1352,7 +1352,7 @@ class ConductorTest(unittest.TestCase):
 
     def test_a_kept_record_with_a_bad_value_is_not_used(self):
         """running.roles の値が不正 (手で直した run.json など) なら roles_from_record は None を返し、run は取り直す。"""
-        roles, sources, _ = conductor.load_roles()
+        roles, sources, _ = conductor.resolve_roles([])  # 本物の home を読まない
         record = conductor.roles_record(roles, sources)
         self.assertEqual(conductor.roles_from_record(record), roles)
         record['designer']['model']['value'] = None
