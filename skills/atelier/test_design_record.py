@@ -97,7 +97,7 @@ class DesignRecordTest(unittest.TestCase):
     # Markdown の封筒
 
     def test_markdown_envelope_matches_the_renderer_rules(self):
-        result = self.run_cli('markdown', '--draft', self.path('draft.md'))
+        result = self.run_cli('markdown', '--draft', self.path('approve-good.md'))
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = result.stdout.split('\n')
         meta = [line for line in lines if line.startswith('reply-meta-')]
@@ -110,11 +110,11 @@ class DesignRecordTest(unittest.TestCase):
             self.assertRegex(value, META_VALUE)
         self.assertEqual(lines[0], '---')
         self.assertLess(lines.index(meta[-1]), lines.index('---', 1))
-        self.assertIn('title: 設計の受け渡し', lines)
+        self.assertIn('title: 設計の受け渡しの承認', lines)
 
     def test_markdown_is_the_same_for_its_own_output_and_crlf(self):
         """封筒を付けた Markdown や \\r\\n の下書きを渡しても draft_hash は変わらない。"""
-        first = self.run_cli('markdown', '--draft', self.path('draft.md')).stdout
+        first = self.run_cli('markdown', '--draft', self.path('approve-good.md')).stdout
         with open(self.path('again.md'), 'w', encoding='utf-8', newline='') as f:
             f.write(first.replace('\n', '\r\n'))
         second = self.run_cli('markdown', '--draft', self.path('again.md'))
@@ -122,12 +122,21 @@ class DesignRecordTest(unittest.TestCase):
         self.assertEqual(second.stdout, first)
 
     def test_markdown_without_frontmatter_gets_one(self):
+        with open(self.path('approve-good.md'), encoding='utf-8') as f:
+            body = f.read().split('---\n', 2)[2]
         with open(self.path('plain.md'), 'w', encoding='utf-8') as f:
-            f.write('## 目的\n本文\n')
+            f.write(body)
         out = self.run_cli('markdown', '--draft', self.path('plain.md')).stdout.split('\n')
         self.assertEqual(out[0], '---')
         self.assertTrue(out[1].startswith('reply-meta-design_id: '))
-        self.assertEqual(out[5:7], ['---', '## 目的'])
+        self.assertEqual(out[5:7], ['---', '## 結論'])
+
+    def test_markdown_stops_on_a_draft_lint_rejects(self):
+        """承認の原稿の形でない下書き (段ごとの記録がある・節が足りない) には封筒を付けず、6 で止める。"""
+        result = self.run_cli('markdown', '--draft', self.path('draft.md'))
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, '')
+        self.assertIn('✗ L', result.stderr)
 
     # 返信の照合
 
@@ -226,6 +235,174 @@ class DesignRecordTest(unittest.TestCase):
         self.assertEqual(self.approvals(), [])
         self.assertEqual(self.check('reply-bare.md', '--dry-run').returncode, 0)
 
+
+
+EXAMPLE = os.path.join(HERE, 'examples', 'approve.md')
+
+
+class ApprovalDraftLintTest(unittest.TestCase):
+    """design_record.py lint: 承認の原稿の 7 つの節・図・表・選択肢の補足を点検し、内部の言葉に警告を出す。"""
+
+    def setUp(self):
+        self.dir = os.path.join(tempfile.gettempdir(), f'approval-lint-{uuid.uuid4().hex}')
+        os.makedirs(self.dir)
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        with open(os.path.join(FIXTURES, 'approve-good.md'), encoding='utf-8') as f:
+            self.good = f.read()
+
+    def lint(self, text):
+        path = os.path.join(self.dir, 'approve.md')
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            f.write(text)
+        result = subprocess.run([sys.executable, SCRIPT, 'lint', '--draft', path], capture_output=True)
+        return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode('utf-8'),
+                                           result.stderr.decode('utf-8', errors='replace'))
+
+    def line_of(self, text, needle):
+        return text.split('\n').index(needle) + 1
+
+    def assert_error(self, text, line, word):
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        errors = [row for row in result.stderr.splitlines() if row.startswith('✗ L')]
+        self.assertTrue(any(row.startswith(f'✗ L{line} ') and word in row for row in errors),
+                        f'no "✗ L{line} … {word}" in:\n{result.stderr}')
+        return result
+
+    def replace_section(self, heading, next_heading, body):
+        start, end = self.good.index(heading), self.good.index(next_heading)
+        return self.good[:start] + body + self.good[end:]
+
+    def test_good_draft_passes(self):
+        result = self.lint(self.good)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('✗', result.stderr)
+        self.assertNotIn('! L', result.stderr)
+        self.assertTrue(result.stdout.startswith('ok\t'), result.stdout)
+
+    def test_crlf_draft_passes(self):
+        self.assertEqual(self.lint(self.good.replace('\n', '\r\n')).returncode, 0)
+
+    def test_extra_section_is_an_error(self):
+        text = self.good.replace('## 作る人と見直し', '## 段ごとの記録\n- 計画: 済み\n\n## 作る人と見直し')
+        result = self.assert_error(text, self.line_of(text, '## 段ごとの記録'), '段ごとの記録')
+        self.assertIn('例:', result.stderr)
+
+    def test_missing_section_is_an_error(self):
+        text = self.replace_section('## 影響範囲', '## 作る人と見直し', '')
+        self.assert_error(text, self.line_of(text, '## 作る人と見直し'), '影響範囲')
+
+    def test_decisions_at_the_end_is_an_error(self):
+        start, end = self.good.index('## 決めること'), self.good.index('## PBI')
+        text = self.good[:start] + self.good[end:] + '\n' + self.good[start:end]
+        self.assert_error(text, self.line_of(text, '## 決めること'), '順')
+
+    def test_before_without_a_diagram_is_an_error(self):
+        text = self.replace_section('## 今の流れ', '## この run のあとの流れ',
+                                    '## 今の流れ\nチャットに一覧を出している。\n\n')
+        self.assert_error(text, self.line_of(text, '## 今の流れ'), '図')
+
+    def test_after_without_change_marks_is_an_error(self):
+        text = self.replace_section('## この run のあとの流れ', '## 決めること',
+                                    '## この run のあとの流れ\n```flow\n(設計者が問いを書く) -> ページにする\n```\n\n')
+        self.assert_error(text, self.line_of(text, '## この run のあとの流れ'), '+')
+
+    def test_machine_pbi_table_is_an_error(self):
+        text = self.good.replace('| PBI | 何をするか | 終わると何ができるか | 先に要る PBI |',
+                                 '| PBI | 題 | 段 | route の先頭 |')
+        self.assert_error(text, self.line_of(text, '## PBI'), '何をするか')
+
+    def test_option_without_a_note_is_an_error(self):
+        text = self.good.replace('- リポジトリの中 | 誰でも同じ図を見られる。差分が毎回出る', '- リポジトリの中')
+        self.assert_error(text, self.line_of(text, '- リポジトリの中'), '|')
+
+    def test_blank_note_after_the_separator_is_an_error(self):
+        text = self.good.replace('- リポジトリの中 | 誰でも同じ図を見られる。差分が毎回出る', '- リポジトリの中 |  ')
+        self.assert_error(text, self.line_of(text, '- リポジトリの中 |  '), '|')
+
+    def test_ask_fence_the_reply_check_cannot_read_is_an_error(self):
+        """返事の照合 (check-reply --draft) が読むのは ```ask だけ。~~~ask などは答えを求められずに通るので止める。"""
+        for opener, closer in (('~~~ask', '~~~'), (':::ask', ':::'), ('````ask', '````'), ('```ask multi', '```')):
+            with self.subTest(opener=opener):
+                ask = '```ask\n図の置き場所はどちらにしますか'
+                text = self.good.replace(ask, ask.replace('```ask', opener))
+                text = text.replace('差分が毎回出る\n```', '差分が毎回出る\n' + closer)
+                self.assert_error(text, self.line_of(text, opener), opener)
+
+    def test_empty_ask_block_is_an_error(self):
+        empty = self.replace_section('## 決めること', '## PBI', '## 決めること\n```ask\n```\n\n')
+        self.assert_error(empty, self.line_of(empty, '```ask'), '選択肢')
+        question_only = self.replace_section('## 決めること', '## PBI', '## 決めること\n```ask\n置き場所は?\n```\n\n')
+        self.assert_error(question_only, self.line_of(question_only, '```ask'), '選択肢')
+
+    def test_two_ask_blocks_are_checked_apart(self):
+        second = '\n```ask\n点検しますか\n* する | 時間がかかる\n- しない\n```\n'
+        text = self.good.replace('## PBI\n', second + '\n## PBI\n')
+        result = self.assert_error(text, self.line_of(text, '- しない'), '|')
+        self.assertEqual(len([r for r in result.stderr.splitlines() if r.startswith('✗ L')]), 1, result.stderr)
+
+    def test_empty_diagram_is_an_error(self):
+        text = self.replace_section('## 今の流れ', '## この run のあとの流れ', '## 今の流れ\n```flow\n```\n\n')
+        self.assert_error(text, self.line_of(text, '## 今の流れ'), '図')
+
+    def test_empty_decisions_is_an_error_and_none_passes(self):
+        empty = self.replace_section('## 決めること', '## PBI', '## 決めること\n\n')
+        self.assert_error(empty, self.line_of(empty, '## 決めること'), 'なし')
+        none = self.replace_section('## 決めること', '## PBI', '## 決めること\nなし\n\n')
+        result = self.lint(none)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_ask_outside_decisions_is_an_error(self):
+        ask = '```ask\n点検しますか\n* する | 時間がかかる\n- しない | 速い\n```\n'
+        text = self.good.replace('## 影響範囲\n', '## 影響範囲\n' + ask)
+        self.assert_error(text, self.line_of(text, '## 影響範囲') + 1, '決めること')
+
+    def test_every_error_is_listed_at_once(self):
+        text = self.good.replace('| PBI | 何をするか | 終わると何ができるか | 先に要る PBI |', '| PBI | 題 |')
+        text = text.replace('- リポジトリの中 | 誰でも同じ図を見られる。差分が毎回出る', '- リポジトリの中')
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 6)
+        self.assertEqual(len([row for row in result.stderr.splitlines() if row.startswith('✗ L')]), 2, result.stderr)
+
+    def test_internal_term_is_a_warning_with_a_rewording(self):
+        row = '| PBI-012 | route と tier を変える | ページで設計を読める | なし |'
+        text = self.good.replace('| PBI-012 | 承認の一覧をページにする | ページで設計を読める | なし |', row)
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        warnings = [w for w in result.stderr.splitlines() if w.startswith(f'! L{self.line_of(text, row)} ')]
+        self.assertEqual(len(warnings), 2, result.stderr)
+        self.assertTrue(all('→' in w for w in warnings), warnings)
+
+    def test_explained_term_is_not_warned(self):
+        text = self.good.replace('| PBI-012 | 承認の一覧をページにする |',
+                                 '| PBI-012 | route (どのモデルにどの順で頼むか) を変える |')
+        self.assertNotIn('! L', self.lint(text).stderr)
+
+    def test_common_words_with_the_same_kanji_are_not_warned(self):
+        text = self.good.replace('設計の受け渡しを、', '段階を分け、階段のように手段をそろえ、波線を引き、設計の受け渡しを、')
+        self.assertNotIn('! L', self.lint(text).stderr)
+
+    def test_english_headings_pass(self):
+        names = {'## 結論': '## Summary', '## 今の流れ': '## Before', '## この run のあとの流れ': '## After',
+                 '## 決めること': '## Decisions', '## PBI\n': '## PBIs\n', '## 影響範囲': '## Impact',
+                 '## 作る人と見直し': '## Who builds',
+                 '| PBI | 何をするか | 終わると何ができるか | 先に要る PBI |': '| PBI | What it does | What works after | Needs |'}
+        text = self.good
+        for ja, en in names.items():
+            text = text.replace(ja, en)
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_panel_id_and_attributes_are_ignored(self):
+        text = self.good.replace('## 結論', '## A 結論 {span=2}')
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_example_draft_passes_without_warnings(self):
+        result = subprocess.run([sys.executable, SCRIPT, 'lint', '--draft', EXAMPLE], capture_output=True)
+        stderr = result.stderr.decode('utf-8', errors='replace')
+        self.assertEqual(result.returncode, 0, stderr)
+        self.assertNotIn('! L', stderr)
 
 if __name__ == '__main__':
     unittest.main()
