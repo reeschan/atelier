@@ -122,6 +122,19 @@ def meta_entries(record: dict, draft: str) -> list:
             ('record_hash', record_hash(record)), ('draft_hash', draft_hash(draft))]
 
 
+def envelope_base(draft: str) -> str:
+    """封筒を入れる前の、出力と同じ形の下書き: frontmatter が無ければ空の frontmatter を付け、末尾を改行で終える。
+
+    draft_hash はこの形で取る。入力のまま取ると、markdown が足す frontmatter と改行のぶん、出力と合わない。
+    """
+    text = normalize(draft)
+    lines = text.split('\n')
+    has_front = bool(lines) and lines[0].strip() == '---' and any(line.strip() == '---' for line in lines[1:])
+    if not has_front:
+        text = '---\n---\n' + text
+    return text if text.endswith('\n') else text + '\n'
+
+
 def with_envelope(draft: str, entries: list) -> str:
     """下書きの frontmatter に封筒の行を足す (前からある reply-meta- の行は置き換える)。frontmatter が無ければ作る。"""
     body = strip_meta_lines(draft)
@@ -522,6 +535,7 @@ def cmd_markdown(args) -> int:
     report_lint(errors, warnings)
     if errors:
         return EXIT_DRAFT
+    draft = envelope_base(draft)
     entries = meta_entries(record, draft)
     errors = check_meta(entries)
     if errors:
