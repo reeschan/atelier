@@ -131,6 +131,21 @@ class DesignRecordTest(unittest.TestCase):
         self.assertTrue(out[1].startswith('reply-meta-design_id: '))
         self.assertEqual(out[5:7], ['---', '## 結論'])
 
+    def test_markdown_draft_hash_matches_its_own_output(self):
+        """frontmatter も末尾の改行も無い下書きでも、出力の draft_hash はその出力から取った値と同じ。"""
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import design_record
+        with open(self.path('approve-good.md'), encoding='utf-8') as f:
+            body = f.read().split('---\n', 2)[2]
+        for name, text in (('plain.md', body), ('plain-no-newline.md', body.rstrip('\n'))):
+            with self.subTest(draft=name):
+                with open(self.path(name), 'w', encoding='utf-8', newline='') as f:
+                    f.write(text)
+                out = self.run_cli('markdown', '--draft', self.path(name)).stdout
+                given = next(line.split(': ', 1)[1] for line in out.split('\n')
+                             if line.startswith('reply-meta-draft_hash: '))
+                self.assertEqual(given, design_record.draft_hash(out))
+
     def test_markdown_stops_on_a_draft_lint_rejects(self):
         """承認の原稿の形でない下書き (段ごとの記録がある・節が足りない) には封筒を付けず、6 で止める。"""
         result = self.run_cli('markdown', '--draft', self.path('draft.md'))

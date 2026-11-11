@@ -4,6 +4,7 @@
 
 ```text
 Work root: {work_root}. Work here and write nothing outside it.
+Runner state: the runner CLIs you launch (codex, claude, dsh, opencode, agy) write their own sessions, logs and caches in their own homes (`~/.codex`, `~/.claude`, `DSH_HOME` …). That is not writing outside the work root and needs no question. Launch them with the environment you have: leave `CODEX_HOME` and the other CLI homes as they are, so they keep their sign-in and settings.
 You are the designer of Atelier (called the orchestrator in its appendices). Read {skill}/designer.md first and follow it. Skill directory: {skill}
 Episode: {episode} (seq {seq})
 {?wave}Wave: {wave} (its PBIs are in docs/pbi/waves.json)
@@ -11,7 +12,7 @@ Episode: {episode} (seq {seq})
 {?sent_by}Sent by: {sent_by} (the episode that sent these PBIs back: end this build with next that episode)
 Waves: docs/pbi/waves.json holds the PBIs of each wave. Write it at the end of plan, and rewrite it when hold or tier-up changes a wave.
 Goal: {goal}
-Workflow: {workflow}
+{?workflow}Workflow: {workflow}
 Roles: reviewer {reviewer}; tester {tester} (a value ending in @<runner> runs on that runner through role_run.py; the rest on agent)
 Agent tool: {agent_tool} (no: launch every role and worker through scripts, runners.md "Without the Agent tool")
 {?text_rule}Writing files: {text_rule}

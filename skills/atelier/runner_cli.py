@@ -10,6 +10,7 @@ conductor.py (設計者) と role_run.py (レビュー担当・テスト担当) 
 """
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -54,7 +55,7 @@ def find_command(runner: str, home=None):
         except ValueError:
             words = None
         if isinstance(words, list) and words and all(isinstance(w, str) and w.strip() for w in words):
-            return list(words), None
+            return list(words), codex_home_problem(words) if runner == 'codex' else None
         return None, f'ATELIER_{runner.upper()}_CMD is not a JSON array of strings'
     if runner == 'claude' and os.environ.get('PBI_CLAUDE_BIN'):
         # claude_run.py と同じ場所の指定 (作業者の claude と同じ実行ファイルを使う)
@@ -64,10 +65,10 @@ def find_command(runner: str, home=None):
         return None, f'claude not found (PBI_CLAUDE_BIN {configured})'
     path = runner_entry(runner, home).get('path')
     if isinstance(path, str) and path and Path(path).is_file():
-        return [path], None
+        return [path], codex_home_problem() if runner == 'codex' else None
     found = shutil.which(runner)
     if found:
-        return [found], None
+        return [found], codex_home_problem() if runner == 'codex' else None
     where = f' (agents.json path {path})' if isinstance(path, str) and path else ''
     return None, f'{runner} not found{where}'
 
@@ -91,14 +92,52 @@ def model_listed(runner: str, model: str, home=None):
     return model in ids
 
 
+def codex_home() -> Path:
+    """codex が設定とサインインを読む場所 (CODEX_HOME、無ければ ~/.codex)。"""
+    given = os.environ.get('CODEX_HOME')
+    return Path(given) if given else Path.home() / '.codex'
+
+
+def codex_home_problem(words=()):
+    """CODEX_HOME が設定もサインインも無いフォルダなら、その理由。問題が無ければ None。
+
+    空のフォルダを CODEX_HOME にすると、codex は設定もサインインも無いまま起動して落ちる。サインインは auth.json の
+    ほか keyring にも置けるので (config.toml か、コマンドの -c の cli_auth_credentials_store)、config.toml がある
+    ホームと、コマンド (words) が置き場を選んでいるときは断らない。
+    """
+    given = os.environ.get('CODEX_HOME')
+    if not given or os.environ.get('OPENAI_API_KEY'):
+        return None
+    if any('cli_auth_credentials_store' in str(word) for word in words):
+        return None
+    home = Path(given)
+    if (home / 'auth.json').is_file() or (home / 'config.toml').is_file():
+        return None
+    return (f'CODEX_HOME {given} has no sign-in and no config.toml; '
+            'leave CODEX_HOME unset so codex uses its own home')
+
+
+MCP_TABLE = re.compile(r'^\s*\[mcp_servers\.(?:"shared-memory"|\'shared-memory\'|shared-memory)\]', re.M)
+
+
+def codex_has_shared_memory() -> bool:
+    """codex の config.toml に shared-memory の MCP があるか。無いのに承認の -c を渡すと、中身の無い表ができて落ちる。"""
+    try:
+        text = (codex_home() / 'config.toml').read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return False
+    return bool(MCP_TABLE.search(text))
+
+
 def codex_sandbox(permission_mode) -> str:
     return permission_mode if permission_mode in CODEX_SANDBOXES else CODEX_DEFAULT_SANDBOX
 
 
 def codex_args(model: str, effort, sandbox: str, last_path) -> list:
     """codex の実行ファイルのあとに付ける引数。依頼は標準入力 (末尾の `-`) で渡す。"""
-    args = ['-a', 'never', 'exec', '--skip-git-repo-check', '--json', '-m', model, '-s', sandbox,
-            '-c', CODEX_MCP_APPROVAL]
+    args = ['-a', 'never', 'exec', '--skip-git-repo-check', '--json', '-m', model, '-s', sandbox]
+    if codex_has_shared_memory():
+        args += ['-c', CODEX_MCP_APPROVAL]
     if effort:
         # TOML の基本文字列として書く (\ などをエスケープし、設定した値のまま渡す。受けない値は codex が断る)
         quoted = json.dumps(str(effort), ensure_ascii=False).replace('\x7f', '\\u007f')

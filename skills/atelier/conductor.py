@@ -811,6 +811,9 @@ def check_role_runners(roles: dict) -> list:
         reason = runner_cli.unusable_reason(runner)
         if reason:
             raise Refused(f'roles.{name}.runner {runner}: {reason}')
+        if runner == 'dsh' and name != 'designer':
+            warns.append(f'warn roles.{name}.runner dsh: its sandbox may refuse child processes (seen on Windows), '
+                         'so verify and test commands may not finish; codex runs them')
         if runner_cli.model_listed(runner, part['model']) is False:
             warns.append(f"warn roles.{name}.model: {part['model']!r} is not in the {runner} model list; "
                          'using it as given')
@@ -819,6 +822,19 @@ def check_role_runners(roles: dict) -> list:
 
 def designer_runner(roles: dict) -> str:
     return roles['designer'].get('runner', 'agent')
+
+
+def check_agent_roles_without_agent_tool(roles: dict) -> None:
+    """codex の設計者は agent の役割を claude -p で起こす。claude が使えなければ Refused。"""
+    if designer_runner(roles) != 'codex':
+        return
+    left = [name for name, part in role_parts(roles) if name != 'designer' and part.get('runner', 'agent') == 'agent']
+    if not left:
+        return
+    reason = runner_cli.unusable_reason('claude')
+    if reason:
+        raise Refused(f"roles {', '.join(left)}: a codex designer runs agent roles on claude -p, but {reason}; "
+                      f"set their runner (--role <role>.runner=codex)")
 
 
 def model_label(part: dict) -> str:
@@ -984,6 +1000,7 @@ def cmd_start(args, paths: Paths) -> int:
     # 指定された実行先が使えなければ run を作らない (黙って Claude で動かさない)
     resolved, _, _ = load_roles(paths, {'roles': given_roles})
     warns = check_role_runners(resolved)
+    check_agent_roles_without_agent_tool(resolved)
     carried = {}  # 前の run の止められなかった pid (新しい run の stuck_pids に引き継ぐ)
     with Lock(paths):
         try:
@@ -1070,7 +1087,7 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
     values = {
         'work_root': Path.cwd().resolve().as_posix(), 'skill': SKILL.as_posix(), 'episode': episode, 'seq': seq,
         'wave': pending.get('wave'), 'pbis': ','.join(pending.get('pbis') or []),
-        'goal': paths.goal.as_posix(), 'workflow': run.get('workflow') or 'default',
+        'goal': paths.goal.as_posix(), 'workflow': run.get('workflow'),
         'reviewer': (f"deep={model_label(reviewer['deep'])} other={model_label(reviewer['other'])}"
                      ' (switch to the other when it equals the built model)'),
         'tester': model_label(roles['tester']),
@@ -1314,6 +1331,9 @@ def process_done(paths: Paths, run: dict) -> tuple:
     summary = data.get('summary')
     if errors:
         return fail(paths, run, running, '; '.join(errors), 'invalid', summary)
+    stale = stale_envelope(data)
+    if stale:
+        return fail(paths, run, running, stale, 'invalid', summary)
     code, lines = settle_result(paths, run, running, data, summary)
     garbled = garbled_warnings(data)
     if garbled:
@@ -1321,6 +1341,31 @@ def process_done(paths: Paths, run: dict) -> tuple:
         run['garbled'] = merge_warnings(run.get('garbled') or [], garbled)[-GARBLED_KEEP:]
         save(paths, run)
     return code, with_warnings(lines, garbled) if lines else lines
+
+
+DRAFT_HASH = re.compile(r'^reply-meta-draft_hash:\s*(\S+)\s*$', re.M)
+
+
+def stale_envelope(data: dict) -> str:
+    """check が design-record の承認の問いで、下書きの封筒の draft_hash が今の中身と合わなければ、その説明。
+
+    封筒を付けたあとで中身を書き換えると、ユーザーの返信がどれも check-reply で弾かれる。合っていれば空。
+    """
+    question = data.get('question') if isinstance(data.get('question'), dict) else {}
+    if data.get('status') != 'question' or question.get('kind') != 'approve' or question.get('check') != 'design-record':
+        return ''
+    path = question.get('path')
+    try:
+        draft = Path(path).read_text(encoding='utf-8')
+    except (OSError, TypeError, ValueError):
+        return f'approve draft not readable: {path}'
+    match = DRAFT_HASH.search(design_record.normalize(draft))
+    if match is None:
+        return f'approve draft has no reply-meta-draft_hash: {path} (design_record.py markdown adds the envelope)'
+    if match.group(1) != design_record.draft_hash(draft):
+        return (f'approve draft changed after its envelope: {path} (reply-meta-draft_hash does not match; '
+                'add the envelope last, with design_record.py markdown)')
+    return ''
 
 
 def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -> tuple:
