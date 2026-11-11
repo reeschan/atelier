@@ -14,11 +14,11 @@ jevlint (`@indxjp/jevlint`, MIT, https://github.com/INDXDev/jevlint) scores file
 
 ## The send approval
 
-The model questions run only after the user says yes, every time, right before the send. This is the fifth stop point of `SKILL.md`.
+The model questions run only after the user says yes, every time, right before the send. This is a stop point of `designer.md` (`## When to stop`).
 
 1. Make the file list. `lint_run.py files` writes `<name>.files.txt` (all files to judge), `<name>.send.txt` (the files allowed to leave) and `<name>.excluded.txt` under `docs/pbi/jevlint/`. Secret files (`.env*`, keys, credentials) are dropped; files matching `--sensitive` (the targets of sensitive PBIs, or the files a sensitive request will touch) stay AST only.
 2. Run the same stage command with `--mode dry-run`. It prints the files, tokens, cost and provider and keeps them in `docs/pbi/jevlint/<name>.dry-run.json`. Nothing is sent.
-3. Ask once with AskUserQuestion: the stage, the numbers from the dry run, the provider, the path of `<name>.send.txt`, and two choices, "send" and "AST only". Never ask for a standing approval, a budget, or several sends at once.
+3. End the episode with a question of kind `send-approval` (inline: AskUserQuestion): the stage, the numbers from the dry run, the provider, the path of `<name>.send.txt`, and two choices, "send" and "AST only". Never ask for a standing approval, a budget, or several sends at once.
 4. Record the answer: `python <skill>/lint_run.py approve docs/pbi --name <name> --answer send|ast-only`. It stores the hash of the send list in `docs/pbi/adapters.json` under `sends`.
 5. Run the stage with `--mode model` after "send", or `--mode ast-only` after "AST only". `--mode model` refuses (exit 3) without an unused "send" record for the same name and list; a changed list needs a new question. On resume, a record with `used` true and its result on disk (`docs/pbi/jevlint/<name>.json` for the survey, `<name>.after.json` for the recheck) means the send happened: do not ask again. A `used` record without that result means the run stopped before or during the send: ask again before the next model run.
 

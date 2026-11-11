@@ -58,8 +58,8 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 | plan | spec | `PBI-<n>.md`・`PBI-<n>.facts.json`・`PBI-<n>.brief.md` |
 | route | PBI・facts・brief | `PBI-<n>.route.json` |
 | build | PBI・route | 変更と報告 `reports/PBI-<n>.md` |
-| verify | PBI の検証コマンド | `verify/<報告名>.json` |
-| review | diff・spec・報告 | `reviews/<名前>.md` (1 行目に件数) |
+| verify | PBI の検証コマンド (担い手はレビュー担当。`verify.py` を流し、受け入れ条件と差分を確かめる) | `verify/<報告名>.json`・`reviews/<報告名>.review.json` |
+| review | diff・spec・報告 | `reviews/<名前>.md` (1 行目に件数)・`reviews/<報告名>.review.json` (`atelier.review/1`) |
 | fix | 指摘・検証結果 | `PBI-<n>.rework-<k>.md` |
 | finish | すべて | 完了報告 |
 
@@ -217,6 +217,13 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - 同梱の部品は自分と Claude Code の built-in だけ、の決まりは変えない。`map.builtin` は oh-my-mermaid の `omm-scan` を呼び出し先として手順の中で使い、無ければ同じ部品の中で代わりの依頼文に切り替える。`lint-survey.jevlint`・`lint-recheck.jevlint` はこのスキルの script (`lint_run.py`) で、requires は cli `jevlint`。
 - agents.json の `tools.<名前>.path` で、実行先ではない道具 (jevlint など) の場所を指せる。flow.py は runners が無い agents.json でも tools を読む。
 - テンプレートに `lint` (比べる線) を足した。`build.tests_at_end` と `kiln` は既定で有効にし、run の写しの `"enabled": false` で止める。flow.py は `lint`・`kiln` を検証しない (読むのは lint_run.py・lint_compare.py・kiln_log.py)。
+
+### 設計者を Atelier の中へ (v6)
+
+- 役割を 6 つに分けた: 呼び出し側 (Claude Code・Codex・Grok などの、ユーザーと話すセッション)、進行役 (`conductor.py`)、設計者 (`agents/atelier-designer.md`)、作業者 (`agents/pbi-worker.md`)、レビュー担当 (`agents/atelier-reviewer.md`)、テスト担当 (`agents/atelier-tester.md`)。呼び出し側は進行役を呼び、出番の数行と問いだけをユーザーに渡す。設計者は出番ごとに新しく起動され、役割どうしの受け渡しはディスクのファイルだけで行う。
+- 進行役 `conductor.py` が run の状態を `docs/pbi/conductor/run.json` に持ち、次の出番と依頼文を決める。出番は design → build (波) → test → review → finish の順につながり、依頼文と結果は `docs/pbi/conductor/episodes/<seq>-<出番>.prompt.md`・`.result.json`、問いの答えは `docs/pbi/conductor/answers/` に置く。コマンドと終了コードは [atelier-v6.md](atelier-v6.md)。
+- 止まる場所は 4 つ: 承認、差し戻しの上限 (または設計の見直し)、壊す操作の前、外への送信の前。波の境目の引き継ぎ (旧 4 番目) は止まる場所ではなくなり、出番の `handoff` になった。設計者は出番の途中で Kiln の線を越えたら状態の板を書いて `handoff` で終わり、進行役が `Continue from:` を付けて新しい設計者を起こす (ユーザーの `/clear` と resume は要らない)。
+- 検証・差分の精読・テストの実行はレビュー担当とテスト担当に移した。レビュー担当は 1 報告に 1 人で、`verify.py` を流し、受け入れ条件を 1 つずつ判定し、差分を読んで `reviews/<報告名>.review.json` (`atelier.review/1`) を書く。テスト担当は `verify/tests/<名前>.test-result.json` (`atelier.test-result/1`) を書く。設計者は波のレビューを `role_results.py bundle` の束で受け取って照合する。詳細は [atelier-v6.md](atelier-v6.md)。
 
 ## Testing Decisions
 

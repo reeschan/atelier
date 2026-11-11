@@ -4,13 +4,29 @@ Terms used by this skill's instructions, with the Japanese term used in the spec
 
 ## Roles
 
+**caller (呼び出し側)**:
+The session the user talks to (Claude Code, Codex, Grok …). It runs the conductor, launches the designer when the conductor says to, and carries the lines and questions to the user and the answers back. It designs, builds and reviews nothing, and reads no PBI or diff.
+_Avoid_: main agent, parent session
+
+**conductor (進行役)**:
+The script (`conductor.py`) that keeps one run in `docs/pbi/conductor/` and hands the designer one episode at a time. It is not a model and never designs.
+_Avoid_: dispatcher, scheduler, loop
+
 **orchestrator (設計者)**:
-The main session that runs the skill. It designs, splits the work into PBIs, routes and accepts them. It does not build.
+The designer Atelier owns, launched fresh for every episode; inline, the caller's own session. It designs, splits the work into PBIs, routes and accepts them. It does not build.
 _Avoid_: parent agent, オーケストレーター (only as a transliteration)
 
 **worker (実装担当)**:
 A subagent or external CLI that builds one PBI from the PBI and its refs alone, following `worker.md`.
 _Avoid_: child agent, ワーカー
+
+**reviewer (レビュー担当)**:
+The subagent that runs the verify commands, reads the diff and writes one review JSON per report. Never the model that built what it reviews.
+_Avoid_: checker, QA
+
+**tester (テスト担当)**:
+The subagent that runs the tests at the end of a wave and writes a test result. It proposes the cause of each failure; the designer decides.
+_Avoid_: test runner, QA
 
 **runner (実行先)**:
 What runs a worker: `agent` (a Claude Code subagent), opencode, codex, agy, dsh, claude, or mcp.
@@ -25,6 +41,14 @@ _Avoid_: pipeline, preset (except for the bundled templates)
 **stage (工程)**:
 One of the nine fixed steps: understand, design, plan, route, build, verify, review, fix, finish. Each hands its artifact to the next.
 _Avoid_: phase, 段 (that is a tier)
+
+**episode (出番)**:
+One launch of the designer for one step of a run (design, build, test, review, finish). It starts fresh with a prompt, has no memory of earlier episodes, and ends by writing its result. The prompt and the links are in `appendix/episodes.md`.
+_Avoid_: turn, session, iteration
+
+**episode result (出番の結果)**:
+The JSON an episode writes at `docs/pbi/conductor/episodes/<run8>-<seq>-<episode>.result.json` (`<run8>`: the first 8 characters of the run id) (schema `atelier.episode/1`): status, summary, next, question, state, report, reason. The conductor checks it to move the run on.
+_Avoid_: output, return value
 
 **component (コンポーネント)**:
 A definition in `components/` that serves one or more stages: how it is invoked, where it runs, what it needs, how much memory it may use, and the doc that holds its procedure.

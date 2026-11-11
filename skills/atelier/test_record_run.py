@@ -122,6 +122,8 @@ class RecordRunTest(unittest.TestCase):
 
     def record(self, name, attempt, outcome, *extra, archive=True, home=None):
         env = {k: v for k, v in os.environ.items() if k != 'PBI_RUNS_ARCHIVE'}
+        # 子プロセスの stderr を Windows でも UTF-8 にし、親の encoding='utf-8' と揃える
+        env['PYTHONUTF8'] = '1'
         if home is not None:
             env['HOME'] = env['USERPROFILE'] = str(home)
         elif archive:

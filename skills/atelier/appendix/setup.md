@@ -4,7 +4,7 @@ Read this when the argument is `setup`, `setup --recommended`, `models` or `temp
 
 ## First run
 
-When home has no `agents.json`, ask one question with AskUserQuestion before the work starts: "Set up now" or "Start with agent only". The answer is recorded in `agents.json`, so later runs read the record and ask nothing.
+When home has no `agents.json`, the caller does this section before `conductor.py start`, not the designer. The caller asks, once, with AskUserQuestion, before the work starts: "Set up now" or "Start with agent only". The answer is recorded in `agents.json`, so later runs read the record and ask nothing. When the designer meets this state (no `agents.json`), it ends the episode with a question (kind `decision`) instead of asking.
 
 - **Start with agent only**: run `python <skill>/setup_agents.py record --use ""`, then go back to the work. This records `agent` as the only enabled runner.
 - **Set up now**: follow `## setup`, then go back to the original work.
@@ -15,8 +15,17 @@ When home has no `agents.json`, ask one question with AskUserQuestion before the
 2. Ask one multiple-choice question with AskUserQuestion. Put the external runners that `detect` found — opencode, codex, agy, dsh — in the list. `agent` is always used, so it stays out of the list. When no external runner was found, skip the question and continue with `agent` only.
 3. Run `python <skill>/setup_agents.py record --use <chosen runners, comma-separated>`. `record` keeps the existing model choices and billing settings.
 4. Follow `## models`.
-5. Follow `## templates`.
-6. Follow `## Optional integrations`. After that, say in one line that the recommended set can be installed with `setup --recommended`. Do not ask now; only name it.
+5. Offer the agent definitions. `agents/` has `agents/pbi-worker.md`, `agents/atelier-designer.md`, `agents/atelier-reviewer.md` and `agents/atelier-tester.md`. Ask once, and copy them to `~/.claude/agents/` only when the user allows it (the work root's `.claude/agents/` works too; the conductor checks it and `CLAUDE_CONFIG_DIR` in place of `~/.claude`):
+
+   ```bash
+   mkdir -p ~/.claude/agents && cp <skill>/agents/*.md ~/.claude/agents/
+   ```
+
+   When the user does not allow it, leave the folder as it is. The skill runs without the definitions: `next` prints `warn agents: atelier-designer not installed; using fallback`, an agent launch uses `subagent_type: general-purpose` and puts `Read <skill>/agents/<role>.md and follow it as your instructions.` first in the prompt, and headless builds `--agents` from the same file (`appendix/episodes.md`).
+
+   The skill needs depth 3: caller 0, designer 1, worker, reviewer or tester 2, the children of a skill they call 3. Set `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=3` before Claude Code starts. An agent at depth 3 has no Agent tool, so a skill child that would need its own child uses the built-in fallback (`appendix/review.md`, `appendix/tests-at-end.md`).
+6. Follow `## templates`.
+7. Follow `## Optional integrations`. After that, say in one line that the recommended set can be installed with `setup --recommended`. Do not ask now; only name it.
 
 Use `--home DIR` on these commands when the user keeps the settings outside the default home (`## home`).
 
@@ -41,6 +50,22 @@ Checked on 2026-10-21 with opencode 2.0.29, codex-cli 0.153.4, agy 1.4.4 and dsh
 | agy | `agy models`, tab-separated | the level at the end of the model id |
 | dsh | the bundled `dsh.models.json` catalog and `dsh headless --dump-config` | the thinking level in the catalog |
 | agent | the Agent tool's built-in definitions (haiku, sonnet, opus, fable) | low through max |
+
+## roles
+
+The role models are `roles` in home's `agents.json`, beside the runners. An invalid value (not a non-empty string; `null` is allowed for effort only) falls back to its default, and `next` prints one `warn roles.` line per value it replaced. Effort `null` leaves the runner's own level.
+
+- `designer`: `{"model", "effort", "permission_mode"}`. Defaults: model `opus`, effort `null`, `permission_mode` `auto` (passed to `claude -p` for a headless designer).
+- `reviewer`: `{"deep": {"model", "effort"}, "other": {"model", "effort"}}`. `deep` defaults to model `opus` with effort `null`; `other` defaults to model `sonnet` with effort `high`. A review stage that is not deep uses `other`. When the stage's model equals the model that built the PBI, use the other stage.
+- `tester`: `{"model", "effort"}`. Defaults: model `sonnet`, effort `null`.
+
+```json
+{"roles": {
+  "designer": {"model": "opus", "effort": null, "permission_mode": "auto"},
+  "reviewer": {"deep": {"model": "opus", "effort": null}, "other": {"model": "sonnet", "effort": "high"}},
+  "tester": {"model": "sonnet", "effort": null}
+}}
+```
 
 ## templates
 
@@ -113,7 +138,7 @@ home is optional; a missing file means "not set", and the skill creates a file o
 
 | File | What it holds |
 |---|---|
-| `agents.json` | The runners to use, the CLI path and version found for each, when it was checked, the selected models, and the billing kind |
+| `agents.json` | The runners to use, the CLI path and version found for each, when it was checked, the selected models, the billing kind, and the models for the roles (`roles`) |
 | `models/<runner>.json` | The last model list fetched for that runner, with its fetch time, method, error, and effort levels |
 | `routing.json` | The routing template that maps each tier to a step order |
 | `templates/<name>.json` | One priority template |

@@ -36,7 +36,7 @@ Once, before the split. `<home>/web.json` decides whether to sync.
 4. Write its data (`{"application": ..., "updated_at": ...}`) to `docs/pbi/state.json`. A missing file or `{}` means no application.
 5. Run `python <skill>/templates.py sync --state docs/pbi/state.json`. It keeps whichever of the web and local updated_at is newer, writes overrides.json, and prints `{"status", "application", "writes"}`.
 6. Write any `writes` with an ArtifactData batch, adding the version you read as `if_version`. A write to an existing document needs `if_version`; a new document takes none.
-7. Status `unknown_template`: the template is missing locally or invalid, and the copy keeps the application as it is. Fix the template or ask the user.
+7. Status `unknown_template`: the template is missing locally or invalid, and the copy keeps the application as it is. Fix the template. When it cannot be fixed, end the episode with a question (kind `decision`).
 
 Use this result until the work ends. Do not read it again when an expiry passes mid-work.
 

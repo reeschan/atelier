@@ -17,7 +17,7 @@ Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="Atelier architecture. The developer gives the Claude Code orchestrator a task, approves it and resumes it after a hand-off. The orchestrator passes facts to prepare.py, which asks Jev for gate 1 (brief and PBI quality), picks a tier and a route with select_model.py, reads the routing, overrides and agents.json from your home (~/.config/atelier) and docs/pbi/routing.json, and drops steps whose runner is unusable. PBIs go to pbi-worker (the Agent tool), the default runner for every tier, or to external runners (opencode, Codex, Antigravity, DeepSeek Harness, Claude Code headless) chosen in setup and named in routing.json; they change the source code of the target repository. The orchestrator verifies each PBI with verify.py and unchanged.py, asks Jev in plain text only when a report and the verification disagree and to check rework notes, and records status and HANDOFF in docs/pbi/. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. setup_agents.py and model_fetch.py detect the runner CLIs and fetch each runner's model list into agents.json and models/ in your home. The developer uses the local editor (studio/serve.py, with tabs for agents and models, routing, priority templates and application, and workflow templates) to read and save those files in home only. templates.py keeps priority templates and the local overrides.json, which is the source of truth; the optional priority templates web page (a claude.ai artifact) only syncs with it. Phase adapters use optional callee skills when they are installed: the orchestrator runs mattpocock-skills grilling for design, and after all PBIs adapter_gate.py reads the PBIs and the adapters setting in agents.json to decide whether the final and security reviews run; a general-purpose review wrapper then calls mattpocock-skills code-review or the built-in /code-review and /security-review, and writes the findings to docs/pbi/reviews/. An optional jev-mcp server (jev_mcp.py, on 127.0.0.1) lets an MCP client claim and submit tasks and use Jev's own steps: route (select_model.py), run (one try on a runner, as runners.md describes) and record (record_run.py); it reads the routing and agents.json from your home and writes prompts, reports and runs in docs/pbi/. lint_run.py and lint_compare.py run jevlint for the lint survey and recheck, reading the source code and a merge-base worktree, and send file contents to Jev (jevlint's provider) only after you approve each send. omm_cache.py reuses oh-my-mermaid scans kept in .omm-cache outside the repository and calls the omm-scan skill on a miss. kiln_log.py records each Kiln cool-down decision in docs/pbi/.kiln/, following sac-strategic-compact when it is installed. setup also runs tools_check.py for the recommended tools.">
+  <img src="assets/architecture-light.svg" alt="Atelier architecture. The developer gives a task to the caller (their Claude Code session, or Codex or Grok through AGENTS.md, which need the claude CLI) and approves it. The caller only runs conductor.py, a script with no model that keeps the run state in docs/pbi/conductor/run.json and starts a new designer (atelier-designer on Opus, through the Agent tool or claude -p) for every episode; each episode ends with episode.result.json. The designer hands each report to a reviewer (atelier-reviewer, never the model that built it), which runs verify.py and writes review.json; role_results.py bundles a wave's reviews back to the designer, and a tester (atelier-tester on Sonnet) runs the tests at the end and writes test-result.json. The designer passes facts to prepare.py, which asks Jev for gate 1 (brief and PBI quality), picks a tier and a route with select_model.py, reads the routing, overrides and agents.json from your home (~/.config/atelier) and docs/pbi/routing.json, and drops steps whose runner is unusable. PBIs go to pbi-worker (the Agent tool), the default runner for every tier, or to external runners (opencode, Codex, Antigravity, DeepSeek Harness, Claude Code headless) chosen in setup and named in routing.json; they change the source code of the target repository. The designer asks Jev in plain text only when a report and the verification disagree and to check rework notes, and records STATUS, waves.json and reports in docs/pbi/. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. setup_agents.py and model_fetch.py detect the runner CLIs and fetch each runner's model list into agents.json and models/ in your home. The developer uses the local editor (studio/serve.py, with tabs for agents and models, routing, priority templates and application, and workflow templates) to read and save those files in home only. templates.py keeps priority templates and the local overrides.json, which is the source of truth; the optional priority templates web page (a claude.ai artifact) only syncs with it. Phase adapters use optional callee skills when they are installed: the designer runs mattpocock-skills grilling for design, and after all PBIs adapter_gate.py reads the PBIs and the adapters setting in agents.json to decide whether the final and security reviews run; a general-purpose review wrapper then calls mattpocock-skills code-review or the built-in /code-review and /security-review, and writes the findings to docs/pbi/reviews/. An optional jev-mcp server (jev_mcp.py, on 127.0.0.1) lets an MCP client claim and submit tasks and use Jev's own steps: route (select_model.py), run (one try on a runner, as runners.md describes) and record (record_run.py); it reads the routing and agents.json from your home and writes prompts, reports and runs in docs/pbi/. lint_run.py and lint_compare.py run jevlint for the lint survey and recheck, reading the source code and a merge-base worktree, and send file contents to Jev (jevlint's provider) only after you approve each send. omm_cache.py reuses oh-my-mermaid scans kept in .omm-cache outside the repository and calls the omm-scan skill on a miss. kiln_log.py records each Kiln cool-down decision in docs/pbi/.kiln/, following sac-strategic-compact when it is installed. setup also runs tools_check.py for the recommended tools.">
 </picture>
 
 The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lang.com)).
@@ -49,6 +49,39 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 - A record per run. Each time the orchestrator decides a run (pass, rework, promotion, unavailable, on hold), `record_run.py` appends one line to `docs/pbi/runs.jsonl`: runner, model, effort, tokens, cost, steps, time and verification results are read from the logs, and only the outcome and the review finding counts come from the orchestrator. Values it cannot read stay null. It also copies that run's raw logs to an archive outside the repository: `$PBI_RUNS_ARCHIVE` if set (point it at a synced folder to keep logs off the machine), otherwise `~/.claude/pbi-runs`. `model_report.py` sums the runs per model, across repositories with `--archive`, and adds a provisional A–D grade for people to adjust later; it never changes routing.
 - Records for an outer harness. A rework, tier up or hold also records its cause (`spec`, `convention`, `scope`, `memory`, `model`, `env`), and every row carries the version of `docs/pbi/worker.md`, the base commit and the refs the worker did not read. At finish, `export_cases.py` writes one normalized case per PBI to `docs/pbi/cases.jsonl` and the archive: what was injected into the worker (system prompt, the CLAUDE.md conventions that applied, refs), the PBI's sections and size (the facts estimate, counts of Targets, criteria and refs, and the length of worker.md, the PBI and the refs' gists), every attempt's result with its time, steps, tokens and cost, and the rework notes' expectations kept apart for scoring. Atelier builds no prompt from them; an outer harness such as harness2 reads them to replay PBIs and propose changes to the instructions (`skills/atelier/appendix/cases.md`).
 - Costs are estimates. The bundled `prices.json` is a sample price list; a `prices.json` in your home overrides and extends it. `agent_stats.py --cost` reports the designer's cost in API-equivalent USD, and `model_report.py` reports how many runs have no known cost (it leaves them out of the sums).
+
+## v6: the designer lives inside Atelier
+
+In v6 the caller and the designer are separate. The **caller** (Claude Code, Codex, Grok …) talks to the user and runs the conductor; it reads no PBI, diff or review. The **conductor** (`conductor.py`, a script) keeps the run in `docs/pbi/conductor/run.json` and hands the designer one episode at a time. The **designer** starts fresh for every episode and has no memory of the last one.
+
+```mermaid
+flowchart TD
+  U[User] <--> C[Caller<br/>Claude Code, Codex, Grok …]
+  C -- "start / next / done / answer / run / wait" --> K[Conductor<br/>conductor.py<br/>docs/pbi/conductor/run.json]
+  K -- "one fresh launch per episode<br/>(agent or claude -p)" --> D[Designer<br/>atelier-designer, Opus]
+  D --> W[Worker<br/>pbi-worker, route model]
+  D --> R[Reviewer<br/>atelier-reviewer]
+  D --> T[Tester<br/>atelier-tester, Sonnet]
+  R -- "reviews/&lt;report&gt;.review.json" --> B[(Bundle<br/>role_results.py bundle<br/>reads the verify JSON itself)]
+  B --> D
+  T -- "test-result.json" --> D
+  D -- "episode result<br/>episode.result.json" --> K
+```
+
+| Role | What it does | Where it lives |
+|---|---|---|
+| caller | talks to the user, runs `conductor.py`, passes the episode's lines and questions on, and returns the answers with `answer`. Reads no PBI, diff or review | the user's session (Claude Code, Codex, Grok …) |
+| conductor | keeps the run in `docs/pbi/conductor/run.json` and decides the next episode and its prompt (a script, not a model) | `conductor.py` |
+| designer | the first design (understand to route) and the approval draft, reconciling the reviewers' bundle and the test results; starts the worker, reviewer and tester | `agents/atelier-designer.md` (Opus) |
+| worker | builds one PBI from the PBI and its refs | `agents/pbi-worker.md` (the route's model) |
+| reviewer | one per report; runs `verify.py`, checks the criteria and the diff, writes `reviews/<report>.review.json` | `agents/atelier-reviewer.md` (never the model that built it) |
+| tester | the tests deferred after a wave, the test stage's survey and the final run; writes `verify/tests/<name>.test-result.json` | `agents/atelier-tester.md` (Sonnet) |
+
+- Files are the source of truth. Every hand-over between roles is a file on disk: a subagent's reply may be empty, and the run goes on when the file at its fixed path exists.
+- The designer stops at four points: the approval, the rework limit (or a redesign), before a destructive operation, and before a send out of the machine. The wave-boundary hand-off is no longer a stop point; it is the episode's `handoff`. When the context crosses a Kiln line the designer writes the state tablet and ends with `handoff`, and the conductor starts a fresh designer with `Continue from:` (`/clear` and resume are no longer needed). With the inline fallback (no Agent tool and no `claude`), the caller's session is the designer, and the hand-off and Kiln notes below still apply.
+- The definitions in `agents/` are `atelier-designer.md`, `atelier-reviewer.md`, `atelier-tester.md` and `pbi-worker.md`. Install all four with `mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/*.md ~/.claude/agents/`. Without them the fallback runs (general-purpose, and `--agents` for headless).
+- A caller that reads AGENTS.md (Codex, Grok …) can use this paragraph: `python <skill>/conductor.py start --launch headless` starts the run; `python <skill>/conductor.py run --detach` launches the designer detached; repeat `python <skill>/conductor.py wait --timeout 300` until the state is no longer running; when there is a question, answer it with `python <skill>/conductor.py answer`, and read the state with `python <skill>/conductor.py status`. That machine needs the `claude` CLI; without it Atelier cannot be used.
+- Terms are in [skills/atelier/CONTEXT.md](skills/atelier/CONTEXT.md); the contract of the stages and components is [docs/specs/atelier-workflow.md](docs/specs/atelier-workflow.md); the v6 design is [docs/specs/atelier-v6.md](docs/specs/atelier-v6.md).
 
 ## Stages, components and templates
 
@@ -333,7 +366,7 @@ Only Claude Code is required. Jev, shared-memory, the external CLIs, the web pag
 ```sh
 git clone https://github.com/reeschan/atelier.git
 cp -r atelier/skills/atelier ~/.claude/skills/
-mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/pbi-worker.md ~/.claude/agents/
+mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/*.md ~/.claude/agents/
 ```
 
 ### Moving from pbi-orchestration-jev
@@ -345,7 +378,7 @@ The skill was renamed from `pbi-orchestration-jev` to `atelier`. Nothing you set
 - rtk hook: if you added the rtk hook, change its path in `settings.json` to `skills/atelier/rtk/rtk-gate.mjs`.
 - Work in progress: `docs/pbi/` in your repositories is unchanged; `/atelier resume` picks it up.
 
-`pbi-worker` defines the worker and reviewer sub-agent. Restart Claude Code to load it. Without it the skill falls back to general-purpose (you only lose the guard that stops workers from searching memory).
+`agents/*.md` holds the definitions of the designer (`atelier-designer`), the reviewer (`atelier-reviewer`), the tester (`atelier-tester`) and the worker (`pbi-worker`). Restart Claude Code to load them. Without them the fallback runs (general-purpose, and `--agents` for headless); you only lose some guards, such as the one that stops workers from searching memory.
 
 Put your Jev API key in one of these places (checked in this order):
 
@@ -440,19 +473,25 @@ It then checks that `STATUS.md` and the branch match, and either moves the sessi
 
 ```
 skills/atelier/
-├── SKILL.md                    # the skill: the workflow engine the orchestrator follows
+├── SKILL.md                    # the caller's procedure: run the conductor and launch the designer per episode
+├── designer.md                 # the designer's procedure (fresh for every episode; files carry the state)
 ├── CONTEXT.md                  # glossary (English and Japanese terms)
 ├── flow.py                     # resolves and checks a workflow template; prints the plan per stage
 ├── component.py                # registers an installed skill as an external component in your home
+├── conductor.py                # the conductor: keeps the run and hands the designer one episode at a time
+├── role_results.py             # checks the episode, review and test-result JSON; bundles a wave's reviews
 ├── workflows/                  # bundled workflow templates (jev-routed, high-model)
 ├── components/                 # component definitions: what fills each stage, and the doc that runs it (this skill and Claude Code built-ins only)
 ├── runners.md                  # how to hand PBIs to opencode / Codex / Antigravity / dsh
 ├── dsh_run.py                  # runs one PBI on DeepSeek Harness headless
 ├── claude_run.py               # runs one PBI on Claude Code headless
 ├── worker.md                   # how workers proceed and report
-├── appendix/                   # read only when needed: engine, the stage procedures (design, plan, verify, review, rework, finish, optional, map, lint, tests-at-end), cases, handoff, kiln, memory, jev, setup, adapters, priority-templates
-├── prompts/                    # subagent prompts (design review, PBI review, final review), the Kiln block for every subagent, and the map and lint fallback prompts
-├── agents/pbi-worker.md        # worker / reviewer sub-agent (copy to ~/.claude/agents)
+├── appendix/                   # read only when needed: engine, episodes (appendix/episodes.md), the stage procedures (design, plan, verify, review, rework, finish, optional, map, lint, tests-at-end), cases, handoff, kiln, memory, jev, setup, adapters, priority-templates
+├── prompts/                    # prompts: the designer's episodes (prompts/designer-episode.md), subagents (design review, PBI review, final review, tester (prompts/tester.md)), the Kiln block for every subagent, and the map and lint fallbacks
+├── agents/pbi-worker.md        # worker sub-agent (copy to ~/.claude/agents)
+├── agents/atelier-designer.md  # designer (Opus)
+├── agents/atelier-reviewer.md  # reviewer
+├── agents/atelier-tester.md    # tester (Sonnet)
 ├── prepare.py                  # Jev gate 1 + decision table in one call; prints a table
 ├── verify.py                   # runs a PBI's verification commands; prints exit codes and tails; --deferred runs the tests-at-end checks once per wave
 ├── lint_run.py                 # jevlint for the lint survey and recheck: file lists, send approvals, the merge-base worktree

@@ -1,10 +1,10 @@
 # Prompt: final review or security review
 
-Give this to a `general-purpose` subagent (not `pbi-worker`, which has no Skill tool) to run a review skill over the whole diff (`appendix/review.md`). Fill in the brackets.
+Give this to an `atelier-reviewer` subagent (not `pbi-worker`, which has no Skill tool) to run a review skill over the whole diff (`appendix/review.md`). Fill in the brackets.
 
 ```text
 description: FINAL.review <short text>   (FINAL.security for the security review)
-subagent_type: general-purpose
+subagent_type: atelier-reviewer
 prompt:
 Final review of this repository's work. Report only: do not edit, commit, push or post anything.
 - base: <merge-base sha>; head: <HEAD sha>; spec: <docs/specs/<slug>.md, or none>
