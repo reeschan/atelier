@@ -1,0 +1,121 @@
+"""役割 (設計者・レビュー担当・テスト担当) を動かす実行先の、使えるかの判定と CLI の組み立て。
+
+conductor.py (設計者) と role_run.py (レビュー担当・テスト担当) が使う。
+
+- 実行先の CLI は、環境変数 ATELIER_<RUNNER>_CMD (JSON の文字列の配列。テストの差し替え口)、home の agents.json の
+  runners.<runner>.path、PATH の <runner> の順に探す。
+- 使えるかは、agents.json で enabled が true で、CLI が見つかること。
+- codex は `-a never exec --json -s <サンドボックス>` で起こし、shared-memory の道具の承認を `-c` で自動にする
+  (ユーザーの ~/.codex/config.toml は書き換えない)。
+"""
+import json
+import os
+import shutil
+from pathlib import Path
+
+import common
+
+# 役割に置ける実行先。設計者は Agent ツールか claude -p か codex で動くものだけ
+ROLE_RUNNERS = ('agent', 'opencode', 'codex', 'agy', 'dsh', 'claude')
+DESIGNER_RUNNERS = ('agent', 'codex', 'claude')
+CODEX_SANDBOXES = ('read-only', 'workspace-write', 'danger-full-access')
+# 既定のサンドボックス。workspace-write はネットワークとワークスペースの外への書き込みを塞ぐので、
+# dsh の作業者・入れ子の codex・ユーザーの道具 (fnm の Node・pnpm) が動かない
+CODEX_DEFAULT_SANDBOX = 'danger-full-access'
+CODEX_MCP_APPROVAL = 'mcp_servers.shared-memory.default_tools_approval_mode="auto"'
+
+
+def runners_for(part: str) -> tuple:
+    """役割の部分 (designer・reviewer.deep・reviewer.other・tester) に置ける実行先。"""
+    return DESIGNER_RUNNERS if part == 'designer' else ROLE_RUNNERS
+
+
+def _agents(home=None) -> dict:
+    data = common.load_json(common.resolve_home(home) / 'agents.json', {})
+    return data if isinstance(data, dict) else {}
+
+
+def runner_entry(runner: str, home=None) -> dict:
+    runners = _agents(home).get('runners')
+    entry = runners.get(runner) if isinstance(runners, dict) else None
+    return entry if isinstance(entry, dict) else {}
+
+
+def find_command(runner: str, home=None):
+    """実行先の CLI のコマンドの先頭。(コマンド, 見つからない理由) を返し、見つかれば理由は None。"""
+    given = os.environ.get(f'ATELIER_{runner.upper()}_CMD')
+    if given:
+        try:
+            words = json.loads(given)
+        except ValueError:
+            words = None
+        if isinstance(words, list) and words and all(isinstance(w, str) and w.strip() for w in words):
+            return list(words), None
+        return None, f'ATELIER_{runner.upper()}_CMD is not a JSON array of strings'
+    path = runner_entry(runner, home).get('path')
+    if isinstance(path, str) and path and Path(path).is_file():
+        return [path], None
+    found = shutil.which(runner)
+    if found:
+        return [found], None
+    where = f' (agents.json path {path})' if isinstance(path, str) and path else ''
+    return None, f'{runner} not found{where}'
+
+
+def unusable_reason(runner: str, home=None):
+    """agent 以外の実行先が使えない理由。使えれば None。"""
+    if runner == 'agent':
+        return None
+    if runner_entry(runner, home).get('enabled') is not True:
+        return f'{runner} is disabled in agents.json (setup)'
+    return find_command(runner, home)[1]
+
+
+def model_listed(runner: str, model: str, home=None):
+    """モデルが home の models/<runner>.json の一覧にあるか。一覧が無ければ None。"""
+    data = common.load_json(common.resolve_home(home) / 'models' / f'{runner}.json', {})
+    models = data.get('models') if isinstance(data, dict) else None
+    if not isinstance(models, list) or not models:
+        return None
+    ids = {m.get('id') if isinstance(m, dict) else m for m in models}
+    return model in ids
+
+
+def codex_sandbox(permission_mode) -> str:
+    return permission_mode if permission_mode in CODEX_SANDBOXES else CODEX_DEFAULT_SANDBOX
+
+
+def codex_args(model: str, effort, sandbox: str, last_path) -> list:
+    """codex の実行ファイルのあとに付ける引数。依頼は標準入力 (末尾の `-`) で渡す。"""
+    args = ['-a', 'never', 'exec', '--skip-git-repo-check', '--json', '-m', model, '-s', sandbox,
+            '-c', CODEX_MCP_APPROVAL]
+    if effort:
+        args += ['-c', f'model_reasoning_effort="{effort}"']
+    return args + ['-o', Path(last_path).as_posix(), '-']
+
+
+def codex_events(path) -> dict:
+    """codex exec --json の JSONL から、thread_id・使用量・失敗の理由を拾う。読めない行は飛ばす。"""
+    got = {'session_id': None, 'tokens': None, 'failed': None}
+    try:
+        lines = Path(path).read_text(encoding='utf-8', errors='replace').splitlines()
+    except OSError:
+        return got
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        kind = event.get('type')
+        if kind == 'thread.started' and isinstance(event.get('thread_id'), str):
+            got['session_id'] = event['thread_id']
+        elif kind == 'turn.completed' and isinstance(event.get('usage'), dict):
+            usage = event['usage']
+            got['tokens'] = {'input': usage.get('input_tokens'), 'cached_input': usage.get('cached_input_tokens'),
+                             'output': usage.get('output_tokens')}
+        elif kind in ('turn.failed', 'error'):
+            error = event.get('error') if isinstance(event.get('error'), dict) else {}
+            got['failed'] = str(error.get('message') or event.get('message') or kind)
+    return got
