@@ -29,8 +29,12 @@ The subagent that runs the tests at the end of a wave and writes a test result. 
 _Avoid_: test runner, QA
 
 **runner (実行先)**:
-What runs a worker: `agent` (a Claude Code subagent), opencode, codex, agy, dsh, claude, or mcp.
+What runs a worker or a role: `agent` (Claude: a Claude Code subagent, or `claude -p` for a headless designer), opencode, codex, agy, dsh, claude, or mcp. A role's runner is its `runner` key (`agent` unless set); the designer takes `agent`, codex or claude only, and mcp runs workers only.
 _Avoid_: provider, backend
+
+**Agent tool (Agent ツール)**:
+Whether the designer can launch subagents. A designer on `agent` has it; a designer on another runner does not, and launches the roles and workers set to `agent` through `claude -p` instead.
+_Avoid_: subagent support
 
 ## Workflow
 

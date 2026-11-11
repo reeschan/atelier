@@ -1,6 +1,6 @@
 # Runners: launching a worker
 
-Read this when the build stage picks `build.runners`: `## Common rules` first, then only the section of each runner that appears in a route, before its first use.
+Read this when the build stage picks `build.runners`: `## Common rules` first, then only the section of each runner that appears in a route, before its first use. Read `## Roles on a runner` when a value on your `Roles:` line ends in `@<runner>`, and `## Without the Agent tool` when your prompt says `Agent tool: no`.
 
 ## Common rules
 
@@ -216,3 +216,38 @@ python <skill>/jev_mcp.py --http --port 7830 --root <absolute repository path>  
 - HTTP listens on 127.0.0.1 only. It refuses a Host other than 127.0.0.1, localhost or [::1] and a foreign Origin (403), and a POST that is not `application/json` (415). There is no authentication, so never expose it to other machines.
 
 **Unusable when.** `.last.md` never comes, or the status is `NEEDS_CONTEXT` or `BLOCKED`: treat it as unusable (`## Common rules`) or rework, as with any runner. Remove a `.claim.json` left behind only after confirming the client has stopped.
+
+## Roles on a runner (role_run.py)
+
+A reviewer or tester whose role value ends in `@<runner>` (the `Roles:` line of your prompt, `appendix/setup.md` `## roles`) runs on that runner, not as an Agent tool subagent. The same rules as for external workers hold: one launch per review or test, files at fixed paths, no memory.
+
+1. Write the `prompt:` part of `prompts/pbi-review.md`, `prompts/tester.md` or `prompts/final-review.md` to `docs/pbi/roles/<name>.prompt.md`. The name is `<report>.review` for a PBI review, `test-<result name>` for a test run, `final.review` or `final.security` for the final review.
+2. Copy the PBI's refs into it under `## Refs (workspace)` as for workers, and write "The refs are copied below. Do not use memory." in place of "get them by id".
+3. Launch it from the repository root, in the background (Bash `run_in_background`, or `background.py` below):
+
+   ```bash
+   python <skill>/role_run.py <name> --role reviewer|tester --runner <runner> --model <model> [--effort <effort>]
+   ```
+
+4. `role_run.py` puts the line "Read `<skill>/agents/atelier-<role>.md` and follow it" first in the prompt file, launches the runner (codex: `-a never exec -s danger-full-access`, shared-memory approval automatic; claude: `claude_run.py --folder roles`; dsh: `dsh_run.py --folder roles`; opencode and agy as in their sections) and writes its logs to `docs/pbi/roles/<name>.*`. Its exit code is the child's.
+5. The result is the review JSON or test result at its usual path, checked by `role_results.py` as always. A missing result, or a sign from the runner's "Unusable when" table, is an unusable runner (`## Common rules`); retry once, then ask (kind `decision`).
+
+- A runner without a Skill tool cannot call the review skill of the final review. Replace the Skill line of `prompts/final-review.md` with "Read `<path of the skill's SKILL.md>` and follow it. If it needs subagents, write BLOCKED." A `BLOCKED` result goes to the next row (`appendix/review.md`).
+- When both reviewer stages equal the model that built the attempt, use the default pair instead (opus for deep, sonnet at high effort otherwise) on `agent`, and say so in the stage record.
+
+## Without the Agent tool
+
+Your prompt says `Agent tool: no` when you run on a runner that has no Agent tool (codex). Then:
+
+- A role on `agent` (a value with no `@<runner>`) runs through `role_run.py --runner claude --model <model>`.
+- A PBI whose route step is `agent` runs on the claude runner: write the prompt to `docs/pbi/claude/<report>.prompt.md`, run `python <skill>/claude_run.py <report> --model <model> [--effort <effort>]`, and record it with `record_run.py <report> --attempt <n> --outcome ... --runner claude --model <model>`. The design review of `prompts/design-review.md` runs the same way, as report `PBI-<n>.design`.
+- These `claude -p` children have no MCP tools: copy the refs into the prompt as for external runners.
+- Launch every long child (workers, roles) detached and wait for it; a shell command of yours may have a time limit:
+
+  ```bash
+  python <skill>/background.py start --name <report or role name> -- <the launch command, word by word>
+  python <skill>/background.py wait --name <name> --timeout 300
+  ```
+
+  `wait` prints `state: done exit <n>` (exit 0) once the child ends, or `state: running` (exit 3) at the timeout: run `wait` again. Give each command a time limit longer than its `--timeout`. `state: lost` (exit 4) means the watcher died without a code: treat the child as unusable. `background.py status` lists the jobs. The child's output is in `docs/pbi/bg/<name>.log`.
+- Start two or more children 30 seconds apart, as `## Common rules` says, then wait for each.

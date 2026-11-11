@@ -2,6 +2,7 @@
 
   python <このディレクトリ>/claude_run.py <報告名> --model <model> [--effort <effort>]
       [--setting default|edit-only] [--pbi-dir docs/pbi]
+      [--folder claude|roles]
 
 - 依頼文は <pbi-dir>/claude/<報告名>.prompt.md（先に書いておく）。リポジトリのルートで実行する（そこが作業ルートになる）。
   依頼文は標準入力で「依頼文のファイルを読み、その指示どおりに作業してください」の 1 文と一緒に渡す。
@@ -100,6 +101,8 @@ def main() -> None:
     ap.add_argument('--effort', default=None)
     ap.add_argument('--setting', default='default', choices=sorted(SETTINGS))
     ap.add_argument('--pbi-dir', default='docs/pbi')
+    ap.add_argument('--folder', default='claude', choices=('claude', 'roles'),
+            help='依頼文とログの置き場 (<pbi-dir>/<folder>)。役割 (role_run.py) は roles')
     args = ap.parse_args()
 
     if not REPORT.match(args.report):
@@ -110,7 +113,7 @@ def main() -> None:
     if effort is not None and not NAME.match(effort):
         fail(f'--effort に使えない文字があります: {effort!r}')
 
-    base = Path(args.pbi_dir) / 'claude'
+    base = Path(args.pbi_dir) / args.folder
     prompt = base / f'{args.report}.prompt.md'
     if not prompt.is_file():
         fail(f'依頼文がありません: {prompt}')

@@ -18,7 +18,7 @@ You are the caller: the session the user talks to. Atelier's designer does the w
 
 1. Home has no `agents.json`: finish `setup` first (`appendix/setup.md`).
 2. Write the user's goal in two or three lines, in their language, and say them. Do not wait for a reply; the approval of the PBI list is where the user corrects them.
-3. Put that text in a file and run `python <skill>/conductor.py start --goal-file <file>`. When the user names a template, add `--workflow <name>`. When the user names a model for a role in this run, add `--role <role>=<model>` (`appendix/setup.md`, `## roles`).
+3. Put that text in a file and run `python <skill>/conductor.py start --goal-file <file>`. When the user names a template, add `--workflow <name>`. When the user names a model for a role in this run, add `--role <role>=<model>`, and `--role <role>.runner=<runner>` when it runs outside Claude (for example codex for GPT models; `appendix/setup.md`, `## roles`). Exit 2 naming `roles.<role>.runner` means that runner is disabled or missing: show the `error:` line and stop.
    - `--launch agent` (the default) when you are a Claude Code main session.
    - `--launch headless` when you are already inside a subagent: one level of the Agent tool is gone.
    - Not Claude Code (Codex, Grok, or any caller reading AGENTS.md): always `start --launch headless`, then `run --detach` and repeated `wait --timeout 300` as below; the `claude` CLI is required.
@@ -51,7 +51,8 @@ With launch `agent` (headless is below):
 
 - `run --detach` starts the designer and returns at once.
 - Repeat `python <skill>/conductor.py wait --timeout 300` until it prints a state other than running, then read its lines.
-- With launch `headless`, `next` prints `launch: headless` and `then: ... run --detach`: run that line and do not launch the designer.
+- With launch `headless`, `next` prints `launch: headless` and `then: ... run --detach`: run that line and do not launch the designer. The same happens on an `agent` run when the designer runs on codex or claude (`launch: headless (designer runner codex)`).
+- Claude Code's auto mode may refuse `run --detach` when it starts codex with `-a never` and no sandbox. Then show the refusal and ask the user to allow the command or to run it themselves.
 - `--launch` is taken by `start` and `run` only. `next` does not take it.
 - A `decision` question with a `relaunch:` line (`no-agent-tool`): run that line, then follow the headless steps.
 

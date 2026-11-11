@@ -1,6 +1,6 @@
 # Prompt: one designer episode
 
-`conductor.py next` fills the block below and writes it to `docs/pbi/conductor/episodes/<seq>-<episode>.prompt.md`. The `Result:` path carries the run (`<run>-<seq>-<episode>.result.json`, `<run>` the first 8 characters of `run_id`) for every episode, headless or agent; `done` reads only that path, and refuses while a headless designer is still running. The caller gives that file to an `atelier-designer` subagent (`agents/atelier-designer.md`), or `conductor.py run` gives it to `claude -p`. A line that starts with `{?name}` is kept only when `name` has a value. Edit the wording here, not in the script; keep every placeholder. When the agent definition is not installed, the conductor puts one more line above the block's first line (`Read <skill>/agents/atelier-designer.md and follow it as your instructions.`); that line is not part of this template.
+`conductor.py next` fills the block below and writes it to `docs/pbi/conductor/episodes/<seq>-<episode>.prompt.md`. The `Result:` path carries the run (`<run>-<seq>-<episode>.result.json`, `<run>` the first 8 characters of `run_id`) for every episode, headless or agent; `done` reads only that path, and refuses while a headless designer is still running. The caller gives that file to an `atelier-designer` subagent (`agents/atelier-designer.md`), or `conductor.py run` gives it to `claude -p` (or to `codex exec` when `roles.designer.runner` is codex, with the definition line put first). A line that starts with `{?name}` is kept only when `name` has a value. Edit the wording here, not in the script; keep every placeholder. When the agent definition is not installed, the conductor puts one more line above the block's first line (`Read <skill>/agents/atelier-designer.md and follow it as your instructions.`); that line is not part of this template.
 
 ```text
 Work root: {work_root}. Work here and write nothing outside it.
@@ -12,7 +12,8 @@ Episode: {episode} (seq {seq})
 Waves: docs/pbi/waves.json holds the PBIs of each wave. Write it at the end of plan, and rewrite it when hold or tier-up changes a wave.
 Goal: {goal}
 Workflow: {workflow}
-Roles: reviewer {reviewer}; tester {tester}
+Roles: reviewer {reviewer}; tester {tester} (a value ending in @<runner> runs on that runner through role_run.py; the rest on agent)
+Agent tool: {agent_tool} (no: launch every role and worker through scripts, runners.md "Without the Agent tool")
 Context probe: {ctx_probe} (run it at every boundary to measure your own context)
 State: docs/pbi/STATUS.md and docs/pbi/conductor/run.json (read only the parts you need)
 Files are the source of truth: every role hands over through files at fixed paths. A subagent's reply may be empty; when the file is there, go on.
