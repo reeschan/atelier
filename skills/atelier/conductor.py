@@ -306,7 +306,23 @@ def pid_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
-    return True
+    # 止めたあと親がまだ回収していないゾンビも os.kill(pid, 0) は通るので、終わったものとして扱う
+    return not _posix_zombie(pid)
+
+
+def _posix_zombie(pid: int) -> bool:
+    """POSIX で pid がゾンビ (終わったが親が回収していない) か。読めなければ False (生きているとみなす)。"""
+    try:
+        stat = Path(f'/proc/{pid}/stat')
+        if stat.parent.parent.is_dir() and Path('/proc/self/stat').exists():
+            # 2 つ目の欄 (コマンド名) は括弧の中に空白を含みうるので、最後の ')' のあとを読む
+            return stat.read_text().rsplit(')', 1)[1].split()[0] in ('Z', 'X')
+        # /proc が無い POSIX (macOS・BSD) は ps の状態の欄を読む
+        out = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True, text=True,
+                             env=dict(os.environ, LC_ALL='C'), creationflags=NO_WINDOW).stdout.strip()
+        return out.startswith('Z')
+    except (OSError, IndexError):
+        return False
 
 
 def stop_child(pid) -> bool:
