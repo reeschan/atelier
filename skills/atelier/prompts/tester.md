@@ -1,11 +1,11 @@
 # Prompt: test run
 
-Give this to an `atelier-tester` subagent to run the deferred checks (`appendix/tests-at-end.md`) and write `docs/pbi/verify/tests/<name>.test-result.json`. Fill in the brackets. Keep only the line of the kind you start and delete the other two. It runs on sonnet.
+Give this to an `atelier-tester` subagent to run the deferred checks (`appendix/tests-at-end.md`) and write `docs/pbi/verify/tests/<name>.test-result.json`. Fill in the brackets. Keep only the line of the kind you start and delete the other two. It runs on the tester of the `Roles:` line (sonnet by default). A value ending in `@<runner>` (or any value when your prompt says `Agent tool: no`) runs through `role_run.py --role tester` with the `prompt:` part below, named `test-<name>` (`runners.md`, `## Roles on a runner`).
 
 ```text
 description: TEST.<kind> <short text>   (kind: wave, survey or final)
 subagent_type: atelier-tester
-model: sonnet
+model: <the tester of the Roles: line, sonnet by default>
 prompt:
 Work root: <absolute path of the repository or worktree>. Work here and write nothing outside it.
 Kind: <wave, survey or final>   Name: <result name, for example wave-1, survey or final>   Reports: <report,report,...>
