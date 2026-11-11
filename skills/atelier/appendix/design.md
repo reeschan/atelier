@@ -37,6 +37,6 @@ An unknown is a point the request and the code do not settle (a behaviour, a bou
 1. Read only the lines the point depends on, and keep them in its slice (`design_record.py slice <id> --question <q> --read <path>:<start>-<end> --unknown <u>`, `appendix/adapters.md`, `## Confirm`).
 2. When the lines settle it, write the decision in the spec and go on.
 3. When it is still open and its answer changes the PBI split, an interface or the data model: collect every such point and end the episode with one question (kind `decision`, with `state`) before plan, with the choices you see and the one you would pick. Ask once for all of them.
-4. When it is still open and its answer changes only details inside a PBI: put it in the approval draft as an `ask` block (the choices, yours first), under "Open questions". Nothing goes on with an open question unanswered:
+4. When it is still open and its answer changes only details inside a PBI: put it in the approval draft as an `ask` block (the choices, yours first), under `## 決めること` (`## Decisions`, `appendix/approve.md`). Nothing goes on with an open question unanswered:
    - With the `confirm` adapter on, `design_record.py check-reply` refuses a reply that leaves an `ask` unanswered or out.
-   - With `confirm` `off` there is no check, and any reply comes back as the `Answer:`. Read it against the "Open questions" first: when it leaves one unanswered, end with kind `approve` again, asking only those, before anything goes to build.
+   - With `confirm` `off` there is no check, and any reply comes back as the `Answer:`. Read it against the questions under `## 決めること` first: when it leaves one unanswered, end with kind `approve` again, asking only those, before anything goes to build.

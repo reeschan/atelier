@@ -26,6 +26,8 @@ If an appendix tells you to ask the user or to use AskUserQuestion, end the epis
 
 Do not stop to report anything else. Put what the user should know in the summary of the episode result.
 
+Ask the user only what changes what they get, what it costs, how long it takes or what can go wrong; decide the insides yourself and write them in the spec. Every choice says what changes when it is picked (`appendix/approve.md`, `## Decisions`).
+
 ## Invariants
 
 - Pass or fail comes from the exit codes of the verify commands. Counts come from `docs/pbi/STATUS.md`. A PBI's model comes from its `route.json`.
@@ -56,6 +58,7 @@ Do not stop to report anything else. Put what the user should know in the summar
 | Priority templates: the start-time sync, applying or editing one in chat, an expired application | `appendix/priority-templates.md` |
 | Asking Jev directly (report triage, rework check) | `appendix/jev.md` |
 | Recording the cause of a rework, tier up or hold; writing the cases at finish | `appendix/cases.md` |
+| Writing the approval draft at Approve, or rewriting it after a revise request | `appendix/approve.md` |
 | The `adapters` setting in agents.json (turns a design or review stage off, names a skill for it, or the `confirm` view of Approve) | `appendix/adapters.md` |
 
 ## Episodes
@@ -114,16 +117,9 @@ Build, verify and fix repeat per PBI until each PBI passes or stops. With tests 
 
 ## Approve
 
-After route and its gates, write the approval to `docs/pbi/notes/approve.md` and the design record through `appendix/adapters.md` (`## Confirm`). Per PBI: id, title, tier, route head, review level, the reason, dropped steps, dependencies, quality warnings. Also:
+After route and its gates, write the approval draft `docs/pbi/notes/approve.md` in the seven sections of `appendix/approve.md`, after the example `examples/approve.md`: what changes, the before and after flow as diagrams, every question as an `ask` under the decisions, then the PBIs, the impact and who builds. Check it with `design_record.py lint`, then write the design record through `appendix/adapters.md` (`## Confirm`).
 
-- one line per stage from the flow table: the component picked, or the fallback with its reason
-- the priority-template line from `prepare.py` with the warning when a template overrides the opus tier, and expired priority applications (`appendix/priority-templates.md`)
-- the open questions from the design stage, one `ask` block each (`appendix/design.md`, `## Design: unknowns`)
-- the leads from the lint survey: each `Survey fix:` PBI as its own choice (fix it in this run, or not), and the leads outside the range under "Found, not in this run" (`appendix/lint.md`); the tests-at-end `deferred` and `test_paths` you drafted
-- one line per recommended tool `tools_check.py` did not find: its install and its fallback, asked as a choice in the approve text. When the approve answer chooses to install, end with a question (kind `decision`, with `state`) for the install; after its `Answer:`, end with `done`, next build wave 1. Otherwise the fallback runs
-- the question for each optional stage with an `ask-user` row placed after route or later (security, by default): whether to run it this time (`appendix/optional.md`); the model-check chart and its rules, when that stage ran
-
-End the episode with a question of kind `approve`, `check: design-record`, its path `docs/pbi/notes/approve.md`. With the `confirm` adapter `off` there is no design record: leave `check` out of the question. When the `Answer:` line comes, it is either a reply that passed `design_record.py check-reply` (approved: go on) or a revise request (`answer --revise`): fix the plan, raise the revision, and end with kind `approve` again.
+End the episode with a question of kind `approve`, `check: design-record`, its path `docs/pbi/notes/approve.md`. With the `confirm` adapter `off` there is no design record: leave `check` out of the question. When the `Answer:` line comes, it is either a reply that passed `design_record.py check-reply` (approved: go on) or a revise request (`answer --revise`): fix the plan, raise the revision, and end with kind `approve` again. When the approve answer chooses to install a missing tool, end with a question (kind `decision`, with `state`) for the install; after its `Answer:`, end with `done`, next build wave 1. Otherwise the fallback runs.
 
 ## One PBI
 
