@@ -106,7 +106,10 @@ class OmmCacheTest(unittest.TestCase):
         self.assertEqual(self.run_cli('store').returncode, 0)
         placed = self.run_cli('export')
         self.assertEqual(placed.returncode, 0, placed.stderr)
-        self.assertEqual(placed.stdout.strip(), f"placed {os.path.join(self.repo, '.omm')}")
+        word, _, where = placed.stdout.strip().partition(' ')
+        # git の出すルートは別名を解いた形 (macOS の /private/var、Windows の長い名前) なので、場所の同じさで比べる
+        self.assertEqual(word, 'placed')
+        self.assertTrue(os.path.samefile(where, os.path.join(self.repo, '.omm')), where)
         self.assertTrue(os.path.isfile(os.path.join(self.repo, '.omm', 'overall-architecture', 'description.md')))
         self.assertEqual(self.run_cli('lookup').stdout.split()[0], 'hit')
 
