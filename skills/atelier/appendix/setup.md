@@ -53,7 +53,7 @@ Checked on 2026-10-21 with opencode 2.0.29, codex-cli 0.153.4, agy 1.4.4 and dsh
 
 ## roles
 
-The role models come from three layers, strongest first, and each key (model, effort, permission_mode) is taken from the first layer that sets it:
+The role models come from three layers, strongest first, and each key (runner, model, effort, permission_mode) is taken from the first layer that sets it:
 
 1. **run**: `conductor.py start --role <role>[.<key>]=<value>` (repeatable; the key defaults to `model`, and `none` sets effort to `null`), for this run only. The roles are `designer`, `reviewer.deep`, `reviewer.other` and `tester`.
 2. **repo**: `docs/pbi/roles.json`, the same `{"roles": {...}}` shape as below, for every run in this repository.
@@ -61,17 +61,26 @@ The role models come from three layers, strongest first, and each key (model, ef
 
 A key no layer sets takes its default. An invalid value (not a non-empty string; `null` is allowed for effort only) is skipped and the next layer's value is used; `next` prints one `warn roles.<role>.<key> (<layer>)` line naming the value it used and where it came from. Effort `null` leaves the runner's own level.
 
+`runner` is where the role runs: `agent` (Claude, the default) or a runner of `agents.json`. The designer takes `agent`, `codex` or `claude`; the reviewer stages and the tester take `agent`, `opencode`, `codex`, `agy`, `dsh` or `claude`. `model` is then that runner's model id (`gpt-6.1-terra` for codex, `deepseek-official/deepseek-flash` for dsh). `start` stops with exit 2 when a runner other than agent is not enabled in agents.json or its CLI is not found, and prints a `warn roles.<role>.model` line when the model is not in that runner's model list (`models/<runner>.json`).
+
 Every `next` that launches an episode prints `roles: designer opus (repo), reviewer.deep opus (default), ...`, and keeps each value with its layer in `running.roles` and the episode's `history` entry of `docs/pbi/conductor/run.json`. A headless `run` launches the designer with the values `next` kept.
 
-- `designer`: `{"model", "effort", "permission_mode"}`. Defaults: model `opus`, effort `null`, `permission_mode` `auto` (passed to `claude -p` for a headless designer).
-- `reviewer`: `{"deep": {"model", "effort"}, "other": {"model", "effort"}}`. `deep` defaults to model `opus` with effort `null`; `other` defaults to model `sonnet` with effort `high`. A review stage that is not deep uses `other`. When the stage's model equals the model that built the PBI, use the other stage.
-- `tester`: `{"model", "effort"}`. Defaults: model `sonnet`, effort `null`.
+- `designer`: `{"runner", "model", "effort", "permission_mode"}`. Defaults: runner `agent`, model `opus`, effort `null`, `permission_mode` `auto` (passed to `claude -p` for a headless designer). On codex, `permission_mode` names the sandbox (`read-only`, `workspace-write`, `danger-full-access`); any other value, `auto` included, gives `danger-full-access`. Effort goes to codex as `model_reasoning_effort`, with no cap.
+- `reviewer`: `{"deep": {"runner", "model", "effort"}, "other": {"runner", "model", "effort"}}`. `deep` defaults to model `opus` with effort `null`; `other` defaults to model `sonnet` with effort `high`. A review stage that is not deep uses `other`. When the stage's model equals the model that built the PBI, use the other stage; when both do, use the default pair on agent.
+- `tester`: `{"runner", "model", "effort"}`. Defaults: runner `agent`, model `sonnet`, effort `null`.
+
+A value shows as `model[/effort]`, followed by `@<runner>` when the runner is not agent: `gpt-6.1-terra/high@codex`. For example, the designer and both reviewer stages on GPT Terra 6.1 for one run:
+
+```bash
+python <skill>/conductor.py start --goal-file <file> --role designer.runner=codex --role designer=gpt-6.1-terra --role reviewer.deep.runner=codex --role reviewer.deep=gpt-6.1-terra --role reviewer.other.runner=codex --role reviewer.other=gpt-6.1-terra
+```
 
 ```json
 {"roles": {
-  "designer": {"model": "opus", "effort": null, "permission_mode": "auto"},
-  "reviewer": {"deep": {"model": "opus", "effort": null}, "other": {"model": "sonnet", "effort": "high"}},
-  "tester": {"model": "sonnet", "effort": null}
+  "designer": {"runner": "agent", "model": "opus", "effort": null, "permission_mode": "auto"},
+  "reviewer": {"deep": {"runner": "agent", "model": "opus", "effort": null},
+               "other": {"runner": "agent", "model": "sonnet", "effort": "high"}},
+  "tester": {"runner": "agent", "model": "sonnet", "effort": null}
 }}
 ```
 
