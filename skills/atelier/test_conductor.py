@@ -1447,12 +1447,15 @@ class ConductorTest(unittest.TestCase):
         self.con('start', '--goal', 'plain')
         rc, out = self.con('next')
         self.assertIn('Agent tool: yes', self.request(out))
+        self.assertNotIn('Writing files:', self.request(out))
         self.assertIn('subagent_type=atelier-designer model=opus', self.line(out, 'launch'))
         self.codex_start('--force')
         rc, out = self.con('run')
         self.assertEqual(rc, 10, out)
         prompts = sorted(p for p in os.listdir(self.path('docs/pbi/conductor/episodes')) if p.endswith('.prompt.md'))
-        self.assertIn('Agent tool: no', self.read(f'docs/pbi/conductor/episodes/{prompts[-1]}'))
+        codex_prompt = self.read(f'docs/pbi/conductor/episodes/{prompts[-1]}')
+        self.assertIn('Agent tool: no', codex_prompt)
+        self.assertIn('Writing files: On Windows', codex_prompt)
 
     def test_codex_designer_failure_is_a_launch_failure(self):
         """codex の turn.failed と 0 以外の終了は、起動の失敗 (retry) になる。"""
@@ -1516,6 +1519,30 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn("warn roles.designer.runner (repo): 'opencode' is not valid; using 'agent' (default)", out)
         self.assertIn('designer opus (default)', self.line(out, 'roles'))
+
+    def test_garbled_question_and_summary_are_warned(self):
+        """問いのファイルや要約に ? が 3 つ以上続けば warn garbled を出す。化けていなければ出さない。"""
+        self.con('start', '--goal', 'garbled')
+        rc, out = self.con('next')
+        self.write(STATE, '# state\nImmediate next action: ask\n')
+        self.write('docs/pbi/notes/q.md', '# ?????\n\n????????????\n')
+        self.result(out, status='question', state=STATE, summary=['design: ??????'],
+                    question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': '???????'})
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+        warn = next((line for line in out.splitlines() if line.startswith('warn garbled:')), '')
+        for place in ('summary', 'question.summary', 'docs/pbi/notes/q.md'):
+            self.assertIn(place, warn)
+        self.assertNotIn(STATE, warn)
+
+        self.con('start', '--goal', 'clean', '--force')
+        rc, out = self.con('next')
+        self.write('docs/pbi/notes/q.md', '# 設計の問い\n\nどれにしますか?\n')
+        self.result(out, status='question', state=STATE, summary=['design: 問いがある'],
+                    question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': '進めますか?'})
+        rc, out = self.con('done')
+        self.assertEqual(rc, 10, out)
+        self.assertNotIn('warn garbled', out)
 
     def test_codex_effort_is_passed_as_an_escaped_toml_string(self):
         """effort の \\ や " は TOML の基本文字列としてエスケープして渡し、設定した値のまま codex に届く。"""

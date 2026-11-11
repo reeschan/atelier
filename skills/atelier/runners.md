@@ -101,6 +101,9 @@ codex exec -m <model> -c model_reasoning_effort='"<effort>"' -s workspace-write 
 
 - `-o` writes the last message (the 5 lines of `worker.md`) to `.last.md`.
 - Use the route's effort, never above `high` (no xhigh or max).
+- Put this line in the prompt, before `How to work and report:`, so that Japanese and other non-ASCII text survives on Windows:
+
+  Writing files: On Windows, Windows PowerShell 5.1 sends text piped into another program (`@'...'@ | python -`) as US-ASCII, so every non-ASCII character arrives as `?`. Write files with apply_patch, or write a script to a `.py` file and run `python <file>`. Keep non-ASCII text out of PowerShell pipes; when you need one, run `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` first in the same command.
 
 **Unusable when.**
 

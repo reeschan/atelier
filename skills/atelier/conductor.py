@@ -1075,6 +1075,7 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
                      ' (switch to the other when it equals the built model)'),
         'tester': model_label(roles['tester']),
         'agent_tool': 'no' if designer_runner(roles) == 'codex' else 'yes',
+        'text_rule': runner_cli.CODEX_TEXT_RULE if designer_runner(roles) == 'codex' else None,
         'continue_from': pending.get('continue_from'), 'answer': pending.get('answer'),
         'conductor_answer': pending.get('conductor_answer'), 'sent_by': pending.get('sent_by'),
         'result': result.as_posix(), 'alive': alive.as_posix(), 'ctx_probe': ctx_probe,
@@ -1313,6 +1314,12 @@ def process_done(paths: Paths, run: dict) -> tuple:
     summary = data.get('summary')
     if errors:
         return fail(paths, run, running, '; '.join(errors), 'invalid', summary)
+    code, lines = settle_result(paths, run, running, data, summary)
+    return code, with_warnings(lines, garbled_warnings(data)) if lines else lines
+
+
+def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -> tuple:
+    """形の正しい出番の結果で状態を進める。(終了コード, 出す行) を返す。"""
     status = data['status']
     episode = running['episode']
     if status == 'error':
@@ -1389,6 +1396,28 @@ def process_done(paths: Paths, run: dict) -> tuple:
     run['running'] = None
     save(paths, run)
     return EXIT_OK, ready_lines(run)
+
+
+# ? が 3 つ以上続くか U+FFFD がある文は、書くときに日本語などが失われたものとみなす (Windows PowerShell の管)
+GARBLED = re.compile('\\?{3,}|\ufffd')
+
+
+def garbled_warnings(data: dict) -> list:
+    """結果の要約と、問い・状態のファイルに文字化けがあれば warn の行を返す。読めないファイルは見ない。"""
+    question = data.get('question') if isinstance(data.get('question'), dict) else {}
+    texts = [('summary', '\n'.join(str(line) for line in data.get('summary') or [])),
+             ('question.summary', str(question.get('summary') or ''))]
+    for path in (question.get('path'), data.get('state')):
+        if isinstance(path, str) and path:
+            try:
+                texts.append((path, Path(path).read_text(encoding='utf-8', errors='replace')))
+            except OSError:
+                pass
+    places = [name for name, text in texts if GARBLED.search(text)]
+    if not places:
+        return []
+    return [f"warn garbled: '???' in {', '.join(places)}; non-ASCII text was lost when it was written "
+            '(Windows PowerShell pipe). Have the designer rewrite them']
 
 
 def cmd_done(args, paths: Paths) -> int:
