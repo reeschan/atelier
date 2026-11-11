@@ -42,7 +42,7 @@ Open with one line that restates the user's goal in your own words, as at the st
   - the stage records from STATUS.md, as they are (`appendix/engine.md`)
   - the two tables of `python <skill>/model_report.py`, pasted as they are: runs, outcome breakdown, unavailable rate, tokens, cost and API equivalent, time, and the provisional grades. The grades are a guide for a person to adjust later; add no reading of them here. Whether a rotate group split evenly shows in the run counts
   - runs whose archive copy failed (`archive.ok` false in `runs.jsonl`)
-  - how many times a route moved to its next step, and why
+  - every unusable runner: the PBI, the cause, and what the user picked instead
   - PBIs where you overrode the decision table, and how they ended
   - where Jev was skipped, and the number of handoffs
   - the stats per role: the table of `docs/pbi/stats/roles.json` (caller, designer, worker, reviewer, tester)

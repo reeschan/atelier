@@ -123,7 +123,7 @@ Raising a PBI's tier and rewriting its route. Recorded as the outcome `tier-up`.
 _Avoid_: promotion (used only for memory)
 
 **route**:
-The runner, model and effort candidates for one PBI, in the order to try. When the head is unusable, the next one runs.
+The runner, model and effort candidates for one PBI, in the order to try. When a step is unusable, the user picks what runs next, often a later step of the route (`runners.md`).
 _Avoid_: assignment list
 
 **sensitive**:
