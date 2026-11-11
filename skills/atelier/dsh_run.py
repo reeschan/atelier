@@ -31,6 +31,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 
 # provider ごとのキー: (環境変数, 環境変数が無いときに読むファイル)。ファイルはキーだけを書いたもの。
 KEY_FILES = {
@@ -184,7 +187,7 @@ def main() -> None:
     with open(jsonl, 'wb') as out, open(err, 'wb') as errf:
         code = subprocess.call(
             [*launcher, '--profile', 'headless', '--patch', str(patch.resolve()), '--json', task],
-            stdin=subprocess.DEVNULL, stdout=out, stderr=errf, env=env)
+            stdin=subprocess.DEVNULL, stdout=out, stderr=errf, env=env, creationflags=NO_WINDOW)
     # dsh の --json には時刻が無いので、record_run.py が読む開始・終了時刻をここで残す
     run = {'start': start, 'end': now(), 'exit': code, 'model': f'{provider}/{model}', 'effort': effort,
            'memory': args.memory}
