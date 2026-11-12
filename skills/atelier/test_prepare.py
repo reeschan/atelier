@@ -336,6 +336,18 @@ class PrepareTest(unittest.TestCase):
         cmd = seen[0]
         self.assertEqual(cmd[cmd.index('--only') + 1], 'PBI-001,PBI-002')
 
+    def test_only_with_an_unknown_pbi_exits_and_rewrites_nothing(self):
+        self.use_home(app=None)
+        self.add_pbi('PBI-001')
+        self.assertEqual(self.run_prepare('--now', NOW).returncode, 0)
+        path = os.path.join(self.base, 'PBI-001.route.json')
+        stale = {**self.route('PBI-001'), 'tier': 'opus'}
+        write_json(path, stale)
+        out = self.run_prepare('--now', NOW, '--only', 'PBI-999')
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn('PBI-999', out.stderr)
+        self.assertEqual(self.route('PBI-001'), stale)
+
     def test_tier_without_only_exits_nonzero(self):
         self.use_home(app=None)
         self.add_pbi()

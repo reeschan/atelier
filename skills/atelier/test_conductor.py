@@ -1700,6 +1700,29 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual((rc, out.splitlines()[0]), (0, 'state: finished'), out)
         self.assertEqual(self.read('docs/pbi/REPORT.md'), '# 完了\n- 済み\n')
 
+    def test_finish_does_not_take_an_old_report(self):
+        """前の run の REPORT.md は finish の出番の前に消え、report_body の無い finish は失敗になる。"""
+        self.write('docs/pbi/REPORT.md', '# old report\n')
+        out = self.go_to_finish('old report')
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, 'docs', 'pbi', 'REPORT.md')))
+        self.result(out, status='done', next=None, report='docs/pbi/REPORT.md')
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+
+    def test_start_and_abort_drop_the_last_runs_grill_and_full_run_yes(self):
+        """新しい run は前の run の grill の木と通しの「はい」を持ち越さず、abort も「はい」を消す。"""
+        grill = os.path.join(self.tmp, 'docs', 'pbi', 'notes', 'grill.json')
+        token = os.path.join(self.tmp, 'docs', 'pbi', 'full-run.approved.json')
+        self.write_json('docs/pbi/notes/grill.json', {'schema': 'atelier.grill/1'})
+        self.write_json('docs/pbi/full-run.approved.json', {'seq': 1})
+        self.con('start', '--goal', 'fresh')
+        self.assertFalse(os.path.exists(grill))
+        self.assertFalse(os.path.exists(token))
+        self.write_json('docs/pbi/full-run.approved.json', {'seq': 1})
+        rc, out = self.con('abort', '--reason', 'stop')
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(token))
+
     def approve_result(self, out):
         self.setup_approve()
         self.result(out, status='question', question={'kind': 'approve', 'path': 'docs/pbi/notes/approve.md',

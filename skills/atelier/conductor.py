@@ -1053,6 +1053,9 @@ def cmd_start(args, paths: Paths) -> int:
                 raise Refused(f'cannot move run.json aside: {error}')
         paths.goal.parent.mkdir(parents=True, exist_ok=True)
         paths.goal.write_text(goal if goal.endswith('\n') else goal + '\n', encoding='utf-8', newline='\n')
+        # 前の run の grill の木と通しの「はい」は、この run の答えではない
+        for stale in (paths.base / 'notes' / 'grill.json', full_run_token(paths)):
+            stale.unlink(missing_ok=True)
         run = {
             'schema': SCHEMA, 'run_id': str(uuid.uuid4()), 'created_at': iso_now(),
             'goal': paths.goal.as_posix(), 'workflow': args.workflow, 'launch': args.launch,
@@ -1092,8 +1095,9 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
     prompt = paths.episode_file(seq, episode, '.prompt.md')
     result = paths.result_file(seq, episode, run_short, launcher)
     alive = paths.episode_file(seq, episode, '.alive')
-    # 前の run の同じ名前の結果を読まないように消す
-    for stale in (result, alive):
+    # 前の run の同じ名前の結果を読まないように消す。finish は前の完了報告も消し、古い報告が通らないようにする
+    stales = [result, alive] + ([paths.base / 'REPORT.md'] if episode == 'finish' else [])
+    for stale in stales:
         try:
             stale.unlink()
         except OSError:
@@ -1826,6 +1830,7 @@ def cmd_abort(args, paths: Paths) -> int:
         run['reason'] = args.reason or 'aborted'
         run['aborted_at'] = iso_now()
         save(paths, run)
+        full_run_token(paths).unlink(missing_ok=True)
     emit([*closed_lines(run), *warns])
     return EXIT_OK
 

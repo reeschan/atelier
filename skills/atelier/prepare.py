@@ -183,6 +183,9 @@ def main():
         shutil.copy(HERE / "jev.config.template.json", config)
     only = {p for p in args.only.split(",") if p}
     pbis = sorted(p.name.removesuffix(".facts.json") for p in base.glob("PBI-*.facts.json"))
+    unknown = sorted(only - set(pbis))
+    if unknown:
+        sys.exit(f"--only に facts の無い PBI がある: {', '.join(unknown)}")
     missing = [p for p in pbis if not (base / f"{p}.brief.md").exists() or not (base / f"{p}.md").exists()]
     if missing:
         sys.exit(f"brief.md か PBI 本文が無い: {', '.join(missing)}")
@@ -219,8 +222,9 @@ def main():
         targets = [p for p in pbis if p in only or not (base / f"{p}.route.json").exists()]
     else:
         targets = pbis
-    if targets:
-        cmd += ["--only", ",".join(targets)]
+    if not targets:
+        sys.exit("準備する PBI が無い")
+    cmd += ["--only", ",".join(targets)]
     if args.tier:
         cmd += ["--tier", args.tier]
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", creationflags=NO_WINDOW)

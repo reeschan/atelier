@@ -2,15 +2,10 @@
   "enabled": true,
   "deferred": [
     "pnpm run test:unit",
-    "pnpm run check:domain-tests",
     {
-      "match": "cy:run",
+      "match": "pnpm run check:domain-tests",
       "when": "end",
-      "timeout": 3600,
-      "server": {
-        "start": "pnpm run start:e2e",
-        "url": "http://localhost:10096/"
-      }
+      "timeout": 600
     }
   ],
   "test_paths": [

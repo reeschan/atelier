@@ -443,6 +443,10 @@ def write_override(base: Path, pbi: str, steps: list, why: str, today: datetime.
     --tier があれば段をそれにする。
     """
     path = base / f'{pbi}.route.json'
+    facts = common.load_json(base / f'{pbi}.facts.json', {})
+    # sensitive はリポジトリの外のサービスに出さない (route と同じ決まり): override でも agent だけ
+    if isinstance(facts, dict) and facts.get('sensitive') and any(step.get('runner') != 'agent' for step in steps):
+        sys.exit(f'--override: {pbi} は sensitive なので agent の route だけにできる')
     out = common.load_json(path) if path.is_file() else None
     if not isinstance(out, dict) or not isinstance(out.get('tier'), str):
         facts_path = base / f'{pbi}.facts.json'

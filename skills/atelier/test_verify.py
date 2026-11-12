@@ -153,6 +153,14 @@ class FindBashTest(unittest.TestCase):
         found = verify.find_bash(self.root, 'nt', lambda name: wsl if name == 'bash' else None)
         self.assertIsNone(found)
 
+    def test_system_bash_splits_both_separators_on_any_host(self):
+        for path in (r'C:\Windows\System32\bash.exe', 'C:/Windows/System32/bash.exe',
+                     r'C:\Users\u\AppData\Local\Microsoft\WindowsApps\bash.exe'):
+            with self.subTest(path=path):
+                self.assertTrue(verify._system_bash(path))
+        self.assertFalse(verify._system_bash(r'C:\Program Files\Git\bin\bash.exe'))
+        self.assertFalse(verify._system_bash('/usr/bin/bash'))
+
     def test_windows_rejects_the_windowsapps_bash(self):
         shim = r'C:\Users\u\AppData\Local\Microsoft\WindowsApps\bash.exe'
         self.assertIsNone(verify.find_bash(self.root, 'nt', lambda name: shim if name == 'bash' else None))
@@ -251,9 +259,20 @@ class VerifyEnvAndModesTest(unittest.TestCase):
         self.settings(deferred=[{'match': 'sleep', 'timeout': 1}])
         (self.base / 'PBI-001.md').write_text(pbi('sleep 20'), encoding='utf-8')
         started = time.monotonic()
-        self.run_script('PBI-001', '--deferred')
+        r = self.run_script('PBI-001', '--deferred')
         self.assertLess(time.monotonic() - started, 15)
+        # 結果は書いたうえで、上限に当たったことを終了コード 3 で伝える
         self.assertEqual(self.results('PBI-001'), {1: 'timeout'})
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn('blocked: limit', r.stdout)
+
+    def test_deferred_with_no_entries_for_the_phase_is_a_no_op(self):
+        self.settings(deferred=['echo wave'])
+        (self.base / 'PBI-001.md').write_text(pbi('echo wave >> wave.txt'), encoding='utf-8')
+        r = self.run_script('PBI-001', '--deferred', '--when', 'end')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('deferred: none for when=end', r.stdout)
+        self.assertFalse((self.root / 'wave.txt').exists())
 
     def test_related_fills_specs_into_investigate(self):
         self.settings(investigate='echo {specs} > specs.txt')
@@ -261,6 +280,20 @@ class VerifyEnvAndModesTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual((self.root / 'specs.txt').read_text(encoding='utf-8').strip(), 'a.cy.ts,b.cy.ts')
         self.assertEqual(self.results('related'), {1: 0})
+
+    def test_related_without_specs_is_refused(self):
+        self.settings(investigate='echo {specs} > ran.txt')
+        r = self.run_script('--related', ' , ,')
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('refused: --related has no spec', r.stdout)
+        self.assertFalse((self.root / 'ran.txt').exists())
+
+    def test_related_with_investigate_without_specs_placeholder_is_refused(self):
+        self.settings(investigate='echo all > ran.txt')
+        r = self.run_script('--related', 'a.cy.ts')
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('refused: "investigate" in tests-at-end.json has no {specs}', r.stdout)
+        self.assertFalse((self.root / 'ran.txt').exists())
 
     def test_related_stops_at_specs_times_per_spec(self):
         self.settings(investigate='echo {specs}; sleep 30', limits={'per_spec': 1})
@@ -290,6 +323,23 @@ class VerifyEnvAndModesTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.results('final'), {1: 0})
 
+    def test_final_counts_output_without_a_newline_as_activity(self):
+        self.settings(final='for i in 1 2 3 4 5; do printf .; sleep 1; done', limits={'idle': 3})
+        self.approve_full_run()
+        r = self.run_script('--final')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.results('final'), {1: 0})
+
+    def test_final_keeps_the_approval_when_the_server_is_not_ready(self):
+        url = f'http://127.0.0.1:{free_port()}/'
+        self.settings(final='echo ran > ran.txt', server={'url': url})
+        self.approve_full_run()
+        r = self.run_script('--final')
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn('blocked: server', r.stdout)
+        self.assertTrue((self.base / 'full-run.approved.json').exists())
+        self.assertFalse((self.root / 'ran.txt').exists())
+
     def test_final_without_approval_is_refused(self):
         self.settings(final='echo ran > ran.txt')
         r = self.run_script('--final')
@@ -307,14 +357,29 @@ class VerifyEnvAndModesTest(unittest.TestCase):
         self.assertEqual(len((self.root / 'ran.txt').read_text(encoding='utf-8').splitlines()), 1)
 
     def test_pbi_verify_that_runs_final_is_refused(self):
-        self.settings(final='echo whole suite')
-        for cmd in ('echo whole suite', 'cd . && echo whole suite >> ran.txt'):
+        self.settings(final='cd . && echo whole  suite')
+        # final そのもの・final を含むもの・cd の前置きを除いた最後のコマンドを含むもの
+        for cmd in ('cd . && echo whole suite', 'cd . && echo whole suite >> ran.txt',
+                    'echo whole suite >> ran.txt'):
             with self.subTest(cmd=cmd):
                 (self.base / 'PBI-004.md').write_text(pbi('echo ok', cmd), encoding='utf-8')
                 r = self.run_script('PBI-004')
                 self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                 self.assertIn('refused: PBI-004 verify 2 runs the whole suite (final); use related specs', r.stdout)
                 self.assertFalse((self.root / 'ran.txt').exists())
+
+    def test_runs_final_compares_the_last_command_of_final(self):
+        final = 'cd e2e && pnpm run cy:run:parallel'
+        self.assertTrue(verify.runs_final('pnpm run cy:run:parallel', final))
+        self.assertTrue(verify.runs_final('cd e2e;  pnpm run  cy:run:parallel', final))
+        self.assertFalse(verify.runs_final('cd e2e && pnpm exec cypress run --spec a.cy.ts', final))
+
+    def test_example_settings_defer_nothing_that_runs_final(self):
+        settings = json.loads(Path(HERE, 'examples', 'tests-at-end.json').read_text(encoding='utf-8'))
+        final = verify.final_command(settings)
+        for entry in verify.deferred_entries(settings):
+            with self.subTest(match=entry['match']):
+                self.assertNotIn(entry['match'], final)
 
     def test_deferred_patterns_lists_every_match(self):
         self.settings(deferred=['pnpm test', {'match': 'cy:run', 'when': 'end'}])
@@ -344,6 +409,28 @@ class VerifyEnvAndModesTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.results('PBI-001'), {1: 0})
         self.assertFalse(answers(url))
+
+
+@unittest.skipIf(os.name == 'nt', 'プロセスグループで止めるのは Windows 以外')
+class KillTreeTest(unittest.TestCase):
+    def test_stops_the_group_after_the_launcher_exited(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        pid_file = root / 'pid'
+        proc = subprocess.Popen(['bash', '-c', f'sleep 60 >/dev/null 2>&1 & echo $! > "{pid_file}"'],
+                                stdin=subprocess.DEVNULL, **verify.NEW_GROUP)
+        proc.wait(timeout=10)
+        child = int(pid_file.read_text(encoding='utf-8').strip())
+        os.kill(child, 0)
+        verify.kill_tree(proc)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.1)
+        self.fail(f'sleep (pid {child}) is still running')
 
 
 if __name__ == '__main__':
