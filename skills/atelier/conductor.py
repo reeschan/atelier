@@ -1316,7 +1316,9 @@ def cmd_start(args, paths: Paths) -> int:
             run['stuck_pids'] = carried['stuck_pids']
         save(paths, run)
         _emit(paths, 'run.started', lambda: _run_started_data(paths, run))
-    emit(['state: ready', *warns, f"run: {run['run_id'][:8]}", 'next: design', 'then: ' + command('next')])
+    setup = events.sender_setup_line(paths.base) if events is not None else None
+    emit(['state: ready', *warns, *([setup] if setup else []), f"run: {run['run_id'][:8]}", 'next: design',
+          'then: ' + command('next')])
     return EXIT_OK
 
 

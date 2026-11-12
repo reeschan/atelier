@@ -267,6 +267,21 @@ def _sender(base):
     return module
 
 
+def sender_setup_line(base):
+    """送り手があって設定がまだ無いとき、呼び出し側にユーザーへ聞かせる 1 行を返す。それ以外は None。
+    答えは送り手の init (--remote <URL>・--local・--off) で、どれを選んでも設定ができるので 1 回だけになる。"""
+    try:
+        module = _sender(base)
+        if module is None or module.load_config() is not None:
+            return None
+        return (f'ask harness-log: no destination set; ask the user once and run '
+                f'python {Path(module.__file__).as_posix()} init --remote <URL> | --local | --off '
+                '(appendix/events.md, ## First run)')
+    except Exception as e:  # 聞く行が出せなくても start は止めない
+        _log_error(base, 'sender_setup_line', e)
+        return None
+
+
 def _send(base, name: str, **kwargs):
     module = _sender(base)
     if module is None:
