@@ -51,8 +51,8 @@ Reconcile only once every result is in: the tester's test-result, the review ski
 
 1. Check each finding yourself: open the file at the line and confirm the claim. A reviewer's report is not proof.
 2. A confirmed finding in a file that a PBI's targets name becomes a rework of that PBI (`appendix/rework.md`), counted toward the limit. Review again once every reworked PBI passes.
-   - The final review runs at most twice per run. Count the runs in STATUS.md. After the second, rework nothing more: put the confirmed findings that are left into the findings of the completion report.
-   - A PBI that has had its two reviews (`limit`, or `round 2/2` in its last bundle row, `appendix/rework.md`) gets no rework from the final review either: its findings go into the completion report.
+   - The final review runs at most twice per run. Each run gets its own stage record with its number, `stage review: <component> run #1|#2 (<reason>) findings <c>,<m>,<n>` (`appendix/engine.md`, `## Stage records`); never replace the first line. Before a final review, count those lines: with two already, do not start a third. After the second, rework nothing more: put the confirmed findings that are left into the findings of the completion report.
+   - A PBI that has used both reviews gets no rework from the final review either: its findings go into the completion report. This applies when its last bundle row shows `limit`, or when it shows `round 2/2` with a pass (`appendix/rework.md`).
 3. A confirmed finding in a file that no PBI owns goes into the findings of the completion report.
 4. A remark about taste or wording is not a reason for rework. Drop it.
 5. A confirmed conflict between the change and an accepted decision record (an ADR, in the repository's decisions folder) is never dropped, even when the user prefers the code. It ends one of two ways: rework the code, or a new record that supersedes the old one. Writing that record is the user's call: end the episode with a question (kind `decision`). Inline, put it under Waiting on you.

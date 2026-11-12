@@ -6,7 +6,7 @@ Read this when the fix stage picks `fix.rework` (verify or the final review deci
 
 The limit is the template's `fix.max_rework` (2 in the bundled templates). Each rework starts a new worker from the head of the same route.
 
-Reviews have their own limit: a PBI is reviewed at most twice, its first report and one rework, whatever `fix.max_rework` says. `role_results.py bundle` prints `round <k>/2` on each row, and `limit` on a row whose second review still does not pass. On `limit`, do not rework: stop the PBI (`## Stop`).
+Reviews have their own limit: a PBI is reviewed at most twice, its first report and one rework, whatever `fix.max_rework` says. `role_results.py bundle` prints `round <k>/2` on each row, and `limit` on a row whose second review still does not pass. On `limit`, do not rework: stop the PBI (`## Stop`). Since every report is reviewed, a PBI gets at most one rework after a failed review, even when `fix.max_rework` is 2.
 
 1. Write `docs/pbi/PBI-<n>.rework-<k>.md`:
 

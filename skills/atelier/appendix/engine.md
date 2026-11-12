@@ -139,4 +139,5 @@ stage <stage|gate after stage>: <component> <run|skip|fallback|off> (<reason>) [
 
 - `skip`: its `when` did not hold. `fallback`: it was not usable or failed, and the next row ran. `off`: turned off in agents.json.
 - Add `findings` only for a review or security component.
+- A final review that runs again writes a new line, with `#1` or `#2` after `run` (`appendix/review.md`, `## Findings`). The earlier line stays.
 - The approval list and the completion report copy these lines as they are.
