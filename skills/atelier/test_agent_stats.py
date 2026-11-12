@@ -556,7 +556,7 @@ class EpisodeCostTest(unittest.TestCase):
         (sub / f"agent-{aid}.meta.json").write_text(
             json.dumps({"description": desc, **meta}), encoding="utf-8")
 
-    def run(self, history, run_id=None):
+    def make_run(self, history, run_id=None):
         return {"run_id": run_id or self.RUN_ID, "history": history}
 
     def price(self, model="claude-haiku-5-5"):
@@ -571,7 +571,7 @@ class EpisodeCostTest(unittest.TestCase):
                                                    inp=1, out=2, read=3, w5=40, w1=50)])
         self.agent(main, "t1", "TEST PBI-1 verify", [row("t1", "2026-11-10T00:02:00Z",
                                                          inp=4, out=5, read=6, w5=7, w1=8)])
-        run = self.run([{"seq": 1, "session_id": sid}, {"seq": 2, "session_id": "other"}])
+        run = self.make_run([{"seq": 1, "session_id": sid}, {"seq": 2, "session_id": "other"}])
         data = agent_stats.episode_cost(run, 1, self.prices)
         self.assertEqual(data["method"], "headless")
         p = self.price()
@@ -607,7 +607,7 @@ class EpisodeCostTest(unittest.TestCase):
                    [row("d1", "2026-11-09T00:00:00Z", inp=100, out=100, read=100)])
         self.agent(main, "x1", "PBI-9 build", [row("x1", "2026-11-09T00:00:01Z", inp=100, out=100, read=100)],
                    parentAgentId="d1")
-        data = agent_stats.episode_cost(self.run([{"seq": 2}]), 2, self.prices)
+        data = agent_stats.episode_cost(self.make_run([{"seq": 2}]), 2, self.prices)
         self.assertEqual(data["method"], "transcript")
         self.assertEqual({r: v["requests"] for r, v in data["roles"].items()},
                          {"designer": 1, "worker": 1, "reviewer": 1, "tester": 1, "other": 1})
@@ -622,11 +622,11 @@ class EpisodeCostTest(unittest.TestCase):
         """session_id の会話記録も設計者の meta も無ければ unmeasured。"""
         other = "33333333-3333-4333-8333-333333333333"
         self.session(other, [row("m1", "2026-11-10T00:00:00Z")])
-        for run, seq in [(self.run([]), 1),
-                         (self.run([{"seq": 1}]), 1),
-                         (self.run([{"seq": 1, "session_id": "missing-session"}]), 1),
-                         (self.run([{"seq": 2, "session_id": other}]), 1),  # 別の seq の行は見ない
-                         (self.run([{"seq": 1, "session_id": 90210}]), 1)]:
+        for run, seq in [(self.make_run([]), 1),
+                         (self.make_run([{"seq": 1}]), 1),
+                         (self.make_run([{"seq": 1, "session_id": "missing-session"}]), 1),
+                         (self.make_run([{"seq": 2, "session_id": other}]), 1),  # 別の seq の行は見ない
+                         (self.make_run([{"seq": 1, "session_id": 90210}]), 1)]:
             with self.subTest(seq=seq):
                 self.assertEqual(agent_stats.episode_cost(run, seq, self.prices),
                                  {"method": "unmeasured", "roles": {}})
@@ -640,7 +640,7 @@ class EpisodeCostTest(unittest.TestCase):
         self.agent(main, "w1", "PBI-1 build", [
             row("k1", "2026-11-10T00:01:00Z", inp=10, out=20),
             row("k2", "2026-11-10T00:01:01Z", model="mystery-9", inp=30, out=40)])
-        data = agent_stats.episode_cost(self.run([{"seq": 1, "session_id": sid}]), 1, self.prices)
+        data = agent_stats.episode_cost(self.make_run([{"seq": 1, "session_id": sid}]), 1, self.prices)
         worker = data["roles"]["worker"]
         self.assertIsNone(worker["usd"])
         self.assertEqual((worker["requests"], worker["input"], worker["output"]), (2, 40, 60))
@@ -651,7 +651,7 @@ class EpisodeCostTest(unittest.TestCase):
         sid = "55555555-5555-4555-8555-555555555555"
         self.session(sid, [row("m1", "2026-11-10T00:00:00Z", inp=10, out=20, read=100)])
         with mock.patch.object(agent_stats.common, "load_prices", return_value=self.prices):
-            data = agent_stats.episode_cost(self.run([{"seq": 1, "session_id": sid}]), 1)
+            data = agent_stats.episode_cost(self.make_run([{"seq": 1, "session_id": sid}]), 1)
         self.assertIsInstance(data["roles"]["designer"]["usd"], float)
         self.assertGreater(data["roles"]["designer"]["usd"], 0)
 
