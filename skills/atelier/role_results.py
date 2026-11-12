@@ -20,6 +20,8 @@ bundle  波 n の PBI を <dir>/waves.json から決め、PBI ごとにいちば
             その行に mismatch を付ける
           - 触らない範囲 (unchanged.py の記録) が変わっていないか
           - 作ったモデルが分かり (分からなければ誤り)、reviewer.model と同じなら誤り
+          - その PBI のレビューの回数 (初回の報告と手直しの報告を合わせた数)。上限の REVIEW_ROUNDS 回目で
+            まだ通らない行には limit を付ける。設計者はその PBI を手直しせずに止める (appendix/rework.md)
         表のあとに `bundle: <--out のパス>` を出す。束のファイル (--out) は引き継ぎ用の写しで、schema を持たず、
         check の対象にしない。誤りがあっても束のファイルは書く。
 
@@ -48,6 +50,8 @@ TEST_RESULT = 'atelier.test-result/1'
 EPISODE = 'atelier.episode/1'
 
 SEVERITIES = ('critical', 'major', 'minor')
+# PBI ごとのレビューの上限 (初回の報告と手直しの報告を合わせた回数)。これを超えて繰り返さない
+REVIEW_ROUNDS = 2
 VERDICTS = ('pass', 'fail', 'deferred')
 RECOMMEND = ('pass', 'rework', 'tier-up', 'hold')
 TEST_KINDS = ('wave', 'survey', 'final', 'full')
@@ -466,6 +470,13 @@ def needs_designer(row: dict) -> bool:
             or row['findings'][0] > 0 or row['findings'][1] > 0 or row['mismatch'])
 
 
+def at_limit(row: dict) -> bool:
+    """レビューが上限の回数に達して、まだ通っていない行か。手直しせずに止める。"""
+    if row.get('errors'):
+        return False
+    return row['round'] >= REVIEW_ROUNDS and (row['recommendation'] != 'pass' or bool(row['verify_failed']))
+
+
 def row_line(row: dict) -> str:
     """表の 1 行 (2 つの空白で区切る)。"""
     if row['errors']:
@@ -474,9 +485,12 @@ def row_line(row: dict) -> str:
     # あとに回すコマンドしか無い PBI は verify の JSON が無い。合否ではなく、その旨を列に出す
     verify_column = 'verify: all deferred' if row.get('all_deferred') else f"verify {'fail ' + failed if failed else 'ok'}"
     parts = [row['report'], verify_column, f"unchanged {row['unchanged']}",
-             f"review {row['recommendation']}", 'findings ' + ','.join(str(n) for n in row['findings'])]
+             f"review {row['recommendation']}", 'findings ' + ','.join(str(n) for n in row['findings']),
+             f"round {row['round']}/{REVIEW_ROUNDS}"]
     if row['mismatch']:
         parts.append('mismatch')
+    if at_limit(row):
+        parts.append('limit')
     if needs_designer(row):
         parts.append('open')
     return '  '.join(parts)
@@ -533,6 +547,7 @@ def bundle_row(base: Path, pbi: str) -> dict:
         'findings': [sum(1 for f in review['findings'] if f['severity'] == s) for s in SEVERITIES],
         'reviewer': reviewer,
         'built': built,
+        'round': attempt + 1,
     })
     return row
 

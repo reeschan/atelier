@@ -339,6 +339,31 @@ class FlowCliTest(unittest.TestCase):
             ['review', 'review.pstack-interrogate', 'all', 'run', 'review deep: PBI-002'],
         ])
 
+    def test_heavy_ask_only_in_review_and_left_to_the_designer(self):
+        '''heavy-ask は review の工程だけで使え、--decide は設計者に任せる行 (orchestrator) を出す。'''
+        self.write_route('PBI-001', 'sonnet', 2, 'deep')
+        env = self.install_pstack()
+        with open(os.path.join(self.home, 'workflows', 'jev-routed.json'), encoding='utf-8') as f:
+            custom = json.load(f)
+        custom['stages']['review'] = [{'id': 'review.pstack-interrogate', 'when': 'heavy-ask'}
+                                      if (item if isinstance(item, str) else item['id']) == 'review.pstack-interrogate'
+                                      else item for item in custom['stages']['review']]
+        write_json(os.path.join(self.base, 'workflow.json'), custom)
+        result = self.run_flow('--decide', env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        rows = [line.split('\t') for line in result.stdout.splitlines()[2:]]
+        review = [row for row in rows if row[0] == 'review']
+        self.assertEqual(review, [['review', 'review.pstack-interrogate', 'all', 'orchestrator',
+                                   'heavy-ask: check the heavy criterion, ask at approval, read docs/pbi/adapters.json']])
+
+        bad = copy.deepcopy(custom)
+        bad['stages']['understand'] = [{'id': 'understand.pstack-how', 'when': 'heavy-ask'}]
+        write_json(os.path.join(self.base, 'workflow.json'), bad)
+        result = self.run_flow(env=env)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('error understand: understand.pstack-how uses when heavy-ask, which only the review stage can use',
+                      result.stdout.splitlines())
+
     def test_decide_rejects_bad_routes(self):
         self.write_route('PBI-001', 'opus', 1, 'normal')
         with open(os.path.join(self.base, 'PBI-002.route.json'), 'w', encoding='utf-8') as f:
