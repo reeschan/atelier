@@ -200,9 +200,6 @@ def _run_keys(base: Path):
     return None, None
 
 
-run_keys = _run_keys  # 呼び出し側が、行を書いた時点のキーを先に取っておくための公開名
-
-
 def _once_key(once):
     if not isinstance(once, str) or not once:
         return None
