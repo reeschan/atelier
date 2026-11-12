@@ -1704,7 +1704,7 @@ class ConductorTest(unittest.TestCase):
 
     def go_to_finish(self, goal):
         self.write_json('docs/pbi/waves.json', {'waves': [{'n': 1, 'pbis': ['PBI-001']}]})
-        self.con('start', '--goal', goal)
+        self.con('start', '--goal', goal, '--force')
         for nxt in ({'episode': 'build', 'wave': 1}, {'episode': 'review'}, {'episode': 'finish'}):
             rc, out = self.con('next')
             self.result(out, status='done', next=nxt)
@@ -1737,6 +1737,32 @@ class ConductorTest(unittest.TestCase):
         self.result(out, status='done', next=None, report='docs/pbi/REPORT.md')
         rc, out = self.con('done')
         self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+
+    def test_finish_does_not_start_when_the_old_report_cannot_be_removed(self):
+        """消せない古い REPORT.md (ここではディレクトリ) があれば、finish の出番を起こさずに止まる。"""
+        self.write_json('docs/pbi/waves.json', {'waves': [{'n': 1, 'pbis': ['PBI-001']}]})
+        self.con('start', '--goal', 'stuck report')
+        for nxt in ({'episode': 'build', 'wave': 1}, {'episode': 'review'}, {'episode': 'finish'}):
+            rc, out = self.con('next')
+            self.result(out, status='done', next=nxt)
+            self.con('done')
+        os.makedirs(os.path.join(self.tmp, 'docs', 'pbi', 'REPORT.md', 'inside'))
+        rc, out = self.con('next')
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('cannot remove the old completion report', out)
+
+    def test_report_body_asks_the_caller_for_the_done_memory(self):
+        """報告が report_body から書かれたときだけ、完了の記憶を呼び手に頼む行が出る。"""
+        out = self.go_to_finish('memory line')
+        self.result(out, status='done', next=None, report='docs/pbi/REPORT.md', report_body='# 完了')
+        rc, out = self.con('done')
+        self.assertIn('then: write the done memory', out)
+        out = self.go_to_finish('own report')
+        self.write('docs/pbi/REPORT.md', '# report\n')
+        self.result(out, status='done', next=None, report='docs/pbi/REPORT.md')
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: finished'), out)
+        self.assertNotIn('done memory', out)
 
     def test_start_and_abort_drop_the_last_runs_grill_and_full_run_yes(self):
         """新しい run は前の run の grill の木と通しの「はい」を持ち越さず、abort も「はい」を消す。"""

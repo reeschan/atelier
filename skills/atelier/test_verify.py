@@ -340,6 +340,31 @@ class VerifyEnvAndModesTest(unittest.TestCase):
         self.assertTrue((self.base / 'full-run.approved.json').exists())
         self.assertFalse((self.root / 'ran.txt').exists())
 
+    def test_final_refuses_when_the_approval_went_during_server_start(self):
+        """サーバーを用意するあいだに承認が使われたら (同時に始めた別の --final)、流さずに断る。"""
+        port = free_port()
+        url = f'http://127.0.0.1:{port}/'
+        token = (self.base / 'full-run.approved.json').as_posix()
+        start = (f'{PY} -c "import os;os.remove(\'{token}\')" && '
+                 f'{PY} -m http.server {port} --bind 127.0.0.1')
+        self.settings(final='echo ran > ran.txt', server={'start': start, 'url': url})
+        self.approve_full_run()
+        r = self.run_script('--final')
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('refused: the full-run approval was already used', r.stdout)
+        self.assertFalse((self.root / 'ran.txt').exists())
+        self.assertFalse(answers(url))
+
+    def test_deferred_keeps_finished_results_when_a_later_server_fails(self):
+        """先の deferred を流し終えたあと、次のコマンドのサーバーが立たなくても、先の結果は残る。"""
+        url = f'http://127.0.0.1:{free_port()}/'
+        self.settings(deferred=[{'match': 'echo first'}, {'match': 'echo second', 'server': {'url': url}}])
+        (self.base / 'PBI-001.md').write_text(pbi('echo first', 'echo second'), encoding='utf-8')
+        r = self.run_script('PBI-001', '--deferred')
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn('blocked: server', r.stdout)
+        self.assertEqual(self.results('PBI-001'), {1: 0})
+
     def test_final_without_approval_is_refused(self):
         self.settings(final='echo ran > ran.txt')
         r = self.run_script('--final')

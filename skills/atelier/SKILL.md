@@ -70,6 +70,8 @@ With launch `agent` (headless is below):
 - `full-run`: the run asks whether to run the whole E2E suite once (`appendix/tests-at-end.md`). Run `answer --full-run yes` or `answer --full-run no` by the user's answer; a yes is used up by one full run.
 - Other kinds (`rework-limit`, `destructive`, `send-approval`, `decision`): take the answer as text and run `answer --text`. A `decision` may be a round of grill questions: show it whole and pass the user's answers on as they are.
 
+A finished run whose report came from `report_body` prints `then: write the done memory (appendix/memory.md, Finish)`: write that memory yourself, after the report file exists.
+
 ## Warnings
 
 Any command (`next`, `done`, `run`, `wait`, `status`) may print `warn` lines. Show them as they are.
