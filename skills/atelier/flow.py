@@ -81,7 +81,7 @@ MODEL_SPEC = re.compile(r'(opus|sonnet|haiku|fable|inherit)( (low|medium|high|xh
 # 1 つの部品が同時に起こすサブエージェントの上限
 MAX_MODELS = 10
 WHEN = ('always', 'clearly-complex', 'ask-or-decide', 'adapter-gate', 'tier-opus', 'coupling-high', 'deep',
-        'ui-change', 'ui-retouch', 'user-facing', 'ask-user')
+        'ui-change', 'ui-retouch', 'user-facing', 'ask-user', 'heavy-ask')
 # 画面の見た目の条件は 2 つで 1 組にし、同じ実行で両方は成り立たない (appendix/optional.md)。新しい画面・流れ・方向性は
 # ui-change (design-studio など新しく見た目を作る部品)、いまある画面の見た目の手直しだけなら ui-retouch (unslop など
 # 点検して直す部品)。作る部品と直す部品が同じ回に重なると方向性が二重になるため
@@ -89,6 +89,9 @@ WHEN = ('always', 'clearly-complex', 'ask-or-decide', 'adapter-gate', 'tier-opus
 PER_PBI_WHEN = ('tier-opus', 'coupling-high')
 # 利用者に毎回聞く条件。聞く時点を決めてあるのはオプションの工程だけ (appendix/optional.md)
 OPTIONAL_ONLY_WHEN = ('ask-user',)
+# 重い構成 (新しいアプリケーションを一から作るなど) のときだけ、設計者が基準に当てて利用者に聞く条件。
+# 承認のときに聞くので、承認のあとに動く review の工程だけで使える (appendix/engine.md)
+REVIEW_ONLY_WHEN = ('heavy-ask',)
 COST = ('low', 'mid', 'high')
 EXTERNAL_MEMORY = ('none', 'refs-only')
 # 差し戻しの上限の範囲 (今の上限は 2。5 を超える回数は設計の見直しに回すべき規模)
@@ -306,6 +309,8 @@ def check_item(item, role: str, place: str, components: dict, errors: list, afte
         errors.append(f'{place}: {cid} uses when {effective}, which only a gate after route can decide')
     elif effective in OPTIONAL_ONLY_WHEN and role not in OPTIONAL:
         errors.append(f'{place}: {cid} uses when {effective}, which only an optional stage can use')
+    elif effective in REVIEW_ONLY_WHEN and role != 'review':
+        errors.append(f'{place}: {cid} uses when {effective}, which only the review stage can use')
     if isinstance(item, dict) and 'where' in item and item['where'] not in ENTRY_WHERE:
         errors.append(f'{place}: {cid} where must be one of {", ".join(ENTRY_WHERE)}')
     elif component['where'] == 'runner' and isinstance(item, dict) and 'where' in item:
@@ -419,6 +424,9 @@ def decide_rows(workflow: dict, components: dict, routes: dict) -> list[tuple]:
                 rows.append(('gate after route', cid, pbi, *per_pbi(effective, route)))
     for item in workflow['stages']['review']:
         cid, when = entry(item)
+        if (when or components[cid]['when']) == 'heavy-ask':
+            rows.append(('review', cid, 'all', 'orchestrator',
+                         'heavy-ask: check the heavy criterion, ask at approval, read docs/pbi/adapters.json'))
         if (when or components[cid]['when']) == 'deep':
             deep = [pbi for pbi, route in routes.items() if route.get('review') == 'deep']
             rows.append(('review', cid, 'all', 'run' if deep else 'skip',

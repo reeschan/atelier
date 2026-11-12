@@ -47,10 +47,25 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 | `ui-retouch` | the request only fixes how existing screens look (AI-looking signs, polish), adding no screen or flow. Never with `ui-change` in the same run (`appendix/optional.md`) |
 | `user-facing` | the request adds or changes something end users see or pay for (`appendix/optional.md`) |
 | `ask-user` | the user said yes when asked this run; always ask, never decide alone. Optional stages only (`appendix/optional.md`) |
+| `heavy-ask` | the run is heavy by the criterion in `## Heavy review`, and the user said yes at approval. The review stage only |
 
 A template entry `{"id", "when", "where", "models"}` replaces the component's own `when` and `where` in that template only, and `models` names the models of the subagents the component starts (`## read-skill components`). The component file is shared by every template, so these never go into it. `flow.py` accepts `models` only on an entry whose `where` is `main`, because a subagent cannot start subagents.
 
-The per-PBI values are decided by a script. Once every `route.json` exists, run `python <skill>/flow.py docs/pbi --decide` (with the same `--workflow <name>` as at the start, if any): it prints place, component, PBI, decision (`run`, `skip`, or `orchestrator` for a `when` you decide) and reason, for each row of the gates after route (one per PBI) and for each review row whose `when` is `deep` (PBI `all`). Follow it; do not judge these values yourself.
+The per-PBI values are decided by a script. Once every `route.json` exists, run `python <skill>/flow.py docs/pbi --decide` (with the same `--workflow <name>` as at the start, if any): it prints place, component, PBI, decision (`run`, `skip`, or `orchestrator` for a `when` you decide) and reason, for each row of the gates after route (one per PBI) and for each review row whose `when` is `deep` (PBI `all`). Follow it; do not judge these values yourself. A review row whose `when` is `heavy-ask` comes out as `orchestrator`: decide it as in `## Heavy review`.
+
+## Heavy review
+
+A review component with `when` `heavy-ask` (pstack's `interrogate` in the recommended example) costs much more than the usual review, so it runs only on heavy work, and only when the user says yes.
+
+1. Once every PBI is routed, check the run against the criterion. The run is heavy when any of these holds:
+   - it builds a new application or service from scratch (no app runs yet in the repository, or in the folder it builds in);
+   - it adds a new subsystem with its own data model or external interface, spanning 3 or more modules;
+   - it replaces the architecture of an existing app (a new framework, data store or deployment target).
+
+   A large diff, a `sensitive` PBI or a PBI with review `deep` is not heavy by itself.
+2. Heavy: put the question in the approval draft as an `ask` block under `## 決めること` (`## Decisions`, `appendix/approve.md`): the criterion that holds and why, the reviewers it starts (the entry's `models`), and two choices, the heavy review or the usual review. Not heavy: skip the row without asking.
+3. Save the result in `docs/pbi/adapters.json` as `{"heavy-review": {"heavy": true|false, "reason": "<the criterion, or why none holds>", "decision": "run|skip", "asked": true|false}}`, so a resume does not ask again. With no answer, it does not run.
+4. When it does not run, the next usable row of the review stage runs (`lens-review` in the recommended example).
 
 ## where and memory
 
@@ -124,4 +139,5 @@ stage <stage|gate after stage>: <component> <run|skip|fallback|off> (<reason>) [
 
 - `skip`: its `when` did not hold. `fallback`: it was not usable or failed, and the next row ran. `off`: turned off in agents.json.
 - Add `findings` only for a review or security component.
+- A final review that runs again writes a new line, with `#1` or `#2` after `run` (`appendix/review.md`, `## Findings`). The earlier line stays.
 - The approval list and the completion report copy these lines as they are.
