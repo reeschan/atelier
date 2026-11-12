@@ -58,12 +58,16 @@ With launch `agent` (headless is below):
 
 ## Questions
 
-`next` and `done` end with exit 10 while the run waits on the user: `question: <kind> <path>`, `summary:`, and the `then:`, `approve:` and `revise:` lines.
+`next` and `done` end with exit 10 while the run waits on the user: `question: <kind> <path>`, `summary:`, `confirm:`, and the `then:`, `approve:` and `revise:` lines (`yes:` and `no:` for `full-run`).
 
-- `approve`: show the file at the `question:` path as it is (or through the `confirm` skill when the adapters name one: `appendix/adapters.md` (`## Confirm`); `adapter_gate.py` prints the confirm row), with the `summary:`. Save the user's reply to a file and run `python <skill>/conductor.py answer --reply <file>`.
+- `confirm: skill <name>`: show every question, approve or not, through that skill (Skill tool), even when the adapters say `auto`. Never paste the Markdown in chat instead. A `warn: old name` on the line: pass it on to the user once.
+- `confirm: chat` or `confirm: off`: show the file as it is in chat.
+
+- `approve`: show the file at the `question:` path the way the `confirm:` line says (`appendix/adapters.md`, `## Confirm`), with the `summary:`. Save the user's reply to a file and run `python <skill>/conductor.py answer --reply <file>`.
 - `check-reply exit 4` (a reply with no fence): an approval is `answer --approve --choices ...`, a request to change the list is `answer --revise --text ...`. A revise comes back as a new design episode; that is normal.
 - Exit 3 (the reply does not match the draft) or 5 (a choice left unanswered): show it and ask the user again.
-- Other kinds (`rework-limit`, `destructive`, `send-approval`, `decision`): take the answer as text and run `answer --text`.
+- `full-run`: the run asks whether to run the whole E2E suite once (`appendix/tests-at-end.md`). Run `answer --full-run yes` or `answer --full-run no` by the user's answer; a yes is used up by one full run.
+- Other kinds (`rework-limit`, `destructive`, `send-approval`, `decision`): take the answer as text and run `answer --text`. A `decision` may be a round of grill questions: show it whole and pass the user's answers on as they are.
 
 ## Warnings
 

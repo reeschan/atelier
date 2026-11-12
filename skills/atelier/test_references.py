@@ -60,6 +60,10 @@ OUTSIDE_SKILL_NAMES = {
     'adapters.json',
     # 利用者が入れたプラグインの定義 (component.py が license と link を読む)
     'plugin.json',
+    # 作業リポジトリの決まり (テストの決まりを汲むときに読む)
+    'AGENTS.md',
+    'AGENTS.project.md',
+    'CLAUDE.md',
 }
 
 

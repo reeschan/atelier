@@ -2,11 +2,31 @@
   "enabled": true,
   "deferred": [
     "pnpm run test:unit",
-    "pnpm run check:domain-tests"
+    "pnpm run check:domain-tests",
+    {
+      "match": "cy:run",
+      "when": "end",
+      "timeout": 3600,
+      "server": {
+        "start": "pnpm run start:e2e",
+        "url": "http://localhost:10096/"
+      }
+    }
   ],
   "test_paths": [
     "scripts/verify_*.mts",
     "e2e/cypress/e2e/**"
   ],
-  "principle": "principle-test-behavior-not-implementation"
+  "principle": "principle-test-behavior-not-implementation",
+  "server": {
+    "start": "pnpm run start:e2e",
+    "url": "http://localhost:10096/"
+  },
+  "investigate": "cd e2e && pnpm exec cypress run --spec {specs}",
+  "final": "cd e2e && pnpm run cy:run:parallel",
+  "limits": {
+    "per_spec": 900,
+    "retries": 2,
+    "idle": 600
+  }
 }

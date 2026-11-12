@@ -30,6 +30,18 @@ Read `docs/pbi/notes/map.md` and `docs/pbi/notes/survey.md` when they exist (`ap
 2. Then write `docs/specs/<slug>.md` yourself, where `<slug>` is a short lowercase name for the work. Headings, in this order: Problem Statement, Solution, User Stories, Implementation Decisions, Testing Decisions, Out of Scope, Further Notes. The design skills decide; they do not write the spec.
 3. When `design.builtin` is the one picked (no design skill in the skill list), write the decisions you made in the same file. Record `run` when the template has no design skill, or `fallback (<skill> not in the skill list)`.
 
+## Design: grill
+
+A run that designs (the design step `run`) always grills, with or without a design skill: the user answers every question of the design tree, and you answer none of them. When `mattpocock-skills:grilling` is in the skill list, follow its method for the questions; otherwise follow the steps here.
+
+1. Keep the tree in `docs/pbi/notes/grill.json` (schema `atelier.grill/1`): `rounds` (each `{"n", "questions": [{"id", "question", "recommended", "answer", "answered_in"}]}`), `frontier` (the open questions that wait on earlier answers) and `aligned` / `aligned_in`.
+2. A round is every question whose prerequisites are settled. Write it to `docs/pbi/notes/grill-<n>.md`: number each question (`Q1`, `Q2`, ...), give the choices and your recommended answer, and word it so that "yes" takes the recommendation. Facts you can look up are not questions: look them up.
+3. End the episode with a question (kind `decision`, with `state`, its path the round file). The next launch has the `Answer:` line: copy each answer into `answer`, and the `Answer:` path into `answered_in`. Never write an answer the user did not give, and never close a question as "decided in the spec".
+4. Recompute the frontier from the answers and ask the next round, until the frontier is empty. Then ask once whether the understanding is shared (kind `decision`); its `Answer:` path goes into `aligned_in`, with `aligned: true`.
+5. Only then write the spec and go on. `done` refuses an approve question while a question has no answer from an `Answer:` file, the frontier is not empty, or `aligned_in` is missing.
+
+The unknowns below are the points the grill did not reach; in a run that grills, ask them in a round too.
+
 ## Design: unknowns
 
 An unknown is a point the request and the code do not settle (a behaviour, a boundary, a name the user expects). The user knows the answer, so you ask rather than assume.

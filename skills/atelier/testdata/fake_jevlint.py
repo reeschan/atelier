@@ -2,6 +2,8 @@
 
 ファイルの中の行で結果を決める: `score: N` (点、既定 90)、`fn: N` (その長さの関数)、`bug: X` (bug-hunt の合致、既定 0.9)。
 呼ばれるたびに FAKE_JEVLINT_LOG に {"args", "cwd", "path0" (PATH の先頭)} を 1 行足す。FAKE_JEVLINT_KEYS が空なら auth list に typesafe を出さない。
+FAKE_JEVLINT_DRY_RUN で audit --dry-run の要約の形を変える: pinned (後ろに pinned の文が続く)、no-cost (費用が無い)、
+local (送り先が無く、手元で判定する)。空なら費用付きの形。
 """
 import json
 import os
@@ -49,8 +51,13 @@ def main(args):
     if '--dry-run' in args:
         for f in files:
             print(f'  {f}')
-        print(f'\n {len(files)} files, about {1000 * len(files):,} tokens (about ${0.01 * len(files):.4f}), '
-              'would be sent to typesafe.')
+        form = os.environ.get('FAKE_JEVLINT_DRY_RUN', '')
+        if form == 'local':
+            print(f'\n {len(files)} files would be analysed locally, and nothing would be sent.')
+            return 0
+        cost = '' if form == 'no-cost' else f' (about ${0.01 * len(files):.4f})'
+        tail = ' 5 files pinned, blank or cached, and not counted.' if form == 'pinned' else ''
+        print(f'\n {len(files)} files, about {1000 * len(files):,} tokens{cost}, would be sent to typesafe.{tail}')
         return 0
     ast_only = '--ast-only' in args
     print(json.dumps({'root': os.getcwd(), 'provider': 'typesafe', 'score': 80,

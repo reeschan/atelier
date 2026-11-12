@@ -49,6 +49,8 @@ import time
 import uuid
 from pathlib import Path
 
+import adapter_gate
+import agents as agents_module
 import common
 import claude_run
 import design_record
@@ -936,10 +938,30 @@ def episode_line(item: dict) -> str:
     return line + (f" wave {item['wave']}" if item.get('wave') is not None else '')
 
 
+def confirm_line() -> str:
+    """問いの見せ方の 1 行。confirm のスキルが入っていれば auto でも必ずそれで見せる (SKILL.md の Questions)。"""
+    try:
+        settings, _warnings = agents_module.load_adapters(common.resolve_home(None))
+        skills = Path(os.environ.get('ATELIER_SKILLS_DIR') or Path.home() / '.claude' / 'skills')
+        _setting, kind, reason = adapter_gate.confirm_row(settings['confirm'], skills, os.environ)
+    except (OSError, KeyError, ValueError):
+        return 'confirm: chat'
+    if kind != 'skill':
+        return f'confirm: {kind}'
+    name = reason.split(' found at ', 1)[0]
+    if name == agents_module.CONFIRM_SKILL_OLD:
+        return f'confirm: skill {name} (warn: old name, rename it to {agents_module.CONFIRM_SKILL})'
+    return f'confirm: skill {name}'
+
+
 def question_lines(run: dict) -> list:
     q = run.get('question') or {}
-    lines = ['state: question', f"question: {q.get('kind')} {q.get('path')}", f"summary: {fold(q.get('summary'), SUMMARY_MAX)}"]
-    if q.get('kind') == 'approve':
+    lines = ['state: question', f"question: {q.get('kind')} {q.get('path')}", f"summary: {fold(q.get('summary'), SUMMARY_MAX)}",
+             confirm_line()]
+    if q.get('kind') == 'full-run':
+        lines.append('yes: ' + command('answer', '--full-run', 'yes'))
+        lines.append('no: ' + command('answer', '--full-run', 'no'))
+    elif q.get('kind') == 'approve':
         lines.append('then: ' + command('answer', '--reply', 'F'))
         lines.append('approve: ' + command('answer', '--approve', '[--choices 1=a,2=b]'))
         lines.append('revise: ' + command('answer', '--revise', '--text', '"..."'))
@@ -1331,7 +1353,7 @@ def process_done(paths: Paths, run: dict) -> tuple:
     summary = data.get('summary')
     if errors:
         return fail(paths, run, running, '; '.join(errors), 'invalid', summary)
-    stale = stale_envelope(data)
+    stale = stale_envelope(data) or grill_open(paths, run, data)
     if stale:
         return fail(paths, run, running, stale, 'invalid', summary)
     code, lines = settle_result(paths, run, running, data, summary)
@@ -1365,6 +1387,43 @@ def stale_envelope(data: dict) -> str:
     if match.group(1) != design_record.draft_hash(draft):
         return (f'approve draft changed after its envelope: {path} (reply-meta-draft_hash does not match; '
                 'add the envelope last, with design_record.py markdown)')
+    return ''
+
+
+GRILL = 'atelier.grill/1'
+
+
+def grill_open(paths: Paths, run: dict, data: dict) -> str:
+    """承認の問いを出す結果で、grill の設計の木 (notes/grill.json) に答えの無い問いが残っていれば、その説明。
+
+    grill.json が無い run (設計をしない run) は見ない。問いには持ち主だけが答える: どの答えも、この run の
+    answer が書いたファイル (answered_in) から来ていなければ、答えの無い問いとして数える。
+    """
+    question = data.get('question') if isinstance(data.get('question'), dict) else {}
+    if data.get('status') != 'question' or question.get('kind') != 'approve':
+        return ''
+    path = paths.base / 'notes' / 'grill.json'
+    if not path.exists():
+        return ''
+    tree = common.load_json(path)
+    if not isinstance(tree, dict) or tree.get('schema') != GRILL:
+        return f'grill tree broken: {path.as_posix()} (schema {GRILL})'
+    answered = {Path(row['path']).as_posix() for row in run.get('answers') or []
+                if isinstance(row, dict) and isinstance(row.get('path'), str)}
+
+    def from_owner(item: dict, key: str) -> bool:
+        return isinstance(item.get(key), str) and Path(item[key]).as_posix() in answered
+
+    open_ids = [str(item.get('id')) for rnd in tree.get('rounds') or [] if isinstance(rnd, dict)
+                for item in rnd.get('questions') or [] if isinstance(item, dict)
+                and not (isinstance(item.get('answer'), str) and item['answer'].strip()
+                         and from_owner(item, 'answered_in'))]
+    if open_ids:
+        return f"grill has unanswered questions: {', '.join(open_ids[:8])} (ask them as a decision question first)"
+    if tree.get('frontier'):
+        return 'grill frontier is not empty: ask the next round before approve'
+    if tree.get('aligned') is not True or not from_owner(tree, 'aligned_in'):
+        return 'grill is not aligned: ask the owner whether the understanding is shared before approve'
     return ''
 
 
@@ -1408,6 +1467,15 @@ def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -
                           'continue_from': state_path, 'answer': None,
                           'conductor_answer': None, 'sent_by': running.get('sent_by')}
     elif episode == 'finish':
+        report = Path(data['report'])
+        if not report.is_file():
+            body = data.get('report_body')
+            if not isinstance(body, str) or not body.strip():
+                return fail(paths, run, running, f"completion report not found: {data['report']} "
+                            '(write it, or give its text in report_body)', 'invalid', summary)
+            # サブエージェントが報告の .md を書けないとき、本文を受けて conductor が書く
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(body if body.endswith('\n') else body + '\n', encoding='utf-8', newline='\n')
         history_add(run, running, status, summary)
         run['failures'] = None
         run['handoff'] = None
@@ -1592,13 +1660,18 @@ def checked_reply(paths: Paths, run: dict, q: dict, answer: Path):
     return check_reply(paths, answer, q['path'])
 
 
+def full_run_token(paths: Paths) -> Path:
+    """通しへの持ち主の「はい」。verify.py --final はこれが無ければ流さず、流し始めに消す。"""
+    return paths.base / 'full-run.approved.json'
+
+
 def cmd_answer(args, paths: Paths) -> int:
-    given = [x is not None for x in (args.reply, args.text)]
+    given = [x is not None for x in (args.reply, args.text, args.full_run)]
     if args.approve:
         if any(given) or args.revise:
             raise Refused('--approve takes no --reply, --text or --revise')
     elif sum(given) != 1:
-        raise Refused('give one of --reply or --text (or --approve)')
+        raise Refused('give one of --reply, --text or --full-run (or --approve)')
     if args.choices is not None and not args.approve:
         raise Refused('--choices goes with --approve')
     choices = parse_choices(args.choices)
@@ -1614,6 +1687,9 @@ def cmd_answer(args, paths: Paths) -> int:
         kind = q['kind']
         if (args.approve or args.revise) and kind != 'approve':
             raise Refused(f'--approve and --revise answer only an approve question (this one is {kind})')
+        if (args.full_run is not None) != (kind == 'full-run'):
+            raise Refused('--full-run answers only a full-run question, and a full-run question takes only '
+                          f'--full-run (this one is {kind})')
         answer = paths.answers / f"{q['seq']}-{kind}.md"
         answer.parent.mkdir(parents=True, exist_ok=True)
         if args.approve:
@@ -1623,6 +1699,14 @@ def cmd_answer(args, paths: Paths) -> int:
                 shutil.copyfile(args.reply, answer)
             except OSError as error:
                 raise Refused(f'{args.reply}: {error}')
+        elif args.full_run is not None:
+            answer.write_text(f'full-run: {args.full_run}\n', encoding='utf-8', newline='\n')
+            # 「はい」は 1 回の通しで使い切る: verify.py --final が読んで消す。「いいえ」は前の「はい」も消す
+            token = full_run_token(paths)
+            if args.full_run == 'yes':
+                token.write_text(json.dumps({'seq': q['seq'], 'at': iso_now()}) + '\n', encoding='utf-8')
+            else:
+                token.unlink(missing_ok=True)
         else:
             text = args.text
             answer.write_text(text if text.endswith('\n') else text + '\n', encoding='utf-8', newline='\n')
@@ -1684,7 +1768,7 @@ def status_lines(run: dict) -> list:
             lines += ['stale: no live runner', 'relaunch: ' + command('next', '--relaunch')]
     elif state == 'question':
         q = run.get('question') or {}
-        lines += [episode_line(q), f"question: {q.get('kind')} {q.get('path')}"]
+        lines += [episode_line(q), f"question: {q.get('kind')} {q.get('path')}", confirm_line()]
     elif state in ('ready', 'retry'):
         pending = run.get('pending') or {}
         lines.append(episode_line(dict(pending, seq=int(run.get('seq') or 0) + 1)))
@@ -2325,6 +2409,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument('--reply', help='答えのファイル')
     p.add_argument('--text', help='答えの文')
     p.add_argument('--approve', action='store_true', help='承認の問いを承認する (返信の囲みは進行役が組む)')
+    p.add_argument('--full-run', choices=('yes', 'no'), help='通しを流すかの問いに答える (yes は 1 回の通しで使い切る)')
     p.add_argument('--choices', help='--approve の選択 (1=a,2=b)')
     p.add_argument('--revise', action='store_true', help='承認の問いを「直してほしい」として閉じる (--text か --reply)')
     p = add('run', 'headless で出番を回す (claude -p で設計者を起こし、依頼文→起動→done を繰り返す)')
