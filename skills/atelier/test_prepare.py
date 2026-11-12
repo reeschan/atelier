@@ -5,7 +5,9 @@ prepare.py を別プロセスで起動する。テンプレートの home は別
 sensitive の PBI には brief の応答だけを置く (pbi_quality は送られないので Jev は呼ばれない)。
 --only は応答があっても Jev を呼び直すので、資格情報を無いことにして即座に失敗させる。
 """
+import contextlib
 import datetime
+import io
 import json
 import os
 import shutil
@@ -282,6 +284,69 @@ class PrepareTest(unittest.TestCase):
             self.assertEqual(f.read(), before)
         self.assertEqual(self.route('PBI-001')['tier'], 'sonnet')
         self.assertNotIn('Jev 失敗', rows(out)[0])
+
+    # --- --only と override ---
+
+    def test_only_rewrites_only_that_route(self):
+        self.use_home(app=None)
+        self.add_pbi('PBI-001')
+        self.add_pbi('PBI-002')
+        self.assertEqual(self.run_prepare('--now', NOW).returncode, 0)
+        path = os.path.join(self.base, 'PBI-001.route.json')
+        stale = {**self.route('PBI-001'), 'tier': 'opus'}
+        write_json(path, stale)
+        out = self.run_prepare('--now', NOW, '--only', 'PBI-002')
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.route('PBI-001'), stale)
+
+    def test_prepare_keeps_an_override_route(self):
+        self.use_home(app=None)
+        self.add_pbi('PBI-001')
+        self.assertEqual(self.run_prepare('--now', NOW).returncode, 0)
+        steps = [{'runner': 'codex', 'model': 'gpt-6.1-terra', 'effort': None}]
+        pinned = {**self.route('PBI-001'), 'route': steps, 'override': {'route': steps, 'why': 'goal'}}
+        write_json(os.path.join(self.base, 'PBI-001.route.json'), pinned)
+        out = self.run_prepare('--now', NOW)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.route('PBI-001'), pinned)
+        self.assertEqual(cells(rows(out)[0])[2], 'codex gpt-6.1-terra')
+
+    def test_prepare_passes_the_pbis_it_prepares_with_only(self):
+        self.use_home(app=None)
+        self.add_pbi('PBI-001')
+        self.add_pbi('PBI-002')
+        seen = []
+        real = prepare.subprocess.run
+
+        def spy(cmd, *a, **k):
+            if any(str(c).endswith('select_model.py') for c in cmd):
+                seen.append(cmd)
+            return real(cmd, *a, **k)
+
+        argv = sys.argv
+        sys.argv = ['prepare.py', self.base, '--home', self.home, '--now', NOW]
+        try:
+            prepare.subprocess.run = spy
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare.main()
+        finally:
+            prepare.subprocess.run = real
+            sys.argv = argv
+        self.assertEqual(len(seen), 1)
+        cmd = seen[0]
+        self.assertEqual(cmd[cmd.index('--only') + 1], 'PBI-001,PBI-002')
+
+    def test_only_with_an_unknown_pbi_exits_and_rewrites_nothing(self):
+        self.use_home(app=None)
+        self.add_pbi('PBI-001')
+        self.assertEqual(self.run_prepare('--now', NOW).returncode, 0)
+        path = os.path.join(self.base, 'PBI-001.route.json')
+        stale = {**self.route('PBI-001'), 'tier': 'opus'}
+        write_json(path, stale)
+        out = self.run_prepare('--now', NOW, '--only', 'PBI-999')
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn('PBI-999', out.stderr)
+        self.assertEqual(self.route('PBI-001'), stale)
 
     def test_tier_without_only_exits_nonzero(self):
         self.use_home(app=None)

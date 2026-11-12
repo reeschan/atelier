@@ -18,6 +18,8 @@
 - 表の列「補正後の値」は route.json の scores、「理由」は reasons[0] から「決定: 」を除いたもの、
   「外した手順」は route.json の dropped を `<runner> <model> (<理由>)` の `; ` つなぎにする。
   「route の先頭」は common.step_label
+- select_model.py には準備する PBI を常に --only で渡す (--only の指定があればそれと route.json がまだ無い PBI。
+  --tier のときは指定だけ。指定が無ければ全部)。route.json に override (goal で指定した route) があれば select_model.py がそのまま残す
 - --tier は --only と一緒のときだけ受け付け、select_model.py に --only と一緒に渡す (tier up で route.json を書き直す)
 - --home・--now はテンプレートの home (templates.resolve_home) と今の時刻 (templates.parse_time)。select_model.py にもそのまま渡す
 """
@@ -181,6 +183,9 @@ def main():
         shutil.copy(HERE / "jev.config.template.json", config)
     only = {p for p in args.only.split(",") if p}
     pbis = sorted(p.name.removesuffix(".facts.json") for p in base.glob("PBI-*.facts.json"))
+    unknown = sorted(only - set(pbis))
+    if unknown:
+        sys.exit(f"--only に facts の無い PBI がある: {', '.join(unknown)}")
     missing = [p for p in pbis if not (base / f"{p}.brief.md").exists() or not (base / f"{p}.md").exists()]
     if missing:
         sys.exit(f"brief.md か PBI 本文が無い: {', '.join(missing)}")
@@ -209,8 +214,19 @@ def main():
         cmd += ["--home", args.home]
     if args.now:
         cmd += ["--now", args.now]
+    # 準備する PBI を常に --only で渡す。--only の指定があればそれと route.json がまだ無い PBI (--tier のときは
+    # 指定だけ)、無ければ全部。ほかの PBI の route.json と、override のある route.json は select_model.py が書き直さない
     if args.tier:
-        cmd += ["--only", args.only, "--tier", args.tier]
+        targets = sorted(only)
+    elif only:
+        targets = [p for p in pbis if p in only or not (base / f"{p}.route.json").exists()]
+    else:
+        targets = pbis
+    if not targets:
+        sys.exit("準備する PBI が無い")
+    cmd += ["--only", ",".join(targets)]
+    if args.tier:
+        cmd += ["--tier", args.tier]
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", creationflags=NO_WINDOW)
     if r.returncode != 0:
         sys.exit(f"select_model.py が失敗した: {r.stderr[-500:]}")

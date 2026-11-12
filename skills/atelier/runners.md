@@ -98,10 +98,11 @@ PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<skill>/opencode.config.json" opencode ru
 
 ```bash
 mkdir -p docs/pbi/codex
-codex exec -m <model> -c model_reasoning_effort='"<effort>"' -s workspace-write -o docs/pbi/codex/<report>.last.md - < docs/pbi/codex/<report>.prompt.md > docs/pbi/codex/<report>.log 2>&1
+codex -a never exec -m <model> -c model_reasoning_effort='"<effort>"' -s danger-full-access -o docs/pbi/codex/<report>.last.md - < docs/pbi/codex/<report>.prompt.md > docs/pbi/codex/<report>.log 2>&1
 ```
 
 - `-o` writes the last message (the 5 lines of `worker.md`) to `.last.md`.
+- `-s danger-full-access` is the same sandbox as the roles (`runner_cli.codex_args`): `workspace-write` blocks the user's toolchain (fnm's Node, pnpm, uv's Python, Biome), so the worker cannot run its own verify commands. Use `-s workspace-write` only when the user asks to narrow it, and say in the PBI's Notes that the reviewer runs the verify commands.
 - Use the route's effort, never above `high` (no xhigh or max).
 - Put this line in the prompt, before `How to work and report:`, so that Japanese and other non-ASCII text survives on Windows:
 

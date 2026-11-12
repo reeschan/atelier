@@ -270,16 +270,21 @@ class AdapterGateTest(unittest.TestCase):
         return path.replace(os.sep, '/')
 
     def test_confirm_auto_uses_chat_until_the_skill_is_installed(self):
-        """auto は answer-me-with-html。無ければ chat で、何も入れない。"""
+        """auto は answer-me-with-any。古い名前しか無ければそれを使い、どちらも無ければ chat で、何も入れない。"""
         self.write_numstat()
         rows = self.table(self.gate())
         self.assertRow(rows, 'confirm', 'auto', 'chat',
-                       'answer-me-with-html not installed; show the same Markdown in chat (no install, no CLI)')
+                       'answer-me-with-any not installed; show the same Markdown in chat (no install, no CLI)')
         self.assertEqual(os.listdir(self.skills), [])
-        found = self.touch_skill(self.skills, 'answer-me-with-html')
+        old = self.touch_skill(self.skills, 'answer-me-with-html')
         rows = self.table(self.gate())
         self.assertRow(rows, 'confirm', 'auto', 'skill',
-                       f'answer-me-with-html found at {found}; use it only if it is in the skill list')
+                       f'answer-me-with-html found at {old} (old name; rename it to answer-me-with-any); '
+                       'use it only if it is in the skill list')
+        found = self.touch_skill(self.skills, 'answer-me-with-any')
+        rows = self.table(self.gate())
+        self.assertRow(rows, 'confirm', 'auto', 'skill',
+                       f'answer-me-with-any found at {found}; use it only if it is in the skill list')
 
     def test_confirm_skill_name_and_plugin_skill(self):
         self.write_numstat()

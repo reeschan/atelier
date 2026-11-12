@@ -533,6 +533,72 @@ class AllOnlyTest(unittest.TestCase):
             self.write_pbi(d, 'PBI-001', SMALL)
             self.assertNotEqual(self.run_all(d, '--only', 'PBI-999').returncode, 0)
 
+    def test_only_without_tier_rewrites_only_those_routes(self):
+        with temp_dir() as d:
+            for name in ('PBI-001', 'PBI-002'):
+                self.write_pbi(d, name, SMALL)
+            self.assertEqual(self.run_all(d).returncode, 0)
+            stale = {'tier': 'opus', 'route': [{'runner': 'agent', 'model': 'opus', 'effort': None}]}
+            for name in ('PBI-001', 'PBI-002'):
+                with open(os.path.join(d, f'{name}.route.json'), 'w', encoding='utf-8') as f:
+                    json.dump(stale, f)
+            out = self.run_all(d, '--only', 'PBI-002')
+            self.assertEqual(out.returncode, 0, out.stderr)
+            with open(os.path.join(d, 'PBI-001.route.json'), encoding='utf-8') as f:
+                self.assertEqual(json.load(f), stale)
+            with open(os.path.join(d, 'PBI-002.route.json'), encoding='utf-8') as f:
+                self.assertEqual(json.load(f)['tier'], 'haiku')
+
+    def run_override(self, base, *extra):
+        return subprocess.run([sys.executable, SCRIPT, '--override', 'PBI-001', '--dir', base, '--now', NOW, *extra],
+                              capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              env=env_with_agents(base))
+
+    def test_override_pins_the_route_and_all_keeps_it(self):
+        with temp_dir() as d:
+            for name in ('PBI-001', 'PBI-002'):
+                self.write_pbi(d, name, SMALL)
+            self.assertEqual(self.run_all(d).returncode, 0)
+            out = self.run_override(d, '--route', 'codex/gpt-6.1-terra@high,agent/sonnet', '--why', 'goal')
+            self.assertEqual(out.returncode, 0, out.stderr)
+            with open(os.path.join(d, 'PBI-001.route.json'), encoding='utf-8') as f:
+                pinned = json.load(f)
+            steps = [{'runner': 'codex', 'model': 'gpt-6.1-terra', 'effort': 'high'},
+                     {'runner': 'agent', 'model': 'sonnet', 'effort': None}]
+            self.assertEqual((pinned['route'], pinned['override'], pinned['tier']),
+                             (steps, {'route': steps, 'why': 'goal'}, 'haiku'))
+            self.assertTrue(pinned['reasons'][0].startswith('決定: override'))
+            again = self.run_all(d)
+            self.assertEqual(again.returncode, 0, again.stderr)
+            self.assertIn('keep PBI-001: override', again.stdout)
+            self.assertNotIn('| PBI-001 |', again.stdout)
+            with open(os.path.join(d, 'PBI-001.route.json'), encoding='utf-8') as f:
+                self.assertEqual(json.load(f), pinned)
+
+    def test_override_keeps_a_model_with_a_slash(self):
+        with temp_dir() as d:
+            self.write_pbi(d, 'PBI-001', SMALL)
+            out = self.run_override(d, '--route', 'opencode/opencode-go/deepseek-v4.1-flash')
+            self.assertEqual(out.returncode, 0, out.stderr)
+            with open(os.path.join(d, 'PBI-001.route.json'), encoding='utf-8') as f:
+                self.assertEqual(json.load(f)['override']['route'],
+                                 [{'runner': 'opencode', 'model': 'opencode-go/deepseek-v4.1-flash', 'effort': None}])
+
+    def test_override_keeps_a_sensitive_pbi_on_the_agent(self):
+        with temp_dir() as d:
+            self.write_pbi(d, 'PBI-001', {**SMALL, 'sensitive': True})
+            out = self.run_override(d, '--route', 'codex/gpt-6.1-terra')
+            self.assertNotEqual(out.returncode, 0)
+            self.assertIn('sensitive', out.stderr)
+            self.assertFalse(os.path.exists(os.path.join(d, 'PBI-001.route.json')))
+            self.assertEqual(self.run_override(d, '--route', 'agent/sonnet').returncode, 0)
+
+    def test_override_with_an_unknown_runner_fails(self):
+        with temp_dir() as d:
+            self.write_pbi(d, 'PBI-001', SMALL)
+            self.assertNotEqual(self.run_override(d, '--route', 'nope/model').returncode, 0)
+            self.assertFalse(os.path.exists(os.path.join(d, 'PBI-001.route.json')))
+
 
 class FindCliOnceTest(unittest.TestCase):
     """--all は agents.json を 1 回だけ読み、CLI の場所も runner ごとに 1 回だけ求める。"""

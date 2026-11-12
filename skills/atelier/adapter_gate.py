@@ -14,7 +14,7 @@ route.json が無い・読めない PBI は deep、facts.json が無い・読め
 
 review は diff が 300 行以下・PBI が 2 件以下・deep も sensitive も無い、のすべてで skip。ほかは run。
 security は sensitive か deep の PBI が 1 件でもあれば run。design はスクリプトでは決めず manual。
-confirm は Approve の見せ方 (appendix/adapters.md、`## Confirm`)。auto は answer-me-with-html、スキル名はそのスキルを
+confirm は Approve の見せ方 (appendix/adapters.md、`## Confirm`)。auto は answer-me-with-any (古い名前 answer-me-with-html しか無ければそれ)、スキル名はそのスキルを
 --skills-dir (無ければ ~/.claude/skills) かプラグインの置き場 (<プラグイン>:<スキル>) で探し、あれば skill、無ければ chat
 (同じ Markdown をチャットに出す)。どちらでも何も入れない・作らない。off は今までどおりの一覧だけ。
 設定が off のフェーズは判定にかかわらず off で、理由は turned off in agents.json。
@@ -115,6 +115,11 @@ def confirm_row(setting, skills_dir, env) -> tuple:
     found = flow.find_skill_file(name, skills_dir, env)
     if found:
         return setting, 'skill', f'{name} found at {found.as_posix()}; use it only if it is in the skill list'
+    old = agents_module.CONFIRM_SKILL_OLD
+    found = flow.find_skill_file(old, skills_dir, env) if setting == 'auto' else None
+    if found:
+        return setting, 'skill', (f'{old} found at {found.as_posix()} (old name; rename it to {name}); '
+                                  'use it only if it is in the skill list')
     return setting, 'chat', f'{name} not installed; show the same Markdown in chat (no install, no CLI)'
 
 
