@@ -749,6 +749,23 @@ def attempt_data(row: dict) -> dict:
     }
 
 
+def run_snapshot(base: Path):
+    """<base>/conductor/run.json を 1 回だけ読み、(行の run_id, (イベントの run_id, seq)) を返す。
+
+    行の run_id は、無い・読めないときに none。イベントのキーは、無い・型が違うときに None。
+    """
+    try:
+        run = json.loads((base / 'conductor' / 'run.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        return 'none', (None, None)
+    if not isinstance(run, dict):
+        return 'none', (None, None)
+    run_id = run.get('run_id') if isinstance(run.get('run_id'), str) and run.get('run_id') else None
+    seq = run.get('seq')
+    seq = seq if isinstance(seq, int) and not isinstance(seq, bool) else None
+    return run_id or 'none', (run_id, seq)
+
+
 def run_id_of(base: Path) -> str:
     """<base>/conductor/run.json の run_id。無い・読めないときは none。"""
     try:
@@ -793,11 +810,9 @@ def main():
     pbi, rework = m.group(1), int(m.group(2) or 0)
     cwd = Path.cwd().resolve()
     base = Path(args.dir)
-    # この行を記録した run。あとで別の run から読んでも attempt の unit_id を再現できるよう行に残す
-    run_id = run_id_of(base)
-    # イベントの結び付けキーは、行と同じ時点の run.json から取る (あとで start --force が run.json を
-    # 入れ替えても、この attempt は記録した run に付いたままにする)
-    event_keys = events.run_keys(base) if events is not None else (None, None)
+    # この行を記録した run。行の run_id・unit_id とイベントの run_id・seq は、run.json を 1 回だけ読んだ
+    # 同じ写しから取る (読む間に start --force が run.json を入れ替えても、どれも同じ run を指す)
+    run_id, event_keys = run_snapshot(base)
     runs = base / 'runs.jsonl'
     if any(r.get('report') == args.report and r.get('attempt') == args.attempt for r in read_rows(runs)):
         fail(f'{args.report} の attempt {args.attempt} は記録済み (runs.jsonl)')

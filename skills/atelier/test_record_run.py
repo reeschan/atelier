@@ -587,6 +587,41 @@ class RecordRunTest(unittest.TestCase):
         self.assertEqual(ids[0], ids[1])
         self.assertNotEqual(ids[0], ids[2])
 
+    def test_run_json_replaced_after_the_snapshot_keeps_row_and_event_on_one_run(self):
+        """run.json を読んだ直後に別の run へ入れ替わっても、行・unit_id・イベントは読んだ run に付く。"""
+        from unittest import mock
+        import record_run
+        run = self.pbi / 'conductor' / 'run.json'
+        run.parent.mkdir()
+        run.write_text(json.dumps({'run_id': 'old-run', 'seq': 4}), encoding='utf-8')
+        self.write_opencode('PBI-007', [])
+        real = record_run.run_snapshot
+
+        def snapshot_then_replace(base):
+            got = real(base)
+            run.write_text(json.dumps({'run_id': 'new-run', 'seq': 9}), encoding='utf-8')
+            return got
+
+        env = {'PYTHONUTF8': '1', 'HARNESS_LOG_CONFIG': str(self.tmp / 'harness-log.json'),
+               'PBI_RUNS_ARCHIVE': str(self.archive)}
+        argv = [RECORD, 'PBI-007', '--attempt', '1', '--outcome', 'pass', '--projects', str(self.projects),
+                '--home', str(self.price_home)]
+        before = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            with mock.patch.object(record_run, 'run_snapshot', snapshot_then_replace),                     mock.patch.dict(os.environ, env), mock.patch.object(sys, 'argv', argv),                     mock.patch('sys.stdout'):
+                try:
+                    record_run.main()
+                except SystemExit as exit_:
+                    self.assertIn(exit_.code, (0, None))
+        finally:
+            os.chdir(before)
+        [row] = self.rows()
+        [event] = self.attempts()
+        self.assertEqual(row['run_id'], 'old-run')
+        self.assertEqual(event['unit_id'], 'at:old-run:PBI-007:1')
+        self.assertEqual((event['run_id'], event['seq']), ('old-run', 4))
+
     def test_attempted_event_unit_id_uses_the_run_and_the_report(self):
         (self.pbi / 'conductor').mkdir()
         run = self.pbi / 'conductor' / 'run.json'
