@@ -3,6 +3,7 @@
 testdata/design/ の返信 (reply-*.md) は answer-me-with-any (8856dde) の replyText と withReplyMeta で作ったもの。
 同じフォルダの pbi/design-record.json と draft.md に対する封筒が付いている。HTML の生成や skill の手順は起動しない。
 """
+import hashlib
 import json
 import os
 import re
@@ -64,6 +65,109 @@ class DesignRecordTest(unittest.TestCase):
     def check(self, reply_name, *extra):
         return self.run_cli('check-reply', '--reply', self.path(reply_name), *extra)
 
+    # 一時 git リポジトリ (work・stale・slice は git のリポジトリのルートで動かす)
+
+    @property
+    def repo(self):
+        """1 コミットだけある一時 git リポジトリ (src/a.txt と src/b.txt)。使うテストだけが作る。"""
+        if not hasattr(self, '_repo'):
+            self._repo = tempfile.mkdtemp(prefix='design-record-repo-')
+            self.addCleanup(shutil.rmtree, self._repo, **self.rmtree_options())
+            self.git('init', '-q')
+            os.makedirs(self.repo_path('src'))
+            for name in ('a.txt', 'b.txt'):
+                with open(self.repo_path('src', name), 'w', encoding='utf-8', newline='\n') as f:
+                    f.write(f'{name}\n')
+            self.git('add', '.')
+            self.git('-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false',
+                     'commit', '-q', '-m', 'first')
+        return self._repo
+
+    @staticmethod
+    def rmtree_options():
+        """git が読み取り専用で作るファイルも消す (Windows)。"""
+        def make_writable(func, path, _):
+            os.chmod(path, 0o700)
+            func(path)
+        return {'onexc' if sys.version_info >= (3, 12) else 'onerror': make_writable}
+
+    def git(self, *args):
+        done = subprocess.run(['git', *args], cwd=self.repo, capture_output=True, stdin=subprocess.DEVNULL)
+        stdout, stderr = done.stdout.decode('utf-8', errors='replace'), done.stderr.decode('utf-8', errors='replace')
+        self.assertEqual(done.returncode, 0, f'git {args}: {stdout}{stderr}')
+        return stdout
+
+    def repo_path(self, *parts):
+        return os.path.join(self.repo, *parts)
+
+    def run_cli_in(self, cwd, *args, stdin=None, env=None):
+        """cwd で動かす。--dir は渡さず、既定の docs/pbi (cwd からの相対) を使う。"""
+        result = subprocess.run([sys.executable, SCRIPT, *args], cwd=cwd,
+                                input=None if stdin is None else stdin.encode('utf-8'), capture_output=True,
+                                env=dict(os.environ, HARNESS_LOG_CONFIG=self.no_config, **(env or {})))
+        return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode('utf-8'),
+                                           result.stderr.decode('utf-8', errors='replace'))
+
+    @staticmethod
+    def read_json(path):
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+
+    def read_repo_record(self):
+        return self.read_json(self.repo_path('docs', 'pbi', 'design-record.json'))
+
+    def repo_approvals(self):
+        path = self.repo_path('docs', 'pbi', 'design-approvals.jsonl')
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding='utf-8') as f:
+            return [json.loads(line) for line in f if line.strip()]
+
+    def work_path(self, pbi):
+        return self.repo_path('docs', 'pbi', f'{pbi}.work.json')
+
+    @staticmethod
+    def file_hash(path):
+        """作業票の中身 (改行を \\n にそろえたもの) の sha256。"""
+        with open(path, 'rb') as f:
+            text = f.read().decode('utf-8').replace('\r\n', '\n')
+        return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def record_hash_of(record):
+        """正本の hash は、キーを並べ替え、区切りを , と : にし、ASCII にしない JSON の sha256 (design_record.py の docstring)。"""
+        text = json.dumps(record, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+        return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+    def write_pbi(self, pbi, goal='目的', targets=None, notes=None):
+        """PBI の Markdown と route.json を docs/pbi に書く。"""
+        base = self.repo_path('docs', 'pbi')
+        os.makedirs(base, exist_ok=True)
+        lines = [f'# {pbi}: 題', '', '- Depends on: none', '', '## Goal', goal, '', '## Targets',
+                 *[f'- `{t}`' for t in (targets or ['src/a.txt'])], '', '## Do not touch', '- none', '']
+        if notes:
+            lines += ['## Notes', notes, '']
+        lines += ['## Refs', 'none', '']
+        with open(os.path.join(base, f'{pbi}.md'), 'w', encoding='utf-8', newline='\n') as f:
+            f.write('\n'.join(lines))
+        with open(os.path.join(base, f'{pbi}.route.json'), 'w', encoding='utf-8', newline='\n') as f:
+            json.dump({'route': [{'runner': 'agent', 'model': 'sonnet', 'effort': None}]}, f)
+
+    def make_work(self, pbi, **pbi_options):
+        """PBI の Markdown を書き、design_record.py work に作業票を作らせる。"""
+        self.write_pbi(pbi, **pbi_options)
+        result = self.run_cli_in(self.repo, 'work', pbi)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def write_reply(self, path, record):
+        """reply-answered.md の封筒の revision と record_hash を、record に結び直した返信を書く。"""
+        with open(self.path('reply-answered.md'), encoding='utf-8') as f:
+            text = f.read()
+        text = re.sub(r'"revision":"\d+"', f'"revision":"{record["revision"]}"', text)
+        text = re.sub(r'"record_hash":"[0-9a-f]+"', f'"record_hash":"{self.record_hash_of(record)}"', text)
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text)
+
     # 正本
 
     def test_fixture_record_is_schema_1(self):
@@ -94,15 +198,176 @@ class DesignRecordTest(unittest.TestCase):
         self.assertEqual(self.read_record(), RECORD)
 
     def test_slice_holds_question_reads_and_unknown_only(self):
-        result = self.run_cli('slice', 'c2', '--question', 'どこに置くか', '--read', 'a/b.py:3-9',
-                              '--read', 'c.md:4', '--unknown', '利用者の選択')
+        """slice は atelier.design-slice/2 で、設計のときの HEAD (base_sha) を持つ。git のリポジトリの中で動かす。"""
+        head = self.git('rev-parse', 'HEAD').strip()
+        result = self.run_cli_in(self.repo, 'slice', 'c2', '--question', 'どこに置くか', '--read', 'a/b.py:3-9',
+                                 '--read', 'c.md:4', '--unknown', '利用者の選択')
         self.assertEqual(result.returncode, 0, result.stderr)
-        with open(os.path.join(self.pbi, 'notes', 'c2.slice.json'), encoding='utf-8') as f:
-            data = json.load(f)
-        self.assertEqual(data, {'schema': 'atelier.design-slice/1', 'id': 'c2', 'question': 'どこに置くか',
+        data = self.read_json(self.repo_path('docs', 'pbi', 'notes', 'c2.slice.json'))
+        self.assertEqual(data, {'schema': 'atelier.design-slice/2', 'id': 'c2', 'question': 'どこに置くか',
                                 'reads': [{'path': 'a/b.py', 'lines': [3, 9]}, {'path': 'c.md', 'lines': [4, 4]}],
-                                'unknown': ['利用者の選択']})
-        self.assertEqual(self.run_cli('slice', 'c3', '--question', 'q', '--read', 'a.py:9-3').returncode, 2)
+                                'unknown': ['利用者の選択'], 'base_sha': head})
+        bad = self.run_cli_in(self.repo, 'slice', 'c3', '--question', 'q', '--read', 'a.py:9-3')
+        self.assertEqual(bad.returncode, 2)
+        self.assertFalse(os.path.exists(self.repo_path('docs', 'pbi', 'notes', 'c3.slice.json')))
+
+    # 作業票を正本に入れる (write --work)
+
+    def test_write_with_works_bumps_revision_and_hash_on_content_or_order_change(self):
+        self.make_work('PBI-1', goal='最初の目的')
+        self.make_work('PBI-2', goal='別の目的', targets=['src/b.txt'])
+        args = ('write', '--id', DESIGN_ID, '--target', 'PBI-1', '--target', 'PBI-2')
+        both = (*args, '--work', 'PBI-1.work.json', '--work', 'PBI-2.work.json')
+        first = self.run_cli_in(self.repo, *both)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        record = self.read_repo_record()
+        self.assertEqual(record['schema'], 'atelier.design-record/2')
+        self.assertEqual(record['revision'], 1)
+        self.assertEqual(record['works'], [
+            {'pbi': 'PBI-1', 'file': 'PBI-1.work.json', 'hash': self.file_hash(self.work_path('PBI-1'))},
+            {'pbi': 'PBI-2', 'file': 'PBI-2.work.json', 'hash': self.file_hash(self.work_path('PBI-2'))}])
+        hash_1 = self.record_hash_of(record)
+        # 作業票の中身が変わる
+        self.make_work('PBI-1', goal='書き直した目的')
+        changed = self.run_cli_in(self.repo, *both)
+        self.assertEqual(changed.returncode, 0, changed.stderr)
+        record = self.read_repo_record()
+        self.assertEqual(record['revision'], 2)
+        self.assertEqual(record['works'][0]['hash'], self.file_hash(self.work_path('PBI-1')))
+        hash_2 = self.record_hash_of(record)
+        self.assertNotEqual(hash_2, hash_1)
+        # --work の順が変わる
+        swapped = self.run_cli_in(self.repo, *args, '--work', 'PBI-2.work.json', '--work', 'PBI-1.work.json')
+        self.assertEqual(swapped.returncode, 0, swapped.stderr)
+        record = self.read_repo_record()
+        self.assertEqual([w['pbi'] for w in record['works']], ['PBI-2', 'PBI-1'])
+        self.assertEqual(record['revision'], 3)
+        self.assertNotIn(self.record_hash_of(record), (hash_1, hash_2))
+
+    def test_write_with_identical_works_keeps_revision_and_hash(self):
+        self.make_work('PBI-1')
+        self.make_work('PBI-2', targets=['src/b.txt'])
+        args = ('write', '--id', DESIGN_ID, '--target', 'PBI-1', '--target', 'PBI-2',
+                '--work', 'PBI-1.work.json', '--work', 'PBI-2.work.json')
+        self.assertEqual(self.run_cli_in(self.repo, *args).returncode, 0)
+        before = self.read_repo_record()
+        with open(self.repo_path('docs', 'pbi', 'design-record.json'), 'rb') as f:
+            before_bytes = f.read()
+        again = self.run_cli_in(self.repo, *args)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        after = self.read_repo_record()
+        self.assertEqual(after['revision'], 1)
+        self.assertEqual(self.record_hash_of(after), self.record_hash_of(before))
+        with open(self.repo_path('docs', 'pbi', 'design-record.json'), 'rb') as f:
+            self.assertEqual(f.read(), before_bytes)
+
+    def test_write_without_work_keeps_schema_1_and_its_hash(self):
+        """--work の無い write は /1 のまま。承認済みの返信 (answer-me-with-any が作ったもの) の record_hash が今も合う。"""
+        result = self.run_cli('write', '--id', DESIGN_ID, '--target', 'PBI-012', '--target', 'PBI-013',
+                              '--target', 'PBI-014', '--concern', 'notes/c1.slice.json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = self.read_record()
+        self.assertEqual(record, RECORD)
+        self.assertEqual(record['schema'], 'atelier.design-record/1')
+        self.assertNotIn('works', record)
+        with open(self.path('reply-answered.md'), encoding='utf-8') as f:
+            given = re.search(r'"record_hash":"([0-9a-f]+)"', f.read()).group(1)
+        self.assertEqual(self.record_hash_of(record), given)
+        matched = self.check('reply-answered.md', '--draft', self.path('draft.md'), '--dry-run')
+        self.assertEqual(matched.returncode, 0, matched.stdout + matched.stderr)
+
+    def test_check_reply_matches_a_schema_2_record(self):
+        self.make_work('PBI-1', goal='最初の目的')
+        args = ('write', '--id', DESIGN_ID, '--target', 'PBI-1', '--work', 'PBI-1.work.json')
+        self.assertEqual(self.run_cli_in(self.repo, *args).returncode, 0)
+        record = self.read_repo_record()
+        self.assertEqual(record['schema'], 'atelier.design-record/2')
+        reply = self.repo_path('reply-works.md')
+        self.write_reply(reply, record)
+        matched = self.run_cli_in(self.repo, 'check-reply', '--reply', reply)
+        self.assertEqual(matched.returncode, 0, matched.stdout + matched.stderr)
+        # 記録を書いたあとに作業票を変え、記録を書き直すと、前の返信は一致しない
+        self.make_work('PBI-1', goal='承認のあとで書き直した目的')
+        self.assertEqual(self.run_cli_in(self.repo, *args).returncode, 0)
+        newer = self.read_repo_record()
+        self.assertEqual(newer['revision'], 2)
+        stale = self.run_cli_in(self.repo, 'check-reply', '--reply', reply)
+        self.assertEqual(stale.returncode, 3, stale.stdout + stale.stderr)
+        self.assertTrue(stale.stdout.startswith('mismatch\t'), stale.stdout)
+        self.assertEqual(len(self.repo_approvals()), 1)
+        # 新しい版に結んだ返信は一致する
+        self.write_reply(reply, newer)
+        self.assertEqual(self.run_cli_in(self.repo, 'check-reply', '--reply', reply).returncode, 0)
+        self.assertEqual(len(self.repo_approvals()), 2)
+
+    def test_check_reply_rechecks_the_work_tickets_on_disk(self):
+        """記録を書き直さずに作業票が変わった・消えた・記録に無い作業票が増えたときも、返信は一致しない。"""
+        self.make_work('PBI-1', goal='最初の目的')
+        args = ('write', '--id', DESIGN_ID, '--target', 'PBI-1', '--work', 'PBI-1.work.json')
+        self.assertEqual(self.run_cli_in(self.repo, *args).returncode, 0)
+        record = self.read_repo_record()
+        reply = self.repo_path('reply-works.md')
+        self.write_reply(reply, record)
+        ticket = self.repo_path('docs', 'pbi', 'PBI-1.work.json')
+        with open(ticket, 'rb') as f:
+            original = f.read()
+
+        def expect_mismatch(reason):
+            result = self.run_cli_in(self.repo, 'check-reply', '--reply', reply)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertTrue(result.stdout.startswith('mismatch\t'), result.stdout)
+            self.assertIn(reason, result.stdout + result.stderr)
+
+        self.make_work('PBI-1', goal='記録のあとで書き換えた目的')
+        expect_mismatch('changed since write')
+        os.remove(ticket)
+        expect_mismatch('missing since write')
+        with open(ticket, 'wb') as f:
+            f.write(original)
+        self.make_work('PBI-2')
+        expect_mismatch('not in the record')
+        os.remove(self.repo_path('docs', 'pbi', 'PBI-2.work.json'))
+        matched = self.run_cli_in(self.repo, 'check-reply', '--reply', reply)
+        self.assertEqual(matched.returncode, 0, matched.stdout + matched.stderr)
+        self.assertEqual(len(self.repo_approvals()), 1)
+
+    def test_write_refuses_a_missing_or_foreign_work_file(self):
+        self.make_work('PBI-1')
+        good = ('write', '--id', DESIGN_ID, '--target', 'PBI-1', '--work', 'PBI-1.work.json')
+        self.assertEqual(self.run_cli_in(self.repo, *good).returncode, 0)
+        record_path = self.repo_path('docs', 'pbi', 'design-record.json')
+        with open(record_path, 'rb') as f:
+            before = f.read()
+        shutil.copyfile(self.work_path('PBI-1'), self.repo_path('outside.work.json'))
+        with open(self.work_path('PBI-9'), 'w', encoding='utf-8') as f:
+            json.dump({'schema': 'atelier.other/1', 'pbi': 'PBI-9'}, f)
+        cases = {'missing': 'PBI-5.work.json', 'outside the dir': '../outside.work.json',
+                 'not atelier.work/1': 'PBI-9.work.json'}
+        for name, work in cases.items():
+            with self.subTest(work=name):
+                result = self.run_cli_in(self.repo, 'write', '--id', DESIGN_ID, '--target', 'PBI-1',
+                                         '--work', 'PBI-1.work.json', '--work', work)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                with open(record_path, 'rb') as f:
+                    self.assertEqual(f.read(), before)
+
+    def test_work_accepts_a_schema_1_slice(self):
+        notes = self.repo_path('docs', 'pbi', 'notes')
+        os.makedirs(notes, exist_ok=True)
+        old = {'schema': 'atelier.design-slice/1', 'id': 'c1', 'question': '古い形',
+               'reads': [{'path': 'src/a.txt', 'lines': [1, 2]}], 'unknown': []}
+        other = {**old, 'schema': 'atelier.design-slice/9', 'id': 'c9'}
+        for name, data in (('c1', old), ('c9', other)):
+            with open(os.path.join(notes, f'{name}.slice.json'), 'w', encoding='utf-8') as f:
+                json.dump(data, f)
+        self.write_pbi('PBI-1', notes='slice: c1')
+        accepted = self.run_cli_in(self.repo, 'work', 'PBI-1')
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(self.read_json(self.work_path('PBI-1'))['slices'], ['c1'])
+        self.write_pbi('PBI-2', notes='slice: c9')
+        refused = self.run_cli_in(self.repo, 'work', 'PBI-2')
+        self.assertEqual(refused.returncode, 6, refused.stdout + refused.stderr)
+        self.assertFalse(os.path.exists(self.work_path('PBI-2')))
 
     # Markdown の封筒
 
