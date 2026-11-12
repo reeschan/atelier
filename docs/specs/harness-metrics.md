@@ -162,9 +162,14 @@ flowchart LR
 ### 送り手 harness-log
 
 - 置き場所は `skills/harness-log/`。中身は、小さな Python の CLI (`harness_log.py`) と、短い SKILL.md (いつ使うか)。標準ライブラリと git だけを使う。atelier は送り手を import で使い、見つからなければ手元の events.jsonl にだけ書く。
-- 設定は `~/.claude/harness-log.json` に置く (環境変数 `HARNESS_LOG_CONFIG` で場所を変えられる)。項目は `remote`・`enabled`・`key`・`show_repos`・`clone_dir`・`spool_dir`・`embedding` (`url`・`model`)。設定が無ければ、emit も flush も何もしない。
+- 設定は `~/.claude/harness-log.json` に置く (環境変数 `HARNESS_LOG_CONFIG` で場所を変えられる)。項目は `mode`・`remote`・`enabled`・`key`・`show_repos`・`clone_dir`・`spool_dir`・`embedding` (`url`・`model`)。設定が無ければ、emit も flush も何もしない。
+- 記録のしかた (`mode`) は 3 つ。どれにするかは、初めて使うときにユーザーが決める (2026-11-12 の追記。下の「初めて使うとき」)。
+  - `remote`: private のリポジトリに送る。`enable` までは送らない (今までどおり)。
+  - `local`: 送り先を決めずに、手元のスプールにだけためる。flush は何もしない。あとで `init --remote` で送り先を足すと、鍵とスプールはそのままで `remote` になり、ためた分も `enable` の後の flush で送られる。
+  - `off`: 何も記録しない (emit も flush も何もしない)。設定があるので、二度と聞かない。
 - 操作:
-  - `init --remote <URL>`: 設定を `enabled: false` で作り、鍵を作り、clone を用意する。送らない。
+  - `init --remote <URL>` / `init --local` / `init --off`: 設定を `enabled: false` で作り、鍵を作る。`--remote` は clone も用意する。どれも送らない。`local` の設定に `init --remote` を打つと、鍵とスプールを残したまま送り先を足す。
+  - `status`: 今の記録のしかたを 1 行で出す (`none`・`off`・`local`・`remote enabled|disabled`、スプールの行の数)。
   - `emit` (関数としても使える): 許可リストで点検し、外枠を付け、スプールの `<phase>/<skill>/<YYYY-MM>/<run_id>.jsonl` に追記する。
   - `flush`: `enabled` のときだけ動く。ロックを取り、`fetch` して clone を `reset --hard origin/<branch>` でリモートに合わせ、スプールの行を clone の同じパスに追記する。`coverage.json` と `SCHEMA.md` を作り直して、1 回のコミットにする。スプールの行は push に成功したときだけ消す。push に失敗したら行はスプールに残り、`errors.log` に 1 行書き、次の flush で clone を合わせ直してから送り直す (clone 側の未 push のコミットは捨てる。正はスプール)。
   - `preview`: スプールの行と、まだ push していないコミットを、そのまま表示する。
@@ -182,6 +187,12 @@ flowchart LR
 - record_run・role_results (check)・kiln_log・design_record (check-reply)・lint_run (approve) は、それぞれ自分の書き込みの横でイベントを出す。
 - 設計者の付録に、いつどのコマンドを打つかを書く (stage record を書くとき・plan を確定したとき・inline で問いに答えを受けたとき・finish のとき)。本文には 1 行の道しるべだけを足す。
 
+### 初めて使うとき (2026-11-12 の追記)
+
+- conductor の `start` は、送り手が見つかって設定がまだ無いとき (`status` が `none`)、`ask harness-log:` の行を 1 行出す。run は止めない。
+- 呼び出し側はその行を見たら、ユーザーに 1 回だけ聞く: private のリポジトリの URL を設定する / 送らずに手元にだけためる / 記録しない。答えに合わせて `init --remote <URL>`・`init --local`・`init --off` を打つ。どれを選んでも設定ができるので、次からは聞かない。
+- 答えるまでの間 (設定が無い間) のイベントは、今までどおり手元の `docs/pbi/events.jsonl` にだけ残る。
+
 ### 送り始めの流れ
 
 4 つの領域が並んで動く。同じ名前のきっかけ (`enable を打つ`) は、そのきっかけを持つ領域を同時に動かす。
@@ -191,11 +202,16 @@ stateDiagram-v2
   state "送り手と run" as All {
     state "送る設定" as Config {
       state "設定なし" as NoConfig
+      state "記録しない" as Off
+      state "手元だけ" as LocalOnly
       state "準備済み" as Prepared
       state "送っている" as Sending
       state "止めている" as Paused
       [*] --> NoConfig
-      NoConfig --> Prepared: init で clone と鍵を作る
+      NoConfig --> Off: ユーザーが「記録しない」を選ぶ
+      NoConfig --> LocalOnly: ユーザーが「手元にだけためる」を選ぶ
+      NoConfig --> Prepared: ユーザーが private のリポジトリを決める
+      LocalOnly --> Prepared: あとで private のリポジトリを決める
       Prepared --> Sending: ユーザーが中身を見て enable を打つ
       Sending --> Paused: disable を打つ
       Paused --> Sending: ユーザーが中身を見て enable を打つ
@@ -205,7 +221,7 @@ stateDiagram-v2
       state "未承認" as NotApproved
       state "承認済み" as Approved
       [*] --> NotApproved
-      NotApproved --> Approved: ユーザーが中身を見て enable を打つ [設定がある]
+      NotApproved --> Approved: ユーザーが中身を見て enable を打つ [送り先がある]
     }
     --
     state "ある 1 行" as Line {
@@ -214,7 +230,7 @@ stateDiagram-v2
       state "手元のコミットにある" as Committed
       state "herness-log に届いた" as Delivered
       [*] --> NotEmitted
-      NotEmitted --> InSpool: イベントが出る [設定がある]
+      NotEmitted --> InSpool: イベントが出る [記録する設定]
       InSpool --> Committed: 出番か run の終わりに flush がコミットする [送っている]
       Committed --> Delivered: push に成功する [送っている]
       Committed --> Committed: push に失敗する (次の flush で送り直す)
@@ -229,8 +245,12 @@ stateDiagram-v2
   }
   %% never 未承認 & herness-log に届いた -- enable を打つ前に、イベントが herness-log に届く
   %% never 未承認 & 手元のコミットにある -- enable を打つ前に、送るためのコミットができる
-  %% never 設定なし & スプールにある -- 設定が無いのに、イベントが手元にたまる
+  %% never 設定なし & スプールにある -- ユーザーが選ぶ前に、イベントが手元にたまる
+  %% never 記録しない & スプールにある -- 「記録しない」を選んだのに、イベントが手元にたまる
+  %% never 手元だけ & 手元のコミットにある -- 「手元にだけ」なのに、送るためのコミットができる
 ```
+
+- 2026-11-12 に「手元だけ」と「記録しない」を足して、もう一度 `/statechart` (from-chart) で検査した。5 つの規則はどれも成り立った (28 状態・60 遷移、規則を破る状態は 0)。
 
 - 2026-11-11 に pstack の `/statechart` (from-chart) で、英語のラベルの写しを検査した (TLA+ の文字列は ASCII に限られるため)。3 つの規則はどれも成り立った (22 状態・47 遷移、規則を破る状態は 0)。検査の途中で、設定が無いのに `enable` で承認済みになれる穴が見つかったので、承認の遷移に「設定がある」の条件を足した。
 - 図の push の失敗は「ある 1 行」の領域だけを動かし、「atelier の run」の領域には何もしない。送れなかったことで run が止まらない、という決まりは、この形で表している。
