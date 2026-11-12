@@ -502,6 +502,35 @@ class BundleTest(unittest.TestCase):
         self.assertEqual(len(rows), 2, out)
         self.assertIn('PBI-902', '\n'.join(rows))
 
+    def test_bundle_review_round_limit(self):
+        """レビューは PBI ごとに 2 回まで。2 回目でまだ通らない行に limit が付き、1 回目や通った行には付かない。"""
+        code, out, _ = self.bundle()
+        self.assertEqual(code, 0, out)
+        self.assertIn('round 1/2', self.row(out))
+        self.assertNotIn('limit', self.row(out))
+
+        review_path = self.base / 'reviews' / 'PBI-901.review.json'
+        review = json.loads(review_path.read_text(encoding='utf-8'))
+        for name, recommendation, limit in (('PBI-901', 'rework', False),
+                                            ('PBI-901.rework-1', 'pass', False),
+                                            ('PBI-901.rework-1', 'rework', True)):
+            with self.subTest(report=name, recommendation=recommendation):
+                self.new_wave()
+                if name != 'PBI-901':
+                    for kind, ext in (('reports', '.md'), ('verify', '.json')):
+                        src = self.base / kind / f'PBI-901{ext}'
+                        text = src.read_text(encoding='utf-8')
+                        dst = self.base / kind / f'{name}{ext}'
+                        dst.write_text(text.replace('"name": "PBI-901"', f'"name": "{name}"'), encoding='utf-8')
+                    os.utime(self.base / 'reports' / f'{name}.md', (OLD, OLD))
+                data = dict(review, report=name, recommendation=recommendation)
+                (self.base / 'reviews' / f'{name}.review.json').write_text(json.dumps(data), encoding='utf-8')
+                code, out, _ = self.bundle()
+                line = self.row(out, name)
+                self.assertNotIn('error', line, out)
+                self.assertIn(f"round {1 if name == 'PBI-901' else 2}/2", line)
+                self.assertEqual('limit' in line.split('  '), limit, line)
+
     def test_bundle_all_verify_deferred(self):
         """verify のコマンドが全部あとに回すものなら、verify の JSON が無くても誤りにしない。"""
         (self.base / 'PBI-901.md').write_text(
