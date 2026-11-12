@@ -15,8 +15,9 @@ from common import AGENT, RUNNERS, load_json
 # confirm は工程ではなく、Approve の見せ方 (appendix/adapters.md、`## Confirm`)
 ADAPTER_PHASES = ('design', 'review', 'security', 'confirm')
 ADAPTER_SETTINGS = ('auto', 'off')
-# confirm が auto のときに探すスキル (answer-me-with-any の skills/answer-me-with-html)
-CONFIRM_SKILL = 'answer-me-with-html'
+# confirm が auto のときに探すスキル (repo answer-me-with-any)。古い名前しか入っていなければそれを使い、warn を出す
+CONFIRM_SKILL = 'answer-me-with-any'
+CONFIRM_SKILL_OLD = 'answer-me-with-html'
 
 # フェーズの値として受け付けるスキル名の形
 SKILL_NAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9:_./-]{0,127}$')
@@ -199,6 +200,25 @@ def _fnm_cli(runner, env) -> str | None:
             found = _first_file(installation / 'bin', runner, ('',))
         if found:
             return found
+    return None
+
+
+def fnm_node_dir(version, env=None) -> str | None:
+    """fnm に入っている、version (26.8.1 か 26 のような先頭だけ) に合う Node の node があるディレクトリ。
+
+    fnm の場所の候補 (_fnm_bases) の順に見て、最初に合う場所の中で版の新しい方を返す。
+    installation/bin/node (Windows 以外) か installation/node.exe (Windows) のディレクトリ。無ければ None。
+    """
+    env = os.environ if env is None else env
+    want = _version_key(version)
+    for base in _fnm_bases(env):
+        found = [p for p in (base / 'node-versions').glob('*/installation')
+                 if _version_key(p.parent.name)[:len(want)] == want]
+        found.sort(key=lambda p: _version_key(p.parent.name), reverse=True)
+        for installation in found:
+            for directory in (installation / 'bin', installation):
+                if (directory / 'node').is_file() or (directory / 'node.exe').is_file():
+                    return str(directory)
     return None
 
 

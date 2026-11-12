@@ -54,6 +54,8 @@ A broken verify command is your mistake, and it looks like a failed PBI. Avoid t
 - **`/tmp` on Windows**: Windows node and python read Git Bash's `/tmp` as `C:\tmp`. Keep temporary files in the repository or under a Windows path.
 - **Format checks see work files**: `prettier --check .` reads untracked files, so add `docs/pbi/` to `.prettierignore` first.
 - **Dev servers on Windows** do not stop with `&` and `kill`. Write one script that starts, requests and stops the whole process tree (for example `docs/pbi/tools/smoke.mjs`), use one port per PBI, and point every connection variable at a dummy so production data is never touched. Never copy `.env*`.
+- **pnpm and `--`**: `pnpm run <script> -- --spec x` may hand `--` on to the tool, which then ignores the filter and runs every spec. Write `pnpm run <script> --spec x` (or the project's `investigate` form, `appendix/tests-at-end.md`) and check the spec count in the output.
+- **Verify uses the project's Node and Git Bash**: `verify.py` puts the version of `.node-version` / `.nvmrc` / `engines` first on PATH and runs commands in Git Bash on Windows (never WSL's `bash.exe`). Do not add PATH tricks to verify commands; when the log's `node:` line shows the wrong version, set `tools.bash.path` or install that version with fnm.
 - **`node --test`**: add `--test-reporter=tap`; the default reporter of Node 26 prints no `# pass` / `# fail` lines.
 - **rtk and `grep -h`**: in `rtk grep`, `-h` means help. The bundled hook leaves grep and rg commands with `-h` alone, but do not write `rtk grep -h` yourself.
 
@@ -89,7 +91,7 @@ Run once, after all facts and briefs exist:
 python <skill>/prepare.py docs/pbi [--skip opencode,codex,agy,dsh] [--only PBI-<n> --tier <tier>]
 ```
 
-`prepare.py` runs Jev gate 1 (brief and PBI quality) and then `select_model.py`, so one run covers both `gate.jev` and `route.jev`. When the template has `route.jev` without `gate.jev`, run `python <skill>/select_model.py --all docs/pbi` instead.
+`prepare.py` runs Jev gate 1 (brief and PBI quality) and then `select_model.py`, so one run covers both `gate.jev` and `route.jev`. When the goal names the model or runner the workers use (for example codex gpt-6.1-terra), pin it before `prepare.py`: `python <skill>/select_model.py --override PBI-<n> --route <runner>/<model>[@<effort>] --why goal --dir docs/pbi` for each PBI. `prepare.py` and `select_model.py --all` keep a route.json with `override`, and a tier-up keeps it too; write a new `--override` to change it. When the template has `route.jev` without `gate.jev`, run `python <skill>/select_model.py --all docs/pbi` instead.
 
 - Copy each row (tier, route head, review, scores, reason, priority template, dropped steps, quality warnings) to the PBI's Model line and to STATUS.md.
 - After rewriting a PBI, judge it again with `--only PBI-<n>`. To raise a tier, run `--only PBI-<n> --tier <tier>`, which rewrites its `route.json`.

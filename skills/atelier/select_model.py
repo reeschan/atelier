@@ -2,6 +2,7 @@
 
   python select_model.py <facts.json> [<brief の Jev 応答.json>] [--today YYYY-MM-DD] [--tier haiku|sonnet|opus] [--skip opencode,agy,<model>] [--pbi N] [--routing <routing.json>] [--home DIR] [--now ISO]
   python select_model.py --all docs/pbi [--only PBI-003,PBI-004 [--tier haiku|sonnet|opus]] [--today ...] [--skip ...] [--routing ...] [--home ...] [--now ...]
+  python select_model.py --override PBI-003 --route <runner>/<model>[@<effort>][,...] [--why TEXT] [--dir docs/pbi] [--tier ...]
 
 facts.json: {"files_changed", "files_new", "files_deleted", "modules", "criteria", "sensitive"}
 Jev 応答: ゲート brief（novelty / coupling / ambiguity）の API 応答。
@@ -16,6 +17,11 @@ Jev 応答: ゲート brief（novelty / coupling / ambiguity）の API 応答。
        --only を付けると、その PBI だけを判定し直して route.json を書き直す（ほかの PBI の route.json は触らない）。
        --tier は --only と一緒のときだけ受け付け、指定した PBI の段を決定表ではなくその段にする。
        --all で --only を付けずに --tier を付けたときは、エラーで終了する。
+       route.json に override (goal などで指定して固定した route) があれば書き直さず、表の後ろに
+       「keep PBI-n: override」を出す。
+--override: <dir>/PBI-n.route.json の route を --route の手順に差し替え、override {"route", "why"} を足して固定する
+       （goal で worker を指定したとき）。--route は <runner>/<model>[@<effort>] のカンマ区切りで、model は / を含んでよい。
+       --why は既定 goal。段・review・scores は今の route.json から（無ければ決定表で判定して）引き継ぐ。--dir は既定 docs/pbi。
 --routing: 段ごとの route を書いたテンプレート（routing.default.json と同じ形。studio/ の画面で作れる。studio/serve.py なら画面から直接置ける）。
        指定が無ければ、--all のときは <dir>/routing.json、次に home（--home と同じ解決順。templates.resolve_home）の
        routing.json を探し、どちらも無ければ同梱の routing.default.json を読む。全リポジトリで共通の表は home に置く
@@ -392,9 +398,13 @@ def run_all(base: Path, today: datetime.date, skip: frozenset, routing: dict | N
     found = find_found(agents)
     print('| PBI | 段 | route の先頭 | review | 優先テンプレート | 外した手順 | 理由 |')
     print('|---|---|---|---|---|---|---|')
+    kept = []
     for fp in sorted(base.glob('PBI-*.facts.json')):
         pbi = fp.name.removesuffix('.facts.json')
         if names and pbi not in names:
+            continue
+        if pinned(base / f'{pbi}.route.json'):
+            kept.append(pbi)
             continue
         brief = base / 'jev' / f'{pbi}.brief.json'
         out = decide(common.load_json(fp), load_answers(brief if brief.exists() else None),
@@ -403,6 +413,55 @@ def run_all(base: Path, today: datetime.date, skip: frozenset, routing: dict | N
         (base / f'{pbi}.route.json').write_text(json.dumps(out, ensure_ascii=False), encoding='utf-8')
         print(f"| {pbi} | {out['tier']} | {label(out['route'][0])} | {out['review']} | {out['template']['note']} | "
               f"{len(out['dropped'])} | {out['reasons'][0].removeprefix('決定: ')} |")
+    for pbi in kept:
+        print(f'keep {pbi}: override')
+
+
+def pinned(path: Path) -> bool:
+    """route.json に override (指定で固定した route) があるか。あれば --all は書き直さない。"""
+    data = common.load_json(path) if path.is_file() else None
+    return isinstance(data, dict) and isinstance(data.get('override'), dict)
+
+
+def parse_route(text: str) -> list[dict]:
+    """--route の値 (<runner>/<model>[@<effort>] のカンマ区切り) を route の手順にする。model は / を含んでよい。"""
+    steps = []
+    for item in (x.strip() for x in text.split(',')):
+        runner, _, rest = item.partition('/')
+        model, _, effort = rest.partition('@')
+        if runner not in common.RUNNERS or not model:
+            sys.exit(f'--route は <runner>/<model>[@<effort>] のカンマ区切り (runner は {"/".join(common.RUNNERS)}): {item}')
+        steps.append({'runner': runner, 'model': model, 'effort': effort or None})
+    return steps
+
+
+def write_override(base: Path, pbi: str, steps: list, why: str, today: datetime.date, forced: str | None,
+                   routing: dict, home: Path, now: datetime.datetime) -> dict:
+    """PBI の route.json に、指定した route を override として書く。
+
+    段・review・scores は今の route.json から (無ければ決定表で判定して) 引き継ぎ、route だけを差し替える。
+    --tier があれば段をそれにする。
+    """
+    path = base / f'{pbi}.route.json'
+    facts = common.load_json(base / f'{pbi}.facts.json', {})
+    # sensitive はリポジトリの外のサービスに出さない (route と同じ決まり): override でも agent だけ
+    if isinstance(facts, dict) and facts.get('sensitive') and any(step.get('runner') != 'agent' for step in steps):
+        sys.exit(f'--override: {pbi} は sensitive なので agent の route だけにできる')
+    out = common.load_json(path) if path.is_file() else None
+    if not isinstance(out, dict) or not isinstance(out.get('tier'), str):
+        facts_path = base / f'{pbi}.facts.json'
+        if not facts_path.is_file():
+            sys.exit(f'--override の PBI の route.json も facts も無い: {pbi}')
+        brief = base / 'jev' / f'{pbi}.brief.json'
+        out = decide(common.load_json(facts_path), load_answers(brief if brief.exists() else None), today,
+                     forced, routing=routing, home=home, now=now, pbi=pbi_number(pbi))
+    if forced:
+        out['tier'] = forced
+    reasons = [r for r in out.get('reasons') or [] if not str(r).startswith('決定: override')]
+    out.update({'route': steps, 'dropped': [], 'override': {'route': steps, 'why': why},
+                'reasons': [f'決定: override（{why}）', *reasons]})
+    path.write_text(json.dumps(out, ensure_ascii=False), encoding='utf-8')
+    return out
 
 
 def pop_opt(args: list, name: str):
@@ -437,6 +496,17 @@ def main():
     except ValueError as error:
         sys.exit(f'--today / --now が不正: {error}')
     home = templates.resolve_home(home_s)
+    override = pop_opt(args, '--override')
+    if override:
+        route_s = pop_opt(args, '--route')
+        if not route_s:
+            sys.exit('--override は --route と一緒に使う')
+        why = pop_opt(args, '--why') or 'goal'
+        base = Path(pop_opt(args, '--dir') or 'docs/pbi')
+        routing, _ = find_routing(pop_opt(args, '--routing'), str(base), home)
+        out = write_override(base, override, parse_route(route_s), why, today, forced, routing, home, now)
+        print(f"override {override}: {' / '.join(label(s) for s in out['route'])} ({why})")
+        return
     all_dir = pop_opt(args, '--all')
     only_s = pop_opt(args, '--only')
     only = [s for s in (only_s or '').split(',') if s]
