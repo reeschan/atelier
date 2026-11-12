@@ -16,6 +16,11 @@ description: スキルのイベントを許可リストで点検し、外枠 (ha
 ## 設定
 
 - 場所は `~/.claude/harness-log.json`。環境変数 `HARNESS_LOG_CONFIG` で変えられる。ファイルが無ければ、emit も flush も何もしない。
+- 記録のしかた `mode` は 3 つ。初めて使うときにユーザーが選ぶ (atelier では conductor の `start` が `ask harness-log:` の行で知らせる)。
+  - `remote`: private のリポジトリに送る。`enable` までは送らない。
+  - `local`: 手元のスプールにだけためる。commit も push もしない。あとで `init --remote` を打つと、鍵とためた行を残したまま `remote` になる。
+  - `off`: 何も記録しない。
+  - `mode` の無い古い設定は `remote` として読む。
 - 項目: `remote`・`enabled`・`key` (ハッシュの鍵。`init` が作る)・`show_repos` (repo 名をそのまま出す glob)・`spool_dir`・`clone_dir`・`embedding` (`url`・`model`・`provider`・`dims`・`normalize`・`prefix`・`timeout`。欠けは既定で補う)。知らない項目は消さない。
 
 ## 許可リスト (スキルが持つ JSON)
@@ -29,10 +34,13 @@ spec の `type` は `int`・`number`・`bool`・`id`・`enum` (`values`)・`hash
 ## コマンド
 
 ```text
-python harness_log.py init --remote <URL> [--show-repo <glob>]...   # enabled:false・鍵・clone を作る。送らない
+python harness_log.py init --remote <URL> [--show-repo <glob>]...   # enabled:false・鍵・clone を作る。送らない (local の設定なら送り先を足す)
+python harness_log.py init --local   # 手元にだけためる
+python harness_log.py init --off     # 何も記録しない
+python harness_log.py status         # none・off・local spool=<n>・remote enabled|disabled spool=<n>
 python harness_log.py emit --schema <path> --type <t> --data <json> [--run-id --seq --stage --pbi --skill-version --envelope <json>]
 python harness_log.py preview    # スプールの行と、push していないコミットをそのまま見る
-python harness_log.py enable     # 送り始める
+python harness_log.py enable     # 送り始める (remote のときだけ)
 python harness_log.py flush      # enabled のときだけ、1 回のコミットにして push する
 python harness_log.py disable    # 送るのを止める。止めている間もスプールにはたまる
 python harness_log.py hash <value>   # その値の h:<12 桁> を出す

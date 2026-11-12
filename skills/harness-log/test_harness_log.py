@@ -430,6 +430,78 @@ class HarnessLogTest(unittest.TestCase):
         [f] = self.spool_files()
         self.assertTrue(f.name.startswith('adhoc-'))
 
+    # ---- 記録のしかた (remote・local・off) と status ----
+    def status(self):
+        r = self.run_hl('status')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def test_status_is_none_without_config(self):
+        self.assertEqual(self.status(), 'none')
+        self.assertFalse(self.cfg.exists())
+
+    def test_init_needs_exactly_one_mode(self):
+        self.assertEqual(self.run_hl('init').returncode, 2)
+        self.assertEqual(self.run_hl('init', '--local', '--off').returncode, 2)
+        self.assertFalse(self.cfg.exists())
+
+    def test_local_keeps_lines_in_spool_and_never_commits(self):
+        r = self.run_hl('init', '--local')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = json.loads(self.cfg.read_text(encoding='utf-8'))
+        self.assertEqual(cfg['mode'], 'local')
+        self.assertIsNone(cfg['remote'])
+        self.assertIs(cfg['enabled'], False)
+        self.assertRegex(cfg['key'], r'^[0-9a-f]{64}$')
+        self.assertFalse((Path(cfg['clone_dir']) / '.git').exists())
+        self.emit({'n': 1})
+        self.assertEqual(len(self.spool_lines()), 1)
+        self.assertEqual(self.run_hl('enable').returncode, 2)  # 送り先が無いので送り始められない
+        self.assertEqual(self.run_hl('flush').returncode, 0)
+        self.assertFalse(hl.flush(config_path=self.cfg))
+        self.assertEqual(self.bare_commits(), 0)
+        self.assertEqual(len(self.spool_lines()), 1)
+        self.assertEqual(self.status(), 'local spool=1')
+
+    def test_local_then_remote_keeps_key_and_sends_the_kept_lines(self):
+        self.assertEqual(self.run_hl('init', '--local').returncode, 0)
+        key = json.loads(self.cfg.read_text(encoding='utf-8'))['key']
+        self.emit({'n': 1}, '--run-id', 'r1')
+        r = self.run_hl('init', '--remote', str(self.bare), '--show-repo', 'acme/*')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = json.loads(self.cfg.read_text(encoding='utf-8'))
+        self.assertEqual((cfg['mode'], cfg['key'], cfg['enabled']), ('remote', key, False))
+        self.assertEqual(cfg['show_repos'], ['acme/*'])
+        self.assertTrue((Path(cfg['clone_dir']) / '.git').is_dir())
+        self.assertEqual(self.status(), 'remote disabled spool=1')
+        self.assertEqual(self.bare_commits(), 0)
+        self.assertEqual(self.run_hl('enable').returncode, 0)
+        self.assertEqual(self.run_hl('flush').returncode, 0)
+        self.assertEqual(self.bare_commits(), 1)
+        self.assertEqual(self.spool_lines(), [])
+        self.assertTrue(any(p.endswith('/r1.jsonl') for p in self.bare_files()))
+
+    def test_off_records_nothing_and_is_not_changed_by_init(self):
+        self.assertEqual(self.run_hl('init', '--off').returncode, 0)
+        cfg = json.loads(self.cfg.read_text(encoding='utf-8'))
+        self.assertEqual(cfg['mode'], 'off')
+        self.emit({'n': 1})
+        self.assertIsNone(hl.emit(self.schema, 'thing.done', {'n': 1}, config_path=self.cfg))
+        self.assertEqual(self.spool_files(), [])
+        self.assertEqual(self.status(), 'off')
+        self.assertEqual(self.run_hl('init', '--local').returncode, 2)
+        self.assertEqual(self.run_hl('init', '--remote', str(self.bare)).returncode, 2)
+        self.assertEqual(self.run_hl('enable').returncode, 2)
+        self.assertEqual(json.loads(self.cfg.read_text(encoding='utf-8'))['mode'], 'off')
+
+    def test_old_config_without_mode_reads_as_remote(self):
+        self.init()
+        raw = json.loads(self.cfg.read_text(encoding='utf-8'))
+        raw.pop('mode', None)
+        self.cfg.write_text(json.dumps(raw), encoding='utf-8')
+        self.assertEqual(hl.load_config(self.cfg)['mode'], 'remote')
+        self.assertEqual(self.status(), 'remote disabled spool=0')
+
 
 if __name__ == '__main__':
     unittest.main()

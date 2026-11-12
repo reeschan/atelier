@@ -2,7 +2,7 @@
 """harness-log: スキルのイベントを許可リストで点検し、外枠 (harness.event/1) を付けて手元のスプールにため、
 enable のときだけ flush で private のリポジトリへ commit と push をする送り手。標準ライブラリと git だけを使う。
 
-関数: load_config・check・emit・flush・preview・keyed_hash。CLI: init・emit・flush・preview・enable・disable・hash。
+関数: load_config・check・emit・flush・preview・keyed_hash。CLI: init・emit・flush・preview・enable・disable・status・hash。
 emit と flush は例外を外に投げない。flush の失敗は標準エラーに 1 行で、CLI の終了コードは 0。
 """
 from __future__ import annotations
@@ -41,6 +41,7 @@ EMBEDDING_DEFAULTS = {
     'dims': None, 'normalize': True, 'prefix': '', 'timeout': 10,
 }
 LOCK_STALE_SECONDS = 600
+MODES = ('remote', 'local', 'off')  # 送る / 手元にだけためる / 記録しない
 COVERAGE_AXES = ('task_type', 'domain', 'size')
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 GIT_IDENT = ['-c', 'user.name=harness-log', '-c', 'user.email=harness-log@localhost', '-c', 'commit.gpgsign=false']
@@ -104,7 +105,10 @@ def load_config(path=None) -> dict | None:
         if not isinstance(raw, dict):
             return None
         cfg = dict(raw)
-        cfg['enabled'] = raw.get('enabled') is True
+        # mode の無い古い設定は remote (送り先のある設定) として読む
+        mode = raw.get('mode')
+        cfg['mode'] = mode if mode in MODES else ('remote' if raw.get('remote') else 'local')
+        cfg['enabled'] = raw.get('enabled') is True and cfg['mode'] == 'remote'
         repos = raw.get('show_repos')
         cfg['show_repos'] = [r for r in repos if isinstance(r, str)] if isinstance(repos, list) else []
         cfg['spool_dir'] = os.path.expanduser(raw.get('spool_dir') or DEFAULT_SPOOL)
@@ -408,7 +412,7 @@ def emit(schema_path, type, data, *, run_id=None, seq=None, stage=None, pbi=None
     try:
         cfg = load_config(config_path)
         key = _key(cfg)
-        if cfg is None or key is None:
+        if cfg is None or key is None or cfg['mode'] == 'off':
             return None
     except Exception:
         return None
@@ -626,7 +630,7 @@ def flush(*, config_path=None, err=None) -> bool:
     送れたら True。送れなければ行をスプールに残し、errors.log に 1 行を書いて False。例外を出さない。"""
     try:
         cfg = load_config(config_path)
-        if cfg is None or cfg['enabled'] is not True or not cfg.get('remote'):
+        if cfg is None or cfg['mode'] != 'remote' or cfg['enabled'] is not True or not cfg.get('remote'):
             return False
         spool = Path(cfg['spool_dir'])
         spool.mkdir(parents=True, exist_ok=True)
@@ -673,25 +677,74 @@ def preview(*, config_path=None, out=None) -> bool:
 
 # ---------- CLI ----------
 
+def _clone_remote(cfg) -> None:
+    clone = Path(cfg['clone_dir'])
+    if not (clone / '.git').exists():
+        clone.parent.mkdir(parents=True, exist_ok=True)
+        r = _git(['clone', '-q', cfg['remote'], clone], timeout=120)
+        if r.returncode != 0:
+            _say(sys.stderr, 'init: clone failed (flush will retry): ' + _redact(r.stderr))
+
+
 def _cmd_init(a) -> int:
+    """設定を作る。どの mode でも enabled: false で、送らない。local の設定に --remote を打つと、
+    鍵とスプールを残したまま送り先を足す (ためた行は enable の後の flush で送られる)。"""
+    modes = [m for m, on in (('remote', a.remote is not None), ('local', a.local), ('off', a.off)) if on]
+    if len(modes) != 1:
+        _say(sys.stderr, 'init: give exactly one of --remote <URL>, --local or --off')
+        return 2
+    mode = modes[0]
     p = config_path()
     if p.exists():
-        _say(sys.stderr, f'init: config already exists: {p} (remove it yourself to start over)')
-        return 2
+        raw = _read_json(p)
+        old = load_config(p)
+        if not (isinstance(raw, dict) and old and old['mode'] == 'local' and mode == 'remote'):
+            _say(sys.stderr, f'init: config already exists: {p} (remove it yourself to start over)')
+            return 2
+        raw.update({'mode': 'remote', 'remote': a.remote, 'enabled': False})
+        if a.show_repo:
+            raw['show_repos'] = a.show_repo
+        _save_config(p, raw)
+        _clone_remote(load_config(p))
+        print(f'harness-log: remote added to {p} (enabled: false; kept lines stay in the spool). '
+              'Run preview, then enable.')
+        return 0
     cfg = {
-        'remote': a.remote, 'enabled': False, 'key': secrets.token_hex(32), 'show_repos': a.show_repo or [],
+        'mode': mode, 'remote': a.remote, 'enabled': False, 'key': secrets.token_hex(32),
+        'show_repos': a.show_repo or [],
         'spool_dir': os.path.abspath(os.path.expanduser(DEFAULT_SPOOL)),
         'clone_dir': os.path.abspath(os.path.expanduser(DEFAULT_CLONE)),
         'embedding': dict(EMBEDDING_DEFAULTS),
     }
     _save_config(p, cfg)
-    clone = Path(cfg['clone_dir'])
-    if not (clone / '.git').exists():
-        clone.parent.mkdir(parents=True, exist_ok=True)
-        r = _git(['clone', '-q', a.remote, clone], timeout=120)
-        if r.returncode != 0:
-            _say(sys.stderr, 'init: clone failed (flush will retry): ' + _redact(r.stderr))
-    print(f'harness-log: config written to {p} (enabled: false). Run preview, then enable.')
+    if mode == 'remote':
+        _clone_remote(cfg)
+    note = {'remote': 'Run preview, then enable.',
+            'local': 'Events stay in the local spool; add a remote later with init --remote <URL>.',
+            'off': 'Nothing is recorded.'}[mode]
+    print(f'harness-log: config written to {p} (mode: {mode}, enabled: false). {note}')
+    return 0
+
+
+def _cmd_status() -> int:
+    """記録のしかたを 1 行で出す: none・off・local spool=<行数>・remote enabled|disabled spool=<行数>。"""
+    cfg = load_config()
+    if cfg is None:
+        print('none')
+        return 0
+    if cfg['mode'] == 'off':
+        print('off')
+        return 0
+    lines = 0
+    for f in _spool_files(Path(cfg['spool_dir'])):
+        try:
+            lines += sum(1 for ln in f.read_text(encoding='utf-8', errors='replace').splitlines() if ln.strip())
+        except OSError:
+            pass
+    if cfg['mode'] == 'local':
+        print(f'local spool={lines}')
+    else:
+        print(f"remote {'enabled' if cfg['enabled'] else 'disabled'} spool={lines}")
     return 0
 
 
@@ -722,6 +775,9 @@ def _cmd_toggle(on: bool) -> int:
     if not isinstance(raw, dict):
         _say(sys.stderr, 'no config; run init first')
         return 2
+    if on and load_config(p)['mode'] != 'remote':
+        _say(sys.stderr, 'enable: no remote to send to; run init --remote <URL> first')
+        return 2
     raw['enabled'] = on
     _save_config(p, raw)
     print('harness-log: ' + ('enabled' if on else 'disabled'))
@@ -741,7 +797,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog='harness_log.py', description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest='cmd', required=True)
     p = sub.add_parser('init')
-    p.add_argument('--remote', required=True)
+    p.add_argument('--remote')
+    p.add_argument('--local', action='store_true')
+    p.add_argument('--off', action='store_true')
     p.add_argument('--show-repo', action='append')
     p = sub.add_parser('emit')
     p.add_argument('--schema', required=True)
@@ -753,7 +811,7 @@ def main(argv=None) -> int:
     p.add_argument('--pbi')
     p.add_argument('--skill-version')
     p.add_argument('--envelope')
-    for name in ('flush', 'preview', 'enable', 'disable'):
+    for name in ('flush', 'preview', 'enable', 'disable', 'status'):
         sub.add_parser(name)
     p = sub.add_parser('hash')
     p.add_argument('value')
@@ -774,6 +832,8 @@ def main(argv=None) -> int:
         if not preview():
             _say(sys.stderr, 'no config; nothing to preview')
         return 0
+    if a.cmd == 'status':
+        return _cmd_status()
     if a.cmd in ('enable', 'disable'):
         return _cmd_toggle(a.cmd == 'enable')
     return _cmd_hash(a)
