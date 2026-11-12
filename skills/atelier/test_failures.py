@@ -29,6 +29,7 @@ class FakeEmbedding:
     """POST /api/embed にベクトルを返し、POST /api/show に digest を返す偽のサーバー。"""
 
     def __init__(self, dim=4, digest='sha256:aaa', show=True):
+        self.salt = 0  # 変えると、同じ名前のまま中身の違うモデルになる
         self.dim = dim
         self.digest = digest
         self.show = show
@@ -79,7 +80,7 @@ class FakeEmbedding:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def vector(self, text):
-        seed = 7
+        seed = 7 + self.salt
         for char in text:
             seed = (seed * 31 + ord(char)) % 1000003
         return [float((seed >> (index * 3)) % 13 + 1) for index in range(self.dim)]
@@ -215,13 +216,24 @@ class FailureTest(unittest.TestCase):
         self.assertEqual(failures.space_id(config, 'failure/2'),
                          sha12(['fake-embed', 'sha256:two', 3, 'failure/2', 'failure']))
 
-    def test_space_id_uses_none_when_show_does_not_answer(self):
+    def test_space_id_uses_a_probe_fingerprint_when_show_does_not_answer(self):
         server = FakeEmbedding(dim=3, show=False)
         self.addCleanup(server.close)
         config = {'url': server.url, 'model': 'fake-embed', 'dims': 3, 'timeout': 5}
-        self.assertEqual(failures.space_id(config, 'failure/1'),
-                         sha12(['fake-embed', 'none', 3, 'failure/1', 'failure']))
+        identity = failures.model_identity(config)
+        self.assertRegex(identity, r'^probe:[0-9a-f]{12}$')
+        first = failures.space_id(config, 'failure/1')
+        self.assertEqual(first, sha12(['fake-embed', identity, 3, 'failure/1', 'failure']))
         self.assertIn('/api/show', server.paths)
+        self.assertEqual(failures.space_id(config, 'failure/1'), first)  # 同じモデルなら同じ空間
+        server.salt = 1  # 同じ名前のまま中身が変わった
+        self.assertNotEqual(failures.space_id(config, 'failure/1'), first)
+
+    def test_space_id_is_never_reused_when_neither_show_nor_probe_answers(self):
+        config = {'url': f'http://127.0.0.1:{free_port()}', 'model': 'fake-embed', 'dims': 3, 'timeout': 1}
+        first = failures.space_id(config, 'failure/1')
+        self.assertNotEqual(failures.space_id(config, 'failure/1'), first)
+        self.assertTrue(failures.model_identity(config).startswith('unknown:'))
 
     # ---- embed_failures ----
 
@@ -314,8 +326,21 @@ class FailureTest(unittest.TestCase):
         self.assertEqual(code, 0, err)
         rows = self.vectors()
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]['space_id'],
-                         sha12(['fake-embed', 'none', 4, 'failure/1', 'failure']))
+        identity = failures.model_identity({'url': server.url, 'model': 'fake-embed'})
+        self.assertTrue(identity.startswith('probe:'))
+        self.assertEqual(rows[0]['space_id'], sha12(['fake-embed', identity, 4, 'failure/1', 'failure']))
+
+    def test_model_changed_under_the_same_name_gets_a_new_vector(self):
+        base = self.make_base()
+        self.write_rows(base, [run_row('PBI-1')])
+        server = FakeEmbedding(dim=4, show=False)
+        self.addCleanup(server.close)
+        self.write_config({'url': server.url, 'model': 'fake-embed'})
+        self.assertEqual(failures.embed_failures(base), 1)
+        self.assertEqual(failures.embed_failures(base), 0)  # 同じモデルなら足さない
+        server.salt = 1
+        self.assertEqual(failures.embed_failures(base), 1)  # 中身が変われば、前の空間のベクトルを使い回さない
+        self.assertEqual(len({row['space_id'] for row in self.vectors()}), 2)
 
     def test_rows_of_another_work_key_are_not_embedded(self):
         base = self.make_base()

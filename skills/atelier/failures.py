@@ -17,6 +17,7 @@ import json
 import re
 import sys
 import urllib.request
+import uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -164,15 +165,36 @@ def show_digest(config) -> str:
         return 'none'
 
 
+# digest が分からないとき、モデルの中身を見分けるために埋め込む決まった文
+PROBE_TEXT = 'atelier failure space probe: a fixed sentence to tell embedding models apart'
+
+
+def model_identity(config) -> str:
+    """モデルの中身を表す値。/api/show の digest。答えなければ、決まった文の埋め込みの指紋 (probe:<12 桁>)。
+    それも取れなければ、二度と同じにならない値 (unknown:<12 桁>) にして、前の空間のベクトルを使い回さない。"""
+    digest = show_digest(config)
+    if digest != 'none':
+        return digest
+    try:
+        vectors = task_profile.embed([PROBE_TEXT], config)
+        if vectors and vectors[0]:
+            rounded = [round(float(v), 6) for v in vectors[0]]
+            blob = json.dumps(rounded, separators=(',', ':')).encode('utf-8')
+            return 'probe:' + hashlib.sha256(blob).hexdigest()[:12]
+    except (Exception, SystemExit):
+        pass
+    return 'unknown:' + uuid.uuid4().hex[:12]
+
+
 def space_id(config, template_version) -> str:
-    """失敗の空間の id。sha12(model, /api/show の digest, dims, template_version, "failure")。
+    """失敗の空間の id。sha12(model, モデルの中身 (model_identity), dims, template_version, "failure")。
 
     dims は設定の `dims` (null なら embed_failures が返りのベクトルの長さを入れる)。式はここ 1 か所だけ。
     """
     config = config if isinstance(config, dict) else {}
     dims = config.get('dims')
     dims = dims if isinstance(dims, int) and not isinstance(dims, bool) and dims > 0 else None
-    parts = [_model_of(config), show_digest(config), dims, template_version, 'failure']
+    parts = [_model_of(config), model_identity(config), dims, template_version, 'failure']
     blob = json.dumps(parts, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     return hashlib.sha256(blob).hexdigest()[:12]
 
