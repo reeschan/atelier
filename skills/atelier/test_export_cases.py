@@ -258,5 +258,16 @@ class ExportCasesTest(unittest.TestCase):
         self.assertIn('分割が無い', r.stderr)
 
 
+    def test_improver_stops_when_the_manifest_exists_but_is_broken(self):
+        """manifest のファイルがあるのに読めないときは、held-out の本文を出さないよう exit 2 で止める。"""
+        self.write_rows([row('PBI-002', 1, '合格')])
+        home = self.tmp / 'home-broken'
+        (home / 'splits').mkdir(parents=True)
+        (home / 'splits' / 'default.json').write_text('{"schema": "harness.split', encoding='utf-8')
+        r = self.run_export('--view', 'improver', '--home', str(home))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('manifest', r.stderr)
+        self.assertFalse((self.pbi / 'cases.improver.jsonl').exists())
+
 if __name__ == '__main__':
     unittest.main()

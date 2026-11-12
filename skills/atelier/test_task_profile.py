@@ -803,5 +803,21 @@ class EmbedTest(unittest.TestCase):
         self.assertLess(elapsed, 1.9)
 
 
+class FindCaseTest(unittest.TestCase):
+    """backfill が埋め込み直す本文を cases.jsonl から探すときの選び方。"""
+
+    def test_known_case_id_does_not_fall_back_to_another_works_row(self):
+        cases = [{'id': 'repo:wk1:PBI-3', 'pbi': 'PBI-3', 'task': 'W-1 の本文'}]
+        self.assertIsNone(task_profile._find_case(cases, 'PBI-3', 'repo:wk2:PBI-3'))
+
+    def test_known_case_id_picks_its_own_row(self):
+        cases = [{'id': 'repo:wk2:PBI-3', 'pbi': 'PBI-3'}, {'id': 'repo:wk1:PBI-3', 'pbi': 'PBI-3'}]
+        self.assertEqual(task_profile._find_case(cases, 'PBI-3', 'repo:wk2:PBI-3')['id'], 'repo:wk2:PBI-3')
+
+    def test_without_case_id_the_last_row_of_the_pbi_is_used(self):
+        cases = [{'id': 'a', 'pbi': 'PBI-3'}, {'id': 'b', 'pbi': 'PBI-3'}, {'id': 'c', 'pbi': 'PBI-4'}]
+        self.assertEqual(task_profile._find_case(cases, 'PBI-3', None)['id'], 'b')
+
+
 if __name__ == '__main__':
     unittest.main()

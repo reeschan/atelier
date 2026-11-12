@@ -910,11 +910,15 @@ def _profile(argv) -> int:
 
 
 def _find_case(cases: list, pbi: str, cid):
+    """cid が分かっていれば、その id の行だけを返す (同じ PBI 番号の別の作業の行で代わりにしない)。
+    cid が無いときだけ、PBI 番号の合う最後の行を返す。"""
     for row in reversed(cases):
         if row.get('pbi') != pbi:
             continue
         if cid and row.get('id') == cid:
             return row
+    if cid:
+        return None
     for row in reversed(cases):
         if row.get('pbi') == pbi:
             return row
