@@ -3,14 +3,31 @@
 
 使い方 (リポジトリのルートで):
   python <このディレクトリ>/design_record.py slice <id> --question Q [--read PATH:START-END ...] [--unknown U ...] [--dir docs/pbi]
-  python <このディレクトリ>/design_record.py write --id ID --target PBI-<n> [--target ...] [--concern notes/<id>.slice.json ...] [--dir docs/pbi]
+  python <このディレクトリ>/design_record.py write --id ID --target PBI-<n> [--target ...] [--concern notes/<id>.slice.json ...] [--work PBI-<n>.work.json ...] [--dir docs/pbi]
   python <このディレクトリ>/design_record.py lint --draft FILE
   python <このディレクトリ>/design_record.py markdown --draft FILE [--dir docs/pbi]
   python <このディレクトリ>/design_record.py check-reply [--reply FILE] [--draft FILE] [--dry-run] [--dir docs/pbi]
+  python <このディレクトリ>/design_record.py work PBI-<n> [--dir docs/pbi]
+  python <このディレクトリ>/design_record.py stale PBI-<n> [--dir docs/pbi]
 
-slice   docs/pbi/notes/<id>.slice.json に、問い・読んだ path と行・unknown だけを書く。ファイルの本文は入れない。
-write   正本を書く。中身は schema・design_id・revision・targets・concerns だけ (schema 1)。同じ id の正本があり、
-        targets か concerns が変わったときだけ revision を 1 上げる。別の id なら 1 から。concerns のファイルが無ければ 2。
+stale   PBI-<n>.work.json の target_blobs と今の作業ツリーの各ファイルの git blob のハッシュを比べる
+        (docs/specs/work-json.md)。depends_on の各 PBI の作業票の targets に入るパスは除く。残る違い
+        (changed・removed・設計のとき無かったファイルが今ある appeared) を `stale<TAB>種類<TAB>パス` で標準出力に出し、
+        終了コード 7。違いが無ければ `fresh` を出して 0。作業票や依存の作業票が無い・形が違う (target_blobs が
+        targets と合わない、自分自身に依存する)・パスがリポジトリの外を指すときは、標準エラーに出して 2。
+        承認の正本 (/2) があれば、古さを見る前に、自分と依存の作業票が記録のときのままかを確かめ、
+        違えば (書き換え・消えた・記録に無い) 標準エラーに出して 3。最初に起こすときだけ流し、手戻しでは流さない。
+work   PBI-<n>.md と PBI-<n>.route.json から実装役への受け渡しの JSON docs/pbi/PBI-<n>.work.json (atelier.work/1) を書く
+        (docs/specs/work-json.md)。goal・targets・do_not_touch・depends_on・base_sha (Git の HEAD)・target_blobs
+        (作業ツリー上の対象ファイルの git blob のハッシュ。無いファイルは null)・route・slices (Notes の `slice: <id>` の行)・refs。
+        Goal・Targets・Do not touch の節が無い・空、Goal・Targets が none、Targets にパスを取れない行がある、route.json が無い・読めない、指した slice のファイルが無いときは
+        原因を全部標準エラーに出し、何も書かずに終了コード 6。リポジトリのルートで動かす (パスはそこからの相対)。
+slice  docs/pbi/notes/<id>.slice.json に、問い・読んだ path と行・unknown だけを書く。ファイルの本文は入れない。
+write   正本を書く。中身は schema・design_id・revision・targets・concerns (schema 1) と、--work を渡したときの works
+        (schema atelier.design-record/2。works は {pbi, file, hash} の並びで、hash は作業票の中身の sha256。順に意味がある)。
+        --work も前の /2 の正本も無いときは schema 1 のまま書く (既存の承認のハッシュを変えない)。同じ id の正本があり、
+        targets・concerns・works (並びか中身) が変わったときだけ revision を 1 上げる。別の id なら 1 から。
+        concerns や --work のファイルが無ければ 2。slice は atelier.design-slice/2 (base_sha を持つ。/1 も読む)。
 lint    承認の原稿 (appendix/approve.md) を点検する。7 つの節の名前と順・前後の図・あとの図の印・PBI の表の見出し・
         ask の置き場所と選択肢の補足を見る。誤りは標準エラーに `✗ L<行>` と `例:` の行で全部出し、終了コード 6。
         説明の無い内部の言葉は `! L<行> <言葉> → <言い換えの案>` の警告で、終了コードは 0 のまま。正本は読まない。
@@ -38,6 +55,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -50,9 +68,11 @@ except (Exception, SystemExit):
     events = None
 
 SCHEMA = 'atelier.design-record/1'
+SCHEMA_2 = 'atelier.design-record/2'
 RECORD_NAME = 'design-record.json'
 APPROVALS_NAME = 'design-approvals.jsonl'
-SLICE_SCHEMA = 'atelier.design-slice/1'
+SLICE_SCHEMA = 'atelier.design-slice/2'
+SLICE_SCHEMAS = ('atelier.design-slice/1', SLICE_SCHEMA)
 
 # renderer (answer-me-with-any の src/parse.js) が受ける封筒の名前と値の形・件数
 META_NAME = re.compile(r'^[a-z][a-z0-9_]{0,31}$')
@@ -67,7 +87,17 @@ UNANSWERED = '**—**'
 # 下書きの問いの囲み (answer-me-with-any の ask ブロック)
 ASK_OPEN = '```ask'
 SLICE_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
-READ = re.compile(r'^(.+):(\d+)(?:-(\d+))?$')
+# 作業票 (work) の形と、PBI の Markdown から読む行の形
+WORK_SCHEMA = 'atelier.work/1'
+PBI_NAME = re.compile(r'^PBI-\d+$')
+PBI_REF = re.compile(r'PBI-\d+')
+NONE_WORDS = ('none', 'なし')
+BULLET = re.compile(r'^\s*[-*](?:\s+|$)')
+WORK_TARGET_LINE = re.compile(r'^\s*(?:`([^`]*)`|(\S+))')
+WORK_REF_LINE = re.compile(r'^\s*(?:[-*]\s*)?`?([\w.-]+)`?')
+WORK_SLICE_LINE = re.compile(r'^\s*(?:[-*]\s+)?slice:[ \t]*(.*?)\s*$')
+WORK_DEPENDS = re.compile(r'^\s*-\s*Depends on:\s*(.*)$', re.M)
+READ =re.compile(r'^(.+):(\d+)(?:-(\d+))?$')
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -75,6 +105,7 @@ EXIT_MISMATCH = 3
 EXIT_UNBOUND = 4
 EXIT_UNANSWERED = 5
 EXIT_DRAFT = 6
+EXIT_STALE = 7
 
 
 def fail(msg: str, code: int = EXIT_USAGE) -> None:
@@ -464,18 +495,42 @@ def report_lint(errors: list, warnings: list) -> None:
 def load_record(base: Path) -> dict:
     record = common.load_json(base / RECORD_NAME)
     if not valid_record(record):
-        fail(f'{(base / RECORD_NAME).as_posix()}: missing or not a {SCHEMA} record (run write first)')
+        fail(f'{(base / RECORD_NAME).as_posix()}: missing or not a {SCHEMA} / {SCHEMA_2} record (run write first)')
     return record
 
 
+def valid_work_entry(entry) -> bool:
+    return (isinstance(entry, dict) and set(entry) == {'pbi', 'file', 'hash'}
+            and all(isinstance(entry[k], str) for k in entry))
+
+
 def valid_record(record) -> bool:
-    return (isinstance(record, dict) and record.get('schema') == SCHEMA
-            and set(record) == {'schema', 'design_id', 'revision', 'targets', 'concerns'}
+    """/1 (works なし) と /2 (works あり) を受ける。/1 は読むだけで、そのままのハッシュで照合できる。"""
+    if not isinstance(record, dict) or record.get('schema') not in (SCHEMA, SCHEMA_2):
+        return False
+    keys = {'schema', 'design_id', 'revision', 'targets', 'concerns'}
+    if record['schema'] == SCHEMA_2:
+        keys = keys | {'works'}
+        if not isinstance(record.get('works'), list) or not all(valid_work_entry(w) for w in record['works']):
+            return False
+    return (set(record) == keys
             and isinstance(record['design_id'], str)
             and isinstance(record['revision'], int) and not isinstance(record['revision'], bool)
             and record['revision'] >= 1
+            and isinstance(record['targets'], list) and isinstance(record['concerns'], list)
             and all(isinstance(t, str) for t in record['targets'])
             and all(isinstance(c, str) for c in record['concerns']))
+
+
+def load_slice(path: Path) -> tuple[dict | None, str | None]:
+    """関心事の抜粋を読む。(slice, 誤りの説明)。/1 と /2 を受け、/1 の base_sha は None として扱う。"""
+    data = common.load_json(path)
+    if not isinstance(data, dict) or data.get('schema') not in SLICE_SCHEMAS:
+        return None, f'{path.as_posix()}: not an {" / ".join(SLICE_SCHEMAS)} slice'
+    base_sha = data.get('base_sha')
+    if base_sha is not None and not isinstance(base_sha, str):
+        return None, f'{path.as_posix()}: base_sha must be a string'
+    return {**data, 'base_sha': base_sha}, None
 
 
 def cmd_slice(args) -> int:
@@ -493,9 +548,36 @@ def cmd_slice(args) -> int:
         reads.append({'path': match.group(1).replace('\\', '/'), 'lines': [first, last]})
     path = Path(args.dir) / 'notes' / f'{args.id}.slice.json'
     common.write_json(path, {'schema': SLICE_SCHEMA, 'id': args.id, 'question': args.question,
-                             'reads': reads, 'unknown': list(args.unknown)})
+                             'reads': reads, 'unknown': list(args.unknown), 'base_sha': git_base_sha()})
     print(path.as_posix())
     return EXIT_OK
+
+
+def work_file_hash(path: Path) -> str:
+    """作業票の中身のハッシュ: sha256(normalize(UTF-8 本文))。write と check-reply が同じ計算を使う。"""
+    return sha256(normalize(path.read_bytes().decode('utf-8-sig', errors='replace')))
+
+
+def work_problems(base: Path, record: dict) -> list[str]:
+    """正本の works とディスクの作業票を照らす。問題の文言の並びを返す (無ければ空)。"""
+    problems = []
+    recorded = set()
+    for entry in record.get('works', []):
+        recorded.add(entry['file'])
+        path = base / entry['file']
+        try:
+            current = work_file_hash(path) if path.is_file() else None
+        except OSError:
+            current = None
+        if current is None:
+            problems.append(f"work {entry['file']} missing since write")
+        elif current != entry['hash']:
+            problems.append(f"work {entry['file']} changed since write")
+    if base.is_dir():
+        for path in sorted(base.glob('PBI-*.work.json')):
+            if path.is_file() and path.name not in recorded:
+                problems.append(f'work {path.name} not in the record')
+    return problems
 
 
 def cmd_write(args) -> int:
@@ -507,18 +589,302 @@ def cmd_write(args) -> int:
             fail(f'--concern {concern!r}: give a path under {base.as_posix()}')
         if not (base / concern).is_file():
             fail(f'--concern {concern!r}: no such file under {base.as_posix()}')
+    works = []
+    for item in dict.fromkeys(p.replace('\\', '/') for p in args.work):
+        if item.startswith('/') or re.match(r'^[A-Za-z]:', item) or '..' in Path(item).parts:
+            fail(f'--work {item!r}: give a path under {base.as_posix()}')
+        if not (base / item).is_file():
+            fail(f'--work {item!r}: no such file under {base.as_posix()}')
+        data = common.load_json(base / item)
+        if not isinstance(data, dict) or data.get('schema') != WORK_SCHEMA or not isinstance(data.get('pbi'), str):
+            fail(f'--work {item!r}: not an {WORK_SCHEMA} work file (run work first)')
+        works.append({'pbi': data['pbi'], 'file': item, 'hash': work_file_hash(base / item)})
     errors = check_meta([('design_id', args.id)])
     if errors:
         fail('; '.join(errors))
     old = common.load_json(base / RECORD_NAME)
+    old_valid = valid_record(old)
+    # works を持つのは /2 だけ。--work も前の /2 も無いときは /1 のまま書き、既存の承認のハッシュを変えない
+    versioned = bool(works) or (old_valid and old['schema'] == SCHEMA_2)
     revision = 1
-    if valid_record(old) and old['design_id'] == args.id:
-        same = old['targets'] == targets and old['concerns'] == concerns
+    if old_valid and old['design_id'] == args.id:
+        same = (old['targets'] == targets and old['concerns'] == concerns
+                and old.get('works', []) == works)
         revision = old['revision'] if same else old['revision'] + 1
-    record = {'schema': SCHEMA, 'design_id': args.id, 'revision': revision,
+    record = {'schema': SCHEMA_2 if versioned else SCHEMA, 'design_id': args.id, 'revision': revision,
               'targets': targets, 'concerns': concerns}
+    if versioned:
+        record['works'] = works
     common.write_json(base / RECORD_NAME, record)
     print(f'{args.id} revision {revision} record_hash {record_hash(record)}')
+    return EXIT_OK
+
+
+def pbi_section(text: str, name: str) -> str:
+    """PBI の Markdown の `## <name>` の節の本文 (前後の空白を除く)。節が無ければ空。"""
+    match = re.search(rf'^## {re.escape(name)}[ \t]*\n(.*?)(?=^## |\Z)', text, re.S | re.M)
+    return match.group(1).strip() if match else ''
+
+
+def is_none_text(text: str) -> bool:
+    return text.strip().strip('`').lower() in NONE_WORDS
+
+
+def clean_path(raw: str) -> str:
+    return raw.strip().rstrip(':：,、').replace('\\', '/').removeprefix('./')
+
+
+def work_targets(section: str, problems: list[str]) -> list[str]:
+    """Targets の空でない各行 (箇条書きの印の有無を問わない) の先頭のパス (バッククォートの中身、無ければ最初の語)。
+    パスを取れない行と none の行は誤り (Targets では none を認めない)。出てきた順で重複を除く。"""
+    found = []
+    for line in section.splitlines():
+        if not line.strip():
+            continue
+        match = WORK_TARGET_LINE.match(BULLET.sub('', line, count=1))
+        path = clean_path(match.group(1) or match.group(2) or '') if match else ''
+        if not path:
+            problems.append(f'Targets: no path in line {line.strip()!r} (write each target as a "- `path`" line)')
+            continue
+        if path.lower() in NONE_WORDS:
+            problems.append('Targets: none is not allowed (name at least one target path)')
+            continue
+        if path.startswith('/') or re.match(r'^[A-Za-z]:', path) or '..' in Path(path).parts:
+            problems.append(f'Targets: {path!r} must be a path under the repository root')
+            continue
+        if path not in found:
+            found.append(path)
+    return found
+
+
+def work_do_not_touch(section: str) -> list[str]:
+    """Do not touch の各行 (箇条書きの印を除いた文)。none だけなら空。"""
+    items = []
+    for line in section.splitlines():
+        text = re.sub(r'^\s*[-*]\s+', '', line).strip()
+        if text and not is_none_text(text) and text not in items:
+            items.append(text)
+    return items
+
+
+def work_refs(section: str) -> list[str]:
+    """Refs の各行の先頭の id (「- mem-1: 要旨」の mem-1)。none は id ではない。"""
+    ids = []
+    for line in section.splitlines():
+        match = WORK_REF_LINE.match(line)
+        if match and match.group(1).lower() not in NONE_WORDS and match.group(1) not in ids:
+            ids.append(match.group(1))
+    return ids
+
+
+def work_slices(section: str, problems: list[str]) -> list[str]:
+    """Notes の `slice: <id>` の行の id。出てきた順で重複を除く。id の形が違う行は誤り。"""
+    ids = []
+    for line in section.splitlines():
+        match = WORK_SLICE_LINE.match(line)
+        if not match:
+            continue
+        value = match.group(1).strip().strip('`')
+        if not value:
+            problems.append('Notes: slice declaration has no id (write `slice: <id>`)')
+        elif not SLICE_ID.fullmatch(value):
+            problems.append(f'Notes: slice id {value!r} must match {SLICE_ID.pattern}')
+        elif value not in ids:
+            ids.append(value)
+    return ids
+
+
+def work_route(route) -> list[dict] | None:
+    """route.json の route を {runner, model, effort} の並びにする。形が違えば None。"""
+    if not isinstance(route, dict) or not isinstance(route.get('route'), list) or not route['route']:
+        return None
+    steps = []
+    for step in route['route']:
+        if not isinstance(step, dict) or not isinstance(step.get('runner'), str) \
+                or not isinstance(step.get('model'), str):
+            return None
+        effort = step.get('effort')
+        if effort is not None and not isinstance(effort, str):
+            return None
+        steps.append({'runner': step['runner'], 'model': step['model'], 'effort': effort})
+    return steps
+
+
+def run_git(args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(['git', *args], capture_output=True, text=True, encoding='utf-8', errors='replace',
+                          stdin=subprocess.DEVNULL, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+
+
+def git_base_sha() -> str:
+    try:
+        done = run_git(['rev-parse', 'HEAD'])
+    except OSError as error:
+        fail(f'git: {error}')
+    if done.returncode != 0 or not done.stdout.strip():
+        fail(f'git rev-parse HEAD failed: {done.stderr.strip() or "no commit yet"}')
+    return done.stdout.strip()
+
+
+def git_blobs(paths: list[str]) -> dict[str, str | None]:
+    """作業ツリー上の各ファイルの blob のハッシュ (git hash-object)。ファイルが無ければ None。"""
+    blobs: dict[str, str | None] = {path: None for path in paths}
+    present = [path for path in paths if Path(path).is_file()]
+    if present:
+        try:
+            done = run_git(['hash-object', '--', *present])
+        except OSError as error:
+            fail(f'git: {error}')
+        hashes = done.stdout.split()
+        if done.returncode != 0 or len(hashes) != len(present):
+            fail(f'git hash-object failed: {done.stderr.strip() or "unexpected output"}')
+        blobs.update(zip(present, hashes))
+    return blobs
+
+
+def cmd_work(args) -> int:
+    pbi = args.pbi
+    if not PBI_NAME.fullmatch(pbi):
+        fail(f'{pbi!r}: use PBI-<n> (for example PBI-3)')
+    base = Path(args.dir)
+    md_path = base / f'{pbi}.md'
+    route_path = base / f'{pbi}.route.json'
+    problems: list[str] = []
+    text = ''
+    readable = True
+    try:
+        text = normalize(md_path.read_bytes().decode('utf-8-sig', errors='replace'))
+    except OSError:
+        readable = False
+        problems.append(f'{md_path.as_posix()}: no such PBI file')
+    goal = pbi_section(text, 'Goal')
+    targets_text = pbi_section(text, 'Targets')
+    do_not_touch_text = pbi_section(text, 'Do not touch')
+    if readable and (not goal or is_none_text(BULLET.sub('', goal, count=1))):
+        problems.append('## Goal is missing, empty or none')
+    targets = work_targets(targets_text, problems)
+    if readable and not targets_text:
+        problems.append('## Targets is missing or empty (write each target as a "- `path`" line)')
+    for path in targets:
+        if Path(path).exists() and not Path(path).is_file():
+            problems.append(f'Targets: {path!r} is not a file')
+    do_not_touch = work_do_not_touch(do_not_touch_text)
+    if readable and not do_not_touch_text:
+        problems.append('## Do not touch is missing or empty')
+    match = WORK_DEPENDS.search(text)
+    depends_on = [p for p in dict.fromkeys(PBI_REF.findall(match.group(1))) if p != pbi] if match else []
+    if not route_path.is_file():
+        problems.append(f'{route_path.as_posix()}: no such route file')
+        route = None
+    else:
+        route = work_route(common.load_json(route_path))
+        if route is None:
+            problems.append(f'{route_path.as_posix()}: no valid "route" list of runner and model')
+    slices = work_slices(pbi_section(text, 'Notes'), problems)
+    for slice_id in slices:
+        slice_path = base / 'notes' / f'{slice_id}.slice.json'
+        if not slice_path.is_file():
+            problems.append(f'Notes: slice {slice_id!r}: no such file {slice_path.as_posix()}')
+        else:
+            _, bad = load_slice(slice_path)
+            if bad:
+                problems.append(f'Notes: slice {slice_id!r}: {bad}')
+    if problems:
+        for problem in problems:
+            print(f'✗ {pbi}: {problem}', file=sys.stderr)
+        print(f'✗ {len(problems)} problem(s): the work file was not written', file=sys.stderr)
+        return EXIT_DRAFT
+    work = {'schema': WORK_SCHEMA, 'pbi': pbi, 'goal': goal, 'targets': targets, 'do_not_touch': do_not_touch,
+            'depends_on': depends_on, 'base_sha': git_base_sha(), 'target_blobs': git_blobs(targets),
+            'route': route, 'slices': slices, 'refs': work_refs(pbi_section(text, 'Refs'))}
+    path = base / f'{pbi}.work.json'
+    common.write_json(path, work)
+    print(path.as_posix())
+    return EXIT_OK
+
+
+def load_work(path: Path) -> dict:
+    """作業票を読み、形が違えば fail (終了コード 2)。stale が使う項目だけを確かめる。"""
+    work = common.load_json(path)
+    if not isinstance(work, dict) or work.get('schema') != WORK_SCHEMA:
+        fail(f'{path.as_posix()}: missing or not a {WORK_SCHEMA} work file (run work first)')
+    blobs = work.get('target_blobs')
+    if not isinstance(blobs, dict) or not all(isinstance(k, str) and (v is None or isinstance(v, str))
+                                               for k, v in blobs.items()):
+        fail(f'{path.as_posix()}: target_blobs must be an object of path to blob hash or null')
+    for key in ('targets', 'depends_on'):
+        if not isinstance(work.get(key), list) or not all(isinstance(v, str) for v in work[key]):
+            fail(f'{path.as_posix()}: {key} must be a list of strings')
+    for name in [*blobs, *work['targets']]:
+        norm = name.replace('\\', '/')
+        if not norm or norm.startswith('/') or re.match(r'^[A-Za-z]:', norm) or '..' in Path(norm).parts:
+            fail(f'{path.as_posix()}: {name!r} must be a path under the repository root')
+    for dep in work['depends_on']:
+        if not PBI_NAME.fullmatch(dep):
+            fail(f'{path.as_posix()}: depends_on {dep!r} must be PBI-<n>')
+        if dep == work.get('pbi'):
+            fail(f'{path.as_posix()}: depends_on names the PBI itself')
+    norm = lambda name: name.replace('\\', '/').removeprefix('./')  # noqa: E731
+    if {norm(k) for k in blobs} != {norm(t) for t in work['targets']}:
+        fail(f'{path.as_posix()}: target_blobs must have exactly one entry per target (run work again)')
+    return work
+
+
+def check_tickets_against_record(base: Path, names: list[str]) -> None:
+    """承認の正本 (/2) があれば、名指した作業票が記録のときのままかを確かめ、違えば mismatch (終了コード 3) で止める。
+    正本が無い (confirm off) か /1 のときは確かめるものが無い。"""
+    record = common.load_json(base / RECORD_NAME)
+    if not valid_record(record) or record['schema'] != SCHEMA_2:
+        return
+    recorded = {entry['file']: entry['hash'] for entry in record['works']}
+    problems = []
+    for name in names:
+        path = base / name
+        if name not in recorded:
+            problems.append(f'work {name} not in the record')
+            continue
+        try:
+            current = work_file_hash(path) if path.is_file() else None
+        except OSError:
+            current = None
+        if current != recorded[name]:
+            problems.append(f'work {name} changed since write')
+    if problems:
+        for problem in problems:
+            print(f'✗ {problem}: do not start it, return it to the designer', file=sys.stderr)
+        sys.exit(EXIT_MISMATCH)
+
+
+def cmd_stale(args) -> int:
+    pbi = args.pbi
+    if not PBI_NAME.fullmatch(pbi):
+        fail(f'{pbi!r}: use PBI-<n> (for example PBI-3)')
+    base = Path(args.dir)
+    work = load_work(base / f'{pbi}.work.json')
+    if work.get('pbi') != pbi:
+        fail(f'{(base / f"{pbi}.work.json").as_posix()}: pbi is {work.get("pbi")!r}, not {pbi!r}')
+    # 承認したときの作業票のままか (自分と依存の作業票)。古さを見る前に確かめる
+    check_tickets_against_record(base, [f'{name}.work.json' for name in [pbi, *work['depends_on']]])
+    # 先に終わった依存 PBI が変えるファイルは、古さに数えない
+    excluded = set()
+    for dep in work['depends_on']:
+        excluded.update(t.replace('\\', '/').removeprefix('./') for t in load_work(base / f'{dep}.work.json')['targets'])
+    recorded = {key.replace('\\', '/').removeprefix('./'): value for key, value in work['target_blobs'].items()}
+    now = git_blobs(list(recorded))
+    changes = []
+    for path, then in recorded.items():
+        current = now[path]
+        if current == then or path in excluded:
+            continue
+        kind = 'appeared' if then is None else 'removed' if current is None else 'changed'
+        changes.append((path, kind))
+    if changes:
+        for path, kind in changes:
+            print(f'stale\t{kind}\t{path}')
+        print(f'✗ {pbi}: {len(changes)} target(s) differ from the design: do not start it, return it to the designer',
+              file=sys.stderr)
+        return EXIT_STALE
+    print(f'fresh\t{pbi}\t{len(recorded)} target(s) match' + (f', {len(excluded & set(recorded))} skipped (depends_on)'
+                                                              if excluded & set(recorded) else ''))
     return EXIT_OK
 
 
@@ -577,7 +943,7 @@ def cmd_check_reply(args) -> int:
     except ValueError:
         print('unbound\tthe am-reply-meta fence is not JSON; not tied to any revision')
         return EXIT_UNBOUND
-    problems = compare(meta, record, draft)
+    problems = work_problems(base, record) + compare(meta, record, draft)
     if problems:
         print('mismatch\t' + '; '.join(problems) + '\tstop: not approved')
         return EXIT_MISMATCH
@@ -625,6 +991,7 @@ def main(argv=None) -> int:
     wr.add_argument('--id', required=True)
     wr.add_argument('--target', action='append', required=True)
     wr.add_argument('--concern', action='append', default=[])
+    wr.add_argument('--work', action='append', default=[])
     md = sub.add_parser('markdown')
     md.add_argument('--draft', required=True)
     li = sub.add_parser('lint')
@@ -633,12 +1000,16 @@ def main(argv=None) -> int:
     ck.add_argument('--reply')
     ck.add_argument('--draft')
     ck.add_argument('--dry-run', action='store_true')
-    for parser in (sl, wr, md, li, ck):
+    wk = sub.add_parser('work')
+    wk.add_argument('pbi')
+    st = sub.add_parser('stale')
+    st.add_argument('pbi')
+    for parser in (sl, wr, md, li, ck, wk, st):
         parser.add_argument('--dir', default='docs/pbi')
     args = ap.parse_args(argv)
     common.utf8_stdout()
     handlers = {'slice': cmd_slice, 'write': cmd_write, 'markdown': cmd_markdown, 'lint': cmd_lint,
-                'check-reply': cmd_check_reply}
+                'check-reply': cmd_check_reply, 'work': cmd_work, 'stale': cmd_stale}
     return handlers[args.command](args)
 
 

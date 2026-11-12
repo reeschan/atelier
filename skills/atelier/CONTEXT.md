@@ -104,6 +104,10 @@ _Avoid_: batch, round
 One small unit of work in `docs/pbi/PBI-<n>.md`, written so that a worker needs nothing else.
 _Avoid_: task, ticket
 
+**work ticket (作業票, work)**:
+The JSON handed to a worker for one PBI, `docs/pbi/PBI-<n>.work.json` (schema `atelier.work/1`): goal, targets, do-not-touch, dependencies, the base SHA and target blobs of the design, the route, the slice ids and the refs. `design_record.py work` makes it from the PBI's Markdown and `route.json`; the designer never writes it by hand. The prompt's `Work:` line names it, on every runner. The worker keeps its scope and constraints; the steps and verify commands stay in the PBI's Markdown. It is not an episode's hand-over (`appendix/handoff.md`) and not the Kiln handoff line, which is why its name does not use "handoff".
+_Avoid_: handoff, brief (the PBI's brief is for Jev's routing), slice (a slice is one concern; a ticket points to slices by id)
+
 **report name (報告名)**:
 `PBI-<n>`, or `PBI-<n>.rework-<k>` for a rework. Files, transcripts and runs are linked through it.
 _Avoid_: run id
