@@ -227,3 +227,69 @@ _Avoid_: 設計図, 構成図
 **internal term (内部の言葉)**:
 A word only Atelier's insides use (route, tier, stage, a quality score's name, a component's name). Text the user reads rewords it or explains it on the same line.
 _Avoid_: jargon, 専門用語
+
+## Harness metrics
+
+**event (イベント)**:
+One checked line in the run's local `docs/pbi/events.jsonl`, schema `atelier.event/1`: `run_id`, `seq`, `stage`, `pbi`, a `type` and identifier-only `data`. The sender may copy it out; nothing of it is required for the run to go on.
+_Avoid_: log line, telemetry
+
+**sender (送り手)**:
+The harness-log script that takes a checked event, writes it to its spool and, when the user enabled it, commits and pushes the lines to the metrics repository. Atelier imports it when it is installed and writes only the local file when it is not.
+_Avoid_: collector, exporter
+
+**allowlist (許可リスト)**:
+The per-type list of fields and vocabularies in `harness.schema.json` that an event must pass before it is written or sent. A value outside it is dropped and its name goes in `dropped`; the rest of the line is kept.
+_Avoid_: schema (the line names its own), filter
+
+**spool (スプール)**:
+The sender's local folder where events wait before `flush` turns them into one commit, under `<phase>/<skill>/<YYYY-MM>/<run_id>.jsonl`. An event in the spool is not yet pushed, and a failed push keeps the lines for the next flush.
+_Avoid_: buffer, queue
+
+**task profile (タスクの特徴)**:
+The measured and tagged description of one PBI or of a whole run (`task.profiled`): size, spread, context weight, languages, frameworks and the designer's `task_type` / `domain` / `difficulty` tags.
+_Avoid_: metadata, attributes
+
+**anchor (アンカー)**:
+A representative task sentence in `taxonomy.json` that a task profile's embedding is compared against. The top three matches are sent with their `anchor_id` and score; the vectors stay in the archive.
+_Avoid_: exemplar, template
+
+**development phase (開発段階)**:
+The phase a sender or a report groups work under, `implement` at this skill. It is a different word from `stage` (工程), which is one of the nine steps of a run: it names the envelope's `phase` item only.
+_Avoid_: stage, step
+
+**split (分割)**:
+The fixed train / heldout / regression assignment of cases, kept in a home manifest with a seed and a `split_set_id`. A case never moves once assigned, except from heldout to regression after it was read.
+_Avoid_: partition, fold
+
+**held-out**:
+The cases a change-maker never reads: only the id, the size and the pass/fail count may be shown (`export_cases.py --view improver`). A held-out case whose failure was read is retired to `regression`.
+_Avoid_: test set, validation set
+
+**change (変更)**:
+One edit to a worker prompt, designer prompt, appendix, routing, model, workflow, tool or grader, recorded in `changes.jsonl` (`harness.change/1`) with a `change_id` and its parent. A round judges one change.
+_Avoid_: commit, patch
+
+**trial (試行)**:
+One replay of the cases under one change, numbered from 0 in the envelope's `trial`. A round aggregates the trials; `HARNESS_TRIAL` sets the number outside a replay.
+_Avoid_: attempt (that is one build of a PBI), run
+
+**round (判定)**:
+The comparison of one change with its base over the trials (`round.judged`): `verdict` accept, overfit_suspect, regress, noise or invalid, with how train and held-out moved and a confidence interval.
+_Avoid_: iteration, wave
+
+**triage (根因の仕分け)**:
+Labelling the root cause of a lineage (`triage.labeled`): task, harness, agent, env, grader or noise, by a human or by the analyzer. The atelier cause maps to it (`spec` to task, `convention`/`scope`/`memory` to harness, `model` to agent, `env` to env, `grader` to grader, `flaky` to noise).
+_Avoid_: diagnosis, postmortem
+
+**config fingerprint (構成の指紋, config_fp)**:
+The first 12 characters of the sha256 of what defines a condition: skill version, the hashes of `worker.md` and `designer.md`, the resolved roles, the workflow name and the default routing. Every event of that condition carries it in the envelope.
+_Avoid_: hash alone, version
+
+**unit (試行の単位, unit_id)**:
+One attempt as the analyzer reads it, `at:<run_id>:<pbi>:<attempt>`, carried in the envelope so a local row and a sent row join to the same attempt.
+_Avoid_: record, row
+
+**signature (シグネチャ)**:
+The identifier of an attempt built from enum-only parts (outcome, causes, counts, flags, runner, tier), so attempts group without prose. `sig_id` is the first 12 characters of the sha256 of the parts.
+_Avoid_: summary, hash of the attempt

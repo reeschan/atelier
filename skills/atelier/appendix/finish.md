@@ -22,14 +22,29 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
    python <skill>/export_cases.py
    ```
 
-4. When rtk mode is on, run these from the repository root, then turn it off. The number covers every rtk run in this repository so far (other sessions, Codex and opencode included); say so.
+4. Profile the run, re-measure the PBIs, assign the finished cases to a split and embed the failures. All four read `docs/pbi/` and leave their record (events or archive); run them once, in this order.
+
+   ```bash
+   python <skill>/events.py profile --run --task-type <type> --domain <domain> --difficulty <low|mid|high>
+   python <skill>/events.py backfill --dir docs/pbi
+   python <skill>/events.py split assign --dir docs/pbi
+   python <skill>/events.py failure-embed --dir docs/pbi
+   ```
+
+   - Run all four even when one exits non-zero: name each failed command and its stderr line in the completion report.
+   - `profile --run` records the whole run once, with the same values as the PBIs' `profile --pbi` (`appendix/events.md`). In an inline run, when `docs/pbi/conductor/goal.md` is missing, write the two or three lines that restate the goal in the spec (`designer.md`, `## Start`) to `docs/pbi/conductor/goal.md` first, then run `profile --run`. `backfill` measures every PBI of this work again from the churn of its Targets since the base commit, and emits `task.profiled` again when the size or the anchors change.
+   - `split assign` puts each new case in train or held-out from the seed in `<home>/splits/<name>.json`, and an existing case keeps its split; a held-out case moves to regression only through `split retire`. Home is `~/.config/atelier`, or the `ATELIER_HOME` value when it is set. When the manifest is missing, `split init` makes it (`appendix/cases.md`, "Hillclimb").
+   - `failure-embed` writes one failure vector per sent-back attempt to the archive's `vectors.jsonl`. When the embedding server does not answer, it prints the URL and `0 件` and the work goes on.
+   - Then run `python <skill>/ingest.py stalled --dir docs/pbi`. When it prints `stalled`, the last rounds (`--k`, default 3) had no `accept`: say so in the completion report and prompt a triage (root-cause labelling), suspecting the grader side first — a reviewer finding that disagrees with verify, many `cause=unknown` from the tester, or the same failure on every model.
+
+5. When rtk mode is on, run these from the repository root, then turn it off. The number covers every rtk run in this repository so far (other sessions, Codex and opencode included); say so.
 
    ```bash
    rtk gain -p | head -n 20
    node <skill>/rtk/rtk-mode.mjs off
    ```
 
-5. When `docs/pbi/adapters.json` has `map.decision` `repo`, run `python <skill>/omm_cache.py export docs/pbi --base <base>`. It copies the stored `.omm/` into the working tree; exit 2 (no stored scan, or an untracked `.omm/` already there) leaves the working tree as it is. Say in the report where `.omm/` is or why it is not, that the user commits it, and that it shows the merge-base, so `omm-pr-scan` can bring it up to the change.
+6. When `docs/pbi/adapters.json` has `map.decision` `repo`, run `python <skill>/omm_cache.py export docs/pbi --base <base>`. It copies the stored `.omm/` into the working tree; exit 2 (no stored scan, or an untracked `.omm/` already there) leaves the working tree as it is. Say in the report where `.omm/` is or why it is not, that the user commits it, and that it shows the merge-base, so `omm-pr-scan` can bring it up to the change.
 
 ## The completion report
 
