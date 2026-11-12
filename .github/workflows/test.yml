@@ -39,3 +39,6 @@ jobs:
       - name: Node tests (ui-video)
         working-directory: skills/ui-video/scripts
         run: node --test record.test.mjs
+      - name: Python tests (harness-log)
+        working-directory: skills/harness-log
+        run: python -m unittest discover -p 'test_*.py'
