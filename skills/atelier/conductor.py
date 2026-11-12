@@ -992,6 +992,9 @@ def closed_lines(run: dict) -> list:
     lines = [f"state: {run.get('state')}"]
     if run.get('state') == 'finished' and run.get('report'):
         lines.append(f"report: {run['report']}")
+        if run.get('report_from_body'):
+            # 設計者は報告のファイルを書けなかったので、完了の記憶も書いていない。書けた報告のあとで呼び手が書く
+            lines.append('then: write the done memory (appendix/memory.md, Finish); the report came from report_body')
     if run.get('state') == 'aborted' and run.get('reason'):
         lines.append(f"reason: {run['reason']}")
     return lines
@@ -1375,8 +1378,12 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
     for stale in stales:
         try:
             stale.unlink()
-        except OSError:
+        except FileNotFoundError:
             pass
+        except OSError as error:
+            if stale.name == 'REPORT.md':
+                # 消せない古い報告は finish で通ってしまうので、起こす前に止める
+                raise Refused(f'cannot remove the old completion report {stale.as_posix()}: {error}')
     roles, sources, warns = load_roles(paths, run)
     session_id = str(uuid.uuid4())
     description = f'ATELIER.{run_short}.{seq} {episode}'
@@ -1793,6 +1800,7 @@ def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -
             # サブエージェントが報告の .md を書けないとき、本文を受けて conductor が書く
             report.parent.mkdir(parents=True, exist_ok=True)
             report.write_text(body if body.endswith('\n') else body + '\n', encoding='utf-8', newline='\n')
+            run['report_from_body'] = True
         history_add(run, running, status, summary)
         run['failures'] = None
         run['handoff'] = None

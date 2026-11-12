@@ -399,7 +399,6 @@ def run_deferred(ctx, base, reports, entries, timeout, tail_n):
         sys.exit(2)
     print(f"| コマンド | 終了コード | 末尾 ({tail_n} 行) | ログ | 報告と番号 |")
     print("|---|---|---|---|---|")
-    per_report = {}
     for i, (cmd, (entry, users)) in enumerate(by_cmd.items(), start=1):
         log = logdir / f"deferred.{reports[0]}.{i}.log"
         with serving(ctx, entry["server"], logdir / f"deferred.{reports[0]}.{i}.server.log"):
@@ -410,10 +409,10 @@ def run_deferred(ctx, base, reports, entries, timeout, tail_n):
         who = ", ".join(f"{r}:{n}" for r, n in users)
         shown = cmd[:60].replace("|", "\\|")
         print(f"| {shown} | {code} | {tail} | {log.as_posix()} | {who} |")
+        # 次のコマンドのサーバーが立たずに止まっても、流し終えた結果は残す
         for report, n in users:
-            per_report.setdefault(report, []).append({"n": n, "command": cmd, "code": code, "log": log.as_posix()})
-    for report, results in per_report.items():
-        merge_results(logdir / f"{report}.json", report, pbi_of(report), results, True)
+            merge_results(logdir / f"{report}.json", report, pbi_of(report),
+                          [{"n": n, "command": cmd, "code": code, "log": log.as_posix()}], True)
     # 結果を書いたあとで止める (上限に当たったことを終了コードで伝えるため)
     if limited:
         raise Blocked(f"limit ({', '.join(limited)})")
@@ -428,8 +427,12 @@ def run_named(ctx, base, settings, name, cmd, timeout, idle, tail_n, approval=No
     log = logdir / f"{name}.1.log"
     with serving(ctx, settings.get("server"), logdir / f"{name}.server.log"):
         if approval is not None:
-            # 「はい」は 1 回の通しで使い切る
-            approval.unlink(missing_ok=True)
+            # 「はい」は 1 回の通しで使い切る。消せた 1 つだけが流す (同時に始めたもう 1 つは断る)
+            try:
+                approval.unlink()
+            except FileNotFoundError:
+                print("refused: the full-run approval was already used (conductor.py answer --full-run yes)")
+                sys.exit(2)
         code, tail = run_one(ctx, cmd, log, timeout, tail_n, idle)
     print(f"| 番号 | 終了コード | 末尾 ({tail_n} 行) | ログ |")
     print("|---|---|---|---|")
