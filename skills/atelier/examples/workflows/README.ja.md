@@ -48,7 +48,7 @@ flowchart TD
     LRA --> Q2{{送ってよい? 変わったファイルの dry-run}}
     Q2 --> LRJ[悪くなった所を 1 件ずつ確かめる]
     LRJ -->|bug-hunt か 新しい 100 行以上の関数| FX2[その PBI を差し戻す]
-    LRJ --> RV[review<br/>interrogate: 深いレビューの PBI があるとき<br/>code-review: 差分が大きいとき]
+    LRJ --> RV[review<br/>interrogate: 重い構成で承認のとき使うと答えたとき<br/>code-review: 差分が大きいとき]
     RV --> SC{{security-audit を使う? 承認のときに聞いた答え}}
     SC --> GS[gate: built-in の security-review]
     GS -->|確かめた指摘| FX2
@@ -76,7 +76,7 @@ flowchart TD
 | route | `route.jev`、関所 `gate.pstack-blast-radius`・`gate.pstack-architect` | 関所は PBI ごと (結合が強い・opus の段) |
 | build / verify / fix | `build.runners` / `verify.builtin` / `fix.rework` | いつも |
 | lint-recheck (verify のあと) | `lint-recheck.jevlint` → `lint-recheck.builtin` | いつも (全 PBI とテストの工程が終わったあと 1 回) |
-| review | `review.pstack-interrogate` → `review.lens-review` → `review.code-review` → `review.builtin` | interrogate は深いレビューの PBI があるとき (設計者が動かし、敵役は opus xhigh と sonnet high)。lens-review (日本語の観点別レビュー、[reeschan/claude-plugins-official](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review)) と code-review は adapter_gate.py が run と言うとき |
+| review | `review.pstack-interrogate` → `review.lens-review` → `review.code-review` → `review.builtin` | interrogate は、新しいアプリケーションを一から作るなどの重い構成のときだけ、承認で聞いて使うと答えた run で動く (`when` は `heavy-ask`。設計者が動かし、敵役は opus xhigh と sonnet high)。lens-review (日本語の観点別レビュー、[reeschan/claude-plugins-official](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review)) と code-review は adapter_gate.py が run と言うとき |
 | security (review のあと) | `security.security-audit`、関所 `gate.security-review` | security-audit は承認のときに聞いて、はいのとき |
 | finish | `finish.builtin`、関所 `gate.yomiyasu` | いつも |
 

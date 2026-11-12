@@ -350,7 +350,7 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(optional['model-check'], [{'id': 'model-check.pstack-statechart', 'when': 'ask-user'}])
         self.assertEqual(optional['security'], [{'id': 'security.security-audit', 'when': 'ask-user'}])
         # interrogate は敵役を起こすので設計者が動かし、敵役のモデルはテンプレートの候補に書く
-        self.assertEqual(workflow['stages']['review'][0], {'id': 'review.pstack-interrogate', 'when': 'deep', 'where': 'main',
+        self.assertEqual(workflow['stages']['review'][0], {'id': 'review.pstack-interrogate', 'when': 'heavy-ask', 'where': 'main',
                                                          'models': ['opus xhigh', 'sonnet high']})
         self.assertEqual(workflow['stages']['review'][1], {'id': 'review.lens-review', 'when': 'adapter-gate'})
         self.assertEqual(self.load('components', 'review.lens-review.json')['invoke'],
