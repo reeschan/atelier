@@ -523,5 +523,138 @@ class RunRolesCliTest(unittest.TestCase):
                          {"caller": 1, "designer": 1, "worker": 1, "reviewer": 1, "tester": 0, "other": 2})
 
 
+class EpisodeCostTest(unittest.TestCase):
+    """episode_cost: 1 つの出番 (run の seq) の役割ごとの数と費用。"""
+
+    RUN_ID = "5a1e0c3d-9b7f-4c2a-8e1d-0f3b6a2c4d5e"
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.projects = self.root / "projects"
+        patcher = mock.patch.object(agent_stats, "PROJECTS", self.projects)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.prices = {"models": {
+            "claude-haiku-5-5": {"input": 1, "output": 5, "cache_read": 0.1,
+                                 "cache_write_5m": 1.25, "cache_write_1h": 2},
+            "claude-sonnet-4-5": {"input": 3, "output": 15, "cache_read": 0.3,
+                                  "cache_write_5m": 3.75, "cache_write_1h": 6}}}
+
+    def session(self, sid, rows, folder="proj"):
+        """projects/<folder>/<sid>.jsonl を書き、そのパスを返す。"""
+        path = self.projects / folder / f"{sid}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_jsonl(path, rows)
+        return path
+
+    def agent(self, main, aid, desc, rows, **meta):
+        """会話記録の subagents/ に 1 体を足す。meta の値 (parentAgentId など) はそのまま書く。"""
+        sub = main.with_suffix("") / "subagents"
+        sub.mkdir(parents=True, exist_ok=True)
+        write_jsonl(sub / f"agent-{aid}.jsonl", rows)
+        (sub / f"agent-{aid}.meta.json").write_text(
+            json.dumps({"description": desc, **meta}), encoding="utf-8")
+
+    def run(self, history, run_id=None):
+        return {"run_id": run_id or self.RUN_ID, "history": history}
+
+    def price(self, model="claude-haiku-5-5"):
+        return self.prices["models"][model]
+
+    def test_headless_episode_counts_session_and_subagents(self):
+        """history の該当行に session_id があれば、そのセッションと subagents/ を役割ごとに数える。"""
+        sid = "11111111-1111-4111-8111-111111111111"
+        main = self.session(sid, [row("m1", "2026-11-10T00:00:00Z",
+                                      inp=10, out=20, read=100, w5=1000, w1=2000)])
+        self.agent(main, "w1", "PBI-1 build", [row("w1", "2026-11-10T00:01:00Z",
+                                                   inp=1, out=2, read=3, w5=40, w1=50)])
+        self.agent(main, "t1", "TEST PBI-1 verify", [row("t1", "2026-11-10T00:02:00Z",
+                                                         inp=4, out=5, read=6, w5=7, w1=8)])
+        run = self.run([{"seq": 1, "session_id": sid}, {"seq": 2, "session_id": "other"}])
+        data = agent_stats.episode_cost(run, 1, self.prices)
+        self.assertEqual(data["method"], "headless")
+        p = self.price()
+        # cache_write は 5m と 1h の合計
+        self.assertEqual(data["roles"]["designer"], {
+            "requests": 1, "input": 10, "output": 20, "cache_read": 100, "cache_write": 3000,
+            "usd": usd(p, input=10, output=20, cache_read=100, cache_write_5m=1000, cache_write_1h=2000)})
+        self.assertEqual(data["roles"]["worker"], {
+            "requests": 1, "input": 1, "output": 2, "cache_read": 3, "cache_write": 90,
+            "usd": usd(p, input=1, output=2, cache_read=3, cache_write_5m=40, cache_write_1h=50)})
+        self.assertEqual(data["roles"]["tester"], {
+            "requests": 1, "input": 4, "output": 5, "cache_read": 6, "cache_write": 15,
+            "usd": usd(p, input=4, output=5, cache_read=6, cache_write_5m=7, cache_write_1h=8)})
+        self.assertEqual(set(data["roles"]), {"designer", "worker", "tester"})
+
+    def test_agent_episode_splits_designer_and_descendants(self):
+        """agent の出番は、その seq の設計者と子孫だけを役割に分け、呼び出し側は数えない。"""
+        sid = "22222222-2222-4222-8222-222222222222"
+        main = self.session(sid, [row("caller", "2026-11-10T00:00:00Z", inp=999, out=999, read=999)])
+        p = self.price()
+        self.agent(main, "d2", f"ATELIER.{self.RUN_ID[:8]}.2 plan",
+                   [row("d2", "2026-11-10T00:00:01Z", inp=10, out=20, read=100)])
+        self.agent(main, "w1", "PBI-1 build", [row("w1", "2026-11-10T00:00:02Z", inp=1, out=2, read=3)],
+                   parentAgentId="d2")
+        self.agent(main, "r1", "PBI-1.review build", [row("r1", "2026-11-10T00:00:03Z", inp=4, out=5, read=6)],
+                   parentAgentId="d2")
+        self.agent(main, "t1", "TEST PBI-1 verify", [row("t1", "2026-11-10T00:00:04Z", inp=7, out=8, read=9)],
+                   parentAgentId="w1")
+        self.agent(main, "o1", "note research", [row("o1", "2026-11-10T00:00:05Z", inp=11, out=12, read=13)],
+                   parentAgentId="d2")
+        # 同じセッションの別の出番 (seq 1) の設計者と、その子。seq 2 には数えない
+        self.agent(main, "d1", f"ATELIER.{self.RUN_ID[:8]}.1 design",
+                   [row("d1", "2026-11-09T00:00:00Z", inp=100, out=100, read=100)])
+        self.agent(main, "x1", "PBI-9 build", [row("x1", "2026-11-09T00:00:01Z", inp=100, out=100, read=100)],
+                   parentAgentId="d1")
+        data = agent_stats.episode_cost(self.run([{"seq": 2}]), 2, self.prices)
+        self.assertEqual(data["method"], "transcript")
+        self.assertEqual({r: v["requests"] for r, v in data["roles"].items()},
+                         {"designer": 1, "worker": 1, "reviewer": 1, "tester": 1, "other": 1})
+        self.assertEqual(data["roles"]["designer"], {
+            "requests": 1, "input": 10, "output": 20, "cache_read": 100, "cache_write": 0,
+            "usd": usd(p, input=10, output=20, cache_read=100)})
+        self.assertEqual(data["roles"]["tester"]["input"], 7)
+        # 子が worker の子 (tester) でも、呼び出し側 (main) のリクエストは数えない
+        self.assertEqual(sum(v["requests"] for v in data["roles"].values()), 5)
+
+    def test_unmeasured_when_neither_transcript_nor_designer(self):
+        """session_id の会話記録も設計者の meta も無ければ unmeasured。"""
+        other = "33333333-3333-4333-8333-333333333333"
+        self.session(other, [row("m1", "2026-11-10T00:00:00Z")])
+        for run, seq in [(self.run([]), 1),
+                         (self.run([{"seq": 1}]), 1),
+                         (self.run([{"seq": 1, "session_id": "missing-session"}]), 1),
+                         (self.run([{"seq": 2, "session_id": other}]), 1),  # 別の seq の行は見ない
+                         (self.run([{"seq": 1, "session_id": 90210}]), 1)]:
+            with self.subTest(seq=seq):
+                self.assertEqual(agent_stats.episode_cost(run, seq, self.prices),
+                                 {"method": "unmeasured", "roles": {}})
+        self.assertEqual(agent_stats.episode_cost({"run_id": self.RUN_ID}, 1, self.prices),
+                         {"method": "unmeasured", "roles": {}})
+
+    def test_role_with_unpriced_model_has_null_usd(self):
+        """単価の分からないモデルが混ざった役割だけ usd を null にし、ほかの役割は換算する。"""
+        sid = "44444444-4444-4444-8444-444444444444"
+        main = self.session(sid, [row("m1", "2026-11-10T00:00:00Z", inp=10, out=20, read=100)])
+        self.agent(main, "w1", "PBI-1 build", [
+            row("k1", "2026-11-10T00:01:00Z", inp=10, out=20),
+            row("k2", "2026-11-10T00:01:01Z", model="mystery-9", inp=30, out=40)])
+        data = agent_stats.episode_cost(self.run([{"seq": 1, "session_id": sid}]), 1, self.prices)
+        worker = data["roles"]["worker"]
+        self.assertIsNone(worker["usd"])
+        self.assertEqual((worker["requests"], worker["input"], worker["output"]), (2, 40, 60))
+        self.assertIsInstance(data["roles"]["designer"]["usd"], float)
+
+    def test_prices_default_to_the_shared_table(self):
+        """prices を省くと --cost と同じ単価表 (同梱 + home) で換算する。"""
+        sid = "55555555-5555-4555-8555-555555555555"
+        self.session(sid, [row("m1", "2026-11-10T00:00:00Z", inp=10, out=20, read=100)])
+        with mock.patch.object(agent_stats.common, "load_prices", return_value=self.prices):
+            data = agent_stats.episode_cost(self.run([{"seq": 1, "session_id": sid}]), 1)
+        self.assertIsInstance(data["roles"]["designer"]["usd"], float)
+        self.assertGreater(data["roles"]["designer"]["usd"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
