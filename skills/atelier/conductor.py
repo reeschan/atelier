@@ -2532,6 +2532,7 @@ def run_episodes(args, paths: Paths) -> int:
     warns = []
     episodes = 0
     while True:
+        not_started = None
         with Lock(paths):
             run = load_run(paths)
             if run is None:
@@ -2572,8 +2573,14 @@ def run_episodes(args, paths: Paths) -> int:
             out_json = paths.episode_file(seq, str(running.get('episode') or 'design'), '.json')
             child, code, lines = launch_designer(paths, run, running, warns)
             if child is None:
-                emit(lines)
-                return code
+                # 設計者を起こせなかった出番も fail が history に閉じる。その出番だけ、ロックを抜けてから settle する
+                ended = any(isinstance(h, dict) and h.get('seq') == seq for h in run.get('history') or [])
+                not_started = (code, lines, seq if ended else None)
+        if not_started is not None:
+            code, lines, settled = not_started
+            settle_after(paths, settled)
+            emit(lines)
+            return code
         # 依頼文を書くのはロックを放してから (その間の abort・next --relaunch を止めない)
         write_prompt(child)
         # 子を待つ間もロックを持たない (その間の abort・next --relaunch が動く)

@@ -557,6 +557,7 @@ class RecordRunTest(unittest.TestCase):
         [event] = self.attempts()
         self.assertNotIn('dropped', event)
         self.assertEqual(event['unit_id'], 'at:r1:PBI-007:1')
+        self.assertEqual((event['run_id'], event['seq']), ('r1', 3))  # 行と同じ時点の run.json のキー
         data = event['data']
         self.assertEqual(
             (data['attempt'], data['step'], data['rework'], data['runner'], data['model'],

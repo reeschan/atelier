@@ -965,6 +965,17 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(run['seq'], 2)  # 問いを閉じ、design を headless で起こした
         self.assertEqual(run['question']['path'], 'docs/pbi/notes/q.md')  # 次は設計者の問い
 
+    def test_designer_that_cannot_start_still_settles_its_episode(self):
+        """設計者を起こせずに出番が失敗で閉じても、その出番の settle (episode.cost) は走る。"""
+        rc, out = self.con('start', '--goal', 'g', '--launch', 'headless')
+        self.assertEqual(rc, 0, out)
+        missing = os.path.join(self.tmp, 'no-such-designer.exe')
+        rc, out = self.con('run', env={'ATELIER_DESIGNER_CMD': missing, 'ATELIER_EVENTS_SETTLE': 'sync'})
+        self.assertNotIn(rc, (0, 10), out)
+        types = [(e['type'], e.get('seq')) for e in self.events()]
+        self.assertIn(('episode.ended', 1), types)
+        self.assertIn(('episode.cost', 1), types)
+
     def test_start_asks_for_the_sender_setup_only_without_config(self):
         """送り手があって設定が無ければ、start は ask harness-log: の行を出す。設定ができたら出さない。"""
         rc, out = self.con('start', '--goal', 'first')
