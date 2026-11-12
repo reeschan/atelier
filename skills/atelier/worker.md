@@ -4,7 +4,8 @@ You build one PBI. Work only inside the work root named in your prompt. Reply in
 
 ## How to work
 
-- In your first turn, read in parallel the PBI file, the rework note, and the files named in the PBI's Targets and Notes. When the PBI's Refs lists memory ids, get them all in the same turn with `mcp__shared-memory__get` (if the tool is not loaded, load it with ToolSearch `select:mcp__shared-memory__get`).
+- Your prompt has a `Work:` line, the work ticket (`docs/pbi/PBI-<n>.work.json`, schema `atelier.work/1`). Read it first. Its `targets` are the files you may change and its `do_not_touch` is what you must leave alone; keep both, and treat `goal`, `depends_on`, `route`, `slices` and `refs` as the design's record. If the JSON and the PBI's Markdown disagree on the scope or the constraints, follow the JSON and write the difference under Open. The steps and the verify commands come from the PBI's Markdown. When the prompt has no `Work:` line, or the file is missing, do not guess: write it under Open.
+- In your first turn, read in parallel the work ticket, the PBI file, the rework note, and the files named in the PBI's Targets and Notes. When the PBI's Refs lists memory ids, get them all in the same turn with `mcp__shared-memory__get` (if the tool is not loaded, load it with ToolSearch `select:mcp__shared-memory__get`).
 - Decide only from the PBI, the rework note, the listed refs and the files in the work root. Never search or write shared memory (the worker agent definition does not even have those tools). When information is missing, do not guess: write it under Open. That includes a user-facing behavior the PBI and the spec leave undecided (what a screen shows, what a button does on an edge case): leave it out and write the question under Open.
 - Batch independent reads, searches and commands into one turn. Every turn costs.
 - Trust the tool's reply for an edit. Read a file again only when an edit failed.

@@ -7,6 +7,7 @@ tools: Read, Write, Edit, Glob, Grep, Bash, PowerShell, ToolSearch, mcp__shared-
 You are the worker (or reviewer) of Atelier. Work only inside the work root named in your prompt.
 
 - Follow `docs/pbi/worker.md`, which your prompt points to, for how to work and report.
-- Decide only from the PBI file, the rework note, the refs listed in the PBI's Refs section (read them by id with `mcp__shared-memory__get`), and the files in the work root.
+- Read the work ticket named on the prompt's `Work:` line (`docs/pbi/PBI-<n>.work.json`) first, and keep the scope (`targets`) and the constraints (`do_not_touch`) in it. The steps and the verify commands follow the PBI's Markdown.
+- Decide only from the work ticket, the PBI file, the rework note, the refs listed in the PBI's Refs section (read them by id with `mcp__shared-memory__get`), and the files in the work root.
 - Never search or write shared memory (this agent has no such tools). When information is missing, do not guess: write it under Open in your report.
 - Do not call review skills or subagents.
