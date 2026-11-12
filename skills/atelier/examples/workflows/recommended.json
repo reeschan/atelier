@@ -1,8 +1,8 @@
 {
   "name": "recommended",
   "description": {
-    "ja": "作者が実際に使っている構成。jev-routed に、pstack (理解・振り分けのあとの関所・深いレビュー)、mattpocock-skills (設計の grilling と最終レビュー)、yomiyasu (完了報告の推敲) と、オプションの工程のマーケティング (founder-skill の利用者パネル)、UI デザイン (新しい見た目は design-studio と ui-video、いまある画面の手直しは unslop)、状態モデルの検査 (pstack の statechart。使うかを毎回聞く)、セキュリティ (Cloudflare の security-audit。使うかを毎回聞く) を足したもの。interrogate は設計者が自分で動かし、敵役は opus xhigh と sonnet high。スキルはこの例に含まれず、component.py example check が入れ方を出す。",
-    "en": "The author's own setup: jev-routed plus pstack (understand, gates after route, deep review), mattpocock-skills (grilling for design, the final review), yomiyasu (polishing the Japanese completion report), the optional stages marketing (founder-skill's user panel), UI design (design-studio and ui-video for a new look, unslop for retouching existing screens), model check (pstack's statechart, asked every run) and security (Cloudflare's security-audit, asked every run). interrogate runs in the orchestrator's session, with adversaries on opus xhigh and sonnet high. The skills are not included; component.py example check prints how to install them."
+    "ja": "作者が実際に使っている構成。jev-routed に、pstack (理解・振り分けのあとの関所・深いレビュー)、mattpocock-skills (設計の grilling)、lens-review (日本語の観点別の最終レビュー)、yomiyasu (完了報告の推敲) と、オプションの工程のマーケティング (founder-skill の利用者パネル)、UI デザイン (新しい見た目は design-studio と ui-video、いまある画面の手直しは unslop)、状態モデルの検査 (pstack の statechart。使うかを毎回聞く)、セキュリティ (Cloudflare の security-audit。使うかを毎回聞く) を足したもの。interrogate は設計者が自分で動かし、敵役は opus xhigh と sonnet high。スキルはこの例に含まれず、component.py example check が入れ方を出す。",
+    "en": "The author's own setup: jev-routed plus pstack (understand, gates after route, deep review), mattpocock-skills (grilling for design), lens-review (the final review, by lens and in Japanese), yomiyasu (polishing the Japanese completion report), the optional stages marketing (founder-skill's user panel), UI design (design-studio and ui-video for a new look, unslop for retouching existing screens), model check (pstack's statechart, asked every run) and security (Cloudflare's security-audit, asked every run). interrogate runs in the orchestrator's session, with adversaries on opus xhigh and sonnet high. The skills are not included; component.py example check prints how to install them."
   },
   "skills": [
     {
@@ -27,9 +27,9 @@
       "license": "MIT", "link": "https://github.com/cursor/plugins"
     },
     {
-      "skill": "mattpocock-skills:code-review", "stage": "review",
-      "install": {"marketplace": "claude-plugins-official"},
-      "license": "MIT", "link": "https://github.com/mattpocock/skills"
+      "skill": "lens-review:lens-review", "stage": "review",
+      "install": {"marketplace_source": "reeschan/claude-plugins-official", "marketplace": "reeschan-plugins"},
+      "license": "Apache-2.0", "link": "https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review"
     },
     {
       "skill": "pstack:interrogate", "stage": "review",
@@ -79,8 +79,8 @@
   "workflow": {
     "name": "recommended",
     "description": {
-      "ja": "作者の構成 (examples/workflows/recommended.json から)。jev-routed に pstack・mattpocock-skills・yomiyasu と、オプションの工程 (マーケティング・UI デザイン・状態モデルの検査・セキュリティ) を足したもの。",
-      "en": "The author's setup (from examples/workflows/recommended.json): jev-routed plus pstack, mattpocock-skills, yomiyasu and the optional stages (marketing, UI design, model check, security)."
+      "ja": "作者の構成 (examples/workflows/recommended.json から)。jev-routed に pstack・mattpocock-skills・lens-review・yomiyasu と、オプションの工程 (マーケティング・UI デザイン・状態モデルの検査・セキュリティ) を足したもの。",
+      "en": "The author's setup (from examples/workflows/recommended.json): jev-routed plus pstack, mattpocock-skills, lens-review, yomiyasu and the optional stages (marketing, UI design, model check, security)."
     },
     "stages": {
       "understand": [{"id": "understand.pstack-how", "when": "clearly-complex"}, "understand.builtin"],
@@ -91,7 +91,7 @@
       "verify": ["verify.builtin"],
       "review": [
         {"id": "review.pstack-interrogate", "when": "deep", "where": "main", "models": ["opus xhigh", "sonnet high"]},
-        {"id": "review.mattpocock-skills-code-review", "when": "adapter-gate"},
+        {"id": "review.lens-review", "when": "adapter-gate"},
         "review.code-review",
         "review.builtin"
       ],
