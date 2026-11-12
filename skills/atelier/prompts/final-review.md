@@ -8,6 +8,11 @@ subagent_type: atelier-reviewer
 prompt:
 Final review of this repository's work. Report only: do not edit, commit, push or post anything.
 - base: <merge-base sha>; head: <HEAD sha>; spec: <docs/specs/<slug>.md, or none>
+- Put these lines in the skill's request as well, for skills that read them (lens-review does):
+  Base: <merge-base sha>
+  Target: the working tree compared with Base. The changes are not committed, so `Base..HEAD` shows nothing.
+  Spec: <the spec path, or none>
+  Rules: <docs/pbi/notes/review-rules.md, or none>
 - Call the Skill tool with <skill name>. For the built-in code-review, pass the argument medium; for the others, pass no argument.
 - Never pass --fix, --comment, ultra or --max-findings.
 - If the skill asks you a question, do not answer it. Stop and write BLOCKED.
@@ -20,5 +25,7 @@ Final review of this repository's work. Report only: do not edit, commit, push o
   major: the change drifts from the spec's intent, decides a behavior the spec leaves open, or contradicts an accepted decision record (ADR).
   minor: wording or a small mismatch; the behavior still matches the spec.
   If you stopped on a question, line 1 is BLOCKED: <reason>, with no finding lines.
+- When the skill prints its list in this same line format (`- [severity] file:line — ... — ...`), copy those lines as they are. Raise a finding to critical when it breaks an acceptance criterion.
+- When the skill also prints details for each finding (why, evidence, fix), copy them to <docs/pbi/reviews/final.review.detail.md, or final.security.detail.md>. This is the only other file you may write.
 - Your final message: the three counts and one line per finding, nothing else.
 ```

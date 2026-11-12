@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-作者がふだん atelier を回している構成です。同梱の `jev-routed` に、ほかの人のスキル (pstack・mattpocock-skills・yomiyasu・founder-skill・design-studio・ui-video・unslop・security-audit) と推奨の道具 (oh-my-mermaid・jevlint・sac-strategic-compact) を足しています。見本の `recommended.json` が持つのは、テンプレートと、スキルごとの入れ方・登録のしかただけです。ほかの人のスキルの中身は、このリポジトリに入れていません。
+作者がふだん atelier を回している構成です。同梱の `jev-routed` に、ほかの人のスキル (pstack・mattpocock-skills・lens-review・yomiyasu・founder-skill・design-studio・ui-video・unslop・security-audit) と推奨の道具 (oh-my-mermaid・jevlint・sac-strategic-compact) を足しています。見本の `recommended.json` が持つのは、テンプレートと、スキルごとの入れ方・登録のしかただけです。ほかの人のスキルの中身は、このリポジトリに入れていません。
 
 <!-- 画像: 流れの全体 (recommended-flow-light.png / recommended-flow-dark.png) をここに置く -->
 
@@ -76,7 +76,7 @@ flowchart TD
 | route | `route.jev`、関所 `gate.pstack-blast-radius`・`gate.pstack-architect` | 関所は PBI ごと (結合が強い・opus の段) |
 | build / verify / fix | `build.runners` / `verify.builtin` / `fix.rework` | いつも |
 | lint-recheck (verify のあと) | `lint-recheck.jevlint` → `lint-recheck.builtin` | いつも (全 PBI とテストの工程が終わったあと 1 回) |
-| review | `review.pstack-interrogate` → `review.mattpocock-skills-code-review` → `review.code-review` → `review.builtin` | interrogate は深いレビューの PBI があるとき (設計者が動かし、敵役は opus xhigh と sonnet high)。code-review は adapter_gate.py が run と言うとき |
+| review | `review.pstack-interrogate` → `review.lens-review` → `review.code-review` → `review.builtin` | interrogate は深いレビューの PBI があるとき (設計者が動かし、敵役は opus xhigh と sonnet high)。lens-review (日本語の観点別レビュー、[reeschan/claude-plugins-official](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review)) と code-review は adapter_gate.py が run と言うとき |
 | security (review のあと) | `security.security-audit`、関所 `gate.security-review` | security-audit は承認のときに聞いて、はいのとき |
 | finish | `finish.builtin`、関所 `gate.yomiyasu` | いつも |
 
