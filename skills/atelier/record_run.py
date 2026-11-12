@@ -795,6 +795,9 @@ def main():
     base = Path(args.dir)
     # この行を記録した run。あとで別の run から読んでも attempt の unit_id を再現できるよう行に残す
     run_id = run_id_of(base)
+    # イベントの結び付けキーは、行と同じ時点の run.json から取る (あとで start --force が run.json を
+    # 入れ替えても、この attempt は記録した run に付いたままにする)
+    event_keys = events.run_keys(base) if events is not None else (None, None)
     runs = base / 'runs.jsonl'
     if any(r.get('report') == args.report and r.get('attempt') == args.attempt for r in read_rows(runs)):
         fail(f'{args.report} の attempt {args.attempt} は記録済み (runs.jsonl)')
@@ -888,7 +891,8 @@ def main():
     # (PBI-7 と PBI-7.rework-1 は別の attempt の並び)。
     if events is not None:
         unit_id = f'at:{run_id}:{row["report"]}:{row["attempt"]}'
-        events.emit(base, 'pbi.attempted', attempt_data(row), pbi=pbi, envelope={'unit_id': unit_id})
+        events.emit(base, 'pbi.attempted', attempt_data(row), pbi=pbi, envelope={'unit_id': unit_id},
+                    run_id=event_keys[0], seq=event_keys[1])
     total = got['tokens']['total']
     cost = cost_reported if cost_reported is not None else cost_api
     saved = '保全 ok' if archive_info['ok'] else f"保全に失敗 ({archive_info['error']})。作業は続けてよい"
