@@ -584,6 +584,15 @@ class AllOnlyTest(unittest.TestCase):
                 self.assertEqual(json.load(f)['override']['route'],
                                  [{'runner': 'opencode', 'model': 'opencode-go/deepseek-v4.1-flash', 'effort': None}])
 
+    def test_override_keeps_a_sensitive_pbi_on_the_agent(self):
+        with temp_dir() as d:
+            self.write_pbi(d, 'PBI-001', {**SMALL, 'sensitive': True})
+            out = self.run_override(d, '--route', 'codex/gpt-6.1-terra')
+            self.assertNotEqual(out.returncode, 0)
+            self.assertIn('sensitive', out.stderr)
+            self.assertFalse(os.path.exists(os.path.join(d, 'PBI-001.route.json')))
+            self.assertEqual(self.run_override(d, '--route', 'agent/sonnet').returncode, 0)
+
     def test_override_with_an_unknown_runner_fails(self):
         with temp_dir() as d:
             self.write_pbi(d, 'PBI-001', SMALL)

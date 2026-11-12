@@ -29,13 +29,17 @@ bash と Node:
   --list-deferred  あとに回すコマンドの番号を「3,5」の形で出して終わる (作業者への prompt に書くため)
   --skip-deferred  あとに回すコマンドを除いて流す (作業者の報告のあとの検証)
   --deferred       位置引数に報告名をカンマでつないで渡す (PBI-003,PBI-004.rework-1)。あとに回すコマンドのうち
-                   --when (既定 wave) の合うものを同じ文字列ごとに 1 回だけ流し、各報告の <報告名>.json の番号に重ねる
+                   --when (既定 wave) の合うものを同じ文字列ごとに 1 回だけ流し、各報告の <報告名>.json の番号に重ねる。
+                   その時期の要素が無ければ `deferred: none for when=<時期>` を出して終了コード 0。
+                   要素の timeout に当たれば結果を書いたうえで `blocked: limit` を出して終了コード 3
   --related a.cy.ts,b.cy.ts  "investigate" の {specs} をカンマでつないだ spec に置き換えて流す。
-                   上限は spec の数 × limits.per_spec 秒。当たれば `blocked: limit` を出して終了コード 3
+                   上限は spec の数 × limits.per_spec 秒。当たれば `blocked: limit` を出して終了コード 3。
+                   spec が空か、investigate に {specs} が無ければ `refused: ...` で終了コード 2
   --final          "final" を時間の上限なしで流す。出力が limits.idle 秒無ければ止め、`blocked: idle` で終了コード 3。
                    <dir>/full-run.approved.json (conductor.py answer --full-run yes) が無ければ `refused: ...` で
-                   終了コード 2。あれば流す前に消す (承認は 1 回の通しで使い切る)
-  PBI の検証コマンドに "final" (と同じか、それを含むコマンド) があれば、流さずに `refused: ...` で終了コード 2。
+                   終了コード 2。あればサーバーを用意したあと、流す直前に消す (承認は 1 回の通しで使い切る)
+  PBI の検証コマンドに "final" (と同じか、それを含むか、"final" を && ・ ; で区切った最後のコマンドを含むコマンド)
+  があれば、流さずに `refused: ...` で終了コード 2。
   "limits" の既定は {"per_spec": 900, "retries": 2, "idle": 600}。
   "server" ({"start", "url"}) のある検査 (--related・--final は最上位の "server") の前に url を見る。
   応答すればそのまま使い、止めない。応答しなければ start を起動して応答を待ち (最大 120 秒、来なければ
@@ -45,6 +49,7 @@ bash と Node:
 """
 
 import argparse
+import codecs
 import json
 import os
 import re
@@ -57,7 +62,7 @@ import time
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from agents import fnm_node_dir
 from common import load_json, resolve_home
@@ -164,7 +169,8 @@ def pbi_of(report):
 
 def _system_bash(path):
     """System32 (WSL の bash) か WindowsApps (ストアの shim) の下か。"""
-    parts = [p.lower() for p in Path(path).parts]
+    # 動いている OS に依らず \ と / の両方で区切る
+    parts = [p.lower() for p in PureWindowsPath(path).parts]
     return "system32" in parts or "windowsapps" in parts
 
 
@@ -244,16 +250,22 @@ def child_env(root, base_env=None):
 # --- 実行 ---
 
 def kill_tree(proc):
-    """proc と、それが起動したプロセスの木を止める。"""
-    if proc.poll() is None:
-        if os.name == "nt":
+    """proc と、それが起動したプロセスの木を止める。
+
+    Windows 以外では proc を NEW_GROUP (新しいセッション) で起動するので、プロセスグループの番号は proc.pid と同じ。
+    起動したシェルが先に終わっていても、残った子 (裏で動くサーバーなど) をグループごと止める。
+    Windows は taskkill /T で木をたどるので、起動したシェルが動いているときだけ止める
+    (終わったあとの pid は別のプロセスに使い回されることがある)。
+    """
+    if os.name == "nt":
+        if proc.poll() is None:
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
                            creationflags=NO_WINDOW)
-        else:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
     try:
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
@@ -263,14 +275,19 @@ def kill_tree(proc):
 def stream(bash, cmd, env, timeout, idle):
     """cmd を流して (出力, 終了コード) を返す。上限なら終了コードは "timeout"、無出力なら "idle"。"""
     proc = subprocess.Popen([bash, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
-                            env=env, creationflags=NO_WINDOW, **NEW_GROUP)
+                            stdin=subprocess.DEVNULL, env=env, creationflags=NO_WINDOW, **NEW_GROUP)
     chunks, last = [], [time.monotonic()]
 
     def pump():
-        for line in proc.stdout:
-            chunks.append(line)
+        # 行ではなく届いた分ずつ読む (改行の無い進み具合の出力も、出力があったと数えるため)
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        while True:
+            data = proc.stdout.read1(65536)
+            if not data:
+                break
+            chunks.append(decoder.decode(data))
             last[0] = time.monotonic()
+        chunks.append(decoder.decode(b"", final=True))
 
     reader = threading.Thread(target=pump, daemon=True)
     reader.start()
@@ -292,7 +309,7 @@ def stream(bash, cmd, env, timeout, idle):
         chunks.append(f"\n(タイムアウト {timeout} 秒)\n")
     elif code == "idle":
         chunks.append(f"\n(出力が {idle} 秒無いので止めた)\n")
-    return "".join(chunks), code
+    return "".join(chunks).replace("\r\n", "\n"), code
 
 
 def run_one(ctx, cmd, log, timeout, tail_n, idle=None):
@@ -376,6 +393,7 @@ def run_deferred(ctx, base, reports, entries, timeout, tail_n):
     """あとに回すコマンドを同じ文字列ごとに 1 回だけ流し、各報告の結果に重ねる。"""
     logdir = base / "verify"
     by_cmd = deferred_runs(base, reports, entries)
+    limited = []
     if not by_cmd:
         print("あとに回すコマンドが無い (tests-at-end.json の deferred に合うコマンドが、渡した報告の PBI に無い)")
         sys.exit(2)
@@ -385,7 +403,10 @@ def run_deferred(ctx, base, reports, entries, timeout, tail_n):
     for i, (cmd, (entry, users)) in enumerate(by_cmd.items(), start=1):
         log = logdir / f"deferred.{reports[0]}.{i}.log"
         with serving(ctx, entry["server"], logdir / f"deferred.{reports[0]}.{i}.server.log"):
-            code, tail = run_one(ctx, cmd, log, entry["timeout"] or timeout, tail_n)
+            limit = entry["timeout"] or timeout
+            code, tail = run_one(ctx, cmd, log, limit, tail_n)
+        if code == "timeout":
+            limited.append(f"{cmd[:60]} ({limit} 秒)")
         who = ", ".join(f"{r}:{n}" for r, n in users)
         shown = cmd[:60].replace("|", "\\|")
         print(f"| {shown} | {code} | {tail} | {log.as_posix()} | {who} |")
@@ -393,13 +414,22 @@ def run_deferred(ctx, base, reports, entries, timeout, tail_n):
             per_report.setdefault(report, []).append({"n": n, "command": cmd, "code": code, "log": log.as_posix()})
     for report, results in per_report.items():
         merge_results(logdir / f"{report}.json", report, pbi_of(report), results, True)
+    # 結果を書いたあとで止める (上限に当たったことを終了コードで伝えるため)
+    if limited:
+        raise Blocked(f"limit ({', '.join(limited)})")
 
 
-def run_named(ctx, base, settings, name, cmd, timeout, idle, tail_n):
-    """--related・--final の 1 本を流して <名前>.json に書く。上限・無出力で止めたら Blocked。"""
+def run_named(ctx, base, settings, name, cmd, timeout, idle, tail_n, approval=None):
+    """--related・--final の 1 本を流して <名前>.json に書く。上限・無出力で止めたら Blocked。
+
+    approval (通しの承認のファイル) があれば、サーバーを用意したあと流す直前に消す。用意で止まれば承認は残る。
+    """
     logdir = base / "verify"
     log = logdir / f"{name}.1.log"
     with serving(ctx, settings.get("server"), logdir / f"{name}.server.log"):
+        if approval is not None:
+            # 「はい」は 1 回の通しで使い切る
+            approval.unlink(missing_ok=True)
         code, tail = run_one(ctx, cmd, log, timeout, tail_n, idle)
     print(f"| 番号 | 終了コード | 末尾 ({tail_n} 行) | ログ |")
     print("|---|---|---|---|")
@@ -462,15 +492,32 @@ def main_named(args, base, settings):
         if not approval.is_file():
             print("refused: no full-run approval (conductor.py answer --full-run yes)")
             sys.exit(2)
-        # 「はい」は 1 回の通しで使い切る
-        approval.unlink()
-    ctx = prepare(base, resolve_home(args.home))
-    if args.final:
-        run_named(ctx, base, settings, args.name or "final", template, None, limits["idle"], args.tail)
+        ctx = prepare(base, resolve_home(args.home))
+        run_named(ctx, base, settings, args.name or "final", template, None, limits["idle"], args.tail,
+                  approval)
         return
+    # spec で絞れない --related は通しと同じになるので流さない
     specs = [s.strip() for s in args.related.split(",") if s.strip()]
+    if not specs:
+        print("refused: --related has no spec (give spec paths separated by commas)")
+        sys.exit(2)
+    if "{specs}" not in template:
+        print('refused: "investigate" in tests-at-end.json has no {specs}; it would ignore the specs')
+        sys.exit(2)
+    ctx = prepare(base, resolve_home(args.home))
     cmd = template.replace("{specs}", ",".join(specs))
     run_named(ctx, base, settings, args.name or "related", cmd, len(specs) * limits["per_spec"], None, args.tail)
+
+
+def _squash(cmd):
+    return " ".join(cmd.split())
+
+
+def runs_final(cmd, final):
+    """cmd が通し (final) を流すか。final と同じ・final を含む・final の最後のコマンド (cd などの前置きを除く) を含む。"""
+    cmd, final = _squash(cmd), _squash(final)
+    core = _squash(re.split(r"&&|;", final)[-1])
+    return cmd == final or final in cmd or (bool(core) and core in cmd)
 
 
 def main_pbi(args, base, settings, entries):
@@ -480,7 +527,7 @@ def main_pbi(args, base, settings, entries):
     final = final_command(settings)
     if final and not args.list_deferred:
         for n, cmd in cmds:
-            if cmd.strip() == final or final in cmd:
+            if runs_final(cmd, final):
                 print(f"refused: {args.pbi} verify {n} runs the whole suite (final); use related specs")
                 sys.exit(2)
     if args.list_deferred:
@@ -531,9 +578,12 @@ def main():
             main_named(args, base, settings)
         elif args.deferred:
             reports = [r.strip() for r in args.pbi.split(",") if r.strip()]
+            phase = [e for e in entries if e["when"] == args.when]
+            if not phase:
+                print(f"deferred: none for when={args.when}")
+                return
             ctx = prepare(base, resolve_home(args.home))
-            run_deferred(ctx, base, reports, [e for e in entries if e["when"] == args.when],
-                         args.timeout, args.tail)
+            run_deferred(ctx, base, reports, phase, args.timeout, args.tail)
         else:
             main_pbi(args, base, settings, entries)
     except Blocked as e:
