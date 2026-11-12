@@ -48,6 +48,8 @@ class ComponentCliTest(unittest.TestCase):
         self.plugin('pstack', {'how': True, 'blast-radius': True, 'architect': True, 'interrogate': True, 'statechart': True}, {'license': 'MIT', 'repository': {'url': 'https://github.com/cursor/plugins'}})
         self.plugin('yomiyasu', {'yomiyasu': False}, {'license': 'MIT', 'repository': 'https://github.com/nanaism/yomiyasu'})
         self.plugin('founder-skill', {'founder-consumer': False}, {'license': 'MIT'})
+        self.plugin('lens-review', {'lens-review': False},
+                    {'license': 'Apache-2.0', 'repository': 'https://github.com/reeschan/claude-plugins-official'})
         write(os.path.join(self.skills, 'my-review', 'SKILL.md'), skill_md('my-review'))
         for name in ('design-studio', 'ui-video', 'unslop', 'security-audit'):
             write(os.path.join(self.skills, name, 'SKILL.md'), skill_md(name))
@@ -80,6 +82,18 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual((data['license'], data['link']), ('MIT', 'https://github.com/mattpocock/skills'))
         self.assertEqual(data['title']['en'], 'Does grilling')
         self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['design'], ['design.mattpocock-skills-grilling', 'design.builtin'])
+
+    def test_plugin_and_skill_with_the_same_name_get_a_short_id(self):
+        # lens-review:lens-review は review.lens-review になり、同梱の review.code-review とぶつからない
+        code, out, err = self.run_cli('add', 'lens-review:lens-review', '--stage', 'review', '--when', 'adapter-gate')
+        self.assertEqual(code, 0, out + err)
+        data = self.load('components', 'review.lens-review.json')
+        self.assertEqual(data['invoke'], {'kind': 'skill', 'name': 'lens-review:lens-review'})
+        self.assertIn('--fix', data['forbid'])
+        self.assertIn('--comment', data['forbid'])
+        self.assertEqual(data['license'], 'Apache-2.0')
+        self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['review'],
+                         [{'id': 'review.lens-review', 'when': 'adapter-gate'}, 'review.code-review', 'review.builtin'])
 
     def test_read_skill_under_a_group_folder_keeps_its_path(self):
         code, out, err = self.run_cli('add', 'grouped:deep', '--stage', 'review')
@@ -303,6 +317,10 @@ class ComponentCliTest(unittest.TestCase):
         self.assertIn('pstack:how\tunderstand\tinstalled\tnot registered', out)
         self.assertIn('install claude plugin marketplace add nanaism/yomiyasu', out)
         self.assertIn('install claude plugin install yomiyasu@yomiyasu --scope user', out)
+        shutil.rmtree(os.path.join(self.plugins, 'cache', 'market', 'lens-review'))
+        _code, out, _err = self.run_cli('example', 'check', 'recommended')
+        self.assertIn('install claude plugin marketplace add reeschan/claude-plugins-official', out)
+        self.assertIn('install claude plugin install lens-review@reeschan-plugins --scope user', out)
         self.assertNotIn('install claude plugin install pstack', out)
         self.assertIn('design-studio\tui-design after design\tinstalled', out)
         self.assertIn('founder-skill:founder-consumer\tmarketing after understand\tinstalled', out)
@@ -334,6 +352,9 @@ class ComponentCliTest(unittest.TestCase):
         # interrogate は敵役を起こすので設計者が動かし、敵役のモデルはテンプレートの候補に書く
         self.assertEqual(workflow['stages']['review'][0], {'id': 'review.pstack-interrogate', 'when': 'deep', 'where': 'main',
                                                          'models': ['opus xhigh', 'sonnet high']})
+        self.assertEqual(workflow['stages']['review'][1], {'id': 'review.lens-review', 'when': 'adapter-gate'})
+        self.assertEqual(self.load('components', 'review.lens-review.json')['invoke'],
+                         {'kind': 'skill', 'name': 'lens-review:lens-review'})
         self.assertEqual(self.load('components', 'ui-design.ui-video.json')['doc'], 'appendix/optional.md')
         # 作る部品 (design-studio) と直す部品 (unslop) は同じ ui-design に並び、when の組で片方だけが動く
         self.assertEqual(optional['ui-design'], [{'id': 'ui-design.design-studio', 'when': 'ui-change'},
