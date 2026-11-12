@@ -20,11 +20,12 @@ A tier up or building it yourself never answers an unusable runner; those come o
 
 **One worker per attempt.** Every attempt starts a new worker, reworks included. Never continue an earlier conversation (`opencode run -c`, `codex exec resume`, `dsh --session-id`); the report file and the rework note carry what is needed. The only message to a running worker is a continue after `NEEDS_CONTEXT` (`appendix/verify.md`).
 
-**The prompt.** Every runner gets the same prompt. Never copy the PBI into it; pass paths.
+**The prompt.** Every runner gets the same prompt. Never copy the PBI or the work ticket into it; pass paths. The `Work:` line is on every prompt of every runner, in the same place (after `PBI:`), reworks included; it names the work ticket (`design_record.py work` writes it from the PBI's Markdown and `route.json`). The worker reads it first and keeps its scope and constraints; the steps and the verify commands stay in the PBI's Markdown.
 
 ```
 Work root: <absolute path of the repository or worktree>. Work here and write nothing outside it.
 PBI: docs/pbi/PBI-<n>.md
+Work: docs/pbi/PBI-<n>.work.json
 Rework: docs/pbi/PBI-<n>.rework-<k>.md (previous report: docs/pbi/reports/<previous report>.md)   <- reworks only
 Report name: <PBI-<n> or PBI-<n>.rework-<k>>
 Files that parallel PBIs touch: <none / paths>
