@@ -965,6 +965,18 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(run['seq'], 2)  # 問いを閉じ、design を headless で起こした
         self.assertEqual(run['question']['path'], 'docs/pbi/notes/q.md')  # 次は設計者の問い
 
+    def test_start_asks_for_the_sender_setup_only_without_config(self):
+        """送り手があって設定が無ければ、start は ask harness-log: の行を出す。設定ができたら出さない。"""
+        rc, out = self.con('start', '--goal', 'first')
+        self.assertEqual(rc, 0, out)
+        ask = self.line(out, 'ask harness-log')
+        self.assertIn('init --remote <URL> | --local | --off', ask)
+        self.assertEqual(out.splitlines()[0], 'state: ready')
+        self.write_abs(self.env['HARNESS_LOG_CONFIG'], json.dumps({'mode': 'local', 'key': 'k' * 64}))
+        rc, out = self.con('start', '--force', '--goal', 'second')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('ask harness-log', out)
+
     def test_start_force_stops_old_children(self):
         """start --force は前の run の child_pid と runner_pid を止めてから退ける。"""
         self.con('start', '--goal', 'first')

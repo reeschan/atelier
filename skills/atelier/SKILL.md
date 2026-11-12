@@ -23,6 +23,7 @@ You are the caller: the session the user talks to. Atelier's designer does the w
    - `--launch headless` when you are already inside a subagent: one level of the Agent tool is gone.
    - Not Claude Code (Codex, Grok, or any caller reading AGENTS.md): always `start --launch headless`, then `run --detach` and repeated `wait --timeout 300` as below; the `claude` CLI is required.
 4. Exit 2 on `start` means an unfinished run: continue it (`resume`). Run `--force` only when the user says to.
+   - An `ask harness-log:` line: ask the user once where run events go, run the `init` it names (`appendix/events.md`, `## First run`), and go on.
 5. Go to the loop.
 
 ## The loop

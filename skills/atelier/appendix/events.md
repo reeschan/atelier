@@ -2,6 +2,18 @@
 
 Events are the identifier-only record of a run: one checked line per event in `docs/pbi/events.jsonl` (schema `atelier.event/1`), with no prose and no file contents. Sending is off until the user runs `enable`; the sender reads its settings from `~/.claude/harness-log.json` and, once enabled, spools and pushes the same lines, while a machine without it keeps the local file only.
 
+## First run
+
+`conductor.py start` prints one `ask harness-log:` line when the sender is installed and has no settings yet. The run goes on; the caller asks the user once, in their language, and runs the `init` the line names with the answer:
+
+| The user's answer | Command | What happens |
+|---|---|---|
+| A private repository to send to | `init --remote <URL>` | Lines are kept in the spool and sent only after the user looks at `preview` and runs `enable`. |
+| Keep the events here, send nothing | `init --local` | Lines are kept in the spool and never committed or pushed. A later `init --remote <URL>` adds the repository and keeps the key and the kept lines. |
+| Record nothing | `init --off` | Nothing is spooled. |
+
+Any answer writes the settings, so the question does not come back. `python <sender> status` prints `none`, `off`, `local spool=<n>` or `remote enabled|disabled spool=<n>`. Until the user answers, events go to `docs/pbi/events.jsonl` only.
+
 ## When to emit
 
 | Moment | Command |
