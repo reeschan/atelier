@@ -36,11 +36,18 @@ import argparse
 import datetime
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
 import common
+
+# イベントの口 (同じフォルダ)。無い環境でも照合と記録は続ける
+try:
+    import events
+except (Exception, SystemExit):
+    events = None
 
 SCHEMA = 'atelier.design-record/1'
 RECORD_NAME = 'design-record.json'
@@ -208,6 +215,14 @@ def decisions(body: str) -> list[dict]:
         found.append({'number': int(match.group(1)), 'panel': match.group(2), 'question': match.group(3),
                       'answer': picked, 'answered': bool(picked) and picked != UNANSWERED})
     return found
+
+
+def reply_choice(found: list[dict]):
+    """返信の答えが 1 つだけで、a〜z の 1 文字ならその値。それ以外は None (イベントの choice)。"""
+    answers = [d['answer'] for d in found if d['answered']]
+    if len(answers) == 1 and len(answers[0]) == 1 and 'a' <= answers[0] <= 'z':
+        return answers[0]
+    return None
 
 
 def compare(meta: dict, record: dict, draft: str | None) -> list[str]:
@@ -586,6 +601,12 @@ def cmd_check_reply(args) -> int:
         base.mkdir(parents=True, exist_ok=True)
         with open(base / APPROVALS_NAME, 'a', encoding='utf-8', newline='\n') as stream:
             stream.write(json.dumps(row, ensure_ascii=False) + '\n')
+        # 承認を保存したときだけ、選ばれた答えをイベントに残す。conductor の answer は自分で出すので
+        # ATELIER_EVENTS_QUIET=1 で二重記録を止める
+        if events is not None and os.environ.get('ATELIER_EVENTS_QUIET') != '1':
+            events.emit(base, 'question.answered',
+                        {'kind': 'approve', 'topic': 'design-approval', 'choice': reply_choice(found),
+                         'wait_s': None, 'revise': False})
     saved = 'dry-run, not saved' if args.dry_run else f'saved to {(base / APPROVALS_NAME).as_posix()}'
     draft_note = '' if draft is not None else ' (draft_hash not checked: no --draft)'
     print(f"match\t{record['design_id']} revision {record['revision']}{draft_note}\t{saved}")

@@ -29,11 +29,14 @@ class DesignRecordTest(unittest.TestCase):
         shutil.copytree(FIXTURES, self.dir)
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         self.pbi = os.path.join(self.dir, 'pbi')
+        # 本物の ~/.claude の設定を読ませない (events.emit の送り手)
+        self.no_config = os.path.join(self.dir, 'no-harness-log.json')
 
-    def run_cli(self, *args, stdin=None):
+    def run_cli(self, *args, stdin=None, env=None):
         """stdin はバイト列で渡す (Windows の改行の変換と文字コードを通さない)。出力は UTF-8 で読む。"""
         result = subprocess.run([sys.executable, SCRIPT, *args, '--dir', self.pbi],
-                                input=None if stdin is None else stdin.encode('utf-8'), capture_output=True)
+                                input=None if stdin is None else stdin.encode('utf-8'), capture_output=True,
+                                env=dict(os.environ, HARNESS_LOG_CONFIG=self.no_config, **(env or {})))
         return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode('utf-8'),
                                            result.stderr.decode('utf-8', errors='replace'))
 
@@ -46,6 +49,13 @@ class DesignRecordTest(unittest.TestCase):
 
     def approvals(self):
         path = os.path.join(self.pbi, 'design-approvals.jsonl')
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding='utf-8') as f:
+            return [json.loads(line) for line in f if line.strip()]
+
+    def events(self):
+        path = os.path.join(self.pbi, 'events.jsonl')
         if not os.path.exists(path):
             return []
         with open(path, encoding='utf-8') as f:
@@ -165,6 +175,34 @@ class DesignRecordTest(unittest.TestCase):
         self.assertEqual((rows[0]['design_id'], rows[0]['revision'], rows[0]['draft_checked']), (DESIGN_ID, 1, True))
         self.assertEqual(rows[0]['answers'], [{'question': 'OMM の置き場所はどちらですか',
                                                'answer': '**リポジトリ外のキャッシュ**'}])
+
+    def test_saving_an_approval_emits_question_answered(self):
+        result = self.check('reply-answered.md', '--draft', self.path('draft.md'))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        rows = [row for row in self.events() if row['type'] == 'question.answered']
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['schema'], 'atelier.event/1')
+        self.assertEqual(rows[0]['data'], {'kind': 'approve', 'topic': 'design-approval', 'choice': None,
+                                           'wait_s': None, 'revise': False})
+
+    def test_a_one_letter_reply_is_the_choice(self):
+        with open(self.path('reply-answered.md'), encoding='utf-8') as f:
+            text = f.read().replace('**リポジトリ外のキャッシュ**', 'a')
+        with open(self.path('reply-letter.md'), 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text)
+        self.assertEqual(self.check('reply-letter.md').returncode, 0)
+        rows = [row for row in self.events() if row['type'] == 'question.answered']
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['data']['choice'], 'a')
+
+    def test_quiet_and_dry_run_emit_no_event(self):
+        quiet = self.run_cli('check-reply', '--reply', self.path('reply-answered.md'),
+                             '--draft', self.path('draft.md'), env={'ATELIER_EVENTS_QUIET': '1'})
+        self.assertEqual(quiet.returncode, 0, quiet.stdout + quiet.stderr)
+        self.assertEqual(self.events(), [])
+        dry = self.check('reply-answered.md', '--draft', self.path('draft.md'), '--dry-run')
+        self.assertEqual(dry.returncode, 0, dry.stdout + dry.stderr)
+        self.assertEqual(self.events(), [])
 
     def test_crlf_reply_and_stdin(self):
         with open(self.path('reply-answered.md'), encoding='utf-8') as f:

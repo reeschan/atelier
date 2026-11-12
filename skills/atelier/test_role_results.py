@@ -22,6 +22,8 @@ WAVE = EXAMPLES / 'wave'
 OLD = 946684800
 # 2033-05-18。verify より報告を新しくするための固定の時刻
 FUTURE = 2000000000
+# 本物の ~/.claude/harness-log.json を読ませないための、無いファイル (作らない)
+NO_CONFIG = Path(tempfile.gettempdir()) / f'role-results-no-config-{uuid.uuid4().hex}.json'
 
 
 def make_temp_dir():
@@ -36,8 +38,13 @@ def make_temp_dir():
 
 
 def run(*args):
-    """role_results.py を動かして (終了コード, stdout と stderr) を返す。"""
-    proc = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, encoding='utf-8')
+    """role_results.py を動かして (終了コード, stdout と stderr) を返す。
+
+    HARNESS_LOG_CONFIG は一時の無いファイルにする (本物の ~/.claude の設定を読ませない)。
+    """
+    env = dict(os.environ, HARNESS_LOG_CONFIG=str(NO_CONFIG))
+    proc = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
+                          encoding='utf-8', env=env)
     return proc.returncode, proc.stdout + proc.stderr
 
 
@@ -139,6 +146,191 @@ class CheckTest(unittest.TestCase):
         self.assertNotIn('Traceback', out)
         self.assertIn('unknown schema', out)
         self.assertIn(f'{EXAMPLES / "review.json"}: ok', out)
+
+
+class JudgedEventTest(unittest.TestCase):
+    """`check` が通ったレビュー・テストの結果を、イベントとして残すこと。"""
+
+    def setUp(self):
+        self.dir = make_temp_dir()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+
+    def write(self, *parts, data):
+        """<一時の dir>/<parts> に JSON を書いて、そのパスを返す。"""
+        path = self.dir.joinpath(*parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data), encoding='utf-8')
+        return path
+
+    def example(self, name):
+        return json.loads((EXAMPLES / name).read_text(encoding='utf-8'))
+
+    def events(self):
+        """<dir>/events.jsonl の行。無ければ空。"""
+        path = self.dir / 'events.jsonl'
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+
+    def test_review_judged_once_per_content(self):
+        """review の check は review.judged を 1 行出し、同じ中身の 2 回目は出さず、変えたら出す。"""
+        review = self.example('review.json')
+        path = self.write('reviews', 'PBI-1.review.json', data=review)
+        code, out = run('check', str(path))
+        self.assertEqual(code, 0, out)
+        rows = self.events()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]['type'], 'review.judged')
+        self.assertEqual(rows[0]['data'], {
+            'report': 'EX-1',
+            'recommendation': 'rework',
+            'findings': {'critical': 0, 'major': 1, 'minor': 0},
+            'criteria': {'pass': 1, 'fail': 1, 'unknown': 1},
+        })
+
+        code, out = run('check', str(path))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.events()), 1, '同じ中身の check の繰り返しで 2 行目が出た')
+
+        review['recommendation'] = 'pass'
+        path.write_text(json.dumps(review), encoding='utf-8')
+        code, out = run('check', str(path))
+        self.assertEqual(code, 0, out)
+        rows = self.events()
+        self.assertEqual(len(rows), 2, rows)
+        self.assertEqual(rows[1]['type'], 'review.judged')
+        self.assertEqual(rows[1]['data']['recommendation'], 'pass')
+
+    def test_test_judged_counts_commands_and_causes(self):
+        """test の結果は test.judged を出し、passed・failed が commands の code (0 か否か) の数と合う。"""
+        result = self.example('test-result.json')
+        result['commands'] = [
+            {'command': 'python -m pytest -q', 'code': 0},
+            {'command': 'python -m unittest', 'code': 1},
+            {'command': 'python --version', 'code': 2},
+        ]
+        result['failing'] = [
+            {'test': 'a', 'file': 'b.py', 'pbi': 'PBI-1', 'cause': 'regression', 'why': 'x'},
+            {'test': 'c', 'file': 'd.py', 'pbi': 'PBI-1', 'cause': 'unknown', 'why': 'y'},
+        ]
+        path = self.write('verify', 'tests', 'x.test-result.json', data=result)
+        code, out = run('check', str(path))
+        self.assertEqual(code, 0, out)
+        rows = self.events()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]['type'], 'test.judged')
+        self.assertEqual(rows[0]['data'], {
+            'kind': 'wave',
+            'passed': 1,
+            'failed': 2,
+            'failing': {'intended': 0, 'regression': 1, 'unknown': 1},
+        })
+
+    def test_test_judged_same_body_at_other_path(self):
+        """同じ中身でもパスが違えば別の結果として出し、同じファイルの 2 回目は出さない。
+
+        合格した test-result は波を持たず、波ごとに同じ本文が別のパスに書かれる。
+        中身だけを once の鍵にすると 2 波目以降が落ちる (final review 8)。
+        """
+        result = self.example('test-result.json')
+        # 全問合格の結果は波・PBI・時刻を持たず、波ごとに同じ本文になる
+        result['commands'] = [{'command': 'python -m unittest discover', 'code': 0}]
+        result['failing'] = []
+        result['recommendation'] = 'pass'
+        paths = [self.write('verify', 'tests', f'wave-{n}.test-result.json', data=result) for n in (1, 2, 3)]
+        for path in paths:
+            code, out = run('check', str(path))
+            self.assertEqual(code, 0, out)
+        rows = self.events()
+        self.assertEqual(len(rows), 3, rows)
+        self.assertEqual([row['type'] for row in rows], ['test.judged'] * 3)
+        self.assertEqual([row['data'] for row in rows], [
+            {'kind': 'wave', 'passed': 1, 'failed': 0, 'failing': {'intended': 0, 'regression': 0, 'unknown': 0}},
+        ] * 3)
+        code, out = run('check', str(paths[0]))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.events()), 3, '同じファイルの check の繰り返しで 4 行目が出た')
+
+    def test_test_judged_again_in_another_run(self):
+        """同じ合格の結果でも run が変われば出し直し、同じ run の中では 1 行のまま。
+
+        `.events/seen.txt` は実行をまたいで残るので、once の鍵に run_id を入れないと
+        次の run の check が落ちる (final review の再現: run-A で 1 行、run-B でもう 1 行)。
+        """
+        result = self.example('test-result.json')
+        result['commands'] = [{'command': 'python -m unittest discover', 'code': 0}]
+        result['failing'] = []
+        result['recommendation'] = 'pass'
+        path = self.write('verify', 'tests', 'final.test-result.json', data=result)
+        run_json = self.dir / 'conductor' / 'run.json'
+        run_json.parent.mkdir(parents=True, exist_ok=True)
+
+        def set_run(run_id):
+            run_json.write_text(json.dumps({'run_id': run_id}), encoding='utf-8')
+
+        set_run('run-A')
+        code, out = run('check', str(path))
+        self.assertEqual(code, 0, out)
+        rows = self.events()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]['run_id'], 'run-A')
+
+        code, out = run('check', str(path))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.events()), 1, '同じ run の check の繰り返しで 2 行目が出た')
+
+        set_run('run-B')
+        code, out = run('check', str(path))
+        self.assertEqual(code, 0, out)
+        rows = self.events()
+        self.assertEqual(len(rows), 2, rows)
+        self.assertEqual(rows[1]['run_id'], 'run-B')
+
+        code, out = run('check', str(path))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.events()), 2, '同じ run の check の繰り返しで 3 行目が出た')
+
+    def test_invalid_results_do_not_emit(self):
+        """誤りのある結果ではイベントを出さない。"""
+        review = self.example('review.json')
+        review['recommendation'] = 'maybe'
+        review_path = self.write('reviews', 'PBI-1.review.json', data=review)
+        result = self.example('test-result.json')
+        result['kind'] = 'nope'
+        result_path = self.write('verify', 'tests', 'x.test-result.json', data=result)
+        code, out = run('check', str(review_path), str(result_path))
+        self.assertEqual(code, 3, out)
+        self.assertEqual(self.events(), [])
+
+    def test_outside_known_dirs_do_not_emit(self):
+        """reviews/ と verify/tests/ の外のファイルでは events.jsonl を作らない (スキルのフォルダに書かない)。"""
+        code, out = run('check', str(EXAMPLES / 'review.json'), str(EXAMPLES / 'test-result.json'))
+        self.assertEqual(code, 0, out)
+        self.assertFalse((HERE / 'events.jsonl').exists())
+        self.assertFalse((self.dir / 'events.jsonl').exists())
+        # 一時の dir の中でも、決まった場所の外なら出さない
+        path = self.write('review.json', data=self.example('review.json'))
+        code, out = run('check', str(path))
+        self.assertEqual(code, 0, out)
+        self.assertFalse((self.dir / 'events.jsonl').exists())
+
+    def test_episode_question_topic(self):
+        """出番の結果の question の topic は決まった値だけを通し、無くても通る。"""
+        base = self.example('episode.json')
+        base.update(status='question', state='episode.state.md',
+                    question={'kind': 'decision', 'path': 'q.md', 'summary': 'pick one'})
+        for topic, expected in ((None, 0), ('omm', 0), ('poem', 3)):
+            with self.subTest(topic=topic):
+                data = json.loads(json.dumps(base))
+                if topic is not None:
+                    data['question']['topic'] = topic
+                path = self.write('episode.json', data=data)
+                code, out = run('check', str(path))
+                self.assertEqual(code, expected, out)
+                if expected:
+                    self.assertIn('topic', out)
+                else:
+                    self.assertIn(': ok', out)
 
 
 class BundleTest(unittest.TestCase):

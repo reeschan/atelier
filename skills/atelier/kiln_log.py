@@ -10,7 +10,9 @@ soft 以上 → suggest、設計者で aux_compress_at 以上 → aux_on、ほ�
 run_id は <pbi-dir>/.kiln/run_id (無ければ作る)。--run-id を渡すと、その値をそこに書いて使う (resume で HANDOFF.md の
 Run id: から戻すとき)。記録は --log、無ければ <pbi-dir>/.kiln/compact-events.jsonl。
 1 行の項目: ts・run_id・host・regime・boundary・role・phase・tokens_before・peak_budget・soft_budget・handoff_at・
-action・state_path・task_id・note (sac-strategic-compact の log_compact_event.py と同じ名前)。
+action・state_path・task_id・note (sac-strategic-compact の log_compact_event.py と同じ名前)。atelier_run_id は
+<pbi-dir>/conductor/run.json の run_id (無ければ null)。追記のあと、同じ判断を <pbi-dir>/events.jsonl の
+context.compacted として出す (kiln off のときは出さない)。
 標準出力は 1 行: `action <手立て> (role <役>, tokens <N>, soft <S>, peak <P>, handoff <H>) -> <記録のパス>`。
 終了コード: 0 = 書いた (または kiln off)、2 = 引数・設定の誤り。
 """
@@ -22,6 +24,11 @@ import uuid
 from pathlib import Path
 
 import common
+
+try:
+    import events
+except Exception:
+    events = None
 
 HERE = Path(__file__).resolve().parent
 ROLES = ('designer', 'implementer')
@@ -69,6 +76,13 @@ def run_id(pbi: Path, given: str | None = None) -> str:
     value = str(uuid.uuid4())
     path.write_text(value + '\n', encoding='utf-8')
     return value
+
+
+def conductor_run_id(pbi: Path):
+    """<pbi>/conductor/run.json の run_id。無い・読めない・型が違うなら None。"""
+    raw = common.load_json(pbi / 'conductor' / 'run.json')
+    value = raw.get('run_id') if isinstance(raw, dict) else None
+    return value if isinstance(value, str) and value else None
 
 
 def main(argv=None) -> int:
@@ -120,11 +134,21 @@ def main(argv=None) -> int:
         'state_path': args.state_path,
         'task_id': args.task_id,
         'note': args.note,
+        'atelier_run_id': conductor_run_id(pbi),
     }
     log = Path(args.log) if args.log else pbi / '.kiln' / 'compact-events.jsonl'
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open('a', encoding='utf-8', newline='\n') as stream:
         stream.write(json.dumps(event, ensure_ascii=False) + '\n')
+    if events is not None:
+        events.emit(pbi, 'context.compacted', {
+            'boundary': args.boundary,
+            'role': args.role,
+            'phase': args.phase,
+            'regime': args.regime,
+            'tokens_before': args.tokens,
+            'action': action,
+        })
     print(f'action {action} (role {args.role}, tokens {args.tokens}, soft {event["soft_budget"]}, '
           f'peak {event["peak_budget"]}, handoff {event["handoff_at"]}) -> {common.shown(log)}')
     return 0
