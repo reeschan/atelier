@@ -222,7 +222,9 @@ def improver_case(case: dict) -> dict:
 def improver_cases(cases: list[dict], name: str, home) -> tuple[list[dict], str | None]:
     """heldout の case だけを improver_case にした一覧と、標準エラーに出す 1 行 (無ければ None) を返す。
 
-    分割が読めない (splits.py が無い・manifest が無い) ときは cases をそのまま返す。
+    分割が無い (splits.py が無い・manifest のファイルが無い) ときは cases をそのまま返す。
+    manifest のファイルがあるのに読めない (壊れている・形が違う) ときは、held-out の本文を出さないよう
+    (None, 理由の 1 行) を返す。呼び出し側は書かずに止める。
     """
     try:
         import splits
@@ -233,11 +235,17 @@ def improver_cases(cases: list[dict], name: str, home) -> tuple[list[dict], str 
     except (Exception, SystemExit):
         manifest = None
     if not isinstance(manifest, dict):
+        try:
+            exists = splits._manifest_path(name, home).exists()
+        except (Exception, SystemExit):
+            exists = True  # 有無を確かめられないときも、壊れているとみなして止める
+        if exists:
+            return None, f'improver: manifest {name} があるのに読めないので、書かずに止める (held-out の本文を出さない)'
         return cases, f'improver: 分割が無い (manifest {name}) ので、owner と同じ行を書く'
     out = []
     for case in cases:
-        found = splits.split_of(case.get('id'), name, home)
-        out.append(improver_case(case) if found is not None and found[0] == 'heldout' else case)
+        # 読み込んだ manifest 1 つで分ける (case ごとに読み直すと、途中で変わった manifest で分かれてしまう)
+        out.append(improver_case(case) if splits.split_in(manifest, case.get('id')) == 'heldout' else case)
     return out, None
 
 
@@ -269,6 +277,8 @@ def main():
         shown, note = improver_cases(cases, args.split_name, args.home)
         if note:
             print(note, file=sys.stderr)
+        if shown is None:
+            sys.exit(2)
     else:
         shown = cases
     text = ''.join(json.dumps(c, ensure_ascii=False) + '\n' for c in shown)

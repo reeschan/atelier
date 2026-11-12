@@ -1,6 +1,6 @@
 # Appendix: events and task profiles
 
-Events are the identifier-only record of a run: one checked line per event in `docs/pbi/events.jsonl` (schema `atelier.event/1`), with no prose and no file contents. Sending is off until the user runs `enable`; the sender reads its settings from `~/.claude/harness-log.json` and, once enabled, spools and pushes the same lines, while a machine without it keeps the local file only.
+Events are the identifier-only record of a run: one checked line per event in `docs/pbi/events.jsonl` (schema `atelier.event/1`), with no prose and no file contents. Sending is off until the user runs `enable`. Once the sender has settings (`~/.claude/harness-log.json`, mode `remote` or `local`), it spools the same lines locally from the start, before any `enable`; only `enable` (mode `remote`) lets `flush` commit and push them. A machine without the sender, or with mode `off`, keeps the local file only.
 
 ## First run
 
