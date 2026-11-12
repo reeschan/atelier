@@ -2,7 +2,7 @@
 
 [日本語](README.ja.md)
 
-This is how the author runs atelier day to day: the bundled `jev-routed` plus other people's skills (pstack, mattpocock-skills, yomiyasu, founder-skill, design-studio, ui-video, unslop, security-audit) and the recommended tools (oh-my-mermaid, jevlint, sac-strategic-compact). `recommended.json` holds only the template and, for each skill, how to install and register it. None of the other people's skills is copied into this repository.
+This is how the author runs atelier day to day: the bundled `jev-routed` plus other people's skills (pstack, mattpocock-skills, lens-review, yomiyasu, founder-skill, design-studio, ui-video, unslop, security-audit) and the recommended tools (oh-my-mermaid, jevlint, sac-strategic-compact). `recommended.json` holds only the template and, for each skill, how to install and register it. None of the other people's skills is copied into this repository.
 
 <!-- image: the whole flow (recommended-flow-light.png / recommended-flow-dark.png) goes here -->
 
@@ -76,7 +76,7 @@ flowchart TD
 | route | `route.jev`, gates `gate.pstack-blast-radius`, `gate.pstack-architect` | the gates per PBI (tight coupling, opus tier) |
 | build / verify / fix | `build.runners` / `verify.builtin` / `fix.rework` | always |
 | lint-recheck (after verify) | `lint-recheck.jevlint` → `lint-recheck.builtin` | always, once, after every PBI and the test stage |
-| review | `review.pstack-interrogate` → `review.mattpocock-skills-code-review` → `review.code-review` → `review.builtin` | interrogate when a PBI needs a deep review (the orchestrator runs it, adversaries on opus xhigh and sonnet high); code-review when adapter_gate.py says run |
+| review | `review.pstack-interrogate` → `review.lens-review` → `review.code-review` → `review.builtin` | interrogate when a PBI needs a deep review (the orchestrator runs it, adversaries on opus xhigh and sonnet high); lens-review (a lens-based review in Japanese, [reeschan/claude-plugins-official](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review)) and code-review when adapter_gate.py says run |
 | security (after review) | `security.security-audit`, gate `gate.security-review` | security-audit when you said yes at approval |
 | finish | `finish.builtin`, gate `gate.yomiyasu` | always |
 

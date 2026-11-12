@@ -214,7 +214,7 @@ The design, final review and security review stages have extra rules on whether 
 | Phase | When | Callees, in priority order | Notes |
 |---|---|---|---|
 | design | before the split into PBIs | the orchestrator's own procedure; with `setup --recommended`, `mattpocock-skills:grilling` | it runs in the main session, because it asks you questions |
-| final review | after the last PBI | the built-in `/code-review` (with `setup --recommended`, `mattpocock-skills:code-review` first) | the built-in one runs at level `medium` with no flags; each gets the merge-base, the head and the spec path |
+| final review | after the last PBI | the built-in `/code-review` (with `setup --recommended`, `lens-review:lens-review` first) | the built-in one runs at level `medium` with no flags; each gets the merge-base, the head and the spec path |
 | security review | at the same time, when a PBI is sensitive or deep | the built-in `/security-review` | no arguments |
 
 A review callee only reports. It gets the merge-base, the head, the spec path and "report, do not fix, do not post", and never sees `--fix`, `--comment`, `ultra` or `--max-findings`. The orchestrator compares `git rev-parse HEAD` and `git status --porcelain` before and after the call; if anything changed, it throws the result away and goes back to its own procedure, and a callee that tries to ask you something ends the wrapper with `BLOCKED`, which means the same fallback. Findings are checked, not taken at face value: a real one becomes a rework of the PBI that owns the file and counts towards the limit of two, a finding outside every PBI goes to the "found" list of the final report, and style preferences cause no rework.
