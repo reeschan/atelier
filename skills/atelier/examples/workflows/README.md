@@ -48,7 +48,7 @@ flowchart TD
     LRA --> Q2{{Send it? dry-run of the changed files}}
     Q2 --> LRJ[check each regression]
     LRJ -->|bug-hunt, or a new function of 100 lines or more| FX2[send that PBI back]
-    LRJ --> RV[review<br/>interrogate when a PBI needs a deep review<br/>code-review when the diff is large]
+    LRJ --> RV[review<br/>interrogate on heavy work, when the user says yes<br/>code-review when the diff is large]
     RV --> SC{{security-audit? the answer given at approval}}
     SC --> GS[gate: built-in security-review]
     GS -->|confirmed finding| FX2
@@ -76,7 +76,7 @@ flowchart TD
 | route | `route.jev`, gates `gate.pstack-blast-radius`, `gate.pstack-architect` | the gates per PBI (tight coupling, opus tier) |
 | build / verify / fix | `build.runners` / `verify.builtin` / `fix.rework` | always |
 | lint-recheck (after verify) | `lint-recheck.jevlint` → `lint-recheck.builtin` | always, once, after every PBI and the test stage |
-| review | `review.pstack-interrogate` → `review.lens-review` → `review.code-review` → `review.builtin` | interrogate when a PBI needs a deep review (the orchestrator runs it, adversaries on opus xhigh and sonnet high); lens-review (a lens-based review in Japanese, [reeschan/claude-plugins-official](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review)) and code-review when adapter_gate.py says run |
+| review | `review.pstack-interrogate` → `review.lens-review` → `review.code-review` → `review.builtin` | interrogate only on heavy work, such as a new application built from scratch, when the user says yes at approval (`when` `heavy-ask`; the orchestrator runs it, adversaries on opus xhigh and sonnet high); lens-review (a lens-based review in Japanese, [reeschan/claude-plugins-official](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review)) and code-review when adapter_gate.py says run |
 | security (after review) | `security.security-audit`, gate `gate.security-review` | security-audit when you said yes at approval |
 | finish | `finish.builtin`, gate `gate.yomiyasu` | always |
 

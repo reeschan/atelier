@@ -100,7 +100,7 @@ An answer to a conductor question with no state to continue from (`launch-failur
 - `unchanged`: the result of `python docs/pbi/tools/unchanged.py check PBI-<n>`
 - the model that built it (from `built`, then `docs/pbi/runs.jsonl`, then `route.json`) differs from `reviewer.model`
 
-A row reads `<report>  verify ok|fail <n,..>  unchanged <state>  review <recommendation>  findings <critical,major,minor>`, then `mismatch` when the review disagrees with the verify JSON, then `open` when you must look. The bundle file is a copy for handing over, not a schema.
+A row reads `<report>  verify ok|fail <n,..>  unchanged <state>  review <recommendation>  findings <critical,major,minor>  round <k>/2`, then `mismatch` when the review disagrees with the verify JSON, then `limit` when the second review still does not pass (`appendix/rework.md`), then `open` when you must look. The bundle file is a copy for handing over, not a schema.
 
 ## Reconcile
 
