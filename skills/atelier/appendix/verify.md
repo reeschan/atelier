@@ -36,6 +36,7 @@ python <skill>/role_results.py bundle --wave <n> --out docs/pbi/reviews/wave-<n>
 - Open `docs/pbi/reviews/<report>.review.json` only for a row with `open`.
 - Verify passes or fails by the bundle's `verify` column, which comes from `docs/pbi/verify/<report>.json`; never by the review.
 - Exit code 3: redo the review of that report only, then bundle again.
+- A row with `limit`: the PBI has had its two reviews and still does not pass. Stop it (`appendix/rework.md`, `## Stop`); never rework it.
 - Confirm each finding by opening the file yourself.
 - The rows and the rest of the rules are in `appendix/episodes.md` (`## Reconcile`).
 

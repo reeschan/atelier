@@ -1,8 +1,8 @@
 {
   "name": "recommended",
   "description": {
-    "ja": "作者が実際に使っている構成。jev-routed に、pstack (理解・振り分けのあとの関所・深いレビュー)、mattpocock-skills (設計の grilling)、lens-review (日本語の観点別の最終レビュー)、yomiyasu (完了報告の推敲) と、オプションの工程のマーケティング (founder-skill の利用者パネル)、UI デザイン (新しい見た目は design-studio と ui-video、いまある画面の手直しは unslop)、状態モデルの検査 (pstack の statechart。使うかを毎回聞く)、セキュリティ (Cloudflare の security-audit。使うかを毎回聞く) を足したもの。interrogate は設計者が自分で動かし、敵役は opus xhigh と sonnet high。スキルはこの例に含まれず、component.py example check が入れ方を出す。",
-    "en": "The author's own setup: jev-routed plus pstack (understand, gates after route, deep review), mattpocock-skills (grilling for design), lens-review (the final review, by lens and in Japanese), yomiyasu (polishing the Japanese completion report), the optional stages marketing (founder-skill's user panel), UI design (design-studio and ui-video for a new look, unslop for retouching existing screens), model check (pstack's statechart, asked every run) and security (Cloudflare's security-audit, asked every run). interrogate runs in the orchestrator's session, with adversaries on opus xhigh and sonnet high. The skills are not included; component.py example check prints how to install them."
+    "ja": "作者が実際に使っている構成。jev-routed に、pstack (理解・振り分けのあとの関所・重い構成のときだけの深いレビュー)、mattpocock-skills (設計の grilling)、lens-review (日本語の観点別の最終レビュー)、yomiyasu (完了報告の推敲) と、オプションの工程のマーケティング (founder-skill の利用者パネル)、UI デザイン (新しい見た目は design-studio と ui-video、いまある画面の手直しは unslop)、状態モデルの検査 (pstack の statechart。使うかを毎回聞く)、セキュリティ (Cloudflare の security-audit。使うかを毎回聞く) を足したもの。最終レビューは lens-review が基本で、interrogate は新しいアプリケーションを一から作るなどの重い構成のとき、承認で聞いて「使う」と答えた run だけ動く (設計者が自分で動かし、敵役は opus xhigh と sonnet high)。スキルはこの例に含まれず、component.py example check が入れ方を出す。",
+    "en": "The author's own setup: jev-routed plus pstack (understand, gates after route, and a deep review only for heavy work), mattpocock-skills (grilling for design), lens-review (the final review, by lens and in Japanese), yomiyasu (polishing the Japanese completion report), the optional stages marketing (founder-skill's user panel), UI design (design-studio and ui-video for a new look, unslop for retouching existing screens), model check (pstack's statechart, asked every run) and security (Cloudflare's security-audit, asked every run). The final review is lens-review; interrogate runs only on heavy work, such as building a new application from scratch, when the user says yes at approval (in the orchestrator's session, with adversaries on opus xhigh and sonnet high). The skills are not included; component.py example check prints how to install them."
   },
   "skills": [
     {
@@ -90,7 +90,7 @@
       "build": ["build.runners"],
       "verify": ["verify.builtin"],
       "review": [
-        {"id": "review.pstack-interrogate", "when": "deep", "where": "main", "models": ["opus xhigh", "sonnet high"]},
+        {"id": "review.pstack-interrogate", "when": "heavy-ask", "where": "main", "models": ["opus xhigh", "sonnet high"]},
         {"id": "review.lens-review", "when": "adapter-gate"},
         "review.code-review",
         "review.builtin"
