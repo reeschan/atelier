@@ -13,6 +13,8 @@
 # omm_cache.py (oh-my-mermaid の omm-scan の結果をリポジトリの外の .omm-cache に置く)、kiln_log.py (Kiln の記録。sac-strategic-compact は任意)、setup に tools_check.py
 # 2026-11-11 に v6 に合わせて描き直した: オーケストレーターを 呼び出し側・進行役 (conductor.py)・設計者 (出番ごとに新規) に分け、
 # レビュー担当・テスト担当と role_results.py の束を足した。Codex・Grok は AGENTS.md から conductor.py を headless で回す
+# 2026-11-12 に最終レビューを描き直した: 最終レビューは atelier-reviewer が回し、呼び出し先は lens-review (reeschan-plugins の日本語レビュー、任意) と built-in のレビュー。
+# 結果は final.review.md と final.review.detail.md。mattpocock-skills は設計の grilling だけになった
 direction: right
 
 vars: {
@@ -112,7 +114,7 @@ cc: Claude Code {
     class: svc
     icon: https://cdn.simpleicons.org/python
   }
-  final: "Review wrapper (general-purpose)\nFINAL.review / FINAL.security, report only" {
+  final: "Final reviewer (atelier-reviewer)\nFINAL.review / FINAL.security, report only" {
     class: svc
     icon: https://cdn.simpleicons.org/claude
   }
@@ -122,7 +124,10 @@ callees: "Callee skills (optional, used when installed)" {
   class: saas
   direction: down
 
-  mp: "mattpocock-skills\ngrilling, domain-modeling, code-review" {
+  mp: "mattpocock-skills\ngrilling, domain-modeling" {
+    shape: hexagon
+  }
+  lens: "lens-review (reeschan-plugins)\nJapanese review by six lenses" {
     shape: hexagon
   }
   omm: "oh-my-mermaid omm-scan\nlayers and modules, scanned on a cache miss" {
@@ -265,7 +270,8 @@ cc.orch -> callees.mp: "design: grilling" {style.stroke-dash: 4}
 cc.orch -> cc.gate: after all PBIs
 cc.gate -> home.agents: adapters
 cc.orch -> cc.final: when the gate says run
-cc.final -> callees: "code-review, security-review" {style.stroke-dash: 4}
+cc.final -> callees.lens: "final review" {style.stroke-dash: 4}
+cc.final -> callees.builtin: "code-review, security-review" {style.stroke-dash: 4}
 cc.final -> repo.pbi: reviews/final.*.md
 harness <-> jevmcp: "claim tasks, route,\nrun, record" {style.stroke-dash: 4}
 harness -> repo.code: "" {style.stroke-dash: 4}
