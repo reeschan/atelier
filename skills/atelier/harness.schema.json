@@ -1,0 +1,264 @@
+{
+  "schema": "harness.allowlist/1",
+  "skill": "atelier",
+  "data_schema": "atelier.event/1",
+  "phase": "implement",
+  "types": {
+    "run.started": {
+      "fields": {
+        "workflow": {"type": "id"},
+        "launch": {"type": "id"},
+        "roles_from": {"type": "map", "keys": {"type": "id"}, "values": {"type": "enum", "values": ["run", "repo", "home", "default"]}}
+      }
+    },
+    "run.ended": {
+      "fields": {
+        "result": {"type": "enum", "values": ["finished", "aborted"]},
+        "episodes": {"type": "int"},
+        "waves": {"type": "int"},
+        "pbis": {"type": "int"},
+        "seconds": {"type": "number"}
+      }
+    },
+    "episode.started": {
+      "fields": {
+        "episode": {"type": "enum", "values": ["design", "build", "test", "review", "finish"]},
+        "wave": {"type": "int"},
+        "launcher": {"type": "enum", "values": ["agent", "headless"]},
+        "designer": {"type": "enum", "values": ["installed", "fallback"]},
+        "roles": {"type": "map", "keys": {"type": "id"}, "values": {"type": "object", "fields": {
+          "model": {"type": "id"},
+          "effort": {"type": "id"},
+          "from": {"type": "enum", "values": ["run", "repo", "home", "default"]}
+        }}}
+      }
+    },
+    "episode.ended": {
+      "fields": {
+        "episode": {"type": "enum", "values": ["design", "build", "test", "review", "finish"]},
+        "status": {"type": "enum", "values": ["done", "question", "handoff", "error", "invalid", "missing", "launch-failed", "relaunched", "aborted", "other"]},
+        "reason": {"type": "enum", "values": ["no-agent-tool", "result-missing", "result-invalid", "episode-error", "launch-failed", "timeout", "interrupted", "other"]},
+        "seconds": {"type": "number"},
+        "failures": {"type": "int"},
+        "next_episode": {"type": "enum", "values": ["design", "build", "test", "review", "finish"]}
+      }
+    },
+    "episode.cost": {
+      "fields": {
+        "episode": {"type": "enum", "values": ["design", "build", "test", "review", "finish"]},
+        "method": {"type": "enum", "values": ["transcript", "headless", "unmeasured"]},
+        "roles": {"type": "map", "keys": {"type": "id"}, "values": {"type": "object", "fields": {
+          "requests": {"type": "int"},
+          "input": {"type": "int"},
+          "output": {"type": "int"},
+          "cache_read": {"type": "int"},
+          "cache_write": {"type": "int"},
+          "usd": {"type": "number"}
+        }}}
+      }
+    },
+    "stage.decided": {
+      "fields": {
+        "component": {"type": "id"},
+        "decision": {"type": "enum", "values": ["run", "skip", "fallback", "off", "repo", "cache", "report-only", "fix", "next-runner", "stop", "send", "ast-only"]},
+        "by": {"type": "enum", "values": ["user", "default", "auto", "fallback"]},
+        "reason": {"type": "enum", "values": ["when-true", "when-false", "tool-missing", "user-off", "spec-given", "design-skip", "approved", "declined", "error", "other"]}
+      }
+    },
+    "pbi.attempted": {
+      "fields": {
+        "attempt": {"type": "int"},
+        "step": {"type": "int"},
+        "rework": {"type": "int"},
+        "runner": {"type": "id"},
+        "model": {"type": "id"},
+        "tier": {"type": "id"},
+        "effort": {"type": "id"},
+        "outcome": {"type": "enum", "values": ["pass", "sent-back", "promoted", "unusable", "held"]},
+        "causes": {"type": "list", "items": {"type": "enum", "values": ["spec", "convention", "scope", "memory", "model", "env", "grader", "flaky"]}, "max": 8},
+        "findings": {"type": "object", "fields": {
+          "critical": {"type": "int"},
+          "major": {"type": "int"},
+          "minor": {"type": "int"}
+        }},
+        "unchanged": {"type": "bool"},
+        "seconds": {"type": "number"},
+        "input": {"type": "int"},
+        "output": {"type": "int"},
+        "cache_read": {"type": "int"},
+        "cache_write": {"type": "int"},
+        "usd": {"type": "number"},
+        "case_id": {"type": "hash"},
+        "signature": {"type": "object", "fields": {
+          "sig_id": {"type": "id"},
+          "parts": {"type": "object", "fields": {
+            "outcome": {"type": "enum", "values": ["pass", "sent-back", "promoted", "unusable", "held"]},
+            "causes": {"type": "list", "items": {"type": "enum", "values": ["spec", "convention", "scope", "memory", "model", "env", "grader", "flaky"]}, "max": 8},
+            "verify_failed_n": {"type": "enum", "values": ["0", "1", "2-3", "4-up"]},
+            "findings": {"type": "object", "fields": {
+              "critical": {"type": "enum", "values": ["0", "1", "2-up"]},
+              "major": {"type": "enum", "values": ["0", "1", "2-up"]},
+              "minor": {"type": "enum", "values": ["0", "1", "2-up"]}
+            }},
+            "unchanged": {"type": "bool"},
+            "memory_violation": {"type": "bool"},
+            "test_failing": {"type": "list", "items": {"type": "enum", "values": ["intended", "regression", "unknown"]}, "max": 3},
+            "fallback_any": {"type": "bool"},
+            "runner": {"type": "id"},
+            "tier": {"type": "enum", "values": ["haiku", "sonnet", "opus"]}
+          }}
+        }}
+      }
+    },
+    "review.judged": {
+      "fields": {
+        "report": {"type": "id"},
+        "recommendation": {"type": "enum", "values": ["pass", "rework", "tier-up", "hold"]},
+        "findings": {"type": "object", "fields": {
+          "critical": {"type": "int"},
+          "major": {"type": "int"},
+          "minor": {"type": "int"}
+        }},
+        "criteria": {"type": "object", "fields": {
+          "pass": {"type": "int"},
+          "fail": {"type": "int"},
+          "unknown": {"type": "int"}
+        }}
+      }
+    },
+    "test.judged": {
+      "fields": {
+        "kind": {"type": "enum", "values": ["wave", "survey", "final"]},
+        "passed": {"type": "int"},
+        "failed": {"type": "int"},
+        "failing": {"type": "object", "fields": {
+          "intended": {"type": "int"},
+          "regression": {"type": "int"},
+          "unknown": {"type": "int"}
+        }}
+      }
+    },
+    "question.asked": {
+      "fields": {
+        "kind": {"type": "enum", "values": ["approve", "rework-limit", "destructive", "send-approval", "decision", "handoff-loop", "launch-failure"]},
+        "topic": {"type": "enum", "values": ["runner-unavailable", "omm", "recheck", "unknown", "approve-ask", "design-approval", "headless", "other"]},
+        "items": {"type": "int"}
+      }
+    },
+    "question.answered": {
+      "fields": {
+        "kind": {"type": "enum", "values": ["approve", "rework-limit", "destructive", "send-approval", "decision", "handoff-loop", "launch-failure"]},
+        "topic": {"type": "enum", "values": ["runner-unavailable", "omm", "recheck", "unknown", "approve-ask", "design-approval", "headless", "other"]},
+        "choice": {"type": "enum", "values": ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "yes", "no", "revise"]},
+        "wait_s": {"type": "int"},
+        "revise": {"type": "bool"}
+      }
+    },
+    "task.profiled": {
+      "fields": {
+        "scope": {"type": "enum", "values": ["run", "pbi"]},
+        "taxonomy_version": {"type": "id"},
+        "task_type": {"type": "enum", "values": ["feature", "bugfix", "refactor", "test", "docs", "infra", "migration", "perf"]},
+        "domain": {"type": "enum", "values": ["frontend", "backend", "cli", "library", "data", "infra", "docs", "skill"]},
+        "difficulty_hint": {"type": "enum", "values": ["low", "mid", "high"]},
+        "size": {"type": "object", "fields": {
+          "files": {"type": "id"},
+          "lines": {"type": "id"},
+          "pbis": {"type": "id"},
+          "waves": {"type": "id"},
+          "input_chars": {"type": "id"}
+        }},
+        "spread": {"type": "object", "fields": {
+          "dirs": {"type": "id"},
+          "languages": {"type": "id"},
+          "tests_touched": {"type": "bool"}
+        }},
+        "context": {"type": "object", "fields": {
+          "repo_files": {"type": "id"},
+          "rules_lines": {"type": "id"},
+          "refs": {"type": "id"}
+        }},
+        "languages": {"type": "list", "items": {"type": "id"}, "max": 16},
+        "frameworks": {"type": "list", "items": {"type": "id"}, "max": 16},
+        "anchors": {"type": "list", "items": {"type": "object", "fields": {
+          "anchor_id": {"type": "id"},
+          "score": {"type": "number"}
+        }}, "max": 3},
+        "case_id": {"type": "hash"}
+      }
+    },
+    "context.compacted": {
+      "fields": {
+        "boundary": {"type": "enum", "values": ["phase", "wave", "attempt", "milestone"]},
+        "role": {"type": "id"},
+        "phase": {"type": "id"},
+        "regime": {"type": "enum", "values": ["EoCC", "SAC"]},
+        "tokens_before": {"type": "int"},
+        "action": {"type": "enum", "values": ["noop", "suggest", "compact", "handoff", "aux_on", "fork"]}
+      }
+    },
+    "split.assigned": {
+      "fields": {
+        "case_id": {"type": "hash"},
+        "split": {"type": "enum", "values": ["train", "heldout", "regression", "unsplit"]},
+        "split_set_id": {"type": "id"},
+        "reason": {"type": "enum", "values": ["seeded", "frozen", "read-heldout", "manual"]}
+      }
+    },
+    "split.retired": {
+      "fields": {
+        "case_id": {"type": "hash"},
+        "split": {"type": "enum", "values": ["train", "heldout", "regression", "unsplit"]},
+        "split_set_id": {"type": "id"},
+        "reason": {"type": "enum", "values": ["seeded", "frozen", "read-heldout", "manual"]}
+      }
+    },
+    "change.applied": {
+      "fields": {
+        "change_id": {"type": "id"},
+        "parent": {"type": "id"},
+        "kind": {"type": "enum", "values": ["worker-prompt", "designer-prompt", "appendix", "routing", "model", "workflow", "tool", "grader"]},
+        "target": {"type": "id"},
+        "hypothesis": {"type": "id"},
+        "multi": {"type": "bool"}
+      }
+    },
+    "change.checked": {
+      "fields": {
+        "change_id": {"type": "id"},
+        "verdict": {"type": "enum", "values": ["pass", "warn", "block"]},
+        "overlap_bucket": {"type": "enum", "values": ["0", "low", "mid", "high"]},
+        "vs": {"type": "list", "items": {"type": "enum", "values": ["heldout", "failure", "rubric"]}, "max": 3}
+      }
+    },
+    "round.judged": {
+      "fields": {
+        "change_id": {"type": "id"},
+        "base_change_id": {"type": "id"},
+        "verdict": {"type": "enum", "values": ["accept", "overfit_suspect", "regress", "noise", "invalid"]},
+        "d_train": {"type": "enum", "values": ["down2", "down", "flat", "up", "up2"]},
+        "d_heldout": {"type": "enum", "values": ["down2", "down", "flat", "up", "up2"]},
+        "ci_lo": {"type": "number"},
+        "ci_hi": {"type": "number"},
+        "trials": {"type": "int"}
+      }
+    },
+    "triage.labeled": {
+      "fields": {
+        "lineage_id": {"type": "id"},
+        "root_cause": {"type": "enum", "values": ["task", "harness", "agent", "env", "grader", "noise"]},
+        "by": {"type": "enum", "values": ["auto", "human"]}
+      }
+    },
+    "cluster.assigned": {
+      "fields": {
+        "unit_id": {"type": "id"},
+        "clusterset_id": {"type": "id"},
+        "cluster_id": {"type": "id"},
+        "lineage_id": {"type": "id"},
+        "dist_bucket": {"type": "enum", "values": ["near", "mid", "far"]},
+        "how": {"type": "enum", "values": ["nearest", "fit", "manual"]}
+      }
+    }
+  }
+}

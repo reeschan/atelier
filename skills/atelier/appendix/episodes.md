@@ -42,7 +42,7 @@ Write the file on the prompt's `Result:` line as your last action, schema `ateli
 - `status`: `done`, `question`, `handoff` or `error`.
 - `summary`: up to 5 lines, 200 characters each. Your reply is these lines only.
 - `next`: with `done`, `{"episode": ..., "wave": n, "pbis": [...]}`; `wave` must be in `docs/pbi/waves.json`; `pbis` only for a rework build.
-- `question`: with `question`, `{"kind", "path", "summary", "check"}`. Kinds: `approve`, `rework-limit`, `destructive`, `send-approval`, `decision` (a grill round is one) and `full-run` (whether to run the whole E2E suite once, `appendix/tests-at-end.md`).
+- `question`: with `question`, `{"kind", "path", "summary", "check"}`. It may also carry an optional `topic` (an identifier such as `omm` or `design-approval`); the values and which question takes which are in `appendix/events.md`. Kinds: `approve`, `rework-limit`, `destructive`, `send-approval`, `decision` (a grill round is one) and `full-run` (whether to run the whole E2E suite once, `appendix/tests-at-end.md`).
 - `report_body` (finish only, optional): the completion report's text, when you could not write `docs/pbi/REPORT.md`; the conductor writes it.
 - `state`: the path of the state tablet; required with `handoff` and with every question kind but `approve`.
 - `report`: the path of the completion report (finish).

@@ -11,7 +11,8 @@ import uuid
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, 'kiln_log.py')
 FIELDS = ['ts', 'run_id', 'host', 'regime', 'boundary', 'role', 'phase', 'tokens_before', 'peak_budget',
-          'soft_budget', 'handoff_at', 'action', 'state_path', 'task_id', 'note']
+          'soft_budget', 'handoff_at', 'action', 'state_path', 'task_id', 'note', 'atelier_run_id']
+COMPACTED = ['boundary', 'role', 'phase', 'regime', 'tokens_before', 'action']
 
 
 class KilnLogTest(unittest.TestCase):
@@ -20,10 +21,17 @@ class KilnLogTest(unittest.TestCase):
         os.mkdir(self.pbi)
         self.addCleanup(shutil.rmtree, self.pbi, ignore_errors=True)
         self.log = os.path.join(self.pbi, '.kiln', 'compact-events.jsonl')
+        # 本物の ~/.claude の設定と送り手を読ませない (無いファイル・空のフォルダ)。
+        no_sender = os.path.join(self.pbi, 'no-sender')
+        os.mkdir(no_sender)
+        self.env = dict(os.environ)
+        self.env['HARNESS_LOG_CONFIG'] = os.path.join(self.pbi, 'no-config.json')
+        self.env['HARNESS_LOG_PATH'] = no_sender
 
     def run_cli(self, *args):
         return subprocess.run([sys.executable, SCRIPT, self.pbi, *args], capture_output=True, text=True,
-                              encoding='utf-8')
+                              encoding='utf-8', env=self.env,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
     def log_once(self, role, tokens, *extra):
         result = self.run_cli('--role', role, '--boundary', 'wave', '--phase', 'build', '--tokens', str(tokens), *extra)
@@ -33,6 +41,19 @@ class KilnLogTest(unittest.TestCase):
     def events(self):
         with open(self.log, encoding='utf-8') as f:
             return [json.loads(line) for line in f]
+
+    def atelier_events(self):
+        path = os.path.join(self.pbi, 'events.jsonl')
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding='utf-8') as f:
+            return [json.loads(line) for line in f if line.strip()]
+
+    def write_run(self, run_id='run-from-conductor', seq=3):
+        folder = os.path.join(self.pbi, 'conductor')
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, 'run.json'), 'w', encoding='utf-8') as f:
+            json.dump({'run_id': run_id, 'seq': seq}, f)
 
     def test_decides_the_action_from_the_bundled_lines(self):
         cases = [('designer', 100000, 'noop'), ('designer', 130000, 'suggest'), ('designer', 200000, 'compact'),
@@ -59,6 +80,39 @@ class KilnLogTest(unittest.TestCase):
         event = self.events()[0]
         self.assertEqual((event['action'], event['task_id'], event['note'], event['state_path']),
                          ('compact', 'W-005', '下書きを待つ', 'docs/pbi/CONTEXT_STATE.md'))
+
+    def test_compacted_event_carries_the_conductor_run_id(self):
+        self.write_run('run-from-conductor')
+        self.log_once('designer', 130000, '--note', '下書きを待つ')
+        event = self.events()[0]
+        self.assertEqual(event['atelier_run_id'], 'run-from-conductor')
+        self.assertNotEqual(event['run_id'], 'run-from-conductor')  # kiln の run_id は今までどおり
+        rows = self.atelier_events()
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row['type'], 'context.compacted')
+        self.assertEqual(row['run_id'], 'run-from-conductor')
+        self.assertEqual(row['data'], {'boundary': 'wave', 'role': 'designer', 'phase': 'build',
+                                       'regime': 'EoCC', 'tokens_before': 130000, 'action': 'suggest'})
+        self.assertNotIn('note', row['data'])  # 自由文は入れない
+        self.assertNotIn('dropped', row)
+
+    def test_without_run_json_atelier_run_id_is_null(self):
+        self.log_once('designer', 100000)
+        event = self.events()[0]
+        self.assertIsNone(event['atelier_run_id'])
+        self.assertTrue(event['run_id'])  # kiln の run_id は今までどおり
+        rows = self.atelier_events()
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]['run_id'])
+
+    def test_kiln_off_writes_neither_the_line_nor_the_event(self):
+        self.write_run()
+        with open(os.path.join(self.pbi, 'kiln.json'), 'w', encoding='utf-8') as f:
+            json.dump({'enabled': False}, f)
+        self.assertEqual(self.log_once('designer', 999999), 'kiln off')
+        self.assertFalse(os.path.exists(self.log))
+        self.assertFalse(os.path.exists(os.path.join(self.pbi, 'events.jsonl')))
 
     def test_run_copy_overrides_and_turns_off(self):
         with open(os.path.join(self.pbi, 'kiln.json'), 'w', encoding='utf-8') as f:

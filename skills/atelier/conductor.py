@@ -57,6 +57,11 @@ import design_record
 import role_results
 import runner_cli
 
+try:
+    import events
+except (Exception, SystemExit):  # events.py の無い古い install でも run を止めない
+    events = None
+
 SCHEMA = 'atelier.run/1'
 SKILL = Path(__file__).resolve().parent
 TEMPLATE = SKILL / 'prompts' / 'designer-episode.md'
@@ -112,6 +117,17 @@ ANSWER_LINE = re.compile(r'^ {3}[←→] (.*)$')
 UNANSWERED = '**—**'
 META_PREFIX = 'reply-meta-'
 FENCE_OPEN = '```am-reply-meta'
+
+# イベントの値の語彙 (skills/atelier/harness.schema.json と合わせる。外れた値は dropped に落ちる)
+EPISODE_TYPES = ('design', 'build', 'test', 'review', 'finish')
+ROLE_SOURCES = ('run', 'repo', 'home', 'default')
+QUESTION_TOPICS = ('runner-unavailable', 'omm', 'recheck', 'unknown', 'approve-ask',
+                   'design-approval', 'headless', 'other')
+QUESTION_CHOICES = tuple('abcdefghijklmnopqrstuvwxyz') + ('yes', 'no', 'revise')
+END_REASONS = {'missing': 'result-missing', 'invalid': 'result-invalid', 'error': 'episode-error',
+               'launch-failed': 'launch-failed', 'aborted': 'other'}
+EVENT_ID = re.compile(r'^[A-Za-z0-9._:/@-]{1,64}\Z')
+SETTLE_TIMEOUT = 120.0
 
 
 class Refused(Exception):
@@ -996,6 +1012,254 @@ def save(paths: Paths, run: dict) -> None:
     paths.seen = run.get('state')
 
 
+# ---- イベント ----
+# 出す値は harness.schema.json の許可リストに合わせる。data を組む処理で run を止めないよう、
+# 組む処理は _emit の try の中 (呼び出し側では lambda に包む) か、例外を飲む小さな関数に置く。
+
+def _emit(paths: Paths, type: str, data, **kw) -> None:
+    """イベントを 1 件出す。events.py が無ければ何もしない。data は辞書か、辞書を返す関数。"""
+    if events is None:
+        return
+    try:
+        value = data() if callable(data) else data
+        if not isinstance(value, dict):
+            return
+        events.emit(paths.base, type, value, **kw)
+    except (Exception, SystemExit):
+        pass
+
+
+def _int_or_none(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _seconds_between(first, second=None):
+    """iso_now() の形の 2 つの時刻の差 (秒、0 以上)。読めなければ None。second を省くと今。"""
+    try:
+        start = datetime.datetime.fromisoformat(str(first))
+        end = common.now() if second is None else datetime.datetime.fromisoformat(str(second))
+        if start.tzinfo is None and end.tzinfo is not None:
+            start = start.replace(tzinfo=end.tzinfo)
+        elif end.tzinfo is None and start.tzinfo is not None:
+            end = end.replace(tzinfo=start.tzinfo)
+        return int(max(0.0, (end - start).total_seconds()))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _event_roles(record) -> dict:
+    """running.roles (役割→{キー: {value, from}}) を episode.started の roles の形にする。
+
+    許可リストに通らない値 (空白を含む model など) は入れない (dropped を出さないため)。
+    """
+    out = {}
+    if not isinstance(record, dict):
+        return out
+    for name, part in record.items():
+        if not isinstance(name, str) or not EVENT_ID.match(name) or not isinstance(part, dict):
+            continue
+        model = part.get('model') if isinstance(part.get('model'), dict) else {}
+        effort = part.get('effort') if isinstance(part.get('effort'), dict) else {}
+        source = model.get('from') if model.get('from') in ROLE_SOURCES else 'default'
+        item = {'from': source}
+        if isinstance(model.get('value'), str) and EVENT_ID.match(model['value']):
+            item['model'] = model['value']
+        if isinstance(effort.get('value'), str) and EVENT_ID.match(effort['value']):
+            item['effort'] = effort['value']
+        out[name] = item
+    return out
+
+
+def _run_started_data(paths: Paths, run: dict) -> dict:
+    """run.started の data。roles_from は load_roles の出所 (役割→from、model の出所で代表する)。"""
+    _, sources, _ = load_roles(paths, run)
+    roles_from = {}
+    for name in ROLE_PARTS:
+        head, _, stage = name.partition('.')
+        origin = sources[head][stage] if stage else sources[head]
+        value = origin.get('model') if isinstance(origin, dict) else None
+        roles_from[name] = value if value in ROLE_SOURCES else 'default'
+    workflow = run.get('workflow')
+    launch = run.get('launch')
+    return {'workflow': workflow if isinstance(workflow, str) and EVENT_ID.match(workflow) else 'default',
+            'launch': launch if launch in ('agent', 'headless') else 'agent',
+            'roles_from': roles_from}
+
+
+def _episode_started_data(run: dict, installed: bool):
+    """episode.started の data。出番の名前が語彙に無ければ None (出さない)。"""
+    running = run.get('running') or {}
+    episode = running.get('episode')
+    if episode not in EPISODE_TYPES:
+        return None
+    data = {'episode': episode, 'designer': 'installed' if installed else 'fallback',
+            'launcher': 'headless' if running.get('launcher') == 'headless' else 'agent',
+            'roles': _event_roles(running.get('roles'))}
+    wave = _int_or_none(running.get('wave'))
+    if wave is not None:
+        data['wave'] = wave
+    return data
+
+
+def _episode_ended_data(run: dict, running: dict, before: int):
+    """history に足された 1 行から episode.ended の data を作る。足されていなければ None。"""
+    history = run.get('history') or []
+    if len(history) <= before:
+        return None
+    row = history[-1]
+    if not isinstance(row, dict) or row.get('seq') != running.get('seq'):
+        return None
+    episode = row.get('episode')
+    if episode not in EPISODE_TYPES:
+        return None
+    status = row.get('status')
+    status = status if isinstance(status, str) and EVENT_ID.match(status) else 'other'
+    data = {'episode': episode, 'status': status}
+    reason = END_REASONS.get(status)
+    if status == 'error':
+        # no-agent-tool は問いの文 (conductor が組んだもの) にだけ残っている
+        summary = str((run.get('question') or {}).get('summary') or '')
+        reason = 'no-agent-tool' if 'no-agent-tool' in summary else 'episode-error'
+    if reason:
+        data['reason'] = reason
+    seconds = _seconds_between(running.get('launched_at'))
+    if seconds is not None:
+        data['seconds'] = seconds
+    failures = run.get('failures')
+    count = _int_or_none(failures.get('count')) if isinstance(failures, dict) else None
+    data['failures'] = count if count is not None and count >= 0 else 0
+    pending = run.get('pending')
+    if isinstance(pending, dict) and pending.get('episode') in EPISODE_TYPES:
+        data['next_episode'] = pending['episode']
+    return data
+
+
+def _emit_episode_ended(paths: Paths, run: dict, running: dict, before: int) -> None:
+    """出番の終わりの行。同じ run の同じ seq は once で 1 度だけ (fail と process_done の両方から呼ぶ)。"""
+    seq = _int_or_none(running.get('seq'))
+    run_id = run.get('run_id') if isinstance(run.get('run_id'), str) else ''
+    once = f'episode.ended:{run_id}:{seq}' if run_id and seq is not None else None
+    _emit(paths, 'episode.ended', lambda: _episode_ended_data(run, running, before),
+          once=once, **({'seq': seq} if seq is not None else {}))
+
+
+def _question_topic(kind, given=None) -> str:
+    """question の topic。結果が付けた値 → approve は design-approval → ほかは other。"""
+    if isinstance(given, str) and given in QUESTION_TOPICS:
+        return given
+    return 'design-approval' if kind == 'approve' else 'other'
+
+
+def _question_items(path) -> int:
+    """問いのファイルの決定 (選択肢) の数。読めなければ 1。"""
+    try:
+        text = Path(path).read_text(encoding='utf-8', errors='replace')
+    except (OSError, TypeError):
+        return 1
+    numbers = {match.group(1) for match in DECISION.finditer(text)}
+    try:
+        asks = len(design_record.draft_asks(text))
+    except (Exception, SystemExit):
+        asks = 0
+    return max(1, len(numbers) + asks)
+
+
+def _emit_question_asked(paths: Paths, kind, topic: str, items, seq) -> None:
+    seq = _int_or_none(seq)
+    _emit(paths, 'question.asked', {'kind': kind, 'topic': topic, 'items': items},
+          **({'seq': seq} if seq is not None else {}))
+
+
+def _answered_data(run: dict, q: dict, choices: dict, revise: bool) -> dict:
+    answers = run.get('answers') or []
+    at = answers[-1].get('at') if answers and isinstance(answers[-1], dict) else None
+    choice = None
+    if revise:
+        choice = 'revise'
+    elif isinstance(choices, dict) and len(choices) == 1:
+        given = next(iter(choices.values()))
+        if isinstance(given, str) and given in QUESTION_CHOICES:
+            choice = given
+    asked = q.get('asked_at')
+    wait_s = _seconds_between(asked, at if isinstance(at, str) else None) if isinstance(asked, str) else None
+    return {'kind': q.get('kind'), 'topic': _question_topic(q.get('kind'), q.get('topic')),
+            'choice': choice, 'wait_s': wait_s, 'revise': bool(revise)}
+
+
+def _emit_question_answered(paths: Paths, run: dict, q: dict, choices: dict, revise: bool) -> None:
+    seq = _int_or_none(q.get('seq'))
+    _emit(paths, 'question.answered', lambda: _answered_data(run, q, choices, revise),
+          **({'seq': seq} if seq is not None else {}))
+
+
+def _wave_counts(paths: Paths):
+    """waves.json の (波の数, PBI の数)。読めなければ None。"""
+    data = common.load_json(paths.base / 'waves.json')
+    waves = data.get('waves') if isinstance(data, dict) else None
+    if not isinstance(waves, list):
+        return None
+    pbis = set()
+    for wave in waves:
+        if isinstance(wave, dict):
+            pbis.update(pbi for pbi in wave.get('pbis') or [] if isinstance(pbi, str))
+    return len(waves), len(pbis)
+
+
+def _run_ended_data(paths: Paths, run: dict, result: str) -> dict:
+    """run.ended の data。episodes は起動した出番の数 (run['seq'])。"""
+    stamp = run.get('finished_at') if result == 'finished' else run.get('aborted_at')
+    data = {'result': result, 'episodes': _int_or_none(run.get('seq')) or 0}
+    seconds = _seconds_between(run.get('created_at'), stamp if isinstance(stamp, str) else None)
+    if seconds is not None:
+        data['seconds'] = seconds
+    counts = _wave_counts(paths)
+    if counts is not None:
+        data['waves'], data['pbis'] = counts
+    return data
+
+
+def _emit_run_ended(paths: Paths, run: dict, result: str) -> None:
+    seq = _int_or_none(run.get('seq'))
+    _emit(paths, 'run.ended', lambda: _run_ended_data(paths, run, result),
+          **({'seq': seq} if seq is not None else {}))
+
+
+def settle_after(paths: Paths, seq, sync=False) -> None:
+    """出番・run の終わりに events.py settle を起こす (ATELIER_EVENTS_SETTLE に従う)。
+
+    off は起こさない、sync はその場で (出力は捨てる)、ほかは spawn_detached で run.log に向けて裏で。
+    sync=True はモードが off でなければその場で走らせる (start --force が run.json を退ける前の settle)。
+    起こせなくても run は止めない。
+    """
+    mode = os.environ.get('ATELIER_EVENTS_SETTLE')
+    seq = _int_or_none(seq)
+    if mode == 'off' or events is None or seq is None or seq < 0:
+        return
+    script = SKILL / 'events.py'
+    if not script.is_file():
+        return
+    argv = [sys.executable, str(script), 'settle', '--dir', str(paths.base), '--seq', str(seq)]
+    if sync or mode == 'sync':
+        try:
+            subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           cwd=str(Path.cwd()), creationflags=NO_WINDOW, timeout=SETTLE_TIMEOUT)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return
+    log = None
+    try:
+        log = open(paths.conductor / 'run.log', 'ab')
+        spawn_detached(argv, log)
+    except OSError:
+        pass
+    finally:
+        if log is not None:
+            try:
+                log.close()
+            except OSError:
+                pass
+
+
 # ---- start ----
 
 def aside_name(paths: Paths) -> Path:
@@ -1040,17 +1304,25 @@ def cmd_start(args, paths: Paths) -> int:
                 stop_warns, stuck = stop_children(old)
                 warns = warns + stop_warns
                 if stuck:
-                    carried['stuck_pids'] = [entry for entry in old.get('stuck_pids') or []
-                                             if isinstance(entry, dict)]
-                    move_stuck(carried, old.get('running') or {})
-                    move_stuck(carried, old)
-                    if carried['stuck_pids']:
-                        warns.append(stuck_line(entry['pid'] for entry in carried['stuck_pids']))
+                    # cmd_abort と同じく、止められなかった pid は old の直下に移す。退けるのに失敗しても
+                    # close_run が run.json に残すので、あとの abort・start --force がもう一度止めにいける。
+                    move_stuck(old, old.get('running') or {})
+                    move_stuck(old, old)
+                    if old.get('stuck_pids'):
+                        warns.append(stuck_line(entry['pid'] for entry in old['stuck_pids']))
+            if old is not None and old.get('state') not in CLOSED:
+                # 途中の run を --force で退ける: abort と同じ手順で閉じ、run.json が old のうちに settle を
+                # 同期で走らせる (裏で起こすと、退けた後に新しい run.json を読む)。失敗しても start は止めない。
+                close_run(paths, old, 'aborted')
+                settle_after(paths, _int_or_none(old.get('seq')), sync=True)
             # 前の run は消さずに退ける (閉じた run も履歴として残す)
             try:
                 replace_retry(paths.run, aside_name(paths))
             except OSError as error:
                 raise Refused(f'cannot move run.json aside: {error}')
+            # 退けられたあとで、止められなかった pid を新しい run に引き継ぐ (失敗したときは carried に残さない)
+            if old is not None and old.get('stuck_pids'):
+                carried['stuck_pids'] = [entry for entry in old['stuck_pids'] if isinstance(entry, dict)]
         paths.goal.parent.mkdir(parents=True, exist_ok=True)
         paths.goal.write_text(goal if goal.endswith('\n') else goal + '\n', encoding='utf-8', newline='\n')
         # 前の run の grill の木と通しの「はい」は、この run の答えではない
@@ -1068,7 +1340,10 @@ def cmd_start(args, paths: Paths) -> int:
         if carried.get('stuck_pids'):
             run['stuck_pids'] = carried['stuck_pids']
         save(paths, run)
-    emit(['state: ready', *warns, f"run: {run['run_id'][:8]}", 'next: design', 'then: ' + command('next')])
+        _emit(paths, 'run.started', lambda: _run_started_data(paths, run))
+    setup = events.sender_setup_line(paths.base) if events is not None else None
+    emit(['state: ready', *warns, *([setup] if setup else []), f"run: {run['run_id'][:8]}", 'next: design',
+          'then: ' + command('next')])
     return EXIT_OK
 
 
@@ -1143,6 +1418,8 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
     }
     run['pending'] = None
     run['state'] = 'running'
+    # seq は run.json にまだ書いていない (save は呼び出し側) ので、明示して渡す
+    _emit(paths, 'episode.started', lambda: _episode_started_data(run, installed), seq=seq)
     model = roles['designer']['model']
     return ['state: running', *warns, f'episode: {episode} seq {seq}', roles_line(roles, sources),
             f'launch: {launcher} subagent_type={"general-purpose" if fallback else "atelier-designer"} '
@@ -1169,6 +1446,7 @@ def relaunch(paths: Paths, run: dict):
     headless の run で自分の子を止められなければ running のまま error (終了コード 2): 生きた runner の隣で run --detach を起こさせない。
     """
     running = run.get('running') or {}
+    before = len(run.get('history') or [])
     warns, stuck = stop_children(run)
     if stuck and run.get('launch') == 'headless':
         return [f"state: {run.get('state')}", *warns, 'error: the running child could not be stopped; not relaunched'], EXIT_USAGE
@@ -1176,6 +1454,7 @@ def relaunch(paths: Paths, run: dict):
     run['pending'] = {'episode': running.get('episode'), 'wave': running.get('wave'), 'pbis': running.get('pbis'),
                       'continue_from': running.get('continue_from'), 'answer': running.get('answer'),
                       'conductor_answer': running.get('conductor_answer'), 'sent_by': running.get('sent_by')}
+    _emit_episode_ended(paths, run, running, before)
     run['running'] = None
     if run.get('launch') == 'headless':
         run['state'] = 'ready'
@@ -1206,6 +1485,7 @@ def cmd_next(args, paths: Paths) -> int:
     none = ['state: none', 'then: ' + command('start', '--goal', '"..."')]
     if no_run(paths):
         return none_exit(none)
+    settled = None
     with Lock(paths):
         run = load_run(paths)
         if run is None:
@@ -1223,25 +1503,30 @@ def cmd_next(args, paths: Paths) -> int:
             if not args.relaunch:
                 emit(running_lines(run))
                 return EXIT_OK
+            before = len(run.get('history') or [])
+            running_seq = _int_or_none((run.get('running') or {}).get('seq'))
             lines, code = relaunch(paths, run)
             save(paths, run)
-            emit(lines)
-            return code
-        if state not in ('ready', 'retry'):
-            raise Refused(f'unknown state {state!r} in run.json')
-        if run.get('launch') == 'headless':
-            emit(headless_lines(run))
-            return EXIT_OK
-        roles, sources, role_warns = load_roles(paths, run)
-        runner = designer_runner(roles)
-        if runner != 'agent':
-            # Agent ツールで起こせない実行先の設計者は、run が起こす
-            emit(headless_lines(run, [*role_warns, roles_line(roles, sources)], f'designer runner {runner}'))
-            return EXIT_OK
-        lines = launch(paths, run)
-        save(paths, run)
+            # 子を止められずに error を返した道は出番が終わっていない (settle しない)
+            settled = running_seq if len(run.get('history') or []) > before else None
+        else:
+            if state not in ('ready', 'retry'):
+                raise Refused(f'unknown state {state!r} in run.json')
+            if run.get('launch') == 'headless':
+                emit(headless_lines(run))
+                return EXIT_OK
+            roles, sources, role_warns = load_roles(paths, run)
+            runner = designer_runner(roles)
+            if runner != 'agent':
+                # Agent ツールで起こせない実行先の設計者は、run が起こす
+                emit(headless_lines(run, [*role_warns, roles_line(roles, sources)], f'designer runner {runner}'))
+                return EXIT_OK
+            lines = launch(paths, run)
+            save(paths, run)
+            code = EXIT_OK
+    settle_after(paths, settled)
     emit(lines)
-    return EXIT_OK
+    return code
 
 
 # ---- done ----
@@ -1281,24 +1566,29 @@ def conductor_question(paths: Paths, run: dict, running: dict, kind: str, what: 
     lines.append('- ' + command('abort') + '  (close the run)')
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='\n')
+    topic = 'headless' if kind == 'decision' else 'other'
     run['question'] = {'kind': kind, 'path': path.as_posix(), 'summary': what, 'check': None,
                        'state': last_handoff_state(run, running), 'seq': running.get('seq'),
                        'episode': running.get('episode'), 'wave': running.get('wave'), 'pbis': running.get('pbis'),
-                       'relaunch': relaunch, 'sent_by': running.get('sent_by')}
+                       'relaunch': relaunch, 'sent_by': running.get('sent_by'),
+                       'asked_at': iso_now(), 'topic': topic}
     run['state'] = 'question'
     run['running'] = None
     run['pending'] = None
     save(paths, run)
+    _emit_question_asked(paths, kind, topic, 1, running.get('seq'))
     return EXIT_ASK, question_lines(run)
 
 
 def fail(paths: Paths, run: dict, running: dict, reason: str, status: str, summary=None) -> tuple:
     """出番の失敗: 数えて retry にし、同じ出番を Continue from 無しで起こせるようにする。
     同じ出番で FAIL_LIMIT 回続いたら launch-failure の問いにする。(終了コード, 出す行) を返す。"""
+    before = len(run.get('history') or [])
     history_add(run, running, status, summary)
     run['last_error'] = reason
     count = bump_failures(run, running)
     if count >= FAIL_LIMIT:
+        _emit_episode_ended(paths, run, running, before)
         return conductor_question(paths, run, running, 'launch-failure',
                                   f"{running.get('episode')} seq {running.get('seq')} failed {count} times in a row: "
                                   f'{fold(reason, 200)}')
@@ -1308,6 +1598,7 @@ def fail(paths: Paths, run: dict, running: dict, reason: str, status: str, summa
                       'continue_from': None, 'answer': running.get('answer'),
                       'conductor_answer': running.get('conductor_answer'), 'sent_by': running.get('sent_by')}
     save(paths, run)
+    _emit_episode_ended(paths, run, running, before)
     return EXIT_FAIL, ['state: retry', episode_line(running), f'error: {fold(reason, 300)}',
                        'then: ' + command('next')]
 
@@ -1343,7 +1634,27 @@ def ready_lines(run: dict) -> list:
 
 
 def process_done(paths: Paths, run: dict) -> tuple:
-    """running の出番の結果を読み、状態を進める (ロックは呼び出し側が持つ)。(終了コード, 出す行) を返す。"""
+    """running の出番の結果を読み、状態を進める (ロックは呼び出し側が持つ)。(終了コード, 出す行) を返す。
+
+    どの枝 (done・question・handoff・finish・失敗) でも、終わった出番の episode.ended を 1 度だけ出す。
+    failures と next_episode は枝の save の後に確定するので、本体が返ってから出す。
+    finish のときは、閉じる出番の episode.ended を run.ended より先に出す。
+    """
+    running = run.get('running') or {}
+    before = len(run.get('history') or [])
+    finished = False
+    try:
+        result = _process_done(paths, run)
+        finished = run.get('state') == 'finished' and len(run.get('history') or []) > before
+        return result
+    finally:
+        _emit_episode_ended(paths, run, running, before)
+        if finished:
+            _emit_run_ended(paths, run, 'finished')
+
+
+def _process_done(paths: Paths, run: dict) -> tuple:
+    """process_done の本体 (イベントは出さない)。"""
     if run.get('state') != 'running':
         raise Refused(f"no running episode (state {run.get('state')})")
     running = run['running']
@@ -1447,14 +1758,16 @@ def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -
     if status == 'question':
         run['failures'] = None
         q = data['question']
+        topic = _question_topic(q['kind'], q.get('topic'))
         history_add(run, running, status, summary)
         run['question'] = {'kind': q['kind'], 'path': q['path'], 'summary': q['summary'], 'check': q.get('check'),
                            'state': data.get('state'), 'seq': running['seq'], 'episode': episode,
-                           'wave': running.get('wave'), 'pbis': running.get('pbis'),
-                           'sent_by': running.get('sent_by')}
+                           'wave': running.get('wave'), 'pbis': running.get('pbis'), 'topic': topic,
+                           'asked_at': iso_now(), 'sent_by': running.get('sent_by')}
         run['state'] = 'question'
         run['running'] = None
         save(paths, run)
+        _emit_question_asked(paths, q['kind'], topic, _question_items(q['path']), running['seq'])
         return EXIT_ASK, question_lines(run)
     if status == 'handoff':
         state_path = data['state']
@@ -1556,7 +1869,9 @@ def cmd_done(args, paths: Paths) -> int:
                   'error: the headless designer is still running; its runner settles the episode',
                   'then: ' + command('wait', '--timeout', '300')])
             return EXIT_USAGE
+        seq = _int_or_none((run.get('running') or {}).get('seq'))
         code, lines = process_done(paths, run)
+    settle_after(paths, seq)
     emit(lines)
     return code
 
@@ -1636,6 +1951,7 @@ def check_reply(paths: Paths, answer: Path, draft: str):
     proc = subprocess.run([sys.executable, str(SKILL / 'design_record.py'), 'check-reply', '--reply', str(answer),
                            '--draft', draft, '--dir', str(paths.base)],
                           capture_output=True, text=True, encoding='utf-8', errors='replace',
+                          env={**os.environ, 'ATELIER_EVENTS_QUIET': '1'},
                           creationflags=NO_WINDOW)
     out = (proc.stdout + proc.stderr).strip().splitlines()
     return proc.returncode, out[-1] if out else ''
@@ -1740,6 +2056,8 @@ def cmd_answer(args, paths: Paths) -> int:
             run['handoff']['count'] = 0
         run['state'] = 'ready'
         save(paths, run)
+    # check-reply が 3・4・5 で問いを残した道はここに来ない (question.answered を出さない)
+    _emit_question_answered(paths, run, q, choices, bool(args.revise))
     emit([*ready_lines(run)[:2], f'answer: {answer.as_posix()}', 'then: ' + command('next')])
     return EXIT_OK
 
@@ -1800,6 +2118,26 @@ def cmd_status(args, paths: Paths) -> int:
     return EXIT_OK
 
 
+def close_run(paths: Paths, run: dict, reason: str) -> None:
+    """走っている出番を aborted で history に残し、run を aborted に閉じる。
+
+    cmd_abort と start --force (退ける run) が同じ手順を使う。episode.ended は once 付きで 1 度だけ、
+    呼び出し側は state が閉じていないことを確かめてから呼ぶ (閉じた run に run.ended を足さない)。
+    """
+    before = len(run.get('history') or [])
+    if run.get('running'):
+        history_add(run, run['running'], 'aborted', None)
+        _emit_episode_ended(paths, run, run['running'], before)
+    run['state'] = 'aborted'
+    run['running'] = None
+    run['reason'] = reason
+    run['aborted_at'] = iso_now()
+    save(paths, run)
+    # 閉じた run の通しの「はい」は、次の run の答えではない
+    full_run_token(paths).unlink(missing_ok=True)
+    _emit_run_ended(paths, run, 'aborted')
+
+
 def cmd_abort(args, paths: Paths) -> int:
     if no_run(paths):
         return none_exit(['state: none'])
@@ -1823,14 +2161,9 @@ def cmd_abort(args, paths: Paths) -> int:
             move_stuck(run, run.get('running') or {})
             move_stuck(run, run)
             warns.append(stuck_line(entry['pid'] for entry in run.get('stuck_pids') or []))
-        if run.get('running'):
-            history_add(run, run['running'], 'aborted', None)
-        run['state'] = 'aborted'
-        run['running'] = None
-        run['reason'] = args.reason or 'aborted'
-        run['aborted_at'] = iso_now()
-        save(paths, run)
-        full_run_token(paths).unlink(missing_ok=True)
+        close_run(paths, run, args.reason or 'aborted')
+        seq = _int_or_none(run.get('seq'))
+    settle_after(paths, seq)
     emit([*closed_lines(run), *warns])
     return EXIT_OK
 
@@ -2289,6 +2622,7 @@ def run_episodes(args, paths: Paths) -> int:
     warns = []
     episodes = 0
     while True:
+        not_started = None
         with Lock(paths):
             run = load_run(paths)
             if run is None:
@@ -2329,12 +2663,19 @@ def run_episodes(args, paths: Paths) -> int:
             out_json = paths.episode_file(seq, str(running.get('episode') or 'design'), '.json')
             child, code, lines = launch_designer(paths, run, running, warns)
             if child is None:
-                emit(lines)
-                return code
+                # 設計者を起こせなかった出番も fail が history に閉じる。その出番だけ、ロックを抜けてから settle する
+                ended = any(isinstance(h, dict) and h.get('seq') == seq for h in run.get('history') or [])
+                not_started = (code, lines, seq if ended else None)
+        if not_started is not None:
+            code, lines, settled = not_started
+            settle_after(paths, settled)
+            emit(lines)
+            return code
         # 依頼文を書くのはロックを放してから (その間の abort・next --relaunch を止めない)
         write_prompt(child)
         # 子を待つ間もロックを持たない (その間の abort・next --relaunch が動く)
         code = child.wait()
+        settled = None
         with Lock(paths):
             run = load_run(paths)
             if run is None:
@@ -2349,6 +2690,9 @@ def run_episodes(args, paths: Paths) -> int:
                 warns = merge_warnings(warns, warnings_in(lines))
                 stopping = stopping or (args.max_episodes is not None and episodes >= args.max_episodes)
                 final = (done_code if stopping else EXIT_OK, with_warnings(lines, warns)) if stopping else None
+                settled = seq
+        # 出番の後片付けはロックを抜けてから (settle の子は run.json を読む)
+        settle_after(paths, settled)
         if final is not None:
             emit(final[1])
             return final[0]

@@ -31,7 +31,9 @@ class LintRunTest(unittest.TestCase):
         with open(os.path.join(self.home, 'agents.json'), 'w', encoding='utf-8') as f:
             json.dump({'tools': {'jevlint': {'path': FAKE}}}, f)
         self.log = os.path.join(self.dir, 'calls.jsonl')
-        self.env = dict(os.environ, FAKE_JEVLINT_LOG=self.log, **GIT_ENV)
+        # 本物の ~/.claude の設定を読ませない (events.emit の送り手)
+        self.env = dict(os.environ, FAKE_JEVLINT_LOG=self.log,
+                        HARNESS_LOG_CONFIG=os.path.join(self.dir, 'no-harness-log.json'), **GIT_ENV)
         self.git('init', '-q', '-b', 'main')
         self.put('src/a.ts', 'score: 90\nfn: 50\n')
         self.put('src/b.ts', 'score: 90\n')
@@ -121,6 +123,24 @@ class LintRunTest(unittest.TestCase):
         self.run_cli('approve', '--name', 'recheck', '--answer', 'ast-only')
         self.assertEqual(self.run_cli('recheck', '--name', 'recheck', '--base', 'main', '--mode', 'model').returncode, 3)
         self.assertEqual(self.model_calls(), [])
+
+    def test_approve_emits_stage_decided(self):
+        self.make_recheck_list()
+        result = self.run_cli('approve', '--name', 'recheck', '--answer', 'send')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with open(os.path.join(self.pbi, 'events.jsonl'), encoding='utf-8') as f:
+            rows = [json.loads(line) for line in f if line.strip()]
+        decided = [row for row in rows if row['type'] == 'stage.decided']
+        self.assertEqual(len(decided), 1)
+        self.assertEqual(decided[0]['data'], {'component': 'lint-survey.jevlint', 'decision': 'send',
+                                              'by': 'user', 'reason': 'approved'})
+
+    def test_an_ast_only_approval_is_recorded_as_ast_only(self):
+        self.make_recheck_list()
+        self.assertEqual(self.run_cli('approve', '--name', 'recheck', '--answer', 'ast-only').returncode, 0)
+        with open(os.path.join(self.pbi, 'events.jsonl'), encoding='utf-8') as f:
+            decided = [row for row in map(json.loads, f) if row['type'] == 'stage.decided']
+        self.assertEqual([row['data']['decision'] for row in decided], ['ast-only'])
 
     def test_a_changed_list_needs_a_new_approval(self):
         self.make_recheck_list()

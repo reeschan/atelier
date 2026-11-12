@@ -1,0 +1,223 @@
+{
+  "taxonomy_version": "tax-1",
+  "vocab": {
+    "task_type": ["feature", "bugfix", "refactor", "test", "docs", "infra", "migration", "perf"],
+    "domain": ["frontend", "backend", "cli", "library", "data", "infra", "docs", "skill"],
+    "difficulty_hint": ["low", "mid", "high"]
+  },
+  "buckets": {
+    "files": [[0, 0, "0"], [1, 1, "1"], [2, 3, "2-3"], [4, 8, "4-8"], [9, 20, "9-20"], [21, null, "21plus"]],
+    "lines": [[0, 0, "0"], [1, 20, "1-20"], [21, 100, "21-100"], [101, 400, "101-400"], [401, 1500, "401-1500"], [1501, null, "1501plus"]],
+    "pbis": [[0, 0, "0"], [1, 1, "1"], [2, 3, "2-3"], [4, 8, "4-8"], [9, 20, "9-20"], [21, null, "21plus"]],
+    "waves": [[0, 0, "0"], [1, 1, "1"], [2, 3, "2-3"], [4, 8, "4-8"], [9, null, "9plus"]],
+    "input_chars": [[0, 0, "0"], [1, 500, "1-500"], [501, 2000, "501-2000"], [2001, 8000, "2001-8000"], [8001, 20000, "8001-20000"], [20001, null, "20001plus"]],
+    "dirs": [[0, 0, "0"], [1, 1, "1"], [2, 3, "2-3"], [4, 8, "4-8"], [9, null, "9plus"]],
+    "languages": [[0, 0, "0"], [1, 1, "1"], [2, 3, "2-3"], [4, null, "4plus"]],
+    "repo_files": [[0, 0, "0"], [1, 50, "1-50"], [51, 200, "51-200"], [201, 1000, "201-1000"], [1001, null, "1001plus"]],
+    "rules_lines": [[0, 0, "0"], [1, 40, "1-40"], [41, 80, "41-80"], [81, 200, "81-200"], [201, null, "201plus"]],
+    "refs": [[0, 0, "0"], [1, 1, "1"], [2, 3, "2-3"], [4, 8, "4-8"], [9, null, "9plus"]]
+  },
+  "languages": {
+    ".py": "python",
+    ".pyi": "python",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".json": "json",
+    ".jsonl": "json",
+    ".md": "markdown",
+    ".mdx": "markdown",
+    ".html": "html",
+    ".htm": "html",
+    ".css": "css",
+    ".scss": "scss",
+    ".sass": "sass",
+    ".less": "less",
+    ".vue": "vue",
+    ".svelte": "svelte",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".rb": "ruby",
+    ".php": "php",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".cxx": "cpp",
+    ".hpp": "cpp",
+    ".cs": "csharp",
+    ".swift": "swift",
+    ".dart": "dart",
+    ".scala": "scala",
+    ".clj": "clojure",
+    ".ex": "elixir",
+    ".exs": "elixir",
+    ".hs": "haskell",
+    ".ml": "ocaml",
+    ".lua": "lua",
+    ".r": "r",
+    ".sql": "sql",
+    ".sh": "shell",
+    ".bash": "shell",
+    ".ps1": "powershell",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".toml": "toml",
+    ".ini": "ini",
+    ".cfg": "ini",
+    ".txt": "text",
+    ".tf": "hcl",
+    ".hcl": "hcl"
+  },
+  "frameworks": {
+    "react": "react",
+    "react-dom": "react",
+    "next": "nextjs",
+    "vue": "vue",
+    "svelte": "svelte",
+    "solid-js": "solid",
+    "express": "express",
+    "fastify": "fastify",
+    "koa": "koa",
+    "@angular/core": "angular",
+    "tailwindcss": "tailwind",
+    "vite": "vite",
+    "webpack": "webpack",
+    "jest": "jest",
+    "vitest": "vitest",
+    "playwright": "playwright",
+    "@playwright/test": "playwright",
+    "cypress": "cypress",
+    "django": "django",
+    "flask": "flask",
+    "fastapi": "fastapi",
+    "starlette": "starlette",
+    "tornado": "tornado",
+    "pytest": "pytest",
+    "sqlalchemy": "sqlalchemy",
+    "alembic": "alembic",
+    "pydantic": "pydantic",
+    "celery": "celery",
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "polars": "polars",
+    "scipy": "scipy",
+    "scikit-learn": "sklearn",
+    "torch": "pytorch",
+    "tensorflow": "tensorflow",
+    "transformers": "transformers",
+    "langchain": "langchain",
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "click": "click",
+    "typer": "typer",
+    "rich": "rich",
+    "hatchling": "hatchling",
+    "setuptools": "setuptools",
+    "poetry-core": "poetry",
+    "mypy": "mypy",
+    "ruff": "ruff",
+    "black": "black",
+    "flake8": "flake8",
+    "isort": "isort"
+  },
+  "test_patterns": ["test_*", "*_test.py", "*_test.go", "*_test.rs", "*.test.*", "*.spec.*", "test/*", "tests/*", "*/tests/*", "*/test/*", "__tests__/*"],
+  "anchors": [
+    {
+      "anchor_id": "cli-subcommand",
+      "task_type": "feature",
+      "domain": "cli",
+      "text": "Add a new subcommand to a command line tool with argument validation and a dry run mode."
+    },
+    {
+      "anchor_id": "cli-flag-bugfix",
+      "task_type": "bugfix",
+      "domain": "cli",
+      "text": "Fix a command line flag that ignores its value when it is the last argument on the line."
+    },
+    {
+      "anchor_id": "react-dashboard",
+      "task_type": "feature",
+      "domain": "frontend",
+      "text": "Build a dashboard page that charts weekly usage and filters the rows by date."
+    },
+    {
+      "anchor_id": "component-split",
+      "task_type": "refactor",
+      "domain": "frontend",
+      "text": "Split a large React component into smaller parts without changing the rendered output."
+    },
+    {
+      "anchor_id": "http-endpoint",
+      "task_type": "feature",
+      "domain": "backend",
+      "text": "Add an HTTP endpoint that validates a request body and stores the record."
+    },
+    {
+      "anchor_id": "validation-refactor",
+      "task_type": "refactor",
+      "domain": "backend",
+      "text": "Refactor a duplicated validation helper into a single shared module without changing behaviour."
+    },
+    {
+      "anchor_id": "flaky-test-fix",
+      "task_type": "bugfix",
+      "domain": "library",
+      "text": "Fix a flaky unit test in a library by removing a hidden dependency on wall clock time."
+    },
+    {
+      "anchor_id": "parser-tests",
+      "task_type": "test",
+      "domain": "library",
+      "text": "Add unit tests for the untested branches of a parser and keep the existing suite green."
+    },
+    {
+      "anchor_id": "readme-guide",
+      "task_type": "docs",
+      "domain": "docs",
+      "text": "Write a short README section that explains how to run the project locally."
+    },
+    {
+      "anchor_id": "docs-index",
+      "task_type": "docs",
+      "domain": "docs",
+      "text": "Reorganise the documentation index so that every guide is reachable in one click."
+    },
+    {
+      "anchor_id": "ci-workflow",
+      "task_type": "infra",
+      "domain": "infra",
+      "text": "Add a CI workflow that runs lint and tests on every push to the main branch."
+    },
+    {
+      "anchor_id": "error-rate-alert",
+      "task_type": "feature",
+      "domain": "infra",
+      "text": "Add an alert that fires when the error rate of a service crosses a threshold."
+    },
+    {
+      "anchor_id": "schema-migration",
+      "task_type": "migration",
+      "domain": "data",
+      "text": "Migrate a table to a new schema and backfill the old rows with default values."
+    },
+    {
+      "anchor_id": "query-speedup",
+      "task_type": "perf",
+      "domain": "data",
+      "text": "Speed up a slow database query by adding an index and selecting fewer columns."
+    },
+    {
+      "anchor_id": "skill-checklist",
+      "task_type": "feature",
+      "domain": "skill",
+      "text": "Add a checklist to a coding skill and route new requests to the right section of it."
+    }
+  ]
+}
