@@ -134,7 +134,7 @@ flowchart LR
 | `test.judged` | role_results check (test-result) | `kind` (wave/survey/final)・`passed`・`failed`・`failing` (intended/regression/unknown の数) |
 | `question.asked` | conductor (出番の結果か進行役の問いを受けたとき) | `kind` (approve/rework-limit/destructive/send-approval/decision/handoff-loop/launch-failure)・`topic` (runner-unavailable/omm/recheck/unknown/approve-ask/design-approval/headless/other)・`items` |
 | `question.answered` | conductor の answer・設計者のコマンド (inline の問い) | `kind`・`topic`・`choice` (列挙。分からなければ null)・`wait_s`・`revise` |
-| `task.profiled` | 設計者のコマンド (plan の確定時は PBI ごと、finish のときは run 全体) | 測った値・タグ・近さ (次の節) |
+| `task.profiled` | 設計者のコマンド (plan の確定時は PBI ごと、finish のときは run 全体)。PBI の大きさは finish の backfill が測り直す | 測った値・タグ・近さ (次の節) |
 | `context.compacted` | kiln_log | `boundary`・`role`・`phase`・`regime`・`tokens_before`・`action` |
 
 - 問いの `topic` は、出番の結果の question に任意の項目として足す (無ければ `other`)。設計者の付録で、使えない runner・OMM・recheck・不明点の問いに付ける値を決める。
@@ -156,7 +156,7 @@ flowchart LR
   - `difficulty_hint`: low・mid・high
 - **アンカーとの近さ**: PBI の目的と受け入れ条件の節 (run 全体では goal) を、SSH 先の Ollama (`qwen3-embedding:0.6b`、shared-memory と同じトンネル) で埋め込む。`taxonomy.json` のアンカー (代表のタスクの文) とのコサイン類似度の上位 3 つを、`anchor_id` と近さ (小数 2 桁) で送る。アンカーのベクトルは手元にキャッシュする (taxonomy の版とモデルをキーにする)。
 - ベクトルは保全先 (`~/.claude/pbi-runs/<repo>/<branch>__W-n/vectors.jsonl`) にだけ書き、`case_id`・モデル・次元を添える。herness-log には送らない (埋め込みからは元の文がある程度戻せるため)。
-- 埋め込めなかったときは、近さを null にして続ける。`events.py backfill` が、近さが null の PBI を cases.jsonl から埋め込み直し、`task.profiled` を出し直す。本文が atelier の側にあるので、backfill は送り手ではなく atelier に置く (合意のときの `harness-log backfill` から場所だけ変えた)。
+- 埋め込めなかったときは、近さを null にして続ける。`events.py backfill` が、近さが null の PBI を cases.jsonl から埋め込み直し、`task.profiled` を出し直す。backfill はそれに加えて、PBI ごとの最新の `task.profiled` について `## Targets` から大きさを測り直し、段階の値が変わったら `task.profiled` を出し直す (PBI のファイルが無ければ stderr に 1 行出して飛ばす。近さと大きさが両方変わるときは 1 行にまとめる)。本文が atelier の側にあるので、backfill は送り手ではなく atelier に置く (合意のときの `harness-log backfill` から場所だけ変えた)。
 - `taxonomy.json` には版 (`taxonomy_version`) を付ける。語彙・段階の境目・アンカーを変えたら版を上げ、`task.profiled` に版を入れる。
 
 ### 送り手 harness-log
@@ -166,7 +166,7 @@ flowchart LR
 - 操作:
   - `init --remote <URL>`: 設定を `enabled: false` で作り、鍵を作り、clone を用意する。送らない。
   - `emit` (関数としても使える): 許可リストで点検し、外枠を付け、スプールの `<phase>/<skill>/<YYYY-MM>/<run_id>.jsonl` に追記する。
-  - `flush`: `enabled` のときだけ動く。ロックを取り、`pull --rebase` し、スプールの行を clone の同じパスに追記する。`coverage.json` と `SCHEMA.md` を作り直して、1 回のコミットにする。push に成功しても失敗しても、コミットに入れた行はスプールから消す。コミット済みで push していない分は、次の flush で送る。
+  - `flush`: `enabled` のときだけ動く。ロックを取り、`fetch` して clone を `reset --hard origin/<branch>` でリモートに合わせ、スプールの行を clone の同じパスに追記する。`coverage.json` と `SCHEMA.md` を作り直して、1 回のコミットにする。スプールの行は push に成功したときだけ消す。push に失敗したら行はスプールに残り、`errors.log` に 1 行書き、次の flush で clone を合わせ直してから送り直す (clone 側の未 push のコミットは捨てる。正はスプール)。
   - `preview`: スプールの行と、まだ push していないコミットを、そのまま表示する。
   - `enable`・`disable`: 送るかどうかを切り替える。止めている間もスプールには書く。
 - flush はどこでも失敗を外に投げない。標準エラーに 1 行出し、終了コード 0 で返す (呼び出し側の run を止めないため)。
@@ -261,3 +261,136 @@ stateDiagram-v2
 - 送り先の URL はリポジトリに書かず、ホームの設定にだけ置く。
 - herness-log への push と、atelier への push・PR は、どちらもユーザーが頼んだときだけ行う。送り始め (`enable`) は、`preview` の見本をユーザーが見てから行う。
 - 送り手は atelier の用語を知らない (ハーネスと Jev の境界の決まりと同じく、スキル固有の項目はスキルの許可リストにだけ置く)。
+
+## 追記: hillclimb と analyzer 連携 (2026-11-11)
+
+2026-11-11 夜に Grok と詰めた追記。上の節は変えず、差分だけをここに足す。外の集計の側 (harness2-analyzer) の設計は、Grok の box の `/workspace/harness2-analyzer/design.md` にある (Out of Scope の「herness-log の中身を集計・可視化する側」を埋めるもの)。決まったこと:
+
+- 本文 (trajectory・transcript・review の why) は、手元の LLM と埋め込みでだけ読む。外へは送らない。
+- 埋め込みの既定は、上の節と同じく SSH 先の Ollama `qwen3-embedding:0.6b`。サーバーは設定で差し替えられる。
+- harness2 の側は、別のリポジトリ harness2-analyzer にする。共通のスキーマ `harness.unit/1` (1 試行 = 1 行。本文は入れない) で、atelier の `pbi.attempted` を読み込む。
+
+### 2. 改訂の方針
+
+1. **analyzer がそのまま食べられる形にする**。`pbi.attempted` の 1 行を、そのまま `harness.unit/1`（analyzer 設計 §4.2）に写せるようにする。足りない結び付けキー（split、change_id、trial、signature）を外枠か data に足す。
+2. **hillclimb を一級にする**。分割（split）、1 変更（change）、試行（trial）、判定（round）、根因（triage）を、イベントと記録の名前として持つ。
+3. **本文は今までどおり外に出さない**。シグネチャ、クラスタ ID、距離の段階は識別子なので送ってよい。ファセットの文とベクトルは手元にだけ置く。
+
+### 3. 差分（追加・変更）
+
+#### 3.1 外枠 `harness.event/1` に足すキー（すべて任意、null 可）
+| キー | 型 | 意味 |
+|---|---|---|
+| `split` | 列挙 `train/heldout/regression/unsplit` | この run または PBI が、どの分割に属するか |
+| `split_set_id` | id | 分割の版 |
+| `change_id` | id | このとき有効な変更（§3.3） |
+| `config_fp` | id | 構成の指紋 = sha12(skill_version, worker.md の sha, designer.md の sha, roles の解決値, workflow 名, route の既定) |
+| `trial` | int | 同じ条件での試行番号（outer harness で replay するとき） |
+| `unit_id` | id | `at:<run_id>:<pbi>:<attempt>`（design.md と共通） |
+
+→ 送り手 `harness-log` は atelier の用語を知らない、という決まりに合わせ、上のキーは **どのスキルにも共通の外枠**として持つ（design-flow や review-flow も同じキーを使える）。
+
+#### 3.2 split（分割）
+- 何を分けるか: atelier の評価単位は **case**（`atelier.case/1`、1 PBI）。outer harness（harness2 など）は cases を replay する。分割はそこに付ける。
+- manifest は home に置く（`~/.config/pbi-orchestration-jev/splits/<name>.json`）。リポジトリには置かない。中身は `{split_set_id, seed, strata: [task_type, domain, size_bucket], heldout: [case_id], frozen: true}`。層を分けるのに、task.profiled の語彙と段階を使う。
+- 新しい `events.py split assign` で、case が確定したとき（finish）に、決まった乱数（`hash(case_id, seed)`）で振り分ける。一度振ったものは変えない。`split.assigned` イベントを出す（`case_id`、`split`、`split_set_id`）。
+- **held-out を守る**:
+  - `export_cases.py --view improver` を足す。held-out の case は、`id`、`size`、`result.passed`（集計用）だけにする。`task`、`harness.memory`、`private` は落とす。今の出力（全部入り）は `--view owner` とし、既定を owner にして今の動きを保つ。
+  - 改善を担当する者（人か、outer harness の改善役）には、improver の見え方だけを渡す。手順は cases.md の付録に書く。
+  - held-out の失敗を個別に読んだら、その case を held-out から外して `regression` に移す（`split.retired` イベント）。見てしまった held-out は、もう held-out ではない。
+
+#### 3.3 change（1 ラウンドに 1 変更）
+- 新しい記録 `changes.jsonl`（`harness.change/1`、analyzer 設計 §6.2 と同じ形）を、保全先（`~/.claude/pbi-runs/changes.jsonl`）に置く。
+- `kind` は atelier では次のとおり: `worker-prompt`（worker.md）、`designer-prompt`（designer.md と agents）、`appendix`、`routing`（route と tier）、**`model`（roles と route のモデル。モデルを変えるのも 1 変更）**、`workflow`、`tool`（スクリプト）、`grader`（reviewer、tester の定義、verify の規則）。
+- 新しい `events.py change apply --kind K --target T --hypothesis LINEAGE`: `change.applied` イベントを出し、以後のイベントに `change_id` を付ける。skill_version を上げる操作（`skill-versioning`）の横で打つ。
+- 2 つ以上の kind が同じ config_fp の変化に入っていたら、`change.applied.multi: true` とし、判定から外す。
+- `prompt.worker`（今の runs.jsonl の項目）は残す。`config_fp` はそれを含む上位の指紋である。
+
+#### 3.4 1 段目のシグネチャを `pbi.attempted` に足す
+- `data.signature: {sig_id, parts}`。parts は列挙だけで組む: `outcome`、`causes`（並べ替え済み）、`verify_failed_n` の段階、`findings`（critical/major/minor の段階）、`unchanged`、`memory_violation`、`test_failing`（intended/regression/unknown の組）、`fallback_any`、`runner`、`tier`。
+- 自由文は使わないので、許可リストを通り、herness-log に送れる。analyzer は、これを analyzer 設計 §5.1 の 1 段目としてそのまま使う。
+
+#### 3.5 原因（cause）を根因に写す
+| atelier の `--cause` | 根因（共通） | 備考 |
+|---|---|---|
+| `spec` | `task` | 課題（PBI）があいまい、条件が足りない |
+| `convention`、`scope`、`memory` | `harness` | 指示、柵、refs で直せる |
+| `model` | `agent` | |
+| `env` | `env` | |
+| **新しく `grader`** | `grader` | レビュー担当やテスト担当の誤り、verify の規則の誤り（差し戻しが誤りだった、など） |
+| **新しく `flaky`** | `noise` | やり直したら通った。試行で合否が割れた |
+
+- `CAUSES` に `grader` と `flaky` を足す（`record_run.py` の列挙と、cases.md の表）。
+- 原因の付いていない差し戻しの数は、今の設計どおり数える（記録の抜けとして）。
+
+#### 3.6 2 段目: 失敗の埋め込みとクラスタの割当
+- 今の埋め込みは「タスクの形」（目的と受け入れ条件 → アンカーとの近さ）だけである。これに **失敗の空間**（`kind: failure`）を足す。
+  - 埋め込む文はテンプレートで組む: `causes | findings の重さ | review の why の要約 | test の failing の分類 | rework note の Expected の要約`。why と Expected は自由文である。D1 により、**手元の LLM と埋め込み（ローカルか自前のサーバー）でだけ**読んで組む。外には送らない。
+  - ベクトルは今と同じく保全先の `vectors.jsonl` に置く（`space_id`、`kind`、`case_id`、`unit_id` を添える）。`space_id` は analyzer 設計 §7.2 と同じ式で出す（モデルの digest とテンプレートの版を含める）。
+- クラスタを作るのは analyzer（train だけで fit）である。atelier の側は、割当を受け取って `cluster.assigned` イベント（`unit_id`、`clusterset_id`、`cluster_id`、`lineage_id`、`dist_bucket`、`how`）を出すだけにする。識別子だけなので送ってよい。
+- 埋め込みサーバーの設定は、`harness-log.json` の `embedding`（`url`、`model`）を、analyzer 設計 §7.1 の形（provider、dims、normalize、prefix、timeout）に広げる。analyzer と同じファイルを読めるようにする。既定は今の設計どおり、SSH 先の Ollama `qwen3-embedding:0.6b`（D2）。
+
+#### 3.7 試行と判定と根因の仕分けのイベント
+| type | 出す人・いつ | data |
+|---|---|---|
+| `split.assigned` / `split.retired` | events.py | `case_id`、`split`、`split_set_id`、`reason`（列挙） |
+| `change.applied` | events.py change apply | `change_id`、`parent`、`kind`、`target`（id）、`hypothesis`（lineage_id）、`multi` |
+| `change.checked` | events.py leakcheck | `change_id`、`verdict`（pass/warn/block）、`overlap_bucket`、`vs`（heldout/failure/rubric） |
+| `round.judged` | analyzer から返す（取り込み） | `change_id`、`base_change_id`、`verdict`（accept/overfit_suspect/regress/noise/invalid）、`d_train`、`d_heldout`（段階）、`ci_lo`、`ci_hi`（小数 2 桁）、`trials` |
+| `triage.labeled` | 人か analyzer | `lineage_id`、`root_cause`、`by`（auto/human） |
+| `cluster.assigned` | §3.6 | |
+
+- **失敗の本文を指示に貼ったかの検出**（leakcheck）: worker.md、designer.md、appendix の diff を、cases の `private.rework`、held-out の case の `task`、review の why と比べる（8-gram の Jaccard、最長一致の長さ、PBI に固有の識別子が入っているか）。held-out と rubric に重なれば block、train の失敗に重なれば warn にする。結果は `change.checked` で残し、本文は残さない。adopt の PR の前に打つ手順を、cases.md に足す。
+- **停滞**: `round.judged` が accept にならない回数が K（既定は 3）続いたら、設計者の finish か outer harness が `triage` を促す。grader 側の誤り（レビューの指摘と verify の不一致、テスト担当の cause=unknown の多さ、どのモデルでも同じ形で落ちること）を先に疑う。
+
+#### 3.8 状態遷移（変更 1 つの一生）
+```mermaid
+stateDiagram-v2
+  [*] --> Proposed: change apply
+  Proposed --> Blocked: leakcheck block
+  Proposed --> Running: train/held-out を replay (trial N)
+  Running --> Judged: analyzer round
+  state Judged {
+    [*] --> J
+    J --> Accept: held-out ↑
+    J --> Overfit: train ↑ & held-out 横ばい
+    J --> Regress: held-out ↓
+    J --> Noise: どちらも ε 内
+  }
+  Accept --> Adopted: 人が PR で採る
+  Overfit --> RolledBack: 差し戻し候補 → 人が確認
+  Regress --> RolledBack
+  Noise --> Running: 試行を足す
+  RolledBack --> [*]
+  Adopted --> [*]
+  %% never: held-out の case 本文が improver の見え方に出る
+  %% never: multi な変更が Accept になる
+```
+
+### 4. analyzer への取り込み（atelier → harness.unit/1）
+
+| unit の項目 | atelier の出所 |
+|---|---|
+| `unit_id` | `at:<run_id>:<pbi>:<attempt>`（events.jsonl の外枠） |
+| `task_id` | `case_id`（`<repo>:<work_key>:<PBI>`。外に送る形では repo と branch がハッシュになる） |
+| `group` | `task.profiled` の `task_type` × `domain` × 大きさの段階 |
+| `split`、`split_set_id`、`change_id`、`trial` | 外枠（§3.1） |
+| `condition` | `pbi.attempted` の runner、model、effort、tier と、外枠の `config_fp` |
+| `outcome` | `pbi.attempted`（outcome、verify、usd、seconds、tokens）。passed = 合格 |
+| `signature` | `pbi.attempted.signature`（§3.4） |
+| `embedding_ref` | 手元の `vectors.jsonl`（kind=failure） |
+| `root_cause` | causes の写像（§3.5） |
+
+- 読む先は 2 つある。手元の `docs/pbi/events.jsonl` と保全先（ベクトルや本文を使える）、または herness-log の clone（識別子だけ。複数のリポジトリをまたいで集計できる）。
+- harness2 から atelier の cases を replay したときは、harness2 の trace に出る unit の `task_id` が atelier の `case_id` と一致する。そのため、atelier で実際に動いたときの結果と、replay したときの結果を同じ課題として並べられる。
+
+### 5. テストの追加（既存の seam の流儀に合わせる）
+- events.py: `split assign` が決定的であること、`--view improver` に held-out の本文が出ないこと、`change apply` で以後のイベントに change_id が付くこと、`leakcheck` の block、warn、pass（偽の diff で確かめる）。
+- record_run: `--cause grader,flaky` を受けること、`signature` が許可リストを通ること。
+- 送り手: 外枠の新しいキーが共通の許可リストにあること。
+
+#### 残っている問い (既定を置いた)
+
+- held-out の manifest は home (`~/.config/pbi-orchestration-jev/splits/`) に置く。
+- `cause` に `grader` と `flaky` を足す。
+- replay するのは harness2 だけにする。
