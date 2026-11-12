@@ -50,6 +50,8 @@ def memory_call(ts, rid, tool, tool_id, ref=None):
 class RecordRunTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        # 本物の ~/.claude の送り手の設定を読ませない (events.emit がイベントを送らないようにする)
+        os.environ['HARNESS_LOG_CONFIG'] = str(self.tmp / 'harness-log.json')
         self.repo = self.tmp / 'myrepo'
         self.pbi = self.repo / 'docs' / 'pbi'
         (self.pbi / 'opencode').mkdir(parents=True)
@@ -124,6 +126,8 @@ class RecordRunTest(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != 'PBI_RUNS_ARCHIVE'}
         # 子プロセスの stderr を Windows でも UTF-8 にし、親の encoding='utf-8' と揃える
         env['PYTHONUTF8'] = '1'
+        # 本物の ~/.claude の送り手の設定を読ませない (無いファイルを指す)
+        env['HARNESS_LOG_CONFIG'] = str(self.tmp / 'harness-log.json')
         if home is not None:
             env['HOME'] = env['USERPROFILE'] = str(home)
         elif archive:
@@ -139,6 +143,15 @@ class RecordRunTest(unittest.TestCase):
     def rows(self):
         path = self.pbi / 'runs.jsonl'
         return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+
+    def events(self):
+        path = self.pbi / 'events.jsonl'
+        if not path.is_file():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+
+    def attempts(self):
+        return [e for e in self.events() if e.get('type') == 'pbi.attempted']
 
     def test_opencode_tokens_cost_steps_and_time(self):
         self.write_opencode('PBI-007', [
@@ -169,6 +182,10 @@ class RecordRunTest(unittest.TestCase):
         self.assertEqual(row['unchanged'], {'checked': True, 'violation': False})
         self.assertEqual(row['judged'], {'outcome': '合格', 'findings': {'重大': 0, '中': 1, '軽微': 2}, 'cause': None})
         self.assertTrue(row['archive']['ok'])
+        # 行を追記した直後に pbi.attempted が 1 行出る
+        [event] = self.attempts()
+        self.assertEqual(event['data']['outcome'], 'pass')
+        self.assertEqual(event['unit_id'], 'at:none:PBI-007:1')
 
     def test_dsh_tokens_steps_and_time_from_status_usage_and_run_json(self):
         dsh = {'runner': 'dsh', 'model': 'deepseek-official/deepseek-flash', 'effort': 'high'}
@@ -523,6 +540,101 @@ class RecordRunTest(unittest.TestCase):
         r = self.record('PBI-007', 2, 'pass', '--findings', '0,0,1')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual([row['judged']['outcome'] for row in self.rows()], ['使えず', '合格'])
+        self.assertEqual([e['data']['outcome'] for e in self.attempts()], ['unusable', 'pass'])
+
+    def test_attempted_event_has_the_allowlisted_data_and_a_signature(self):
+        (self.pbi / 'conductor').mkdir()
+        (self.pbi / 'conductor' / 'run.json').write_text(json.dumps({'run_id': 'r1', 'seq': 3}), encoding='utf-8')
+        self.write_opencode('PBI-007', [
+            step_finish(1792117910000, 100, 20, 5, 1000, 50, 0.0),
+            step_finish(1792117970000, 200, 30, 0, 2000, 0, 0.0)])
+        self.write_verify('PBI-007', [{'n': 1, 'command': 'pnpm test', 'code': 0},
+                                      {'n': 2, 'command': 'python docs/pbi/tools/unchanged.py check PBI-007',
+                                       'code': 0},
+                                      {'n': 3, 'command': 'pnpm lint', 'code': 1}])
+        r = self.record('PBI-007', 1, '差し戻し', '--findings', '1,2,3', '--cause', 'grader,flaky')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [event] = self.attempts()
+        self.assertNotIn('dropped', event)
+        self.assertEqual(event['unit_id'], 'at:r1:PBI-007:1')
+        data = event['data']
+        self.assertEqual(
+            (data['attempt'], data['step'], data['rework'], data['runner'], data['model'],
+             data['tier'], data['effort'], data['outcome']),
+            (1, 1, 0, 'opencode', GLM_FREE['model'], 'haiku', 'max', 'sent-back'))
+        self.assertEqual((data['seconds'], data['input'], data['output'], data['cache_read'], data['cache_write']),
+                         (70, 300, 50, 3000, 50))
+        self.assertEqual(data['findings'], {'critical': 1, 'major': 2, 'minor': 3})
+        self.assertEqual(data['causes'], ['grader', 'flaky'])
+        self.assertFalse(data['unchanged'])
+        self.assertEqual(data['usd'], 0.0)
+        self.assertEqual(data['case_id'], 'myrepo:myrepo:feature/x:W-002:PBI-007')
+        signature = data['signature']
+        self.assertRegex(signature['sig_id'], r'^[0-9a-f]{12}$')
+        self.assertEqual(signature['parts'], {
+            'outcome': 'sent-back', 'causes': ['flaky', 'grader'], 'verify_failed_n': '1',
+            'findings': {'critical': '1', 'major': '2-up', 'minor': '2-up'},
+            'unchanged': False, 'memory_violation': False, 'test_failing': [],
+            'fallback_any': False, 'runner': 'opencode', 'tier': 'haiku'})
+        # 同じ入力 (attempt だけ違う) は同じ sig_id、outcome を変えると違う
+        self.assertEqual(self.record('PBI-007', 2, '差し戻し', '--findings', '1,2,3',
+                                     '--cause', 'grader,flaky').returncode, 0)
+        self.assertEqual(self.record('PBI-007', 3, '合格', '--findings', '1,2,3',
+                                     '--cause', 'grader,flaky').returncode, 0)
+        ids = [e['data']['signature']['sig_id'] for e in self.attempts()]
+        self.assertEqual(len(ids), 3)
+        self.assertEqual(ids[0], ids[1])
+        self.assertNotEqual(ids[0], ids[2])
+
+    def test_attempted_event_unit_id_uses_the_run_and_the_report(self):
+        (self.pbi / 'conductor').mkdir()
+        run = self.pbi / 'conductor' / 'run.json'
+        run.write_text(json.dumps({'run_id': 'run-abc'}), encoding='utf-8')
+        self.write_opencode('PBI-007', [])
+        self.assertEqual(self.record('PBI-007', 1, 'pass').returncode, 0)
+        self.assertEqual([e['unit_id'] for e in self.attempts()], ['at:run-abc:PBI-007:1'])
+        run.unlink()
+        self.assertEqual(self.record('PBI-007', 2, 'pass').returncode, 0)
+        self.assertEqual(self.attempts()[-1]['unit_id'], 'at:none:PBI-007:2')
+        # PBI-7 と PBI-7.rework-1 は別の attempt の並びなので unit_id も別
+        self.write_route('PBI-1', [GLM_FREE], tier='haiku')
+        self.assertEqual(self.record('PBI-1', 1, 'pass').returncode, 0)
+        self.assertEqual(self.record('PBI-1.rework-1', 1, 'pass').returncode, 0)
+        ids = [e['unit_id'] for e in self.attempts()]
+        self.assertIn('at:none:PBI-1:1', ids)
+        self.assertIn('at:none:PBI-1.rework-1:1', ids)
+
+    def test_recorded_row_carries_the_run_id_of_its_run(self):
+        """runs.jsonl の行に記録したときの run_id が残り、あとの run から読んでも unit_id を再現できる。"""
+        (self.pbi / 'conductor').mkdir()
+        run = self.pbi / 'conductor' / 'run.json'
+        run.write_text(json.dumps({'run_id': 'run-A', 'seq': 1}), encoding='utf-8')
+        self.write_opencode('PBI-007', [])
+        self.assertEqual(self.record('PBI-007', 1, 'pass').returncode, 0)
+        [row] = self.rows()
+        self.assertEqual(row['run_id'], 'run-A')
+        self.assertEqual([e['unit_id'] for e in self.attempts()], ['at:run-A:PBI-007:1'])
+        # 次の run で記録した行は次の run_id。前の行は記録したときの run_id のまま
+        run.write_text(json.dumps({'run_id': 'run-B', 'seq': 2}), encoding='utf-8')
+        self.assertEqual(self.record('PBI-007', 2, 'pass').returncode, 0)
+        self.assertEqual([r['run_id'] for r in self.rows()], ['run-A', 'run-B'])
+        self.assertEqual([e['unit_id'] for e in self.attempts()],
+                         ['at:run-A:PBI-007:1', 'at:run-B:PBI-007:2'])
+        # run.json が無ければ none (この行もあとから見て分かる)
+        run.unlink()
+        self.assertEqual(self.record('PBI-007', 3, 'pass').returncode, 0)
+        self.assertEqual(self.rows()[-1]['run_id'], 'none')
+        self.assertEqual(self.attempts()[-1]['unit_id'], 'at:none:PBI-007:3')
+
+    def test_cause_accepts_grader_and_flaky_and_rejects_an_unknown_value(self):
+        self.write_opencode('PBI-007', [])
+        r = self.record('PBI-007', 1, 'rework', '--cause', 'grader,flaky')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.attempts()[0]['data']['causes'], ['grader', 'flaky'])
+        bad = self.record('PBI-007', 2, 'rework', '--cause', 'poem')
+        self.assertEqual(bad.returncode, 2)
+        self.assertIn('--cause', bad.stderr)
+        self.assertEqual(len(self.attempts()), 1)
 
     def test_english_work_key_line_is_read(self):
         (self.pbi / 'STATUS.md').write_text('Work key: myrepo:feature/x:W-004 / Workspace: project:work\n',
