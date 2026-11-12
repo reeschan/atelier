@@ -125,7 +125,13 @@ def load_config(path=None) -> dict | None:
 def _save_config(path: Path, cfg: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + '.tmp')
-    with open(tmp, 'w', encoding='utf-8', newline='\n') as h:
+    # 鍵を書く前から本人だけが読める権限で作る (書いてから chmod すると、その間は読める)
+    try:
+        tmp.unlink()
+    except OSError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as h:
         h.write(json.dumps(cfg, ensure_ascii=False, indent=2) + '\n')
     os.replace(tmp, path)
     try:
