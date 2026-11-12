@@ -46,6 +46,12 @@ import agents as agents_module
 import common
 import lint_compare
 
+# イベントの口 (同じフォルダ)。無い環境でも承認の記録は続ける
+try:
+    import events
+except (Exception, SystemExit):
+    events = None
+
 # Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
@@ -284,6 +290,10 @@ def cmd_approve(args, pbi: Path, _root: Path) -> int:
               'at': datetime.datetime.now().astimezone().isoformat(timespec='seconds')}
     data.setdefault('sends', []).append(record)
     common.write_json(path, data)
+    # 送る直前にユーザーが選んだ答え (send / ast-only) を残す
+    if events is not None:
+        events.emit(pbi, 'stage.decided', {'component': 'lint-survey.jevlint', 'decision': args.answer,
+                                           'by': 'user', 'reason': 'approved'})
     print(f'approval {args.name} {args.answer} ({len(send)} files) -> {common.shown(path)}')
     return 0
 

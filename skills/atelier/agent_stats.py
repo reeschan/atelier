@@ -431,6 +431,80 @@ def role_stats(sessions, prices, prefix=None, end=None):
     return out
 
 
+def role_cost(reqs, prices):
+    """リクエスト列 1 役割ぶんの requests・トークン 4 種・USD を返す。
+
+    cache_write は 5 分 TTL と 1 時間 TTL の合計 (episode.cost の形)。単価の分からないリクエストが
+    混ざった役割は、0 円と取り違えないように usd を None にする。
+    """
+    c = cost_of(reqs, prices)
+    out = {"requests": len(reqs), "input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+    for r in reqs:
+        out["input"] += r["input"]
+        out["output"] += r["output"]
+        out["cache_read"] += r["cache_read"]
+        out["cache_write"] += r["cache_write_5m"] + r["cache_write_1h"]
+    out["usd"] = None if c["unpriced"] else c["usd"]
+    return out
+
+
+def roles_cost(role_reqs, prices=None):
+    """役割ごとのリクエスト列を、リクエストのある役割だけの episode.cost の roles にする。
+
+    prices を省くと、--cost と同じ (同梱 + home) の単価表を使う。
+    """
+    if prices is None:
+        prices = common.load_prices(common.resolve_home(None))
+    return {r: role_cost(reqs, prices) for r, reqs in role_reqs.items() if reqs}
+
+
+def headless_role_requests(main):
+    """headless の出番の会話記録を役割ごとのリクエスト列に分ける。
+
+    メインのセッションが designer。subagents/ の子は description から role_of で役割を決める
+    (headless の設計者は `ATELIER.<run>.<seq>` の印を持たないので、印を渡さない)。
+    """
+    roles = {"designer": load_requests(main)}
+    sub = main.with_suffix("") / "subagents"
+    for jl in sorted(sub.glob("agent-*.jsonl")):
+        meta_path = jl.with_name(jl.name.removesuffix(".jsonl") + ".meta.json")
+        meta = read_meta(meta_path) if meta_path.exists() else {}
+        roles.setdefault(role_of(meta.get("description", "")), []).extend(load_requests(jl))
+    return roles
+
+
+def episode_cost(run, seq, prices=None):
+    """1 つの出番 (run.json の seq) の費用を、役割ごとの数と USD で返す。
+
+    形は {"method": headless|transcript|unmeasured, "roles": {<役割>: {requests, input, output,
+    cache_read, cache_write, usd}}}。headless の出番 (history の該当行に session_id) は、その
+    セッションの会話記録と subagents/ から。agent の出番は、description が
+    `ATELIER.<run_id の先頭 8 文字>.<seq> ` で始まる設計者と、その子孫 (parentAgentId をたどる) から。
+    設計者は designer、子は role_of の分類 (worker・reviewer・tester・other)。どちらも見つからなければ
+    unmeasured。設計者の会話記録は子が終わるまで書き切られないことがあるので、見つかった分だけ数える。
+    """
+    entry = next((e for e in run.get("history") or [] if isinstance(e, dict) and e.get("seq") == seq), None)
+    sid = entry.get("session_id") if entry else None
+    if sid:
+        main = find_session_quiet(sid)
+        if main is not None:
+            return {"method": "headless", "roles": roles_cost(headless_role_requests(main), prices)}
+    prefix = run_prefix(run)
+    episode_prefix = f"{prefix}{seq} "
+    # run_id が無ければ設計者の印を作れない (全プロジェクトを無駄に読まない)
+    designer = find_agent_jsonl(episode_prefix) if run.get("run_id") else None
+    if designer is not None:
+        # 設計者は caller_run_agents が episode_prefix の前方一致で選び、子は parentAgentId でたどる。
+        # role_of には seq の付かない run の印を渡す (seq 付きだと設計者が other に落ちる)
+        sub = designer.parent
+        chosen, _ = caller_run_agents(sub, episode_prefix)
+        role_reqs = {}
+        for _, meta, reqs in chosen:
+            role_reqs.setdefault(role_of(meta.get("description", ""), prefix), []).extend(reqs)
+        return {"method": "transcript", "roles": roles_cost(role_reqs, prices)}
+    return {"method": "unmeasured", "roles": {}}
+
+
 def roles_table(roles):
     lines = ["| 役割 | リクエスト | トークン | 費用 (USD) |", "|---|---:|---:|---:|"]
     for r in ROLES:

@@ -3,6 +3,8 @@
 
 使い方 (リポジトリのルートで):
   python <このディレクトリ>/export_cases.py [--dir docs/pbi] [--repo NAME]
+  python <このディレクトリ>/export_cases.py --view improver [--split-name default] [--home HOME]
+    (improver は改善役に見せる版。held-out の case は schema・id・size・result.passed だけにする)
 
 ここではプロンプトを組み立てない。外のハーネス (harness2 など) が case を読み、自分の構成要素に当てはめる。
 case の形は CASE_SCHEMA の版と appendix/cases.md にある。要素は種類ごとに分ける:
@@ -208,11 +210,55 @@ def build_case(base: Path, root: Path, repo: str, pbi: str, rows: list[dict]) ->
     }
 
 
+def improver_case(case: dict) -> dict:
+    """held-out の case を、改善役に見せてよい項目 (schema・id・size・result.passed) だけにする。
+
+    残すキーを並べた許可リストで作り、それ以外 (task・harness・private・base_commit など) は落とす。
+    """
+    return {'schema': case.get('schema'), 'id': case.get('id'), 'size': case.get('size'),
+            'result': {'passed': (case.get('result') or {}).get('passed')}}
+
+
+def improver_cases(cases: list[dict], name: str, home) -> tuple[list[dict], str | None]:
+    """heldout の case だけを improver_case にした一覧と、標準エラーに出す 1 行 (無ければ None) を返す。
+
+    分割が無い (splits.py が無い・manifest のファイルが無い) ときは cases をそのまま返す。
+    manifest のファイルがあるのに読めない (壊れている・形が違う) ときは、held-out の本文を出さないよう
+    (None, 理由の 1 行) を返す。呼び出し側は書かずに止める。
+    """
+    try:
+        import splits
+    except (Exception, SystemExit):
+        return cases, 'improver: splits が無いので、分割せず owner と同じ行を書く'
+    try:
+        manifest = splits.load_manifest(name, home)
+    except (Exception, SystemExit):
+        manifest = None
+    if not isinstance(manifest, dict):
+        try:
+            exists = splits._manifest_path(name, home).exists()
+        except (Exception, SystemExit):
+            exists = True  # 有無を確かめられないときも、壊れているとみなして止める
+        if exists:
+            return None, f'improver: manifest {name} があるのに読めないので、書かずに止める (held-out の本文を出さない)'
+        return cases, f'improver: 分割が無い (manifest {name}) ので、owner と同じ行を書く'
+    out = []
+    for case in cases:
+        # 読み込んだ manifest 1 つで分ける (case ごとに読み直すと、途中で変わった manifest で分かれてしまう)
+        out.append(improver_case(case) if splits.split_in(manifest, case.get('id')) == 'heldout' else case)
+    return out, None
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--dir', default='docs/pbi')
     ap.add_argument('--repo')
+    ap.add_argument('--view', choices=('owner', 'improver'), default='owner',
+                    help='owner: 今の出力 / improver: held-out の本文を落とす')
+    ap.add_argument('--split-name', default='default')
+    ap.add_argument('--home')
     args = ap.parse_args()
     base = Path(args.dir)
     rows = record_run.read_rows(base / 'runs.jsonl')
@@ -226,18 +272,27 @@ def main():
         by_pbi.setdefault(r.get('pbi'), []).append(r)
     cases = [c for pbi, rs in sorted(by_pbi.items(), key=lambda kv: int(kv[0].split('-')[1]))
              if (c := build_case(base, root, repo, pbi, rs)) is not None]
-    text = ''.join(json.dumps(c, ensure_ascii=False) + '\n' for c in cases)
-    (base / 'cases.jsonl').write_text(text, encoding='utf-8')
+    name = 'cases.improver.jsonl' if args.view == 'improver' else 'cases.jsonl'
+    if args.view == 'improver':
+        shown, note = improver_cases(cases, args.split_name, args.home)
+        if note:
+            print(note, file=sys.stderr)
+        if shown is None:
+            sys.exit(2)
+    else:
+        shown = cases
+    text = ''.join(json.dumps(c, ensure_ascii=False) + '\n' for c in shown)
+    (base / name).write_text(text, encoding='utf-8')
     key = rows[-1].get('work_key')
     copied = 'ok'
     try:
         group = record_run.archive_root() / repo / record_run.key_dir(key)
         group.mkdir(parents=True, exist_ok=True)
-        (group / 'cases.jsonl').write_text(text, encoding='utf-8')
+        (group / name).write_text(text, encoding='utf-8')
     except OSError as error:
         copied = f'失敗 ({error})。作業は続けてよい'
     sent = sum(1 for c in cases if c['result']['sent_back'])
-    print(f'cases: {len(cases)} 件 (差し戻しあり {sent} 件) を {base / "cases.jsonl"} に書いた。保全先 {copied}')
+    print(f'cases: {len(cases)} 件 (差し戻しあり {sent} 件) を {base / name} に書いた。保全先 {copied}')
 
 
 if __name__ == '__main__':

@@ -52,6 +52,7 @@ Ask the user only what changes what they get, what it costs, how long it takes o
 | The `map` stage (OMM); the `lint-survey` or `lint-recheck` stage, or any jevlint run | `appendix/map.md`; `appendix/lint.md` |
 | Argument `setup`, `setup --recommended`, `models` or `templates`, or home has no `agents.json` | `appendix/setup.md` |
 | Picking a component, a `when` you cannot decide, a `read-skill` component, writing a stage record, the user asks to add a skill to the workflow | `appendix/engine.md` |
+| Writing a stage record, settling the plan, an inline answer, the events of finish | `appendix/events.md` |
 | The template has an `optional` list (`ui-design`, `marketing`, `security`, `model-check` rows in the flow table) | `appendix/optional.md` |
 | A component is picked | its `doc` column in the flow table |
 | Choosing the work key, writing refs, handing off, promoting at the end | `appendix/memory.md` |

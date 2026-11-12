@@ -70,7 +70,7 @@ FAIL_STATUSES = ('NEEDS_CONTEXT', 'BLOCKED')
 # record の outcome (record_run.py の --outcome と同じ値。英語の値は record_run.py が日本語の値に直して書く)
 OUTCOMES = ('pass', 'rework', 'tier-up', 'unavailable', 'hold', '合格', '差し戻し', '昇格', '使えず', '保留')
 # record の cause (record_run.py の CAUSES と同じ値)
-CAUSES = ('spec', 'convention', 'scope', 'memory', 'model', 'env')
+CAUSES = ('spec', 'convention', 'scope', 'memory', 'model', 'env', 'grader', 'flaky')
 # claim_task が sections に入れる PBI の見出し (appendix/plan.md の雛形)。キーは英語の見出しで、
 # 旧い PBI の日本語の見出しも同じキーで読む
 SECTIONS = (('Goal', '目的'), ('Targets', '対象'), ('Do not touch', '触らない範囲'),
