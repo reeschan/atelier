@@ -6,16 +6,20 @@ Read this when you record a rework, a tier up or a hold (the cause), and at fini
 
 Give `record_run.py --cause` for every rework, tier up and hold. Pick what would have prevented the failure, more than one when they all apply:
 
-| Cause | When |
-|---|---|
-| `spec` | The PBI, its brief or the rework note said too little or something wrong: a missing Target, an undecided behavior, a wrong verify command that you did not fix as your own mistake |
-| `convention` | The change breaks a convention of the repository: a rule in a CLAUDE.md that applies to the changed files, or a lint or format check |
-| `scope` | A change outside the Targets, or in the "Do not touch" list |
-| `memory` | A listed ref was not read (`missed_refs`), or shared memory was used beyond what the template allows (`memory violation`) |
-| `model` | The PBI and refs were enough, and the model still fell short |
-| `env` | Permissions, the network or a tool failed |
+| Cause | When | Root cause |
+|---|---|---|
+| `spec` | The PBI, its brief or the rework note said too little or something wrong: a missing Target, an undecided behavior, a wrong verify command that you did not fix as your own mistake | `task` |
+| `convention` | The change breaks a convention of the repository: a rule in a CLAUDE.md that applies to the changed files, or a lint or format check | `harness` |
+| `scope` | A change outside the Targets, or in the "Do not touch" list | `harness` |
+| `memory` | A listed ref was not read (`missed_refs`), or shared memory was used beyond what the template allows (`memory violation`) | `harness` |
+| `model` | The PBI and refs were enough, and the model still fell short | `agent` |
+| `env` | Permissions, the network or a tool failed | `env` |
+| `grader` | The reviewer, the tester or a verify rule was wrong: the send-back itself was a mistake | `grader` |
+| `flaky` | A rerun passed; the attempts split between pass and fail | `noise` |
 
-`spec`, `convention`, `scope` and `memory` can be fixed by the instructions; `model` and `env` cannot.
+`spec` maps to the task, `convention`, `scope` and `memory` to the harness, and `model` to the agent. `grader` is the reviewer, the tester or a verify rule being wrong, and `flaky` is noise. The root cause column is what an outer analyzer (harness2-analyzer) records as `triage.labeled`.
+
+`spec`, `convention`, `scope`, `memory` and `grader` can be fixed by the instructions (for `grader`, the reviewer and tester definitions and the verify rules); `model` and `env` cannot. `flaky` is noise, so no instruction fixes it: a rerun decides.
 
 ## The case
 
@@ -34,3 +38,15 @@ Give `record_run.py --cause` for every rework, tier up and hold. Pick what would
 | `private.rework` | The Expected and Repro items of each rework note. For scoring only: an outer harness must not show them to the worker it replays |
 
 The rows of `runs.jsonl` also carry `input.pbi_chars`, `judged.cause`, `prompt.worker` (the version of `docs/pbi/worker.md`), `base_commit` and `memory.missed_refs`, so a change to `worker.md` can be compared before and after from the records alone. `size` and `totals` let an outer harness compare time and tokens against the size of the PBI, the number of refs and the length of the instructions, to decide whether PBIs should be smaller and what the always-on text and the refs should carry.
+
+## Hillclimb
+
+Read this when you improve the instructions across rounds. An outer analyzer (harness2-analyzer) judges each change by replaying cases, so every step below leaves a record; the bodies stay local.
+
+1. Make the split before you compare rounds. `python <skill>/events.py split init --seed <seed>` writes `~/.config/pbi-orchestration-jev/splits/<name>.json` once. At each finish, `python <skill>/events.py split assign --dir docs/pbi` gives a new case its split from that seed, and a case never changes split.
+2. A held-out case that you read is no longer held-out. `python <skill>/events.py split retire --case <case_id> --dir docs/pbi` moves it to `regression` (reason `read-heldout`) and emits `split.retired`.
+3. Hand the improver the improver view only. `python <skill>/export_cases.py --view improver` writes `docs/pbi/cases.improver.jsonl`: a held-out case keeps only `id`, `size` and `result.passed`, and its `task`, `harness.memory` and `private` are dropped. The default view (`owner`) keeps the whole case for you.
+4. Change one kind per round. When you raise the skill version, record the change: `python <skill>/events.py change apply --dir docs/pbi --kind <kind> --target <target> --hypothesis <lineage_id>`. A change whose `config_fp` moved in two or more kinds is `multi`: it is left out of the judgement, so split it and try again.
+5. Check the diff before the adopt PR: `python <skill>/events.py leakcheck --dir docs/pbi --change <change_id> --diff <patch>`. It compares the added lines with the rework notes, the held-out cases and the review notes, writes `change.checked` and prints the verdict as JSON. Exit 0 is `pass` or `warn` (`warn` means it overlaps a train failure: reread the lines first). Exit 3 is `block`: held-out or rubric text leaked, so do not adopt that change. Any other exit code (2: a usage error, an unreadable source or split manifest, a held-out case that cannot be found, or a crash), or no JSON on stdout, means the check did not run: do not adopt the change; fix the cause and run it again.
+6. Take the analyzer's return in with `python <skill>/events.py ingest --file <judgement.jsonl>`. It writes `round.judged`, and the analyzer's cluster assignments as `cluster.assigned`.
+7. Keep the trial number and the change ids with the record, so a later round compares the same condition and a stalled round can be triaged (see `appendix/finish.md`).
