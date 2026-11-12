@@ -33,7 +33,7 @@ NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 HEADER = 'tool\tstatus\tinstall\tfallback'
 # confirm のスキルの出所 (repo と、設計で合わせた fork の main)
 CONFIRM_REPO = 'https://github.com/reeschan/answer-me-with-any'
-CONFIRM_COMMIT = '8856dde51ff8'
+CONFIRM_COMMIT = 'bd70c602d794'
 INSTALL = {
     'omm': 'npm install -g oh-my-mermaid',
     'omm-scan': '/plugin marketplace add oh-my-mermaid/oh-my-mermaid, then /plugin install oh-my-mermaid@oh-my-mermaid',
