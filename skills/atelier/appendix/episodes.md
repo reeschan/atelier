@@ -42,7 +42,8 @@ Write the file on the prompt's `Result:` line as your last action, schema `ateli
 - `status`: `done`, `question`, `handoff` or `error`.
 - `summary`: up to 5 lines, 200 characters each. Your reply is these lines only.
 - `next`: with `done`, `{"episode": ..., "wave": n, "pbis": [...]}`; `wave` must be in `docs/pbi/waves.json`; `pbis` only for a rework build.
-- `question`: with `question`, `{"kind", "path", "summary", "check"}`.
+- `question`: with `question`, `{"kind", "path", "summary", "check"}`. Kinds: `approve`, `rework-limit`, `destructive`, `send-approval`, `decision` (a grill round is one) and `full-run` (whether to run the whole E2E suite once, `appendix/tests-at-end.md`).
+- `report_body` (finish only, optional): the completion report's text, when you could not write `docs/pbi/REPORT.md`; the conductor writes it.
 - `state`: the path of the state tablet; required with `handoff` and with every question kind but `approve`.
 - `report`: the path of the completion report (finish).
 - `reason`: required with `error`.
@@ -88,7 +89,7 @@ An answer to a conductor question with no state to continue from (`launch-failur
 
 ## Test result
 
-`docs/pbi/verify/tests/<name>.test-result.json`, schema `atelier.test-result/1`: `kind` (`wave`, `survey` or `final`), `commands` (command and exit code), `failing` (test, file, pbi, `cause` `intended`, `regression` or `unknown`, why), `recommendation` (`pass`, `rework` or `needs-designer`). The tester's `cause` is a proposal.
+`docs/pbi/verify/tests/<name>.test-result.json`, schema `atelier.test-result/1`: `kind` (`wave`, `survey`, `final` or `full`), `commands` (command and exit code), `failing` (test, file, pbi, `cause` `intended`, `regression` or `unknown`, why), `recommendation` (`pass`, `rework` or `needs-designer`). The tester's `cause` is a proposal.
 
 ## Bundle
 

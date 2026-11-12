@@ -45,8 +45,8 @@ The table header is fixed: `| PBI | 何をするか | 終わると何ができ�
 
 ## Who builds
 
-One table `| PBI | 作るモデル | 見直しの深さ |` (`| PBI | Model | Review |`), the depth in words (ふつう / 深く). Then the tests at the end in one sentence (the `deferred` and `test_paths` you drafted), and the model-check chart when that stage ran. Scores and template names stay out.
+One table `| PBI | 作るモデル | 見直しの深さ |` (`| PBI | Model | Review |`), the depth in words (ふつう / 深く). Then the tests: one table `| PBI | 関連する E2E |` with the `related_specs` of each PBI (`なし` when none), the test rules you took from the project (`appendix/tests-at-end.md`, `## Project test rules`: the full-run command, the one-spec command, the limits, and one line per point where the project's rule wins over Atelier's default), and that the full suite runs only when the user says yes at the end. The model-check chart when that stage ran. Scores and template names stay out.
 
 ## Check the draft
 
-Run `python <skill>/design_record.py lint --draft docs/pbi/notes/approve.md` before you end the episode, with every `confirm` value. Exit 6 lists each error as `✗ L<line>` with an `例:` line: fix every one and run it again. A `! L<line> <term> → <rewording>` line is an internal term with no explanation on that line: reword it, add the explanation in parentheses after it, or keep it when the user knows the word. `design_record.py markdown` runs the same check first and adds no reply check info to a draft with errors.
+Run `python <skill>/design_record.py markdown --draft docs/pbi/notes/approve.md` as the last change before you end the episode (with `confirm` `off`, `design_record.py lint --draft` instead). `markdown` runs the lint first and adds the `reply-meta-` lines; a draft without them stops `answer --approve`. Exit 6 lists each error as `✗ L<line>` with an `例:` line: fix every one and run it again. A `! L<line> <term> → <rewording>` line is an internal term with no explanation on that line: reword it, add the explanation in parentheses after it, or keep it when the user knows the word. `design_record.py markdown` runs the same check first and adds no reply check info to a draft with errors.

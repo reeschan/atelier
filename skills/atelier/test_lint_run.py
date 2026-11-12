@@ -186,6 +186,26 @@ class LintRunTest(unittest.TestCase):
         self.assertEqual((totals['before']['files'], totals['after']['files'], totals['after']['provider']),
                          (1, 2, 'typesafe'))
 
+    def dry_run_after(self, form):
+        self.make_recheck_list()
+        self.env['FAKE_JEVLINT_DRY_RUN'] = form
+        result = self.run_cli('recheck', '--name', 'recheck', '--base', 'main', '--mode', 'dry-run')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.model_calls(), [])
+        with open(os.path.join(self.pbi, 'jevlint', 'recheck.dry-run.json'), encoding='utf-8') as f:
+            return json.load(f)['after']
+
+    def test_dry_run_reads_the_line_with_the_pinned_tail(self):
+        self.assertEqual(self.dry_run_after('pinned'),
+                         {'files': 2, 'tokens': 2000, 'cost_usd': 0.02, 'provider': 'typesafe'})
+
+    def test_dry_run_without_a_cost_counts_it_as_zero(self):
+        self.assertEqual(self.dry_run_after('no-cost'),
+                         {'files': 2, 'tokens': 2000, 'cost_usd': 0.0, 'provider': 'typesafe'})
+
+    def test_dry_run_that_stays_local_counts_the_files_and_sends_nothing(self):
+        self.assertEqual(self.dry_run_after('local'), {'files': 2, 'tokens': 0, 'cost_usd': 0.0, 'provider': None})
+
     def test_files_needs_paths_or_base(self):
         result = self.run_cli('files', '--name', 'x')
         self.assertEqual(result.returncode, 2)

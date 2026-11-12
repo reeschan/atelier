@@ -13,32 +13,72 @@ PBI の「## Verify commands」節 (旧い PBI は「## 検証コマンド」) �
 (appendix/plan.md の PBI の雛形):
   1. `pnpm test`
   2: pnpm lint
-コマンドは bash (Git Bash) でリポジトリのルートから実行する。読めた行が 0 件なら、そう出して終了コード 2 で終わる。
+コマンドは bash でリポジトリのルートから実行する。読めた行が 0 件なら、そう出して終了コード 2 で終わる。
+
+bash と Node:
+  Windows の bash は agents.json の tools.bash.path、git と同じ Git の bin\\bash.exe、PATH の bash
+  (System32・WindowsApps の下は除く) の順に探す。どれも無ければ終了コード 2。
+  Node はリポジトリの .node-version、.nvmrc、package.json の engines.node の順に版を読み、fnm に入っている
+  その版のディレクトリを子の PATH の先頭に置く。見つからなければ warn を出して今の PATH で流す。
+  ログの先頭には `bash: <パス>` と `node: <node -v>` の行を書く。
 
 テストを最後にまとめる選択肢 (appendix/tests-at-end.md):
-  <dir>/tests-at-end.json の "deferred" (文字列の一覧) のどれかを含むコマンドを、あとに回すコマンドとして扱う。
-  作業者は流さず、orchestrator が波の終わりに 1 回だけ流す。
+  <dir>/tests-at-end.json の "deferred" のどれかを含むコマンドを、あとに回すコマンドとして扱う。
+  要素は文字列か {"match", "when": "wave"|"end", "timeout": 秒, "server": {"start", "url"}} (when の既定は wave)。
+  作業者は流さず、orchestrator が波の終わり (wave) か run の最後 (end) に 1 回だけ流す。
   --list-deferred  あとに回すコマンドの番号を「3,5」の形で出して終わる (作業者への prompt に書くため)
   --skip-deferred  あとに回すコマンドを除いて流す (作業者の報告のあとの検証)
-  --deferred       位置引数に報告名をカンマでつないで渡す (PBI-003,PBI-004.rework-1)。あとに回すコマンドを
-                   同じ文字列ごとに 1 回だけ流し、その結果を各報告の <報告名>.json の番号に重ねる
+  --deferred       位置引数に報告名をカンマでつないで渡す (PBI-003,PBI-004.rework-1)。あとに回すコマンドのうち
+                   --when (既定 wave) の合うものを同じ文字列ごとに 1 回だけ流し、各報告の <報告名>.json の番号に重ねる
+  --related a.cy.ts,b.cy.ts  "investigate" の {specs} をカンマでつないだ spec に置き換えて流す。
+                   上限は spec の数 × limits.per_spec 秒。当たれば `blocked: limit` を出して終了コード 3
+  --final          "final" を時間の上限なしで流す。出力が limits.idle 秒無ければ止め、`blocked: idle` で終了コード 3。
+                   <dir>/full-run.approved.json (conductor.py answer --full-run yes) が無ければ `refused: ...` で
+                   終了コード 2。あれば流す前に消す (承認は 1 回の通しで使い切る)
+  PBI の検証コマンドに "final" (と同じか、それを含むコマンド) があれば、流さずに `refused: ...` で終了コード 2。
+  "limits" の既定は {"per_spec": 900, "retries": 2, "idle": 600}。
+  "server" ({"start", "url"}) のある検査 (--related・--final は最上位の "server") の前に url を見る。
+  応答すればそのまま使い、止めない。応答しなければ start を起動して応答を待ち (最大 120 秒、来なければ
+  `blocked: server` で終了コード 3)、検査のあとに起動したプロセスの木ごと止める。
   tests-at-end.json が無いか、"enabled" が false か、"deferred" が空なら、--skip-deferred は何も除かず、
   --list-deferred は空を出す。
 """
 
 import argparse
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
+
+from agents import fnm_node_dir
+from common import load_json, resolve_home
 
 # Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+# Windows 以外では子を新しいプロセスグループにし、止めるときにグループごと止める
+NEW_GROUP = {} if os.name == 'nt' else {'start_new_session': True}
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 LINE = re.compile(r"^\s*(\d+)[.:)]\s+(?P<rest>\S.*?)\s*$")
+VERSION = re.compile(r"v?(\d+(?:\.\d+){0,2})")
+LIMITS = {"per_spec": 900, "retries": 2, "idle": 600}
+SERVER_WAIT = 120
+BLOCKED_EXIT = 3
+# 通しの承認 (conductor.py answer --full-run yes が書く)。--dir からの相対
+FULL_RUN_APPROVAL = "full-run.approved.json"
+
+
+class Blocked(Exception):
+    """上限・無出力・サーバーの起動の失敗で止めたとき。メッセージは `blocked: ` のあとに出す理由。"""
 
 
 def strip_code(rest):
@@ -62,25 +102,57 @@ def commands(pbi_text):
     return out
 
 
-def deferred_patterns(base):
-    """<dir>/tests-at-end.json の "deferred" を返す。ファイルが無い・読めないときは空。"""
-    p = base / "tests-at-end.json"
-    if not p.is_file():
+def load_settings(base):
+    """<dir>/tests-at-end.json を辞書で返す。無い・読めないときは空。"""
+    data = load_json(base / "tests-at-end.json", {})
+    return data if isinstance(data, dict) else {}
+
+
+def deferred_entries(settings):
+    """"deferred" の要素を {"match", "when", "timeout", "server"} にそろえて返す。enabled が false なら空。"""
+    if settings.get("enabled", True) is False:
         return []
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except ValueError:
-        return []
-    if not isinstance(data, dict) or data.get("enabled", True) is False:
-        return []
-    found = data.get("deferred", [])
+    found = settings.get("deferred", [])
     if not isinstance(found, list):
         return []
-    return [m for m in found if isinstance(m, str) and m.strip()]
+    out = []
+    for item in found:
+        if isinstance(item, str):
+            item = {"match": item}
+        if not isinstance(item, dict) or not isinstance(item.get("match"), str) or not item["match"].strip():
+            continue
+        out.append({"match": item["match"], "when": item.get("when", "wave"),
+                    "timeout": item.get("timeout"), "server": item.get("server")})
+    return out
 
 
-def is_deferred(cmd, patterns):
-    return any(p in cmd for p in patterns)
+def entry_for(cmd, entries):
+    """cmd に合う最初の deferred の要素。無ければ None。"""
+    return next((e for e in entries if e["match"] in cmd), None)
+
+
+def deferred_patterns(base):
+    """<dir>/tests-at-end.json の "deferred" の match の文字列の一覧 (when を問わない)。無ければ空。"""
+    return [e["match"] for e in deferred_entries(load_settings(base))]
+
+
+def is_deferred(cmd, entries):
+    """cmd があとに回すコマンドか。entries は deferred_entries の要素か、deferred_patterns の文字列。"""
+    return any((e if isinstance(e, str) else e["match"]) in cmd for e in entries)
+
+
+def final_command(settings):
+    """"final" (通しのコマンド) を前後の空白を除いて返す。無ければ None。"""
+    final = settings.get("final")
+    return final.strip() if isinstance(final, str) and final.strip() else None
+
+
+def limits_of(settings):
+    limits = dict(LIMITS)
+    given = settings.get("limits")
+    if isinstance(given, dict):
+        limits.update({k: v for k, v in given.items() if isinstance(v, (int, float))})
+    return limits
 
 
 def pbi_of(report):
@@ -88,21 +160,191 @@ def pbi_of(report):
     return report.split(".", 1)[0]
 
 
-def run_one(bash, cmd, log, timeout, tail_n):
-    """コマンドを 1 つ流してログに書き、終了コードと表に出す末尾を返す。"""
+# --- bash と Node ---
+
+def _system_bash(path):
+    """System32 (WSL の bash) か WindowsApps (ストアの shim) の下か。"""
+    parts = [p.lower() for p in Path(path).parts]
+    return "system32" in parts or "windowsapps" in parts
+
+
+def find_bash(home, os_name=None, which=shutil.which):
+    """検証に使う bash。Windows は tools.bash.path → git の Git の bin\\bash.exe → PATH (System32・WindowsApps を除く)。"""
+    os_name = os.name if os_name is None else os_name
+    if os_name != "nt":
+        return which("bash")
+    agents = load_json(Path(home) / "agents.json", {})
+    tools = agents.get("tools") if isinstance(agents, dict) else None
+    tool = tools.get("bash") if isinstance(tools, dict) else None
+    configured = tool.get("path") if isinstance(tool, dict) else None
+    if isinstance(configured, str) and Path(configured).is_file():
+        return configured
+    git = which("git")
+    if git:
+        where = Path(git).parent
+        # git.exe は <root>\cmd・<root>\bin・<root>\mingw64\bin のどれか
+        root = where.parent.parent if where.parent.name.lower() == "mingw64" else where.parent
+        candidate = root / "bin" / "bash.exe"
+        if candidate.is_file():
+            return str(candidate)
+    found = which("bash")
+    if found and not _system_bash(found):
+        return found
+    return None
+
+
+def wanted_node(root):
+    """プロジェクトが求める Node の版 (26.8.1 か 26)。.node-version → .nvmrc → package.json の engines.node。"""
+    texts = []
+    for name in (".node-version", ".nvmrc"):
+        p = root / name
+        if p.is_file():
+            texts.append(p.read_text(encoding="utf-8", errors="replace"))
+    pkg = load_json(root / "package.json", {})
+    engines = pkg.get("engines") if isinstance(pkg, dict) else None
+    if isinstance(engines, dict) and isinstance(engines.get("node"), str):
+        texts.append(engines["node"])
+    for text in texts:
+        m = VERSION.search(text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _path_key(env):
+    """PATH のキー (Windows の Path のような大小文字を保つ)。"""
+    return next((k for k in env if k.upper() == "PATH"), "PATH")
+
+
+def child_env(root, base_env=None):
+    """(子の環境変数, ログの先頭に書く Node の行)。fnm のプロジェクトの版の Node を PATH の先頭に置く。"""
+    env = dict(os.environ if base_env is None else base_env)
+    notes = []
+    wanted = wanted_node(root)
+    key = _path_key(env)
+    if wanted:
+        directory = fnm_node_dir(wanted, env)
+        if directory:
+            rest = [p for p in env.get(key, "").split(os.pathsep) if p and p != directory]
+            env[key] = os.pathsep.join([directory, *rest])
+        else:
+            notes.append(f"warn node: {wanted} not found; using PATH")
+    node = shutil.which("node", path=env.get(key, ""))
+    version = "(not found)"
+    if node:
+        try:
+            r = subprocess.run([node, "-v"], capture_output=True, text=True, timeout=30, env=env,
+                               creationflags=NO_WINDOW)
+            version = (r.stdout or r.stderr).strip() or f"(exit {r.returncode})"
+        except (OSError, subprocess.SubprocessError) as e:
+            version = f"(failed: {e})"
+    return env, notes + [f"node: {version}"]
+
+
+# --- 実行 ---
+
+def kill_tree(proc):
+    """proc と、それが起動したプロセスの木を止める。"""
+    if proc.poll() is None:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
+                           creationflags=NO_WINDOW)
+        else:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
     try:
-        r = subprocess.run([bash, "-c", cmd], capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=timeout, creationflags=NO_WINDOW)
-        output, code = (r.stdout or "") + (r.stderr or ""), r.returncode
+        proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
-        output, code = f"(タイムアウト {timeout} 秒)", "timeout"
-    log.write_text(f"$ {cmd}\n{output}", encoding="utf-8")
+        proc.kill()
+
+
+def stream(bash, cmd, env, timeout, idle):
+    """cmd を流して (出力, 終了コード) を返す。上限なら終了コードは "timeout"、無出力なら "idle"。"""
+    proc = subprocess.Popen([bash, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+                            env=env, creationflags=NO_WINDOW, **NEW_GROUP)
+    chunks, last = [], [time.monotonic()]
+
+    def pump():
+        for line in proc.stdout:
+            chunks.append(line)
+            last[0] = time.monotonic()
+
+    reader = threading.Thread(target=pump, daemon=True)
+    reader.start()
+    start, code = time.monotonic(), None
+    while code is None:
+        try:
+            code = proc.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            now = time.monotonic()
+            if timeout and now - start >= timeout:
+                kill_tree(proc)
+                code = "timeout"
+            elif idle and now - last[0] >= idle:
+                kill_tree(proc)
+                code = "idle"
+    # 子が残した孫がパイプを持ったままでも待ち続けない
+    reader.join(5)
+    if code == "timeout":
+        chunks.append(f"\n(タイムアウト {timeout} 秒)\n")
+    elif code == "idle":
+        chunks.append(f"\n(出力が {idle} 秒無いので止めた)\n")
+    return "".join(chunks), code
+
+
+def run_one(ctx, cmd, log, timeout, tail_n, idle=None):
+    """コマンドを 1 つ流してログに書き、終了コードと表に出す末尾を返す。"""
+    output, code = stream(ctx["bash"], cmd, ctx["env"], timeout, idle)
+    log.write_text("\n".join(ctx["header"]) + f"\n$ {cmd}\n{output}", encoding="utf-8")
     plain = [ANSI.sub("", ln).strip() for ln in output.strip().splitlines()]
     # node --test (TAP) の集計行は末尾より前にあるので、別に拾って先頭に置く
     tap = [ln for ln in plain if re.match(r"^# (tests|pass|fail) \d+", ln)]
     tail = tap + [ln for ln in plain[-tail_n:] if ln and ln not in tap]
     tail = " / ".join(t[:120] for t in tail).replace("|", "\\|") or "(出力なし)"
     return code, tail
+
+
+def answers(url):
+    """url が HTTP で応答するか (状態コードは問わない)。"""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        opener.open(url, timeout=2).close()
+        return True
+    except urllib.error.HTTPError:
+        return True
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+@contextmanager
+def serving(ctx, server, log):
+    """server ({"start", "url"}) を使える状態にする。自分で起動したものだけ、抜けるときに木ごと止める。"""
+    if not isinstance(server, dict) or not server.get("url"):
+        yield
+        return
+    url = server["url"]
+    if answers(url):
+        print(f"server: {url} answers; using it")
+        yield
+        return
+    if not server.get("start"):
+        raise Blocked(f"server ({url} が応答せず、start が無い)")
+    with open(log, "w", encoding="utf-8") as out:
+        proc = subprocess.Popen([ctx["bash"], "-c", server["start"]], stdout=out, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, env=ctx["env"], creationflags=NO_WINDOW, **NEW_GROUP)
+    try:
+        deadline = time.monotonic() + float(server.get("wait", SERVER_WAIT))
+        while not answers(url):
+            if proc.poll() is not None or time.monotonic() >= deadline:
+                raise Blocked(f"server ({url} が `{server['start']}` のあと応答しない。ログ {log.as_posix()})")
+            time.sleep(0.5)
+        print(f"server: started {url} ({server['start']})")
+        yield
+    finally:
+        kill_tree(proc)
 
 
 def merge_results(out, name, pbi, results, keep_previous):
@@ -118,31 +360,32 @@ def merge_results(out, name, pbi, results, keep_previous):
                               ensure_ascii=False), encoding="utf-8")
 
 
-def deferred_runs(base, reports, patterns):
-    """あとに回すコマンドを、同じ文字列ごとに、使う報告と番号の一覧にまとめる。"""
+def deferred_runs(base, reports, entries):
+    """あとに回すコマンドを、同じ文字列ごとに (合う要素, 使う報告と番号の一覧) にまとめる。"""
     by_cmd = {}
     for report in reports:
         text = (base / f"{pbi_of(report)}.md").read_text(encoding="utf-8")
         for n, cmd in commands(text):
-            if is_deferred(cmd, patterns):
-                by_cmd.setdefault(cmd, []).append((report, n))
+            entry = entry_for(cmd, entries)
+            if entry:
+                by_cmd.setdefault(cmd, (entry, []))[1].append((report, n))
     return by_cmd
 
 
-def run_deferred(base, reports, patterns, timeout, tail_n, bash):
+def run_deferred(ctx, base, reports, entries, timeout, tail_n):
     """あとに回すコマンドを同じ文字列ごとに 1 回だけ流し、各報告の結果に重ねる。"""
     logdir = base / "verify"
-    logdir.mkdir(parents=True, exist_ok=True)
-    by_cmd = deferred_runs(base, reports, patterns)
+    by_cmd = deferred_runs(base, reports, entries)
     if not by_cmd:
         print("あとに回すコマンドが無い (tests-at-end.json の deferred に合うコマンドが、渡した報告の PBI に無い)")
         sys.exit(2)
     print(f"| コマンド | 終了コード | 末尾 ({tail_n} 行) | ログ | 報告と番号 |")
     print("|---|---|---|---|---|")
     per_report = {}
-    for i, (cmd, users) in enumerate(by_cmd.items(), start=1):
+    for i, (cmd, (entry, users)) in enumerate(by_cmd.items(), start=1):
         log = logdir / f"deferred.{reports[0]}.{i}.log"
-        code, tail = run_one(bash, cmd, log, timeout, tail_n)
+        with serving(ctx, entry["server"], logdir / f"deferred.{reports[0]}.{i}.server.log"):
+            code, tail = run_one(ctx, cmd, log, entry["timeout"] or timeout, tail_n)
         who = ", ".join(f"{r}:{n}" for r, n in users)
         shown = cmd[:60].replace("|", "\\|")
         print(f"| {shown} | {code} | {tail} | {log.as_posix()} | {who} |")
@@ -152,40 +395,102 @@ def run_deferred(base, reports, patterns, timeout, tail_n, bash):
         merge_results(logdir / f"{report}.json", report, pbi_of(report), results, True)
 
 
-def main():
+def run_named(ctx, base, settings, name, cmd, timeout, idle, tail_n):
+    """--related・--final の 1 本を流して <名前>.json に書く。上限・無出力で止めたら Blocked。"""
+    logdir = base / "verify"
+    log = logdir / f"{name}.1.log"
+    with serving(ctx, settings.get("server"), logdir / f"{name}.server.log"):
+        code, tail = run_one(ctx, cmd, log, timeout, tail_n, idle)
+    print(f"| 番号 | 終了コード | 末尾 ({tail_n} 行) | ログ |")
+    print("|---|---|---|---|")
+    print(f"| 1 | {code} | {tail} | {log.as_posix()} |")
+    merge_results(logdir / f"{name}.json", name, name,
+                  [{"n": 1, "command": cmd, "code": code, "log": log.as_posix()}], False)
+    if code == "timeout":
+        raise Blocked(f"limit ({timeout} 秒)")
+    if code == "idle":
+        raise Blocked(f"idle ({idle} 秒出力なし)")
+
+
+def prepare(base, home):
+    """bash・子の環境・ログの先頭の行をそろえ、先頭の行を出す。bash が無ければ終了コード 2。"""
+    bash = find_bash(home)
+    if not bash:
+        print("bash: not found. agents.json の tools.bash.path、Git for Windows の bin\\bash.exe、"
+              "PATH の bash (System32・WindowsApps 以外) のどれも無い。Git for Windows を入れるか tools.bash.path を書く")
+        sys.exit(2)
+    env, notes = child_env(Path.cwd())
+    header = [f"bash: {bash}", *notes]
+    print("\n".join(header))
+    (base / "verify").mkdir(parents=True, exist_ok=True)
+    return {"bash": bash, "env": env, "header": header}
+
+
+def parse_args():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("pbi")
+    ap.add_argument("pbi", nargs="?")
     ap.add_argument("--dir", default="docs/pbi")
     ap.add_argument("--only", default="")
     ap.add_argument("--tail", type=int, default=3)
     ap.add_argument("--timeout", type=int, default=900)
-    ap.add_argument("--name", help="ログ名 (既定は PBI 名。全体の再検証などで分けたいとき)")
+    ap.add_argument("--name", help="ログ名 (既定は PBI 名、--related は related、--final は final)")
+    ap.add_argument("--when", choices=("wave", "end"), default="wave", help="--deferred で流す要素の時期")
+    ap.add_argument("--home", help="agents.json のある home (既定は ATELIER_HOME などから)")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--skip-deferred", action="store_true", help="あとに回すコマンドを除いて流す")
     mode.add_argument("--deferred", action="store_true",
                       help="報告名をカンマでつなぎ、あとに回すコマンドを同じ文字列ごとに 1 回流す")
     mode.add_argument("--list-deferred", action="store_true", help="あとに回すコマンドの番号を出して終わる")
+    mode.add_argument("--related", help="investigate で流す spec をカンマでつないで渡す")
+    mode.add_argument("--final", action="store_true", help="final (通し) を流す")
     args = ap.parse_args()
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+    if args.pbi is None and not (args.related or args.final):
+        ap.error("PBI 名 (--deferred では報告名) が要る")
+    return args
 
-    base = Path(args.dir)
-    patterns = deferred_patterns(base)
-    bash = shutil.which("bash") or "bash"
-    if args.deferred:
-        reports = [r.strip() for r in args.pbi.split(",") if r.strip()]
-        run_deferred(base, reports, patterns, args.timeout, args.tail, bash)
+
+def main_named(args, base, settings):
+    """--related・--final。上限・無出力・サーバーで止めたら `blocked: ...` を出して終了コード 3。"""
+    limits = limits_of(settings)
+    key = "final" if args.final else "investigate"
+    template = settings.get(key)
+    if not isinstance(template, str) or not template.strip():
+        print(f"tests-at-end.json に \"{key}\" が無い")
+        sys.exit(2)
+    if args.final:
+        approval = base / FULL_RUN_APPROVAL
+        if not approval.is_file():
+            print("refused: no full-run approval (conductor.py answer --full-run yes)")
+            sys.exit(2)
+        # 「はい」は 1 回の通しで使い切る
+        approval.unlink()
+    ctx = prepare(base, resolve_home(args.home))
+    if args.final:
+        run_named(ctx, base, settings, args.name or "final", template, None, limits["idle"], args.tail)
         return
+    specs = [s.strip() for s in args.related.split(",") if s.strip()]
+    cmd = template.replace("{specs}", ",".join(specs))
+    run_named(ctx, base, settings, args.name or "related", cmd, len(specs) * limits["per_spec"], None, args.tail)
+
+
+def main_pbi(args, base, settings, entries):
+    """PBI 1 つの検証コマンド (--only・--skip-deferred・--list-deferred を含む)。"""
     text = (base / f"{args.pbi}.md").read_text(encoding="utf-8")
     cmds = commands(text)
+    final = final_command(settings)
+    if final and not args.list_deferred:
+        for n, cmd in cmds:
+            if cmd.strip() == final or final in cmd:
+                print(f"refused: {args.pbi} verify {n} runs the whole suite (final); use related specs")
+                sys.exit(2)
     if args.list_deferred:
-        print(",".join(str(n) for n, cmd in cmds if is_deferred(cmd, patterns)))
+        print(",".join(str(n) for n, cmd in cmds if is_deferred(cmd, entries)))
         return
     only = {int(x) for x in args.only.split(",") if x.strip()}
     # --only か --skip-deferred で絞ったか。絞った結果が空のときに「絞らない」と取り違えないため
     filtered = bool(only)
     if args.skip_deferred:
-        skipped = {n for n, cmd in cmds if is_deferred(cmd, patterns)}
+        skipped = {n for n, cmd in cmds if is_deferred(cmd, entries)}
         if skipped:
             print(f"あとに回すので除いた番号: {','.join(str(n) for n in sorted(skipped))}")
             # 除いた番号の前の結果を残すため、--only と同じく前の結果に重ねる
@@ -199,19 +504,41 @@ def main():
     if not cmds:
         print(f"{args.pbi}: 「## Verify commands」から番号付きのコマンドを読めなかった。PBI の書式を直すか、手で実行する")
         sys.exit(2)
+    ctx = prepare(base, resolve_home(args.home))
     logdir = base / "verify"
-    logdir.mkdir(parents=True, exist_ok=True)
     name = args.name or args.pbi
     print(f"| 番号 | 終了コード | 末尾 ({args.tail} 行) | ログ |")
     print("|---|---|---|---|")
     results = []
     for n, cmd in cmds:
         log = logdir / f"{name}.{n}.log"
-        code, tail = run_one(bash, cmd, log, args.timeout, args.tail)
+        code, tail = run_one(ctx, cmd, log, args.timeout, args.tail)
         print(f"| {n} | {code} | {tail} | {log.as_posix()} |")
         results.append({"n": n, "command": cmd, "code": code, "log": log.as_posix()})
     # --only・--skip-deferred で一部だけ流したときは、前の結果に番号ごとに重ねる (record_run.py が全体の件数を読むため)
     merge_results(logdir / f"{name}.json", name, args.pbi, results, bool(only))
+
+
+def main():
+    args = parse_args()
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    base = Path(args.dir)
+    settings = load_settings(base)
+    entries = deferred_entries(settings)
+    try:
+        if args.related or args.final:
+            main_named(args, base, settings)
+        elif args.deferred:
+            reports = [r.strip() for r in args.pbi.split(",") if r.strip()]
+            ctx = prepare(base, resolve_home(args.home))
+            run_deferred(ctx, base, reports, [e for e in entries if e["when"] == args.when],
+                         args.timeout, args.tail)
+        else:
+            main_pbi(args, base, settings, entries)
+    except Blocked as e:
+        print(f"blocked: {e}")
+        sys.exit(BLOCKED_EXIT)
 
 
 if __name__ == "__main__":

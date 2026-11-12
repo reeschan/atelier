@@ -8,8 +8,9 @@
   fallback 入れずに進むときの代わり
 
 道具: omm (oh-my-mermaid の CLI)、omm-scan (oh-my-mermaid のプラグインのスキル)、jevlint、
-sac-strategic-compact、principle-test-behavior-not-implementation (pstack)、answer-me-with-html (Approve を HTML で見せる
-confirm のスキル。repo は answer-me-with-any、スキル名は answer-me-with-html。appendix/adapters.md の `## Confirm`)。
+sac-strategic-compact、principle-test-behavior-not-implementation (pstack)、answer-me-with-any (Approve と問いを HTML で
+見せる confirm のスキル。古い名前 answer-me-with-html しか無ければそれを ok にし、名前を変えるよう添える。
+appendix/adapters.md の `## Confirm`)。
 jevlint は agents.find_cli で探し (home の agents.json の tools.jevlint.path、PATH、fnm・nvm の Node の版)、
 `jevlint auth list` に typesafe があるかを見る (キーの値は出ない)。流すときは見つけた CLI のディレクトリを PATH の先頭に置く
 (agents.cli_env)。シェルで `jevlint` や `which jevlint` を叩いた結果は、PATH の Node の版しだいなので有無の根拠にしない。
@@ -40,9 +41,8 @@ INSTALL = {
                'jevlint auth set typesafe',
     'sac-strategic-compact': 'https://github.com/reeschan/sac-strategic-compact (into ~/.claude/skills/sac-strategic-compact)',
     'principle-test-behavior-not-implementation': '/plugin install pstack@cursor-plugins',
-    'answer-me-with-html': f'git clone {CONFIRM_REPO} and check out {CONFIRM_COMMIT}, then copy its skills/answer-me-with-html '
-                           'to ~/.claude/skills/answer-me-with-html (skill answer-me-with-html, repo answer-me-with-any; '
-                           'only after the user says yes)',
+    'answer-me-with-any': f'git clone {CONFIRM_REPO} and check out {CONFIRM_COMMIT}, then copy its skills/answer-me-with-any '
+                          'to ~/.claude/skills/answer-me-with-any (only after the user says yes)',
 }
 FALLBACK = {
     'omm': 'map: prompts/map-fallback.md',
@@ -50,7 +50,7 @@ FALLBACK = {
     'jevlint': 'lint-survey and lint-recheck: prompts/lint-fallback.md',
     'sac-strategic-compact': 'appendix/kiln.md and prompts/kiln-chamber.md',
     'principle-test-behavior-not-implementation': 'appendix/tests-at-end.md, Test principle (fallback)',
-    'answer-me-with-html': 'confirm: the same Markdown in chat (appendix/adapters.md, Confirm)',
+    'answer-me-with-any': 'confirm: the same Markdown in chat (appendix/adapters.md, Confirm)',
 }
 
 
@@ -92,13 +92,16 @@ def rows(home: Path, skills_dir: Path, env) -> list[tuple]:
     sac = skills_dir / 'sac-strategic-compact' / 'SKILL.md'
     principle = flow.find_plugin_file('pstack', 'skills/principle-test-behavior-not-implementation/SKILL.md', plugins)
     confirm = flow.find_skill_file(agents_module.CONFIRM_SKILL, skills_dir, env)
+    old = None if confirm else flow.find_skill_file(agents_module.CONFIRM_SKILL_OLD, skills_dir, env)
     status = {
         'omm': f'ok {omm}' if omm else 'missing',
         'omm-scan': f'ok {scan}' if scan else 'missing',
         'jevlint': jevlint_status(home),
         'sac-strategic-compact': f'ok {sac}' if sac.is_file() else 'missing',
         'principle-test-behavior-not-implementation': f'ok {principle}' if principle else 'missing',
-        'answer-me-with-html': f'ok {confirm}' if confirm else 'missing',
+        'answer-me-with-any': (f'ok {confirm}' if confirm else
+                               f'ok {old} (old name {agents_module.CONFIRM_SKILL_OLD}; rename it to '
+                               f'{agents_module.CONFIRM_SKILL})' if old else 'missing'),
     }
     return [(tool, status[tool], INSTALL[tool], FALLBACK[tool]) for tool in INSTALL]
 

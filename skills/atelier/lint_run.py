@@ -56,7 +56,11 @@ SECRET_PATTERNS = ('.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx', 'id_rsa
 MODES = ('ast-only', 'dry-run', 'model')
 # 1 回の jevlint に渡すファイルの数 (Windows のコマンドラインの長さに収める)
 CHUNK = 150
-DRY_RUN_LINE = re.compile(r'(\d+) files?, about ([\d,]+) tokens \(about \$([\d.]+)\), would be sent to (\S+?)\.?$')
+# jevlint audit --dry-run の要約の行。費用が分からないと「(about $…)」が無く、後ろに
+# 「N files pinned, blank or cached, and not counted.」が続くことがある。送り先が無いと DRY_RUN_LOCAL の形になる
+DRY_RUN_LINE = re.compile(r'(\d+) files?, about ([\d,]+) tokens(?: \(about (?:under )?\$([\d.]+)\))?, '
+                          r'would be sent to (\S+?)\.(?:\s|$)')
+DRY_RUN_LOCAL = re.compile(r'(\d+) files? would be analysed locally, and nothing would be sent')
 ANSI = re.compile(r'\x1b\[[0-9;]*m')
 
 
@@ -202,16 +206,28 @@ def audit(command: list[str], cwd: Path, files: list[str], ast_only: bool, prese
     return merged
 
 
+def dry_run_summary(text: str) -> tuple:
+    """(要約の行の合致, 送り先が無いか)。下から探す。見つからなければ (None, False)。"""
+    for line in reversed(text.splitlines()):
+        if match := DRY_RUN_LINE.search(line.strip()):
+            return match, False
+        if match := DRY_RUN_LOCAL.search(line.strip()):
+            return match, True
+    return None, False
+
+
 def dry_run(command: list[str], cwd: Path, files: list[str], preset: str | None) -> dict:
     total = {'files': 0, 'tokens': 0, 'cost_usd': 0.0, 'provider': None}
     for part in chunks(files):
         text = run_jevlint(command, cwd, ['audit', '--dry-run', *([f'--preset={preset}'] if preset else []), *part])
-        match = next((m for line in reversed(text.splitlines()) if (m := DRY_RUN_LINE.search(line.strip()))), None)
+        match, local = dry_run_summary(text)
         if match is None:
             raise RuntimeError('jevlint audit --dry-run printed no summary line')
         total['files'] += int(match.group(1))
+        if local:
+            continue
         total['tokens'] += int(match.group(2).replace(',', ''))
-        total['cost_usd'] += float(match.group(3))
+        total['cost_usd'] += float(match.group(3) or 0)
         total['provider'] = match.group(4)
     return total
 

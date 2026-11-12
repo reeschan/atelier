@@ -26,7 +26,7 @@ If an appendix tells you to ask the user or to use AskUserQuestion, end the epis
 
 Do not stop to report anything else. Put what the user should know in the summary of the episode result.
 
-Ask the user only what changes what they get, what it costs, how long it takes or what can go wrong; decide the insides yourself and write them in the spec. Every choice says what changes when it is picked (`appendix/approve.md`, `## Decisions`).
+Ask the user only what changes what they get, what it costs, how long it takes or what can go wrong; decide the insides yourself and write them in the spec. The exception is the grill of a run that designs (`appendix/design.md`, `## Design: grill`): every question of the design tree goes to the user, and you answer none of them yourself. Every choice says what changes when it is picked (`appendix/approve.md`, `## Decisions`).
 
 ## Invariants
 
@@ -66,9 +66,9 @@ Ask the user only what changes what they get, what it costs, how long it takes o
 The prompt names your episode. Do its part, then end it. Every status and `next` is checked by the conductor against the links in `appendix/episodes.md`.
 
 - design: `## Start`, then understand, the design decision, map, lint-survey, design, plan, route and its gates. At the end of plan write `docs/pbi/waves.json` (`{"waves": [{"n": 1, "pbis": [...]}, ...]}`). Where the design decision says "Otherwise" ask, where an `ask-user` option asks, end with a question (kind `decision`); the lint send approval is kind `send-approval`. Then `## Approve`: end with kind `approve`. Once approved, end with `done`, next `{"episode": "build", "wave": 1}`.
-- build: the wave in the prompt's `Wave:` line; with a `PBIs:` line, only those PBIs. Run `## One PBI` for each, repeat attempts for reworks inside the episode, then with tests at the end on, the tester for the deferred commands (kind `wave`) and reconcile it. End with `done`: next the next wave, or `test` (tests at the end on), or `review`.
+- build: the wave in the prompt's `Wave:` line; with a `PBIs:` line, only those PBIs. Run `## One PBI` for each, repeat attempts for reworks inside the episode, then with tests at the end on, the tester for the deferred commands and the related specs (kind `wave`) and reconcile it. End with `done`: next the next wave, or `test` (tests at the end on), or `review`.
 - A build with a `PBIs:` line (a rework sent back by test or review) never names the next wave: end with `done`, next the episode on the prompt's `Sent by:` line (`test` or `review`), with the same wave. Any other next is refused.
-- test: the tester's survey (kind `survey`), reconcile it, run the test PBIs through workers and reviewers, the tester's final run (kind `final`), reconcile it, then lint-recheck. End with `done`, next `review`, or `build` with the wave and `pbis` of the PBIs a regression sends back.
+- test: the tester's survey (kind `survey`), reconcile it, run the test PBIs through workers and reviewers, the tester's final run (kind `final`: related specs of the whole run, never the full suite), reconcile it, ask `full-run` and run the tester's kind `full` only on yes, then lint-recheck. End with `done`, next `review`, or `build` with the wave and `pbis` of the PBIs a regression sends back.
 - Every `next` to build carries `wave` (for a rework, the wave of the PBIs sent back) and `pbis` when it is a subset of that wave.
 - review: the final review (a reviewer runs the review skill, `appendix/review.md`), reconcile it. A confirmed finding: `done`, next `build` with the wave and `pbis` of the PBIs to fix. A finding the user already answered "report only" at the lint recheck stays in the report (`appendix/lint.md`, `## Lint recheck`). None left: `done`, next `finish`.
 - finish: `appendix/finish.md`. Stats per role: `python <skill>/agent_stats.py --out docs/pbi/stats --run docs/pbi/conductor/run.json`. Put the path of the completion report in `report` and end with `done`.
@@ -117,7 +117,7 @@ Build, verify and fix repeat per PBI until each PBI passes or stops. With tests 
 
 ## Approve
 
-After route and its gates, write the approval draft `docs/pbi/notes/approve.md` in the seven sections of `appendix/approve.md`, after the example `examples/approve.md`: what changes, the before and after flow as diagrams, every question as an `ask` under the decisions, then the PBIs, the impact and who builds. Check it with `design_record.py lint`, then write the design record through `appendix/adapters.md` (`## Confirm`).
+After route and its gates, write the approval draft `docs/pbi/notes/approve.md` in the seven sections of `appendix/approve.md`, after the example `examples/approve.md`: what changes, the before and after flow as diagrams, every question as an `ask` under the decisions, then the PBIs, the impact and who builds. Write the design record through `appendix/adapters.md` (`## Confirm`), and finish the draft with `design_record.py markdown` as its last change (it runs the lint first).
 
 End the episode with a question of kind `approve`, `check: design-record`, its path `docs/pbi/notes/approve.md`. When the `confirm` adapter is not `off`, add the envelope (`design_record.py markdown`) as the last change to that file; `done` refuses a draft whose `reply-meta-draft_hash` no longer matches it. With the `confirm` adapter `off` there is no design record: leave `check` out of the question. When the `Answer:` line comes, it is either a reply that passed `design_record.py check-reply` (approved: go on) or a revise request (`answer --revise`): fix the plan, raise the revision, and end with kind `approve` again. When the approve answer chooses to install a missing tool, end with a question (kind `decision`, with `state`) for the install; after its `Answer:`, end with `done`, next build wave 1. Otherwise the fallback runs.
 

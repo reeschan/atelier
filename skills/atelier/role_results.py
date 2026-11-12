@@ -42,13 +42,13 @@ EPISODE = 'atelier.episode/1'
 SEVERITIES = ('critical', 'major', 'minor')
 VERDICTS = ('pass', 'fail', 'deferred')
 RECOMMEND = ('pass', 'rework', 'tier-up', 'hold')
-TEST_KINDS = ('wave', 'survey', 'final')
+TEST_KINDS = ('wave', 'survey', 'final', 'full')
 TEST_CAUSES = ('intended', 'regression', 'unknown')
 TEST_RECOMMEND = ('pass', 'rework', 'needs-designer')
 
 EPISODES = ('design', 'build', 'test', 'review', 'finish')
 EPISODE_STATUS = ('done', 'question', 'handoff', 'error')
-QUESTION_KINDS = ('approve', 'rework-limit', 'destructive', 'send-approval', 'decision')
+QUESTION_KINDS = ('approve', 'rework-limit', 'destructive', 'send-approval', 'decision', 'full-run')
 SUMMARY_MAX_LINES = 5
 SUMMARY_MAX_CHARS = 200
 PBI_NAME = re.compile(r'^PBI-\d+$')
@@ -145,6 +145,8 @@ def _check_next(data, errors) -> None:
             errors.append('next: none after finish')
         if not _is_str(data.get('report')):
             errors.append('report: the completion report path is needed after finish')
+        if 'report_body' in data and not _is_str(data.get('report_body')):
+            errors.append('report_body: the completion report text, when the designer could not write the file')
         return
     if not isinstance(nxt, dict) or nxt.get('episode') not in EPISODES:
         errors.append(f'next.episode: one of {", ".join(EPISODES)}')

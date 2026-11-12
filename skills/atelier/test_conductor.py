@@ -60,6 +60,7 @@ elif episode == 'design':
 elif episode == 'build':
     data.update(status='done', next={'episode': 'finish'})
 else:
+    Path('docs/pbi/report.md').write_text('# report\n', encoding='utf-8')
     data.update(status='done', next=None, report='docs/pbi/report.md')
 Path(result_path).parent.mkdir(parents=True, exist_ok=True)
 Path(result_path).write_text(json.dumps(data), encoding='utf-8')
@@ -893,6 +894,7 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         rc, out = self.con('next')
         self.assertEqual(self.line(out, 'episode'), 'finish seq 6', out)
+        self.write('docs/pbi/report.md', '# report\n')
         self.result(out, status='done', next=None, report='docs/pbi/report.md')
         rc, out = self.con('done')
         self.assertEqual((rc, out.splitlines()[0]), (0, 'state: finished'), out)
@@ -1670,6 +1672,110 @@ class ConductorTest(unittest.TestCase):
         self.con('start', '--goal', 'named', '--workflow', 'jev-routed', '--force')
         rc, out = self.con('next')
         self.assertIn('Workflow: jev-routed', self.request(out))
+
+    def go_to_finish(self, goal):
+        self.write_json('docs/pbi/waves.json', {'waves': [{'n': 1, 'pbis': ['PBI-001']}]})
+        self.con('start', '--goal', goal)
+        for nxt in ({'episode': 'build', 'wave': 1}, {'episode': 'review'}, {'episode': 'finish'}):
+            rc, out = self.con('next')
+            self.result(out, status='done', next=nxt)
+            self.con('done')
+        rc, out = self.con('next')
+        self.assertEqual(self.line(out, 'episode').split()[0], 'finish', out)
+        return out
+
+    def test_finish_without_report_is_a_failure(self):
+        """完了報告のファイルも本文 (report_body) も無い finish は、done が失敗 (retry) にする。"""
+        out = self.go_to_finish('no report')
+        self.result(out, status='done', next=None, report='docs/pbi/REPORT.md')
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('completion report not found', out)
+
+    def test_finish_writes_report_from_report_body(self):
+        """サブエージェントが報告の .md を書けないときは、report_body の本文を conductor が書く。"""
+        out = self.go_to_finish('report body')
+        self.result(out, status='done', next=None, report='docs/pbi/REPORT.md', report_body='# 完了\n- 済み')
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: finished'), out)
+        self.assertEqual(self.read('docs/pbi/REPORT.md'), '# 完了\n- 済み\n')
+
+    def approve_result(self, out):
+        self.setup_approve()
+        self.result(out, status='question', question={'kind': 'approve', 'path': 'docs/pbi/notes/approve.md',
+                                                      'summary': 'approve 1 PBI', 'check': 'design-record'})
+        return self.con('done')
+
+    def test_grill_with_unanswered_questions_blocks_approve(self):
+        """grill の設計の木に、持ち主の答えの無い問い・frontier・未合意が残っていれば、承認の問いに進まない。"""
+        self.con('start', '--goal', 'grill')
+        grill = {'schema': 'atelier.grill/1', 'aligned': True, 'aligned_in': None, 'frontier': [],
+                 'rounds': [{'n': 1, 'questions': [{'id': 'Q1', 'question': 'split?', 'recommended': 'yes',
+                                                    'answer': 'yes', 'answered_in': None}]}]}
+        self.write_json('docs/pbi/notes/grill.json', grill)
+        rc, out = self.con('next')
+        rc, out = self.approve_result(out)  # 設計者が自分で書いた答え (answered_in が無い)
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('grill has unanswered questions: Q1', out)
+
+        # 持ち主の答え (conductor answer が書いたファイル) を経ると通る
+        self.con('start', '--goal', 'grill', '--force')
+        rc, out = self.con('next')
+        self.write(STATE, '# state\n')
+        self.result(out, status='question', state=STATE,
+                    question={'kind': 'decision', 'path': 'docs/pbi/notes/grill-1.md', 'summary': 'round 1'})
+        self.con('done')
+        rc, out = self.con('answer', '--text', 'Q1 yes; aligned')
+        answer = self.answer_line_from(out)
+        grill['rounds'][0]['questions'][0]['answered_in'] = answer
+        self.write_json('docs/pbi/notes/grill.json', grill)
+        rc, out = self.con('next')
+        rc, out = self.approve_result(out)
+        self.assertIn('grill is not aligned', out)
+
+        rc, out = self.con('next')
+        grill['aligned_in'] = answer
+        self.write_json('docs/pbi/notes/grill.json', grill)
+        rc, out = self.approve_result(out)
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+
+    def answer_line_from(self, out):
+        return next(line.split(': ', 1)[1] for line in out.splitlines() if line.startswith('answer: '))
+
+    def test_question_shows_confirm_skill_and_old_name(self):
+        """問いの行に見せ方 (confirm) が出る。新しい名前を優先し、古い名前だけなら warn 付きで使う。"""
+        skills = os.path.join(self.tmp, 'skills')
+        env = {'ATELIER_SKILLS_DIR': skills}
+        self.con('start', '--goal', 'confirm')
+        rc, out = self.con('next')
+        rc, out = self.approve_result(out)
+        self.assertIn('confirm: chat', out)
+
+        self.write_abs(os.path.join(skills, 'answer-me-with-html', 'SKILL.md'), '---\nname: old\n---\n')
+        rc, out = self.con('status', env=env)
+        self.assertIn('confirm: skill answer-me-with-html (warn: old name, rename it to answer-me-with-any)', out)
+        self.write_abs(os.path.join(skills, 'answer-me-with-any', 'SKILL.md'), '---\nname: new\n---\n')
+        rc, out = self.con('status', env=env)
+        self.assertIn('confirm: skill answer-me-with-any', out)
+        self.assertNotIn('old name', out)
+
+    def test_full_run_answer_is_used_once(self):
+        """通しの問いは --full-run だけで答える。yes は 1 回分の印を置き、no は前の印も消す。"""
+        token = os.path.join(self.tmp, 'docs', 'pbi', 'full-run.approved.json')
+        for answer, exists in (('yes', True), ('no', False)):
+            self.con('start', '--goal', f'full run {answer}', '--force')
+            rc, out = self.con('next')
+            self.write(STATE, '# state\n')
+            self.result(out, status='question', state=STATE,
+                        question={'kind': 'full-run', 'path': 'docs/pbi/notes/full-run.md', 'summary': 'run all E2E?'})
+            rc, out = self.con('done')
+            self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+            self.assertIn('--full-run yes', out)
+            rc, out = self.con('answer', '--text', 'yes')
+            self.assertNotEqual(rc, 0, out)
+            rc, out = self.con('answer', '--full-run', answer)
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(os.path.exists(token), exists)
 
 
 if __name__ == '__main__':
