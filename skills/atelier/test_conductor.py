@@ -119,6 +119,8 @@ class ConductorTest(unittest.TestCase):
                         HOME=self.user, USERPROFILE=self.user,
                         CLAUDE_CONFIG_DIR=os.path.join(self.user, '.claude'),
                         ATELIER_DESIGNER_CMD=json.dumps([sys.executable, self.fake]),
+                        HARNESS_LOG_CONFIG=os.path.join(self.tmp, 'no-harness-log.json'),
+                        ATELIER_EVENTS_SETTLE='off',
                         FAKE_DESIGNER_LOG=self.log)
         # codex のホーム: サインインと shared-memory の MCP の設定がある (本物の ~/.codex は読まない)
         self.codex_home = os.path.join(self.tmp, 'codex-home')
@@ -127,7 +129,7 @@ class ConductorTest(unittest.TestCase):
                        '[mcp_servers.shared-memory]\nurl = "http://127.0.0.1:7820/mcp"\n')
         self.env['CODEX_HOME'] = self.codex_home
         self.env.pop('OPENAI_API_KEY', None)
-        for name in ('FAKE_DESIGNER_SLEEP', 'FAKE_IS_ERROR'):
+        for name in ('FAKE_DESIGNER_SLEEP', 'FAKE_IS_ERROR', 'HARNESS_LOG_PATH', 'ATELIER_EVENTS_QUIET'):
             self.env.pop(name, None)
 
     # ---- helpers ----
@@ -168,6 +170,10 @@ class ConductorTest(unittest.TestCase):
 
     def read_json(self, rel):
         return json.loads(self.read(rel) or '{}')
+
+    def events(self):
+        """docs/pbi/events.jsonl の行 (辞書のリスト)。"""
+        return [json.loads(line) for line in self.read('docs/pbi/events.jsonl').splitlines() if line.strip()]
 
     def write_json(self, rel, data):
         self.write(rel, json.dumps(data))
@@ -958,6 +964,29 @@ class ConductorTest(unittest.TestCase):
         run = self.read_json(RUN)
         self.assertEqual(run['seq'], 2)  # 問いを閉じ、design を headless で起こした
         self.assertEqual(run['question']['path'], 'docs/pbi/notes/q.md')  # 次は設計者の問い
+
+    def test_designer_that_cannot_start_still_settles_its_episode(self):
+        """設計者を起こせずに出番が失敗で閉じても、その出番の settle (episode.cost) は走る。"""
+        rc, out = self.con('start', '--goal', 'g', '--launch', 'headless')
+        self.assertEqual(rc, 0, out)
+        missing = os.path.join(self.tmp, 'no-such-designer.exe')
+        rc, out = self.con('run', env={'ATELIER_DESIGNER_CMD': missing, 'ATELIER_EVENTS_SETTLE': 'sync'})
+        self.assertNotIn(rc, (0, 10), out)
+        types = [(e['type'], e.get('seq')) for e in self.events()]
+        self.assertIn(('episode.ended', 1), types)
+        self.assertIn(('episode.cost', 1), types)
+
+    def test_start_asks_for_the_sender_setup_only_without_config(self):
+        """送り手があって設定が無ければ、start は ask harness-log: の行を出す。設定ができたら出さない。"""
+        rc, out = self.con('start', '--goal', 'first')
+        self.assertEqual(rc, 0, out)
+        ask = self.line(out, 'ask harness-log')
+        self.assertIn('init --remote <URL> | --local | --off', ask)
+        self.assertEqual(out.splitlines()[0], 'state: ready')
+        self.write_abs(self.env['HARNESS_LOG_CONFIG'], json.dumps({'mode': 'local', 'key': 'k' * 64}))
+        rc, out = self.con('start', '--force', '--goal', 'second')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('ask harness-log', out)
 
     def test_start_force_stops_old_children(self):
         """start --force は前の run の child_pid と runner_pid を止めてから退ける。"""

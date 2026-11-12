@@ -58,6 +58,12 @@ import agent_stats
 import common
 import flow
 
+# イベントの口。無い環境でも記録は続ける (PBI-2 が作る events.py)
+try:
+    import events
+except (Exception, SystemExit):  # events.py の無い環境でも記録を止めない
+    events = None
+
 # Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
@@ -69,10 +75,16 @@ OUTCOME_ALIASES = {'pass': '合格', 'rework': '差し戻し', 'tier-up': '昇�
 SEVERITIES = ('重大', '中', '軽微')
 # 差し戻し・昇格・保留の原因。spec: PBI・brief・rework note の書き足りなさや誤り (指示を書いた側)、convention: リポジトリの
 # 規約 (CLAUDE.md・lint) を守らない、scope: Targets の外や Do not touch への変更、memory: Refs の読み漏れや許されない
-# shared-memory の使い方、model: 情報は足りていたのにモデルが届かない、env: 権限・ネットワーク・道具の不調
-CAUSES = ('spec', 'convention', 'scope', 'memory', 'model', 'env')
+# shared-memory の使い方、model: 情報は足りていたのにモデルが届かない、env: 権限・ネットワーク・道具の不調、
+# grader: レビュー担当やテスト担当の誤り・verify の規則の誤り、flaky: やり直したら通った (試行で合否が割れた)
+CAUSES = ('spec', 'convention', 'scope', 'memory', 'model', 'env', 'grader', 'flaky')
 # 指示 (worker.md・PBI の書き方) を直せば減らせる原因
 PROMPT_CAUSES = ('spec', 'convention', 'scope', 'memory')
+# pbi.attempted の outcome は英語の列挙。runs.jsonl には今までどおり日本語で書く
+# (--outcome の英語の別名 OUTCOME_ALIASES とは値が違う: rework→sent-back、tier-up→promoted)
+ATTEMPT_OUTCOMES = {'合格': 'pass', '差し戻し': 'sent-back', '昇格': 'promoted', '使えず': 'unusable', '保留': 'held'}
+# pbi.attempted の findings は英語のキー。runs.jsonl の judged.findings は日本語のキー
+ATTEMPT_FINDINGS = (('critical', '重大'), ('major', '中'), ('minor', '軽微'))
 REPORT_RE = re.compile(r'^(PBI-\d+)(?:\.rework-(\d+))?$')
 MEMORY_TOOLS = ('get', 'search', 'write')
 AGENT_MEMORY_TOOL = re.compile(r'^mcp__shared-memory__(get|search|write)$')
@@ -624,6 +636,146 @@ def parse_findings(s: str | None) -> dict | None:
     return dict(zip(SEVERITIES, (int(p) for p in parts)))
 
 
+def attempt_outcome(row: dict) -> str | None:
+    """runs.jsonl の outcome (日本語。英語の別名も受ける) を pbi.attempted の英語の列挙に写す。"""
+    outcome = (row.get('judged') or {}).get('outcome')
+    if not isinstance(outcome, str):
+        return None
+    outcome = OUTCOME_ALIASES.get(outcome, outcome)
+    return ATTEMPT_OUTCOMES.get(outcome, outcome)
+
+
+def attempt_findings(row: dict) -> dict | None:
+    """runs.jsonl の judged.findings (日本語のキー) を critical/major/minor に写す。"""
+    found = (row.get('judged') or {}).get('findings')
+    if not isinstance(found, dict):
+        return None
+    out = {}
+    for en, jp in ATTEMPT_FINDINGS:
+        value = found.get(jp, found.get(en))
+        out[en] = value if isinstance(value, int) and not isinstance(value, bool) else None
+    return out
+
+
+def cache_write_of(tokens: dict):
+    """cache_write の合計。無ければ 5m+1h を足す (read_agent は内訳しか持たない)。"""
+    value = tokens.get('cache_write')
+    if value is not None:
+        return value
+    parts = [tokens.get(k) for k in ('cache_write_5m', 'cache_write_1h')]
+    parts = [p for p in parts if isinstance(p, (int, float)) and not isinstance(p, bool)]
+    return sum(parts) if parts else None
+
+
+def failed_stage(n) -> str:
+    """verify の失敗数 (total - passed) を 0/1/2-3/4-up の段階に丸める。"""
+    if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+        return '0'
+    if n < 2:
+        return str(n)
+    return '2-3' if n <= 3 else '4-up'
+
+
+def finding_stage(n) -> str:
+    """findings の重さごとの数を 0/1/2-up の段階に丸める。"""
+    if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+        return '0'
+    return '0' if n == 0 else '1' if n == 1 else '2-up'
+
+
+def sig_id_of(parts: dict) -> str:
+    """parts を json.dumps(sort_keys=True) した UTF-8 の sha256 の先頭 12 桁。"""
+    text = json.dumps(parts, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()[:12]
+
+
+def signature_of(row: dict) -> dict:
+    """runs.jsonl の 1 行から pbi.attempted の signature (1 段目) を組み立てる。
+
+    parts は許可リストの列挙だけで組む (自由文を入れない)。test_failing と fallback_any は
+    runs.jsonl に出どころが無いので、今は空のリストと false にする。
+    """
+    causes = (row.get('judged') or {}).get('cause')
+    causes = sorted(causes) if isinstance(causes, list) else []
+    verify = row.get('verify')
+    failed = 0
+    if isinstance(verify, dict):
+        total, passed = verify.get('total'), verify.get('passed')
+        if isinstance(total, int) and isinstance(passed, int):
+            failed = max(0, total - passed)
+    findings = attempt_findings(row) or {}
+    parts = {
+        'outcome': attempt_outcome(row),
+        'causes': causes,
+        'verify_failed_n': failed_stage(failed),
+        'findings': {en: finding_stage(findings.get(en)) for en in ('critical', 'major', 'minor')},
+        'unchanged': (row.get('unchanged') or {}).get('violation') is True,
+        'memory_violation': (row.get('memory') or {}).get('violation') is True,
+        'test_failing': [],
+        'fallback_any': False,
+        'runner': row.get('runner'),
+        'tier': row.get('tier'),
+    }
+    return {'sig_id': sig_id_of(parts), 'parts': parts}
+
+
+def attempt_data(row: dict) -> dict:
+    """runs.jsonl の 1 行から pbi.attempted の data を組み立てる (signature は別の関数)。"""
+    tokens = row.get('tokens') or {}
+    when = row.get('time') or {}
+    usd = row.get('cost_reported')
+    if usd is None:
+        usd = row.get('cost_api_equiv')  # 費用の規則は record_run の表示 (cost_reported を優先) と同じ
+    return {
+        'attempt': row.get('attempt'),
+        'step': row.get('step'),
+        'rework': row.get('rework'),
+        'runner': row.get('runner'),
+        'model': row.get('model'),
+        'tier': row.get('tier'),
+        'effort': row.get('effort'),
+        'outcome': attempt_outcome(row),
+        'causes': (row.get('judged') or {}).get('cause'),
+        'findings': attempt_findings(row),
+        'unchanged': (row.get('unchanged') or {}).get('violation') is True,
+        'seconds': when.get('seconds'),
+        'input': tokens.get('input'),
+        'output': tokens.get('output'),
+        'cache_read': tokens.get('cache_read'),
+        'cache_write': cache_write_of(tokens),
+        'usd': usd,
+        'case_id': f"{row.get('repo')}:{row.get('work_key') or ''}:{row.get('pbi')}",
+        'signature': signature_of(row),
+    }
+
+
+def run_snapshot(base: Path):
+    """<base>/conductor/run.json を 1 回だけ読み、(行の run_id, (イベントの run_id, seq)) を返す。
+
+    行の run_id は、無い・読めないときに none。イベントのキーは、無い・型が違うときに None。
+    """
+    try:
+        run = json.loads((base / 'conductor' / 'run.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        return 'none', (None, None)
+    if not isinstance(run, dict):
+        return 'none', (None, None)
+    run_id = run.get('run_id') if isinstance(run.get('run_id'), str) and run.get('run_id') else None
+    seq = run.get('seq')
+    seq = seq if isinstance(seq, int) and not isinstance(seq, bool) else None
+    return run_id or 'none', (run_id, seq)
+
+
+def run_id_of(base: Path) -> str:
+    """<base>/conductor/run.json の run_id。無い・読めないときは none。"""
+    try:
+        run = json.loads((base / 'conductor' / 'run.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        return 'none'
+    run_id = run.get('run_id') if isinstance(run, dict) else None
+    return run_id if isinstance(run_id, str) and run_id else 'none'
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8')
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -658,6 +810,9 @@ def main():
     pbi, rework = m.group(1), int(m.group(2) or 0)
     cwd = Path.cwd().resolve()
     base = Path(args.dir)
+    # この行を記録した run。行の run_id・unit_id とイベントの run_id・seq は、run.json を 1 回だけ読んだ
+    # 同じ写しから取る (読む間に start --force が run.json を入れ替えても、どれも同じ run を指す)
+    run_id, event_keys = run_snapshot(base)
     runs = base / 'runs.jsonl'
     if any(r.get('report') == args.report and r.get('attempt') == args.attempt for r in read_rows(runs)):
         fail(f'{args.report} の attempt {args.attempt} は記録済み (runs.jsonl)')
@@ -721,6 +876,7 @@ def main():
         'schema': SCHEMA,
         'recorded_at': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
         'repo': repo, 'work_key': key, 'pbi': pbi, 'report': args.report, 'attempt': args.attempt,
+        'run_id': run_id,
         'step': args.step,
         'rework': rework, 'tier': tier, 'runner': runner, 'model': model, 'effort': effort,
         'models_seen': got.get('models_seen'),
@@ -746,6 +902,12 @@ def main():
     base.mkdir(parents=True, exist_ok=True)
     with open(runs, 'a', encoding='utf-8') as f:
         f.write(json.dumps(row, ensure_ascii=False) + '\n')
+    # runs.jsonl に追記したら、同じ内容から pbi.attempted を出す。unit_id は報告名ごとに分ける
+    # (PBI-7 と PBI-7.rework-1 は別の attempt の並び)。
+    if events is not None:
+        unit_id = f'at:{run_id}:{row["report"]}:{row["attempt"]}'
+        events.emit(base, 'pbi.attempted', attempt_data(row), pbi=pbi, envelope={'unit_id': unit_id},
+                    run_id=event_keys[0], seq=event_keys[1])
     total = got['tokens']['total']
     cost = cost_reported if cost_reported is not None else cost_api
     saved = '保全 ok' if archive_info['ok'] else f"保全に失敗 ({archive_info['error']})。作業は続けてよい"

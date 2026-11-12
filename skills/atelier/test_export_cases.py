@@ -53,10 +53,28 @@ REWORK = """## Rework 1: PBI-002
   - Repro: `node docs/pbi/tools/stable.mjs`
 """
 
+PBI_B = """# PBI-003: 一覧の余白をそろえる
 
-def row(report, attempt, outcome, rework=0, cause=None, missed=None, worker='abc123def456'):
+## Goal
+一覧の余白を 8px にそろえる。
+
+## Targets
+- `src/list/view.tsx`
+
+## Acceptance criteria
+1. 検証 1 が 0 で終わる
+
+## Verify commands
+1. `pnpm vitest run src/list`
+
+## Notes
+none
+"""
+
+
+def row(report, attempt, outcome, rework=0, cause=None, missed=None, worker='abc123def456', pbi='PBI-002'):
     return {'schema': 1, 'recorded_at': f'2026-10-30T10:0{attempt + rework}:00+09:00', 'repo': 'app',
-            'work_key': 'app:main:W-003', 'pbi': 'PBI-002', 'report': report, 'attempt': attempt, 'rework': rework,
+            'work_key': 'app:main:W-003', 'pbi': pbi, 'report': report, 'attempt': attempt, 'rework': rework,
             'tier': 'sonnet', 'runner': 'agent', 'model': 'sonnet', 'effort': 'high',
             'tokens': {'total': 100}, 'verify': {'passed': 1, 'total': 2, 'codes': [1, 0]},
             'unchanged': {'checked': False, 'violation': None},
@@ -88,10 +106,21 @@ class ExportCasesTest(unittest.TestCase):
         (self.pbi / 'runs.jsonl').write_text(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in rows),
                                              encoding='utf-8')
 
-    def run_export(self):
+    def run_export(self, *args):
         env = {**os.environ, 'PBI_RUNS_ARCHIVE': str(self.archive)}
-        return subprocess.run([sys.executable, EXPORT], cwd=self.repo, capture_output=True, text=True,
+        return subprocess.run([sys.executable, EXPORT, *args], cwd=self.repo, capture_output=True, text=True,
                               encoding='utf-8', env=env)
+
+    def write_manifest(self, home, splits, name='default'):
+        path = Path(home) / 'splits' / f'{name}.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cases = {case_id: {'split': split,
+                           'strata': {'task_type': 'unknown', 'domain': 'unknown', 'size_bucket': 'unknown'}}
+                 for case_id, split in splits.items()}
+        path.write_text(json.dumps({'schema': 'atelier.split/1', 'name': name, 'split_set_id': 'default-abc123',
+                                    'seed': '42', 'heldout_ratio': 0.2,
+                                    'strata': ['task_type', 'domain', 'size_bucket'], 'frozen': True,
+                                    'cases': cases}, ensure_ascii=False), encoding='utf-8')
 
     def cases(self, path=None):
         path = path or self.pbi / 'cases.jsonl'
@@ -183,6 +212,62 @@ class ExportCasesTest(unittest.TestCase):
     def test_missing_runs_exits_2(self):
         self.assertEqual(self.run_export().returncode, 2)
 
+    def test_improver_view_reduces_only_heldout_cases(self):
+        (self.pbi / 'PBI-003.md').write_text(PBI_B, encoding='utf-8')
+        self.write_rows([row('PBI-002', 1, '差し戻し', cause=['spec']),
+                         row('PBI-003', 1, '合格', pbi='PBI-003')])
+        home = self.tmp / 'home'
+        self.write_manifest(home, {'app:app:main:W-003:PBI-002': 'heldout',
+                                   'app:app:main:W-003:PBI-003': 'train'})
+        self.assertEqual(self.run_export().returncode, 0)
+        owner = {case['id']: case for case in self.cases()}
+        r = self.run_export('--view', 'improver', '--home', str(home))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, '')
+        path = self.pbi / 'cases.improver.jsonl'
+        text = path.read_text(encoding='utf-8')
+        shown = {case['id']: case for case in self.cases(path)}
+        heldout = shown['app:app:main:W-003:PBI-002']
+        self.assertEqual(set(heldout), {'schema', 'id', 'size', 'result'})
+        self.assertEqual(set(heldout['result']), {'passed'})
+        self.assertEqual(heldout['result']['passed'],
+                         owner['app:app:main:W-003:PBI-002']['result']['passed'])
+        self.assertEqual(heldout['size'], owner['app:app:main:W-003:PBI-002']['size'])
+        self.assertEqual(text.count('一覧を日付で並べ替えられるようにする。'), 0)
+        self.assertEqual(text.count('同じ日付は元の順のまま'), 0)
+        self.assertEqual(text.count('node docs/pbi/tools/stable.mjs'), 0)
+        self.assertEqual(shown['app:app:main:W-003:PBI-003'], owner['app:app:main:W-003:PBI-003'])
+        self.assertEqual(self.cases(self.archive / 'app' / 'main__W-003' / 'cases.improver.jsonl'),
+                         list(shown.values()))
+
+    def test_default_view_writes_only_owner_cases(self):
+        self.write_rows([row('PBI-002', 1, '合格')])
+        r = self.run_export()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.pbi / 'cases.jsonl').is_file())
+        self.assertFalse((self.pbi / 'cases.improver.jsonl').exists())
+
+    def test_improver_without_manifest_falls_back_to_owner_rows(self):
+        self.write_rows([row('PBI-002', 1, '合格')])
+        self.assertEqual(self.run_export().returncode, 0)
+        owner = self.cases()
+        r = self.run_export('--view', 'improver', '--home', str(self.tmp / 'no-home'))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.cases(self.pbi / 'cases.improver.jsonl'), owner)
+        self.assertEqual(len(r.stderr.strip().splitlines()), 1)
+        self.assertIn('分割が無い', r.stderr)
+
+
+    def test_improver_stops_when_the_manifest_exists_but_is_broken(self):
+        """manifest のファイルがあるのに読めないときは、held-out の本文を出さないよう exit 2 で止める。"""
+        self.write_rows([row('PBI-002', 1, '合格')])
+        home = self.tmp / 'home-broken'
+        (home / 'splits').mkdir(parents=True)
+        (home / 'splits' / 'default.json').write_text('{"schema": "harness.split', encoding='utf-8')
+        r = self.run_export('--view', 'improver', '--home', str(home))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('manifest', r.stderr)
+        self.assertFalse((self.pbi / 'cases.improver.jsonl').exists())
 
 if __name__ == '__main__':
     unittest.main()
