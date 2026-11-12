@@ -26,14 +26,22 @@ bundle  波 n の PBI を <dir>/waves.json から決め、PBI ごとにいちば
 終了コード: 0 正しい / 3 誤り・欠け (設計者はその報告のレビューだけやり直す) / 2 引数の誤り・waves.json に波が無い
 """
 import argparse
+import hashlib
 import json
 import re
 import sys
 from pathlib import Path
 
 import common
+import record_run
 import unchanged
 import verify
+
+# イベントの口 (同じフォルダ)。単体で配られたときなどに無ければ、イベントは出さない
+try:
+    import events
+except Exception:
+    events = None
 
 REVIEW = 'atelier.review/1'
 TEST_RESULT = 'atelier.test-result/1'
@@ -49,6 +57,9 @@ TEST_RECOMMEND = ('pass', 'rework', 'needs-designer')
 EPISODES = ('design', 'build', 'test', 'review', 'finish')
 EPISODE_STATUS = ('done', 'question', 'handoff', 'error')
 QUESTION_KINDS = ('approve', 'rework-limit', 'destructive', 'send-approval', 'decision')
+# 出番の結果の question の任意の topic (docs/specs/harness-metrics.md の question.asked と同じ値)
+QUESTION_TOPICS = ('runner-unavailable', 'omm', 'recheck', 'unknown', 'approve-ask',
+                   'design-approval', 'headless', 'other')
 SUMMARY_MAX_LINES = 5
 SUMMARY_MAX_CHARS = 200
 PBI_NAME = re.compile(r'^PBI-\d+$')
@@ -181,6 +192,9 @@ def check_episode(data) -> list[str]:
         else:
             if question.get('check') not in (None, 'design-record'):
                 errors.append('question.check: design-record or absent')
+            # topic は任意。無ければ other として数える (docs/specs/harness-metrics.md の question.asked)
+            if question.get('topic') is not None and question['topic'] not in QUESTION_TOPICS:
+                errors.append(f'question.topic: one of {", ".join(QUESTION_TOPICS)}')
             # 出番の途中の問い (approve 以外) は、答えのあと Continue from: で続けるので、状態の板が要る
             if question['kind'] != 'approve' and not _is_str(data.get('state')):
                 errors.append('state: the state tablet path is needed for a question other than approve')
@@ -196,8 +210,88 @@ def check_episode(data) -> list[str]:
 CHECKS = {REVIEW: check_review, TEST_RESULT: check_test_result, EPISODE: check_episode}
 
 
+# ---- イベント (review.judged・test.judged) ----
+
+def event_dir(path) -> Path | None:
+    """結果のファイルのパスから <dir> (docs/pbi に当たるフォルダ) を導く。決まった場所の外なら None。
+
+    check は --dir を取らないので、cwd から決めるとスキルのフォルダに書いてしまう。
+    """
+    parent = Path(path).parent
+    if parent.name == 'reviews':
+        return parent.parent
+    if parent.name == 'tests' and parent.parent.name == 'verify':
+        return parent.parent.parent
+    return None
+
+
+def _counts(values, names) -> dict:
+    """値のリストを names ごとに数えた object。"""
+    values = list(values)
+    return {name: sum(1 for value in values if value == name) for name in names}
+
+
+def judged_event(schema: str, data: dict) -> tuple[str, dict]:
+    """check が通った結果のイベント (type, data)。"""
+    if schema == REVIEW:
+        criteria = {'pass': 0, 'fail': 0, 'unknown': 0}
+        for row in data['criteria']:
+            # deferred とそれ以外は unknown に数える
+            verdict = row['verdict'] if row['verdict'] in ('pass', 'fail') else 'unknown'
+            criteria[verdict] += 1
+        return 'review.judged', {
+            'report': data['report'],
+            'recommendation': data['recommendation'],
+            'findings': _counts((row['severity'] for row in data['findings']), SEVERITIES),
+            'criteria': criteria,
+        }
+    codes = [row['code'] for row in data['commands']]
+    passed = sum(1 for code in codes if code == 0)
+    return 'test.judged', {
+        'kind': data['kind'],
+        'passed': passed,
+        'failed': len(codes) - passed,
+        'failing': _counts((row['cause'] for row in data['failing']), TEST_CAUSES),
+    }
+
+
+def _judged_once(path, base) -> str:
+    """once の鍵。<run_id>:<プロジェクトからの相対パス>:<中身の sha256>。
+
+    run_id を鍵に入れるのは、`.events/seen.txt` が実行をまたいで残るため。run が変われば
+    同じファイルをもう一度 check しても出す (記録は run ごとに数える)。run.json が無ければ none。
+    パスも鍵に入れるのは、合格した test-result が波・PBI・時刻を持たず、波ごとに同じ本文が
+    別のパスに書かれるから (同じファイルの繰り返しだけを落とす)。
+    """
+    target = Path(path)
+    try:
+        name = target.resolve().relative_to(Path(base).resolve().parent).as_posix()
+    except (OSError, ValueError):
+        name = target.as_posix()
+    return f'{record_run.run_id_of(Path(base))}:{name}:{hashlib.sha256(target.read_bytes()).hexdigest()}'
+
+
+def _emit_judged(path, data) -> None:
+    """check が通った結果を、決まった場所 (reviews/・verify/tests/) にあるときだけイベントにする。"""
+    if events is None or data.get('schema') not in (REVIEW, TEST_RESULT):
+        return
+    base = event_dir(path)
+    if base is None:
+        return
+    try:
+        once = _judged_once(path, base)
+    except OSError:
+        return
+    type, payload = judged_event(data['schema'], data)
+    # 指示文は「ok が出るまで check を繰り返す」ので、同じファイル・同じ中身の 2 回目は once で落とす
+    events.emit(base, type, payload, once=once)
+
+
 def check_file(path) -> list[str]:
-    """ファイル 1 つの誤り。読めない・3 つの schema のどれでもないものも誤り。"""
+    """ファイル 1 つの誤り。読めない・3 つの schema のどれでもないものも誤り。
+
+    通った review・test-result の結果は、決まった場所にあるときだけ review.judged・test.judged にする。
+    """
     data = common.load_json(path)
     if data is None:
         return ['not readable JSON']
@@ -206,7 +300,10 @@ def check_file(path) -> list[str]:
     check = CHECKS.get(schema) if isinstance(schema, str) else None
     if check is None:
         return [f'unknown schema (expected one of {", ".join(CHECKS)})']
-    return check(data)
+    errors = check(data)
+    if not errors:
+        _emit_judged(path, data)
+    return errors
 
 
 # ---- bundle ----

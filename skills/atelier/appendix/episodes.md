@@ -42,7 +42,7 @@ Write the file on the prompt's `Result:` line as your last action, schema `ateli
 - `status`: `done`, `question`, `handoff` or `error`.
 - `summary`: up to 5 lines, 200 characters each. Your reply is these lines only.
 - `next`: with `done`, `{"episode": ..., "wave": n, "pbis": [...]}`; `wave` must be in `docs/pbi/waves.json`; `pbis` only for a rework build.
-- `question`: with `question`, `{"kind", "path", "summary", "check"}`.
+- `question`: with `question`, `{"kind", "path", "summary", "check"}`. It may also carry an optional `topic` (an identifier such as `omm` or `design-approval`); the values and which question takes which are in `appendix/events.md`.
 - `state`: the path of the state tablet; required with `handoff` and with every question kind but `approve`.
 - `report`: the path of the completion report (finish).
 - `reason`: required with `error`.
