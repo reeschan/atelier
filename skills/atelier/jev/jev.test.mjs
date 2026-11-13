@@ -97,6 +97,24 @@ test("2. 429 (retry-after: 0) のあと 200 で成功、リクエストは 2 回
   });
 });
 
+test("3. 500 文字の境界をまたぐキーは断片を残さない", async () => {
+  const key = "cross-boundary-secret-key";
+  const body = "x".repeat(490) + key + "-tail";
+  await withMock([{ status: 401, body }], async ({ url }) => {
+    await assert.rejects(
+      callJev({ state: "t", questions: QUESTIONS, model: "m", endpoint: url, apiKey: key, sleep: async () => {} }),
+      (e) => {
+        assert.equal(e.code, "http");
+        assert.equal(e.status, 401);
+        assert.ok(!e.message.includes(key));
+        assert.ok(!e.message.includes("cross-boundary"));
+        assert.ok(e.message.includes("[redacted]"));
+        return true;
+      },
+    );
+  });
+});
+
 test("3. 401 は再試行しない", async () => {
   await withMock([{ status: 401, body: { error: "unauthorized" } }], async ({ url, requests }) => {
     await assert.rejects(call(url), (e) => {

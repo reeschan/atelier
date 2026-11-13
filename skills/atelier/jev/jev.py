@@ -166,7 +166,7 @@ def call_jev(state, questions, model, endpoint=DEFAULT_ENDPOINT, api_key=None,
         except urllib.error.HTTPError as e:
             status = e.code
             retry_after = e.headers.get('retry-after') if e.headers else None
-            detail = _redact(e.read().decode('utf-8', 'replace')[:500], api_key)
+            detail = _redact(e.read().decode('utf-8', 'replace'), api_key)[:500]
             err = fail(f'HTTP {status}: {detail}', 'http', status)
             if status in (429, 529):
                 if rate_retries < max_retries:
@@ -191,9 +191,9 @@ def call_jev(state, questions, model, endpoint=DEFAULT_ENDPOINT, api_key=None,
         try:
             data = json.loads(text)
         except ValueError:
-            raise fail(f'応答が JSON でない: {_redact(text[:500], api_key)}', 'bad-response', 200) from None
+            raise fail(f'応答が JSON でない: {_redact(text, api_key)[:500]}', 'bad-response', 200) from None
         if not isinstance(data, dict) or not isinstance(data.get('answers'), dict):
-            raise fail(f'応答に answers が無い: {_redact(text[:500], api_key)}', 'bad-response', 200)
+            raise fail(f'応答に answers が無い: {_redact(text, api_key)[:500]}', 'bad-response', 200)
         return data
 
 

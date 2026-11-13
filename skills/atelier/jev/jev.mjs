@@ -120,15 +120,15 @@ export async function callJev({ state, questions, model, endpoint = DEFAULT_ENDP
       try {
         data = JSON.parse(text);
       } catch {
-        throw new JevError(redact(`応答が JSON でない: ${text.slice(0, 500)}`), { code: "bad-response", status, where });
+        throw new JevError(`応答が JSON でない: ${redact(text).slice(0, 500)}`, { code: "bad-response", status, where });
       }
       const answers = data && typeof data === "object" ? data.answers : null;
       if (!answers || typeof answers !== "object" || Array.isArray(answers)) {
-        throw new JevError(redact(`応答に answers が無い: ${text.slice(0, 500)}`), { code: "bad-response", status, where });
+        throw new JevError(`応答に answers が無い: ${redact(text).slice(0, 500)}`, { code: "bad-response", status, where });
       }
       return data;
     }
-    const err = new JevError(redact(`HTTP ${status}: ${text.slice(0, 500)}`), { code: "http", status, where });
+    const err = new JevError(`HTTP ${status}: ${redact(text).slice(0, 500)}`, { code: "http", status, where });
     if (status === 429 || status === 529) {
       if (rateRetries < maxRetries) {
         await sleep(retryWaitMs(res.headers.get("retry-after"), rateRetries));
