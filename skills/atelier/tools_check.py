@@ -3,7 +3,8 @@
   python tools_check.py [--home DIR] [--skills-dir DIR]
 
 列 (タブ区切り、1 行目は見出し): tool / status / install / fallback
-  status   ok <場所>、missing、または jevlint の no-key (キーが無いのでモデルの判定は使えず、AST だけで動く)
+  status   ok <場所>、missing、または jevlint の no-key (キーが無いのでモデルの判定は使えず、AST だけで動く)。
+           node は ok <場所> <版> / old <版> (20 未満) / missing (env の PATH で探す。confirm の am を流す)
   install  入れ方 (入れるのはユーザーが許可したときだけ)
   fallback 入れずに進むときの代わり
 
@@ -23,6 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import adapter_gate
 import agents as agents_module
 import common
 import flow
@@ -43,14 +45,17 @@ INSTALL = {
     'principle-test-behavior-not-implementation': '/plugin install pstack@cursor-plugins',
     'answer-me-with-any': f'git clone {CONFIRM_REPO} and check out {CONFIRM_COMMIT}, then copy its skills/answer-me-with-any '
                           'to ~/.claude/skills/answer-me-with-any (only after the user says yes)',
+    'node': 'fnm install 22',
 }
+CONFIRM_OFF = 'confirm: off (the question file in chat, no reply check)'
 FALLBACK = {
     'omm': 'map: prompts/map-fallback.md',
     'omm-scan': 'map: prompts/map-fallback.md',
     'jevlint': 'lint-survey and lint-recheck: prompts/lint-fallback.md',
     'sac-strategic-compact': 'appendix/kiln.md and prompts/kiln-chamber.md',
     'principle-test-behavior-not-implementation': 'appendix/tests-at-end.md, Test principle (fallback)',
-    'answer-me-with-any': 'confirm: the same Markdown in chat (appendix/adapters.md, Confirm)',
+    'answer-me-with-any': CONFIRM_OFF,
+    'node': CONFIRM_OFF,
 }
 
 
@@ -93,6 +98,9 @@ def rows(home: Path, skills_dir: Path, env) -> list[tuple]:
     principle = flow.find_plugin_file('pstack', 'skills/principle-test-behavior-not-implementation/SKILL.md', plugins)
     confirm = flow.find_skill_file(agents_module.CONFIRM_SKILL, skills_dir, env)
     old = None if confirm else flow.find_skill_file(agents_module.CONFIRM_SKILL_OLD, skills_dir, env)
+    node = adapter_gate.node_status(env)
+    node_row = (f"ok {node['path']} {node['version']}" if node['status'] == 'ok' else
+                f"old {node['version']}" if node['status'] == 'old' else 'missing')
     status = {
         'omm': f'ok {omm}' if omm else 'missing',
         'omm-scan': f'ok {scan}' if scan else 'missing',
@@ -102,6 +110,7 @@ def rows(home: Path, skills_dir: Path, env) -> list[tuple]:
         'answer-me-with-any': (f'ok {confirm}' if confirm else
                                f'ok {old} (old name {agents_module.CONFIRM_SKILL_OLD}; install '
                                f'{agents_module.CONFIRM_SKILL} and remove it)' if old else 'missing'),
+        'node': node_row,
     }
     return [(tool, status[tool], INSTALL[tool], FALLBACK[tool]) for tool in INSTALL]
 
