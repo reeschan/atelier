@@ -129,7 +129,7 @@ class PrepareTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         lines = out.stdout.splitlines()
         self.assertEqual(lines[0], f'優先テンプレート: all-tiers を適用中 ({UNTIL} まで、期限切れは ask) / 写し: {SYNCED} 時点')
-        self.assertEqual(lines[1], 'Jev: ok 2/2 (unknown)')
+        self.assertEqual(lines[1], 'Jev: not-checked (cached 2/2 (unknown))')
         self.assertEqual(cells(lines[2]), HEADER)
         self.assertIn(f'all-tiers を当てた ({UNTIL} まで)', rows(out)[0])
         brief = [line for line in self.log() if line['gate'] == 'brief'][0]
@@ -185,7 +185,7 @@ class PrepareTest(unittest.TestCase):
         self.add_pbi(brief={'novelty': LOW_TWO, 'coupling': ZERO, 'ambiguity': ZERO})
         out = self.run_prepare('--now', NOW)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertEqual(out.stdout.splitlines()[1], 'Jev: ok 2/2 (unknown)')
+        self.assertEqual(out.stdout.splitlines()[1], 'Jev: not-checked (cached 2/2 (unknown))')
         self.assertEqual(cells(out.stdout.splitlines()[2]), HEADER)
         row = cells(rows(out)[0])
         route = self.route()
@@ -379,7 +379,7 @@ class PrepareTest(unittest.TestCase):
             write_json(path, data)
         out = self.run_prepare('--now', NOW)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertEqual(out.stdout.splitlines()[1], f'Jev: ok 2/2 ({model})')
+        self.assertEqual(out.stdout.splitlines()[1], f'Jev: not-checked (cached 2/2 ({model}))')
         self.assertEqual(self.log()[0]['model'], model)
         self.assertNotIn('Jev 失敗', rows(out)[0])
 

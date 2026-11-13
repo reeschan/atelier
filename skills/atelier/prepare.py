@@ -15,8 +15,9 @@
 - jev-log.jsonl には、PBI の判定 (段・route・template の note・補正後の値・品質の警告・dropped) が、
   同じ PBI・ゲート brief の前回の行と変わったときだけ 1 行書く (変わらなければ書かない。ts はタイムゾーン付き)
 - 表の前に 1 行「優先テンプレート: …」を出し (写しと適用の状態。templates.load_overrides・state_of)、
-  その次に 1 行「Jev: ok n/n (<model>)」か「Jev: unavailable (<code>)」を出す
-  (全部のゲートが成功したときだけ ok。model は応答の model。無ければ unknown)。
+  その次に Jev の 1 行を出す。この実行で呼んだゲートが全部成功なら「Jev: ok n/n (<model>)」、
+  1 件でも失敗なら「Jev: unavailable (<code>)」。呼び直さず応答を再利用しただけなら
+  「Jev: not-checked (cached …)」（今の疎通の根拠にしない）。model は応答の model。無ければ unknown。
   表の列「優先テンプレート」に route.json の template.note を出す (無ければ —)
 - 表の列「補正後の値」は route.json の scores、「理由」は reasons[0] から「決定: 」を除いたもの、
   「外した手順」は route.json の dropped を `<runner> <model> (<理由>)` の `; ` つなぎにする。
@@ -75,8 +76,12 @@ def jev_failure_code(data):
     return code if isinstance(code, str) and code else "unknown"
 
 
-def jev_status_line(records):
-    """表の前の 1 行。全部成功なら Jev: ok n/n (<model>)。1 件でも失敗なら Jev: unavailable (<code>)。"""
+def jev_status_line(records, checked):
+    """表の前の 1 行。checked はこの実行で Jev を呼んだゲートか。
+
+    呼んで全部成功なら Jev: ok n/n (<model>)。1 件でも失敗なら Jev: unavailable (<code>)。
+    呼ばずに再利用しただけなら Jev: not-checked (cached …)。それは今の疎通ではない。
+    """
     total = len(records)
     models = []
     codes = []
@@ -91,9 +96,10 @@ def jev_status_line(records):
         elif code not in codes:
             codes.append(code)
     if total and not codes:
-        model = ", ".join(models) if models else "unknown"
-        return f"Jev: ok {ok}/{total} ({model})"
-    return "Jev: unavailable (" + (", ".join(codes) if codes else "unknown") + ")"
+        body = f"{ok}/{total} ({', '.join(models) if models else 'unknown'})"
+        return f"Jev: ok {body}" if checked else f"Jev: not-checked (cached {body})"
+    code = ", ".join(codes) if codes else "unknown"
+    return f"Jev: unavailable ({code})" if checked else f"Jev: not-checked (cached {code})"
 
 
 def failure_memo(name, data, with_score=False):
@@ -281,13 +287,17 @@ def main():
     ts = common.now().isoformat(timespec="seconds")
     previous = previous_decisions(base / "jev-log.jsonl")
     lines = []
-    jev_rows = []
+    called = {job[3].resolve() for job in jobs}
+    fresh, cached = [], []
     for p in pbis:
-        jev_rows.append(common.load_json(base / "jev" / f"{p}.brief.json"))
+        paths = [base / "jev" / f"{p}.brief.json"]
         if not facts_by[p].get("sensitive"):
-            jev_rows.append(common.load_json(base / "jev" / f"{p}.pbi_quality.json"))
+            paths.append(base / "jev" / f"{p}.pbi_quality.json")
+        for path in paths:
+            (fresh if path.resolve() in called else cached).append(common.load_json(path))
     print(template_line(home, now))
-    print(jev_status_line(jev_rows))
+    # この実行で呼んだゲートだけで ok / unavailable を出す。再利用だけなら not-checked。
+    print(jev_status_line(fresh, True) if fresh else jev_status_line(cached, False))
     print("| PBI | 段 | route の先頭 | review | 補正後の値 (新規性/結合度/あいまいさ) | 理由 | 優先テンプレート | "
           "外した手順 | 品質の警告 | メモ |")
     print("|---|---|---|---|---|---|---|---|---|---|")
