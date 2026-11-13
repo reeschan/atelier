@@ -253,18 +253,20 @@ test("6d. ファイルが無いキーは HTTP を呼ばず no-key と where", as
 });
 
 test("接続できないときは network、応答が止まると timeout", async () => {
-  const closed = createNetServer();
-  await new Promise((r) => closed.listen(0, "127.0.0.1", r));
-  const port = closed.address().port;
-  closed.close();
-  await new Promise((r) => closed.close(r));
-  await assert.rejects(
-    callJev({
-      state: "t", questions: QUESTIONS, model: "m", apiKey: DUMMY_KEY,
-      endpoint: `http://127.0.0.1:${port}/v1/systemone`, timeoutMs: 1000, sleep: async () => {},
-    }),
-    (e) => e instanceof JevError && e.code === "network" && publicCode(e) === "network",
-  );
+  // 閉じたポートは Windows でタイムアウトになることがある。受けてすぐ切る。
+  const reset = createNetServer((socket) => { socket.destroy(); });
+  await new Promise((r) => reset.listen(0, "127.0.0.1", r));
+  try {
+    await assert.rejects(
+      callJev({
+        state: "t", questions: QUESTIONS, model: "m", apiKey: DUMMY_KEY,
+        endpoint: `http://127.0.0.1:${reset.address().port}/v1/systemone`, timeoutMs: 1000, sleep: async () => {},
+      }),
+      (e) => e instanceof JevError && e.code === "network" && publicCode(e) === "network",
+    );
+  } finally {
+    reset.close();
+  }
 
   const hang = createNetServer((socket) => { socket.on("error", () => {}); });
   await new Promise((r) => hang.listen(0, "127.0.0.1", r));
