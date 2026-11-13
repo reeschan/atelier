@@ -9,7 +9,7 @@
 
 道具: omm (oh-my-mermaid の CLI)、omm-scan (oh-my-mermaid のプラグインのスキル)、jevlint、
 sac-strategic-compact、principle-test-behavior-not-implementation (pstack)、answer-me-with-any (Approve と問いを HTML で
-見せる confirm のスキル。古い名前 answer-me-with-html しか無ければそれを ok にし、名前を変えるよう添える。
+見せる confirm のスキル。古い名前 answer-me-with-html しか無ければそれを ok にし、新しい名前で入れ直して古いほうを消すよう添える。
 appendix/adapters.md の `## Confirm`)。
 jevlint は agents.find_cli で探し (home の agents.json の tools.jevlint.path、PATH、fnm・nvm の Node の版)、
 `jevlint auth list` に typesafe があるかを見る (キーの値は出ない)。流すときは見つけた CLI のディレクトリを PATH の先頭に置く
@@ -100,8 +100,8 @@ def rows(home: Path, skills_dir: Path, env) -> list[tuple]:
         'sac-strategic-compact': f'ok {sac}' if sac.is_file() else 'missing',
         'principle-test-behavior-not-implementation': f'ok {principle}' if principle else 'missing',
         'answer-me-with-any': (f'ok {confirm}' if confirm else
-                               f'ok {old} (old name {agents_module.CONFIRM_SKILL_OLD}; rename it to '
-                               f'{agents_module.CONFIRM_SKILL})' if old else 'missing'),
+                               f'ok {old} (old name {agents_module.CONFIRM_SKILL_OLD}; install '
+                               f'{agents_module.CONFIRM_SKILL} and remove it)' if old else 'missing'),
     }
     return [(tool, status[tool], INSTALL[tool], FALLBACK[tool]) for tool in INSTALL]
 

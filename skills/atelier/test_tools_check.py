@@ -76,7 +76,7 @@ class ToolsCheckTest(unittest.TestCase):
         self.touch('skills', 'answer-me-with-html', 'SKILL.md')
         status = self.rows()['answer-me-with-any'][1]
         self.assertTrue(status.startswith('ok '), status)
-        self.assertIn('old name answer-me-with-html; rename it to answer-me-with-any', status)
+        self.assertIn('old name answer-me-with-html; install answer-me-with-any and remove it', status)
 
 if __name__ == '__main__':
     unittest.main()

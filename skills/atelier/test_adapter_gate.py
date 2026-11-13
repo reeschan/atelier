@@ -279,7 +279,7 @@ class AdapterGateTest(unittest.TestCase):
         old = self.touch_skill(self.skills, 'answer-me-with-html')
         rows = self.table(self.gate())
         self.assertRow(rows, 'confirm', 'auto', 'skill',
-                       f'answer-me-with-html found at {old} (old name; rename it to answer-me-with-any); '
+                       f'answer-me-with-html found at {old} (old name; install answer-me-with-any and remove it); '
                        'use it only if it is in the skill list')
         found = self.touch_skill(self.skills, 'answer-me-with-any')
         rows = self.table(self.gate())
