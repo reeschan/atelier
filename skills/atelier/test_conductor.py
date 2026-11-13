@@ -1831,7 +1831,7 @@ class ConductorTest(unittest.TestCase):
 
         self.write_abs(os.path.join(skills, 'answer-me-with-html', 'SKILL.md'), '---\nname: old\n---\n')
         rc, out = self.con('status', env=env)
-        self.assertIn('confirm: skill answer-me-with-html (warn: old name, rename it to answer-me-with-any)', out)
+        self.assertIn('confirm: skill answer-me-with-html (warn: old name, install answer-me-with-any and remove it)', out)
         self.write_abs(os.path.join(skills, 'answer-me-with-any', 'SKILL.md'), '---\nname: new\n---\n')
         rc, out = self.con('status', env=env)
         self.assertIn('confirm: skill answer-me-with-any', out)
