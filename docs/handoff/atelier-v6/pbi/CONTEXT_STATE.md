@@ -1,3 +1,5 @@
+> **注記:** cloud container 2026-11-10 の記録。API キーと外部通信が無い環境での結果で、ユーザー PC の状態ではない。Jev やツールが使えるかは、その回の確認結果で判断すること。
+
 # State tablet (designer, before Approve)
 
 ## Objective
