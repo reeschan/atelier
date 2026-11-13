@@ -29,7 +29,7 @@ The question file holds only the text for the user, and the choices go in an `as
 
 Do not stop to report anything else. Put what the user should know in the summary of the episode result.
 
-Ask the user only what changes what they get, what it costs, how long it takes or what can go wrong; decide the insides yourself and write them in the spec. The exception is the grill of a run that designs (`appendix/design.md`, `## Design: grill`): every question of the design tree goes to the user, and you answer none of them yourself. Every choice says what changes when it is picked (`appendix/approve.md`, `## Decisions`).
+Ask the user only what changes what they get, what it costs, how long it takes or what can go wrong; decide the insides yourself and write them in the spec. The exception is the grill of a run that designs (`appendix/design.md`, `## Design: grill`): every question of the design tree goes to the user, and you answer none of them yourself. Every choice says what changes when it is picked (`appendix/approve.md`, `## Decisions`). Write a question other than `approve` in the form of `appendix/questions.md`, and run `python <skill>/design_record.py lint --draft <path> --kind <kind>` on its draft.
 
 ## Invariants
 
@@ -64,6 +64,7 @@ Ask the user only what changes what they get, what it costs, how long it takes o
 | Asking Jev directly (report triage, rework check) | `appendix/jev.md` |
 | Recording the cause of a rework, tier up or hold; writing the cases at finish | `appendix/cases.md` |
 | Writing the approval draft at Approve, or rewriting it after a revise request | `appendix/approve.md` |
+| Writing a question other than `approve` | `appendix/questions.md` |
 | The `adapters` setting in agents.json (turns a design or review stage off, names a skill for it, or how a question is shown, `confirm` `html`, `md` or `off`) | `appendix/adapters.md` |
 
 ## Episodes

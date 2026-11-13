@@ -34,12 +34,15 @@ class DesignRecordTest(unittest.TestCase):
         self.pbi = os.path.join(self.dir, 'pbi')
         # 本物の ~/.claude の設定を読ませない (events.emit の送り手)
         self.no_config = os.path.join(self.dir, 'no-harness-log.json')
+        # 本物の home・プラグインの yomiyasu を拾わせない
+        self.isolated = {'ATELIER_HOME': os.path.join(self.dir, 'home'),
+                         'PBI_PLUGINS_DIR': os.path.join(self.dir, 'plugins')}
 
     def run_cli(self, *args, stdin=None, env=None):
         """stdin はバイト列で渡す (Windows の改行の変換と文字コードを通さない)。出力は UTF-8 で読む。"""
         result = subprocess.run([sys.executable, SCRIPT, *args, '--dir', self.pbi],
                                 input=None if stdin is None else stdin.encode('utf-8'), capture_output=True,
-                                env=dict(os.environ, HARNESS_LOG_CONFIG=self.no_config, **(env or {})))
+                                env=dict(os.environ, HARNESS_LOG_CONFIG=self.no_config, **self.isolated, **(env or {})))
         return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode('utf-8'),
                                            result.stderr.decode('utf-8', errors='replace'))
 
@@ -106,7 +109,7 @@ class DesignRecordTest(unittest.TestCase):
         """cwd で動かす。--dir は渡さず、既定の docs/pbi (cwd からの相対) を使う。"""
         result = subprocess.run([sys.executable, SCRIPT, *args], cwd=cwd,
                                 input=None if stdin is None else stdin.encode('utf-8'), capture_output=True,
-                                env=dict(os.environ, HARNESS_LOG_CONFIG=self.no_config, **(env or {})))
+                                env=dict(os.environ, HARNESS_LOG_CONFIG=self.no_config, **self.isolated, **(env or {})))
         return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode('utf-8'),
                                            result.stderr.decode('utf-8', errors='replace'))
 
@@ -627,6 +630,15 @@ class DesignRecordTest(unittest.TestCase):
 
 
 EXAMPLE = os.path.join(HERE, 'examples', 'approve.md')
+FAKE_YOMIYASU = os.path.join(HERE, 'testdata', 'fake_yomiyasu.py')
+MARKER = 'ヨミヤス候補'
+
+
+def isolated_env(base, **extra):
+    """本物の home・プラグイン・送り手の設定に触れさせない環境。"""
+    return dict(os.environ, ATELIER_HOME=os.path.join(base, 'home'), PBI_PLUGINS_DIR=os.path.join(base, 'plugins'),
+                HARNESS_LOG_CONFIG=os.path.join(base, 'no-harness-log.json'), ATELIER_EVENTS_SETTLE='off',
+                ATELIER_EVENTS_QUIET='1', **extra)
 
 
 class ApprovalDraftLintTest(unittest.TestCase):
@@ -638,12 +650,14 @@ class ApprovalDraftLintTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         with open(os.path.join(FIXTURES, 'approve-good.md'), encoding='utf-8') as f:
             self.good = f.read()
+        # 本物の home・プラグインの yomiyasu を拾わせない
+        self.env = isolated_env(self.dir)
 
     def lint(self, text):
         path = os.path.join(self.dir, 'approve.md')
         with open(path, 'w', encoding='utf-8', newline='') as f:
             f.write(text)
-        result = subprocess.run([sys.executable, SCRIPT, 'lint', '--draft', path], capture_output=True)
+        result = subprocess.run([sys.executable, SCRIPT, 'lint', '--draft', path], capture_output=True, env=self.env)
         return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode('utf-8'),
                                            result.stderr.decode('utf-8', errors='replace'))
 
@@ -788,10 +802,551 @@ class ApprovalDraftLintTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_example_draft_passes_without_warnings(self):
-        result = subprocess.run([sys.executable, SCRIPT, 'lint', '--draft', EXAMPLE], capture_output=True)
+        result = subprocess.run([sys.executable, SCRIPT, 'lint', '--draft', EXAMPLE], capture_output=True, env=self.env)
         stderr = result.stderr.decode('utf-8', errors='replace')
         self.assertEqual(result.returncode, 0, stderr)
         self.assertNotIn('! L', stderr)
+
+
+class YomiyasuLintTest(unittest.TestCase):
+    """design_record.py lint / markdown: 日本語の原稿に yomiyasu の候補を警告で足す。道具は偽物 (testdata/fake_yomiyasu.py)。"""
+
+    IMPACT = '点検しなかった (変える所が 2 か所だけで、ほかから頼られていないため)。'
+    OPTION = '- リポジトリの中 | 誰でも同じ図を見られる。差分が毎回出る'
+    QUESTION = '図の置き場所はどちらにしますか'
+
+    def setUp(self):
+        self.dir = os.path.join(tempfile.gettempdir(), f'yomiyasu-lint-{uuid.uuid4().hex}')
+        os.makedirs(os.path.join(self.dir, 'home'))
+        os.makedirs(os.path.join(self.dir, 'plugins'))
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        with open(os.path.join(FIXTURES, 'approve-good.md'), encoding='utf-8') as f:
+            self.good = f.read()
+        self.dump = os.path.join(self.dir, 'dump.json')
+        self.point_at(FAKE_YOMIYASU)
+
+    def point_at(self, path):
+        with open(os.path.join(self.dir, 'home', 'agents.json'), 'w', encoding='utf-8') as f:
+            json.dump({'tools': {'yomiyasu': {'path': path}}}, f)
+
+    def env(self, **extra):
+        return isolated_env(self.dir, FAKE_YOMIYASU_DUMP=self.dump, ATELIER_YOMIYASU_TIMEOUT='2', **extra)
+
+    def lint(self, text, command='lint', **extra):
+        path = os.path.join(self.dir, 'approve.md')
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            f.write(text)
+        args = [command, '--draft', path]
+        if command == 'markdown':
+            pbi = os.path.join(self.dir, 'pbi')
+            shutil.copytree(os.path.join(FIXTURES, 'pbi'), pbi, dirs_exist_ok=True)
+            args += ['--dir', pbi]
+        result = subprocess.run([sys.executable, SCRIPT, *args], capture_output=True, env=self.env(**extra))
+        return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode('utf-8'),
+                                           result.stderr.decode('utf-8', errors='replace'))
+
+    def line_of(self, text, needle):
+        return text.split('\n').index(needle) + 1
+
+    def candidates(self, result):
+        return [row for row in result.stderr.splitlines() if ' yomiyasu fake_rule' in row]
+
+    def skipped(self, result):
+        return [row for row in result.stderr.splitlines() if row.startswith('! yomiyasu skipped')]
+
+    def test_a_candidate_in_prose_is_a_warning_at_the_file_line(self):
+        text = self.good.replace(self.IMPACT, self.IMPACT + MARKER)
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        line = self.line_of(text, self.IMPACT + MARKER)
+        self.assertGreater(line, 5, 'the file line counts the frontmatter')
+        self.assertEqual(self.candidates(result), [f'! L{line} yomiyasu fake_rule → {MARKER}を言い直す'])
+        self.assertTrue(result.stdout.startswith('ok\t'), result.stdout)
+        self.assertEqual(self.skipped(result), [])
+
+    def test_a_clean_draft_has_no_candidate_and_exit_0(self):
+        result = self.lint(self.good)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('! L', result.stderr)
+        self.assertTrue(os.path.exists(self.dump), 'yomiyasu ran on a Japanese draft')
+
+    def test_crlf_draft_keeps_the_file_line(self):
+        text = self.good.replace(self.IMPACT, self.IMPACT + MARKER)
+        result = self.lint(text.replace('\n', '\r\n'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.candidates(result)), 1, result.stderr)
+        self.assertIn(f'! L{self.line_of(text, self.IMPACT + MARKER)} yomiyasu', result.stderr)
+
+    def test_a_marker_inside_a_diagram_fence_is_not_reported(self):
+        text = self.good.replace('```flow\n', '```flow\n' + MARKER + '\n', 1)
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.candidates(result), [])
+
+    def test_a_marker_in_an_ask_question_and_option_is_reported(self):
+        text = self.good.replace(self.QUESTION, self.QUESTION + MARKER).replace(self.OPTION, self.OPTION + MARKER)
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = sorted(int(row.split()[1][1:]) for row in self.candidates(result))
+        self.assertEqual(lines, [self.line_of(text, self.QUESTION + MARKER), self.line_of(text, self.OPTION + MARKER)])
+        with open(self.dump, encoding='utf-8') as f:
+            sent = json.load(f)['text']
+        self.assertNotIn('```', sent)
+        self.assertNotIn('lang: ja', sent, 'the frontmatter is not sent')
+
+    def test_a_marker_in_the_callout_is_reported(self):
+        callout = '設計の受け渡しを、HTML のページで読んで返事を貼る形にする。'
+        text = self.good.replace(callout, callout + MARKER)
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.candidates(result),
+                         [f'! L{self.line_of(text, callout + MARKER)} yomiyasu fake_rule → {MARKER}を言い直す'])
+
+    def test_ask_options_are_sent_without_the_list_mark(self):
+        result = self.lint(self.good)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with open(self.dump, encoding='utf-8') as f:
+            sent = json.load(f)['text'].split('\n')
+        self.assertIn(self.OPTION[2:], sent)
+        self.assertNotIn(self.OPTION, sent)
+
+    def test_exit_code_stays_6_for_a_draft_with_errors(self):
+        text = self.good.replace(self.IMPACT, self.IMPACT + MARKER).replace('## 作る人と見直し', '## 段ごとの記録\n- 計画\n')
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 6, result.stderr)
+        self.assertIn('✗ L', result.stderr)
+        self.assertEqual(len(self.candidates(result)), 1, result.stderr)
+
+    def test_a_missing_tool_is_one_skipped_line_and_other_checks_run(self):
+        self.point_at(os.path.join(self.dir, 'nowhere', 'yomiyasu_lint.py'))
+        row = '| PBI-012 | route と tier を変える | ページで設計を読める | なし |'
+        text = self.good.replace('| PBI-012 | 承認の一覧をページにする | ページで設計を読める | なし |', row)
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.skipped(result)), 1, result.stderr)
+        self.assertTrue(self.skipped(result)[0].endswith('(tools_check.py)'), result.stderr)
+        self.assertIn(f'! L{self.line_of(text, row)} route', result.stderr)
+        broken = self.lint(text.replace('## 影響範囲', '## 段ごとの記録\n'))
+        self.assertEqual(broken.returncode, 6)
+        self.assertEqual(len(self.skipped(broken)), 1, broken.stderr)
+        self.assertIn('✗ L', broken.stderr)
+
+    def test_a_tool_that_fails_is_one_skipped_line_and_the_exit_code_is_unchanged(self):
+        text = self.good.replace(self.IMPACT, self.IMPACT + MARKER)
+        for mode in ('crash', 'garbage', 'format3', 'sleep'):
+            with self.subTest(mode=mode):
+                result = self.lint(text, FAKE_YOMIYASU_MODE=mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len(self.skipped(result)), 1, result.stderr)
+                self.assertEqual(self.candidates(result), [])
+                self.assertNotIn('Traceback', result.stderr)
+
+    def test_an_english_draft_does_not_call_yomiyasu(self):
+        result = self.lint('---\nlang: en\n---\n## Summary\nHello there.\n')
+        self.assertEqual(result.returncode, 6, result.stderr)
+        self.assertFalse(os.path.exists(self.dump), 'yomiyasu must not run')
+        self.assertNotIn('yomiyasu', result.stderr)
+
+    def test_lang_ja_alone_calls_yomiyasu(self):
+        result = self.lint('---\nlang: ja\n---\n## Summary\nHello there.\n')
+        self.assertTrue(os.path.exists(self.dump), result.stderr)
+
+    def test_kanji_alone_in_a_draft_without_frontmatter_calls_yomiyasu(self):
+        result = self.lint('## Summary\n結論です。\n')
+        self.assertTrue(os.path.exists(self.dump), result.stderr)
+
+    def test_a_question_draft_is_checked_too(self):
+        with open(os.path.join(FIXTURES, 'question-good.md'), encoding='utf-8') as f:
+            good = f.read()
+        text = good.replace('## 結論\n', '## 結論\n' + MARKER + '\n', 1)
+        path = os.path.join(self.dir, 'question.md')
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            f.write(text)
+        result = subprocess.run([sys.executable, SCRIPT, 'lint', '--draft', path, '--kind', 'decision'],
+                                capture_output=True, env=self.env())
+        stderr = result.stderr.decode('utf-8', errors='replace')
+        self.assertEqual(result.returncode, 0, stderr)
+        self.assertIn(f'! L{text.split(chr(10)).index(MARKER) + 1} yomiyasu fake_rule', stderr)
+
+    def test_a_character_outside_the_ansi_code_page_does_not_hang(self):
+        text = self.good.replace(self.IMPACT, self.IMPACT + '𠮷野家' + MARKER)
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.candidates(result)), 1, result.stderr)
+        self.assertEqual(self.skipped(result), [])
+
+    def test_markdown_checks_too_and_its_stdout_is_unchanged(self):
+        text = self.good.replace(self.IMPACT, self.IMPACT + MARKER)
+        with_tool = self.lint(text, 'markdown')
+        self.assertEqual(with_tool.returncode, 0, with_tool.stderr)
+        self.assertEqual(len(self.candidates(with_tool)), 1, with_tool.stderr)
+        self.point_at(os.path.join(self.dir, 'nowhere', 'yomiyasu_lint.py'))
+        without = self.lint(text, 'markdown')
+        self.assertEqual(without.returncode, 0, without.stderr)
+        self.assertEqual(len(self.skipped(without)), 1, without.stderr)
+        self.assertEqual(with_tool.stdout, without.stdout)
+        self.assertNotIn('yomiyasu', with_tool.stdout)
+
+
+class YomiyasuPathTest(unittest.TestCase):
+    """design_record.yomiyasu_path: agents.json の tools.yomiyasu.path、無ければプラグインのキャッシュのいちばん新しい版。"""
+
+    def setUp(self):
+        self.dir = os.path.join(tempfile.gettempdir(), f'yomiyasu-path-{uuid.uuid4().hex}')
+        self.home = os.path.join(self.dir, 'home')
+        self.plugins = os.path.join(self.dir, 'plugins')
+        os.makedirs(self.home)
+        os.makedirs(self.plugins)
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        sys.path.insert(0, HERE)
+        self.addCleanup(sys.path.remove, HERE)
+        import design_record
+        self.module = design_record
+
+    def cache(self, version):
+        path = os.path.join(self.plugins, 'cache', 'yomiyasu', 'yomiyasu', version, 'scripts', 'yomiyasu_lint.py')
+        os.makedirs(os.path.dirname(path))
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('')
+        return path
+
+    def find(self):
+        found = self.module.yomiyasu_path(home=self.home, env={'PBI_PLUGINS_DIR': self.plugins})
+        return None if found is None else os.path.normpath(str(found))
+
+    def test_nothing_found_is_none(self):
+        self.assertIsNone(self.find())
+
+    def test_the_highest_cached_version_wins_by_number(self):
+        self.cache('2.9.0')
+        newest = self.cache('2.10.0')
+        self.cache('2.2.5')
+        self.assertEqual(self.find(), os.path.normpath(newest))
+
+    def test_a_version_folder_without_the_script_is_skipped(self):
+        older = self.cache('2.1.0')
+        os.makedirs(os.path.join(self.plugins, 'cache', 'yomiyasu', 'yomiyasu', '3.0.0'))
+        self.assertEqual(self.find(), os.path.normpath(older))
+
+    def test_agents_json_wins_when_the_file_exists(self):
+        self.cache('2.3.0')
+        with open(os.path.join(self.home, 'agents.json'), 'w', encoding='utf-8') as f:
+            json.dump({'tools': {'yomiyasu': {'path': FAKE_YOMIYASU}}}, f)
+        self.assertEqual(self.find(), os.path.normpath(FAKE_YOMIYASU))
+
+    def test_agents_json_pointing_nowhere_falls_back_to_the_cache(self):
+        cached = self.cache('2.3.0')
+        with open(os.path.join(self.home, 'agents.json'), 'w', encoding='utf-8') as f:
+            json.dump({'tools': {'yomiyasu': {'path': os.path.join(self.dir, 'gone.py')}}}, f)
+        self.assertEqual(self.find(), os.path.normpath(cached))
+
+    def test_lint_text_never_runs_yomiyasu(self):
+        dump = os.path.join(self.dir, 'dump.json')
+        with open(os.path.join(self.home, 'agents.json'), 'w', encoding='utf-8') as f:
+            json.dump({'tools': {'yomiyasu': {'path': FAKE_YOMIYASU}}}, f)
+        saved = {key: os.environ.get(key) for key in ('ATELIER_HOME', 'FAKE_YOMIYASU_DUMP')}
+        os.environ.update(ATELIER_HOME=self.home, FAKE_YOMIYASU_DUMP=dump)
+
+        def restore():
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        self.addCleanup(restore)
+        with open(os.path.join(FIXTURES, 'approve-good.md'), encoding='utf-8') as f:
+            self.module.lint_text(f.read(), 'approve')
+        self.assertFalse(os.path.exists(dump))
+
+
+QUESTION_KINDS = ('decision', 'send-approval', 'rework-limit', 'destructive', 'full-run', 'handoff-loop',
+                  'launch-failure')
+
+
+class QuestionDraftLintTest(unittest.TestCase):
+    """design_record.py lint --kind <kind>: 問いの原稿の 6 つの節・図・ask を点検する。--kind を省くと承認の点検。"""
+
+    def setUp(self):
+        self.dir = os.path.join(tempfile.gettempdir(), f'question-lint-{uuid.uuid4().hex}')
+        os.makedirs(self.dir)
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        with open(os.path.join(FIXTURES, 'question-good.md'), encoding='utf-8') as f:
+            self.good = f.read()
+        # 本物の home・プラグイン・送り手の設定に触れさせない
+        self.env = dict(os.environ, ATELIER_HOME=os.path.join(self.dir, 'home'),
+                        PBI_PLUGINS_DIR=os.path.join(self.dir, 'plugins'),
+                        HARNESS_LOG_CONFIG=os.path.join(self.dir, 'no-harness-log.json'),
+                        ATELIER_EVENTS_SETTLE='off', ATELIER_EVENTS_QUIET='1')
+
+    def lint(self, text, *extra, kind='decision'):
+        path = os.path.join(self.dir, 'question.md')
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            f.write(text)
+        args = ['--kind', kind] if kind else []
+        result = subprocess.run([sys.executable, SCRIPT, 'lint', '--draft', path, *args, *extra],
+                                capture_output=True, env=self.env)
+        return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode('utf-8'),
+                                           result.stderr.decode('utf-8', errors='replace'))
+
+    def line_of(self, text, needle):
+        return text.split('\n').index(needle) + 1
+
+    def assert_error(self, text, line, word, kind='decision'):
+        result = self.lint(text, kind=kind)
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        errors = [row for row in result.stderr.splitlines() if row.startswith('✗ L')]
+        self.assertTrue(any(row.startswith(f'✗ L{line} ') and word in row for row in errors),
+                        f'no "✗ L{line} … {word}" in:\n{result.stderr}')
+        return result
+
+    def replace_section(self, heading, next_heading, body):
+        start, end = self.good.index(heading), self.good.index(next_heading)
+        return self.good[:start] + body + self.good[end:]
+
+    def ask_close(self, text):
+        """ask の囲みを閉じる行の位置 (文字の位置)。"""
+        start = text.index('```ask\n')
+        return text.index('\n```\n', start) + 1
+
+    def test_a_longer_closing_fence_closes_the_block(self):
+        # 結論の callout を ```` で閉じる。閉じないと、あとの必ずの節が囲みの中に消える
+        start = self.good.index('```callout')
+        at = self.good.index('\n```\n', start) + 1
+        text = self.good[:at] + '````' + self.good[at + 3:]
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_an_unclosed_ask_at_the_end_is_an_error(self):
+        at = self.ask_close(self.good)
+        text = self.good[:at]  # 4 つの必ずの節だけで、最後の ask の閉じが無い
+        self.assert_error(text, self.line_of(text, '```ask'), '閉じていない')
+
+    def test_good_draft_passes_for_every_kind(self):
+        for kind in QUESTION_KINDS:
+            with self.subTest(kind=kind):
+                result = self.lint(self.good, kind=kind)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('✗', result.stderr)
+                self.assertNotIn('! L', result.stderr)
+                self.assertTrue(result.stdout.startswith('ok\t'), result.stdout)
+
+    def test_crlf_draft_passes(self):
+        self.assertEqual(self.lint(self.good.replace('\n', '\r\n')).returncode, 0)
+
+    def test_unknown_kind_is_refused(self):
+        self.assertNotEqual(self.lint(self.good, kind='bogus').returncode, 0)
+
+    def test_kind_approve_runs_the_approval_rules(self):
+        result = self.lint(self.good, kind='approve')
+        self.assertEqual(result.returncode, 6, result.stderr)
+        self.assertIn('承認の原稿', result.stderr)
+
+    def test_without_kind_the_approval_rules_run(self):
+        result = self.lint(self.good, kind=None)
+        self.assertEqual(result.returncode, 6, result.stderr)
+        self.assertIn('in the approval draft', result.stderr)
+        self.assertNotIn('question draft', result.stderr)
+
+    def test_approval_draft_passes_without_kind(self):
+        with open(os.path.join(FIXTURES, 'approve-good.md'), encoding='utf-8') as f:
+            result = self.lint(f.read(), kind=None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_approval_draft_with_none_decisions_still_passes_as_approve(self):
+        with open(os.path.join(FIXTURES, 'approve-good.md'), encoding='utf-8') as f:
+            good = f.read()
+        start, end = good.index('## 決めること'), good.index('## PBI')
+        result = self.lint(good[:start] + '## 決めること\nなし\n\n' + good[end:], kind='approve')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_error_trailer_names_the_question_draft(self):
+        text = self.replace_section('## 決めること', '## 判断の材料', '## 決めること\nなし\n\n')
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 6)
+        self.assertIn('errors in the question draft', result.stderr)
+        self.assertNotIn('approval draft', result.stderr)
+
+    def test_missing_required_section_is_an_error(self):
+        text = self.replace_section('## 今の流れ', '## 答えたあとの流れ', '')
+        self.assert_error(text, self.line_of(text, '## 答えたあとの流れ'), '今の流れ')
+
+    def test_missing_summary_is_an_error(self):
+        text = self.replace_section('## 結論', '## 今の流れ', '')
+        self.assert_error(text, self.line_of(text, '## 今の流れ'), '結論')
+
+    def test_sections_out_of_order_is_an_error(self):
+        start, end = self.good.index('## 今の流れ'), self.good.index('## 答えたあとの流れ')
+        text = self.good[:start] + self.good[end:self.good.index('## 決めること')] + self.good[start:end] \
+            + self.good[self.good.index('## 決めること'):]
+        self.assert_error(text, self.line_of(text, '## 今の流れ'), '順')
+
+    def test_optional_sections_out_of_order_is_an_error(self):
+        start, end = self.good.index('## 判断の材料'), self.good.index('## 影響範囲')
+        text = self.good[:start] + self.good[end:] + '\n' + self.good[start:end]
+        self.assert_error(text, self.line_of(text, '## 判断の材料'), '順')
+
+    def test_duplicate_section_is_an_error(self):
+        text = self.good + '\n## 影響範囲\nもう 1 つ。\n'
+        rows = text.split('\n')
+        self.assert_error(text, rows.index('もう 1 つ。'), '2 つ')
+
+    def test_other_sections_are_errors(self):
+        for heading in ('## PBI', '## PBIs', '## 作る人と見直し', '## Who builds', '## 段ごとの記録'):
+            with self.subTest(heading=heading):
+                text = self.good + f'\n{heading}\n| PBI | 何をするか |\n|---|---|\n'
+                self.assert_error(text, self.line_of(text, heading), heading[3:])
+
+    def test_pbi_table_header_rule_is_not_applied(self):
+        text = self.good.replace('| 置き場所 | 見られる人 | 差分 |', '| 題 | 段 | route の先頭 |')
+        self.assertEqual(self.lint(text).returncode, 0)
+
+    def test_optional_sections_can_be_omitted(self):
+        text = self.good[:self.good.index('## 判断の材料')]
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        only_impact = self.replace_section('## 判断の材料', '## 影響範囲', '')
+        self.assertEqual(self.lint(only_impact).returncode, 0)
+
+    def test_before_without_a_diagram_is_an_error(self):
+        text = self.replace_section('## 今の流れ', '## 答えたあとの流れ', '## 今の流れ\nチャットに一覧を出している。\n\n')
+        self.assert_error(text, self.line_of(text, '## 今の流れ'), '図')
+
+    def test_empty_after_diagram_is_an_error(self):
+        text = self.replace_section('## 答えたあとの流れ', '## 決めること', '## 答えたあとの流れ\n```flow\n```\n\n')
+        self.assert_error(text, self.line_of(text, '## 答えたあとの流れ'), '図')
+
+    def test_other_diagram_kinds_pass(self):
+        for kind, body in (('tree', 'docs/\n  pbi/'), ('er', 'PBI ||--o{ 作業票'), ('sequence', '設計者 -> 利用者: 聞く')):
+            with self.subTest(kind=kind):
+                text = self.replace_section('## 今の流れ', '## 答えたあとの流れ', f'## 今の流れ\n```{kind}\n{body}\n```\n\n')
+                self.assertEqual(self.lint(text).returncode, 0)
+
+    def test_after_without_marks_or_labels_is_an_error(self):
+        text = self.replace_section('## 答えたあとの流れ', '## 決めること',
+                                    '## 答えたあとの流れ\n```flow\n(設計者が図を描く) -> 図の置き場所を決める\n```\n\n')
+        self.assert_error(text, self.line_of(text, '## 答えたあとの流れ'), '印')
+
+    def test_after_with_only_edge_labels_passes(self):
+        for edge in ('{置くか} -> リポジトリの中に保存する: 中に置く', '{置くか} -|中に置く|-> リポジトリの中に保存する'):
+            with self.subTest(edge=edge):
+                text = self.replace_section('## 答えたあとの流れ', '## 決めること',
+                                            f'## 答えたあとの流れ\n```flow\n{edge}\n{{置くか}} -> 外に置く: 外に置く\n```\n\n')
+                result = self.lint(text)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_after_with_only_change_marks_passes(self):
+        text = self.replace_section('## 答えたあとの流れ', '## 決めること',
+                                    '## 答えたあとの流れ\n```flow\n+ 設計者が図を描く -> 中に保存する\n~ 承認する\n```\n\n')
+        self.assertEqual(self.lint(text).returncode, 0)
+
+    def test_change_marks_outside_the_after_diagram_do_not_count(self):
+        text = self.replace_section('## 答えたあとの流れ', '## 決めること',
+                                    '## 答えたあとの流れ\n+ 文の中の印の行\n```flow\n図の置き場所を決める -> 保存する\n```\n\n')
+        self.assert_error(text, self.line_of(text, '## 答えたあとの流れ'), '印')
+
+    def test_before_diagram_needs_no_marks(self):
+        self.assertEqual(self.lint(self.good).returncode, 0)
+
+    def test_no_decisions_is_an_error(self):
+        text = self.replace_section('## 決めること', '## 判断の材料', '## 決めること\n\n')
+        self.assert_error(text, self.line_of(text, '## 決めること'), 'ask')
+
+    def test_none_decisions_is_an_error(self):
+        for word in ('なし', 'None', 'none', '- なし'):
+            with self.subTest(word=word):
+                text = self.replace_section('## 決めること', '## 判断の材料', f'## 決めること\n{word}\n\n')
+                self.assert_error(text, self.line_of(text, '## 決めること'), 'ask')
+
+    def test_option_without_a_note_is_an_error(self):
+        text = self.good.replace('- リポジトリの外 | 差分は出ない。図を見るには別の場所へ行く', '- リポジトリの外')
+        self.assert_error(text, self.line_of(text, '- リポジトリの外'), '|')
+
+    def test_blank_note_is_an_error(self):
+        text = self.good.replace('- リポジトリの外 | 差分は出ない。図を見るには別の場所へ行く', '- リポジトリの外 |  ')
+        self.assert_error(text, self.line_of(text, '- リポジトリの外 |  '), '|')
+
+    def test_ask_without_options_is_an_error(self):
+        text = self.replace_section('## 決めること', '## 判断の材料', '## 決めること\n```ask\n置き場所は?\n```\n\n')
+        self.assert_error(text, self.line_of(text, '```ask'), '選択肢')
+
+    def test_ask_fence_the_reply_check_cannot_read_is_an_error(self):
+        text = self.good.replace('```ask', '~~~ask').replace('差分は出ない。図を見るには別の場所へ行く\n```',
+                                                          '差分は出ない。図を見るには別の場所へ行く\n~~~')
+        self.assert_error(text, self.line_of(text, '~~~ask'), '~~~ask')
+
+    def test_ask_outside_decisions_is_an_error(self):
+        ask = '```ask\n点検しますか\n* する | 時間がかかる\n- しない | 速い\n```\n'
+        text = self.good.replace('## 影響範囲\n', '## 影響範囲\n' + ask)
+        self.assert_error(text, self.line_of(text, '## 影響範囲') + 1, '決めること')
+
+    def test_every_error_is_listed_at_once(self):
+        text = self.good.replace('- リポジトリの外 | 差分は出ない。図を見るには別の場所へ行く', '- リポジトリの外')
+        text = text.replace('+ 図の置き場所を決める -> リポジトリの中に保存する\n+ リポジトリの中に保存する -> 利用者が承認する\n'
+                            '- 図をページに埋め込む -> 利用者が承認する\n', '')
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 6)
+        self.assertEqual(len([row for row in result.stderr.splitlines() if row.startswith('✗ L')]), 2, result.stderr)
+        self.assertEqual(result.stderr.count('  例: '), 2, result.stderr)
+
+    def test_english_headings_pass(self):
+        names = {'## 結論': '## Summary', '## 今の流れ': '## Before', '## 答えたあとの流れ': '## After',
+                 '## 決めること': '## Decisions', '## 判断の材料': '## Details', '## 影響範囲': '## Impact'}
+        text = self.good
+        for ja, en in names.items():
+            text = text.replace(ja, en)
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_panel_id_and_attributes_are_ignored(self):
+        self.assertEqual(self.lint(self.good.replace('## 結論', '## A 結論 {span=2}')).returncode, 0)
+
+    def test_new_internal_terms_are_warnings(self):
+        terms = ('rework-limit', 'send-approval', 'full-run', 'handoff-loop', 'launch-failure', 'no-agent-tool',
+                 'grill', 'stale')
+        for term in terms:
+            with self.subTest(term=term):
+                for sentence in (f'{term} を使う。', f'{term}の問い。'):
+                    text = self.good.replace('## 判断の材料\n', f'## 判断の材料\n{sentence}\n')
+                    result = self.lint(text)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    line = self.line_of(text, sentence)
+                    self.assertTrue(any(row.startswith(f'! L{line} {term} ') for row in result.stderr.splitlines()),
+                                    f'no warning for {term}:\n{result.stderr}')
+
+    def test_kind_names_that_are_plain_words_are_not_warned(self):
+        text = self.good.replace('承認の図を、', 'approve と decision と destructive を使う承認の図を、')
+        self.assertNotIn('! L', self.lint(text).stderr)
+
+    def test_hyphenated_term_inside_a_longer_word_is_not_warned(self):
+        text = self.good.replace('承認の図を、', 'prefull-runner と grilled と staleness の図を、')
+        self.assertNotIn('! L', self.lint(text).stderr)
+
+    def test_new_internal_terms_also_warn_in_approval_drafts(self):
+        with open(os.path.join(FIXTURES, 'approve-good.md'), encoding='utf-8') as f:
+            good = f.read()
+        path = os.path.join(self.dir, 'approve.md')
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            f.write(good.replace('## 結論\n', '## 結論\nrework-limit に当たった。\n', 1))
+        result = subprocess.run([sys.executable, SCRIPT, 'lint', '--draft', path], capture_output=True, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('rework-limit', result.stderr.decode('utf-8', errors='replace'))
+
+    def test_lint_text_returns_errors_and_warnings(self):
+        sys.path.insert(0, HERE)
+        self.addCleanup(sys.path.remove, HERE)
+        import design_record
+        errors, warnings = design_record.lint_text(self.good, 'decision')
+        self.assertEqual((errors, warnings), ([], []))
+        errors, warnings = design_record.lint_text(self.good.replace('承認の図を、', 'grill の承認の図を、'), 'send-approval')
+        self.assertEqual(errors, [])
+        self.assertEqual([w[1] for w in warnings], ['grill'])
+        errors, _ = design_record.lint_text(self.good.replace('```ask', '```text'), 'decision')
+        self.assertTrue(errors and all(len(e) == 3 for e in errors))
+        errors, _ = design_record.lint_text(self.good)
+        self.assertTrue(errors, 'the default kind is approve: a question draft is not an approval draft')
+        with open(os.path.join(FIXTURES, 'approve-good.md'), encoding='utf-8') as f:
+            self.assertEqual(design_record.lint_text(f.read(), 'approve'), ([], []))
+
 
 if __name__ == '__main__':
     unittest.main()

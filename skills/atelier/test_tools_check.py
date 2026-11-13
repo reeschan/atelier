@@ -18,7 +18,7 @@ FAKE = os.path.join(HERE, 'testdata', 'fake_jevlint.py')
 FIXTURES = os.path.join(HERE, 'testdata', 'present')
 sys.path.insert(0, FIXTURES)
 import fakes  # noqa: E402
-TOOLS = ['omm', 'omm-scan', 'jevlint', 'jev', 'sac-strategic-compact',
+TOOLS = ['omm', 'omm-scan', 'jevlint', 'yomiyasu', 'jev', 'sac-strategic-compact',
          'principle-test-behavior-not-implementation', 'answer-me-with-any', 'node']
 SECRET = 'super-secret-jev-key'
 CONFIRM_OFF = 'confirm: off (the question file in chat, no reply check)'
@@ -165,6 +165,32 @@ class ToolsCheckTest(unittest.TestCase):
         self.assertEqual(row[1], 'old v18.19.0')
         self.assertIn('fnm install 22', row[2])
         self.assertIn(CONFIRM_OFF, row[3])
+
+
+    def test_yomiyasu_missing_gives_the_install_and_the_skip(self):
+        """yomiyasu が無いときは missing。入れ方は component.py と同じプラグインの入れ方、代わりは lint の点検を飛ばすこと。"""
+        row = self.rows()['yomiyasu']
+        self.assertEqual(row[1], 'missing')
+        self.assertIn('claude plugin marketplace add nanaism/yomiyasu', row[2])
+        self.assertIn('claude plugin install yomiyasu@yomiyasu --scope user', row[2])
+        self.assertIn('lint の yomiyasu の点検を飛ばす', row[3])
+
+    def test_yomiyasu_from_the_agents_json_path_before_the_cache(self):
+        """home の agents.json の tools.yomiyasu.path が有るファイルなら、キャッシュの版より先にそれを ok にする。"""
+        self.touch('home', 'yomiyasu_lint.py')
+        self.touch('plugins', 'cache', 'yomiyasu', 'yomiyasu', '2.10.0', 'scripts', 'yomiyasu_lint.py')
+        configured = os.path.join(self.dir, 'home', 'yomiyasu_lint.py')
+        with open(os.path.join(self.dir, 'home', 'agents.json'), 'w', encoding='utf-8') as f:
+            json.dump({'tools': {'yomiyasu': {'path': configured}}}, f)
+        self.assertEqual(self.rows()['yomiyasu'][1], f'ok {configured}')
+
+    def test_yomiyasu_from_the_plugin_cache_takes_the_newest_version(self):
+        """プラグインのキャッシュに版が 2 つあるとき、数で比べていちばん新しい版 (2.10.0 > 2.9.0) を ok にする。"""
+        self.touch('plugins', 'cache', 'yomiyasu', 'yomiyasu', '2.9.0', 'scripts', 'yomiyasu_lint.py')
+        self.touch('plugins', 'cache', 'yomiyasu', 'yomiyasu', '2.10.0', 'scripts', 'yomiyasu_lint.py')
+        newest = os.path.join(self.dir, 'plugins', 'cache', 'yomiyasu', 'yomiyasu', '2.10.0', 'scripts',
+                              'yomiyasu_lint.py')
+        self.assertEqual(self.rows()['yomiyasu'][1], f'ok {newest}')
 
 
 if __name__ == '__main__':
