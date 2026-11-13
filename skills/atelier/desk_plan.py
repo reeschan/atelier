@@ -174,8 +174,10 @@ class Recorder:
 
     def _read_regular(self, root: str, rel: str, path: Path, before) -> bytes:
         """ファイルを 1 回だけ開き、開いたハンドルで通常ファイルと確かめて同じハンドルから読む。
-        リンクをたどらず開き (O_NOFOLLOW があれば)、開く前の lstat と同じファイルでなければ終了 4。"""
-        flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+        リンクをたどらず開き (O_NOFOLLOW があれば)、開く前の lstat と同じファイルでなければ終了 4。
+        lstat の後に FIFO へ差し替えられても開く所で止まらないよう、ブロックしない形で開く (O_NONBLOCK があれば)。"""
+        flags = (os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+                 | getattr(os, 'O_NONBLOCK', 0))
         try:
             descriptor = os.open(path, flags)
             try:

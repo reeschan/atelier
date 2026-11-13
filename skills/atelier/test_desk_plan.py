@@ -935,5 +935,17 @@ class Rework4Test(Base):
         self.assertFalse((self.home / 'templates').exists())
 
 
+@unittest.skipUnless(hasattr(os, 'mkfifo'), 'FIFO を作れる OS だけ')
+class FifoTest(Base):
+    def test_fifo_swapped_in_after_lstat_is_rejected_without_blocking(self):
+        """lstat の後に FIFO へ差し替わった状態を再現する。書き手はいないので、ブロックして開くと止まる。"""
+        self.home.mkdir()
+        fifo = self.home / 'agents.json'
+        os.mkfifo(fifo)
+        recorder = desk_plan.Recorder(self.home)
+        with self.assertRaises(desk_validate.CallError):
+            recorder._read_regular('home', 'agents.json', fifo, os.lstat(fifo))
+
+
 if __name__ == '__main__':
     unittest.main()

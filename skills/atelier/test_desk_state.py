@@ -285,6 +285,11 @@ class StateTest(unittest.TestCase):
         (self.home / 'agents.json').mkdir()
         self.assertIn('agents.json', self.fails(4, '--home', self.home))
 
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'FIFO を作れる OS だけ')
+    def test_fifo_in_place_of_a_state_file_exits_four_without_blocking(self):
+        os.mkfifo(self.home / 'agents.json')  # 書き手はいない。ブロックして開くと止まる
+        self.assertIn('agents.json', self.fails(4, '--home', self.home))
+
     def test_invalid_template_name_with_broken_json_is_ignored(self):
         self.put('templates/Not_Valid.json', b'\xff')
         self.ok('--home', self.home)
