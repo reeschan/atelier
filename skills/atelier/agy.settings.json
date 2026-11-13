@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "command(*)"
+    ],
+    "deny": [
+      "command(regex:(.*[^A-Za-z0-9_-])?git +(commit|push|reset|rebase|checkout|switch|restore|stash|clean|merge|cherry-pick|tag|worktree)( .*)?)",
+      "command(regex:(.*[^A-Za-z0-9_-])?rm +-[A-Za-z]*r[A-Za-z]*f.*)",
+      "command(regex:(.*[^A-Za-z0-9_-])?rm +-[A-Za-z]*f[A-Za-z]*r.*)",
+      "command(regex:(.*[^A-Za-z0-9_-])?Remove-Item +.*-Recurse.*)"
+    ]
+  }
+}
