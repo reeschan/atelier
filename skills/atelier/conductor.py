@@ -49,11 +49,11 @@ import time
 import uuid
 from pathlib import Path
 
-import adapter_gate
-import agents as agents_module
 import common
+import agents as agents_module
 import claude_run
 import design_record
+import present
 import role_results
 import runner_cli
 
@@ -165,9 +165,7 @@ def emit(lines) -> None:
     print('\n'.join(lines))
 
 
-def quoted(path) -> str:
-    text = Path(path).as_posix()
-    return f'"{text}"' if ' ' in text else text
+quoted = common.quoted
 
 
 def command(*words) -> str:
@@ -954,37 +952,15 @@ def episode_line(item: dict) -> str:
     return line + (f" wave {item['wave']}" if item.get('wave') is not None else '')
 
 
-def confirm_line() -> str:
-    """問いの見せ方の 1 行。confirm のスキルが入っていれば auto でも必ずそれで見せる (SKILL.md の Questions)。"""
-    try:
-        settings, _warnings = agents_module.load_adapters(common.resolve_home(None))
-        skills = Path(os.environ.get('ATELIER_SKILLS_DIR') or Path.home() / '.claude' / 'skills')
-        _setting, kind, reason = adapter_gate.confirm_row(settings['confirm'], skills, os.environ)
-    except (OSError, KeyError, ValueError):
-        return 'confirm: chat'
-    if kind != 'skill':
-        return f'confirm: {kind}'
-    name = reason.split(' found at ', 1)[0]
-    if name == agents_module.CONFIRM_SKILL_OLD:
-        return f'confirm: skill {name} (warn: old name, install {agents_module.CONFIRM_SKILL} and remove it)'
-    return f'confirm: skill {name}'
+def present_line(q: dict) -> str:
+    """問いを見せる入口の 1 行。答えのコマンド (then・yes・approve など) は present.py の出力が出す。"""
+    return f"present: python {quoted(SKILL / 'present.py')} {quoted(str(q.get('path')))} --kind {q.get('kind')}"
 
 
 def question_lines(run: dict) -> list:
     q = run.get('question') or {}
     lines = ['state: question', f"question: {q.get('kind')} {q.get('path')}", f"summary: {fold(q.get('summary'), SUMMARY_MAX)}",
-             confirm_line()]
-    if q.get('kind') == 'full-run':
-        lines.append('yes: ' + command('answer', '--full-run', 'yes'))
-        lines.append('no: ' + command('answer', '--full-run', 'no'))
-    elif q.get('kind') == 'approve':
-        lines.append('then: ' + command('answer', '--reply', 'F'))
-        lines.append('approve: ' + command('answer', '--approve', '[--choices 1=a,2=b]'))
-        lines.append('revise: ' + command('answer', '--revise', '--text', '"..."'))
-    else:
-        lines.append('then: ' + command('answer', '--text', '"..."'))
-        if q.get('relaunch'):
-            lines.append('relaunch: ' + q['relaunch'])
+             present_line(q)]
     return with_warnings(lines, run.get('garbled') or [])
 
 
@@ -1563,14 +1539,10 @@ def last_handoff_state(run: dict, running: dict):
 
 
 def conductor_question(paths: Paths, run: dict, running: dict, kind: str, what: str, relaunch=None) -> tuple:
-    """進行役が作る問い (handoff-loop・launch-failure・decision)。説明を episodes/<seq>-<種類>.question.md に書く。
-    (終了コード, 出す行) を返す (出すのは呼び出し側)。"""
+    """進行役が作る問い (handoff-loop・launch-failure・decision)。説明だけを episodes/<seq>-<種類>.question.md に書く
+    (答えのコマンドは書かない。答えの行は present.py が出す)。(終了コード, 出す行) を返す (出すのは呼び出し側)。"""
     path = paths.episode_file(running.get('seq'), kind, '.question.md')
-    lines = [f'# Conductor question: {kind}', '', what, '', 'Next:',
-             '- ' + command('answer', '--text', '"..."') + '  (the same episode starts again with Answer:)']
-    if relaunch:
-        lines.append(f'- {relaunch}  (run the episodes headless)')
-    lines.append('- ' + command('abort') + '  (close the run)')
+    lines = [f'# Conductor question: {kind}', '', what]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='\n')
     topic = 'headless' if kind == 'decision' else 'other'
@@ -1675,6 +1647,11 @@ def _process_done(paths: Paths, run: dict) -> tuple:
     summary = data.get('summary')
     if errors:
         return fail(paths, run, running, '; '.join(errors), 'invalid', summary)
+    absent = missing_for_done(data)
+    if absent:
+        code, lines = fail(paths, run, running, f'missing {absent}', 'invalid', summary)
+        # 状態の扱いは fail と同じ。launch-failure の問いになったときはその行を返し、そうでなければ exit 2 の 1 行
+        return (EXIT_USAGE, [f'error: missing {absent}']) if code == EXIT_FAIL else (code, lines)
     stale = stale_envelope(data) or grill_open(paths, run, data)
     if stale:
         return fail(paths, run, running, stale, 'invalid', summary)
@@ -1690,10 +1667,104 @@ def _process_done(paths: Paths, run: dict) -> tuple:
 DRAFT_HASH = re.compile(r'^reply-meta-draft_hash:\s*(\S+)\s*$', re.M)
 
 
+def _approve_question(data: dict) -> dict | None:
+    """出番が承認 (approve) の問いで終わるなら、その question。そうでなければ None。
+    design だけでなく、build の出番の再承認 (designer.md) も同じ扱いにする。"""
+    question = data.get('question') if isinstance(data.get('question'), dict) else {}
+    if data.get('status') == 'question' and question.get('kind') == 'approve':
+        return question
+    return None
+
+
+def _needs_draft_meta(data: dict) -> bool:
+    """承認の原稿に check と照合情報を求めるか: approve の問いで終わる出番で、confirm の設定が off でない。"""
+    if _approve_question(data) is None:
+        return False
+    return not confirm_off()
+
+
+def _needs_no_check(data: dict) -> bool:
+    """承認の問いに check を付けさせないか: approve の問いで終わる出番で、confirm の設定が off。"""
+    if _approve_question(data) is None:
+        return False
+    return confirm_off()
+
+
+def confirm_off() -> bool:
+    """confirm の設定が off か。設定が読めなければ既定 (html) とみなして False (done も answer も止めない)。"""
+    try:
+        settings, _warnings = agents_module.load_adapters(common.resolve_home(None))
+    except Exception:
+        return False
+    return settings.get('confirm') == 'off'
+
+
+def _draft_meta_missing(data: dict) -> bool:
+    """承認の問いの check が design-record でない、原稿が読めない、または reply-meta-draft_hash の行が無ければ True。"""
+    question = _approve_question(data) or {}
+    if question.get('check') != 'design-record':
+        return True
+    try:
+        draft = Path(question.get('path')).read_text(encoding='utf-8')
+    except (OSError, TypeError, ValueError):
+        return True
+    return DRAFT_HASH.search(design_record.normalize(draft)) is None
+
+
+def _draft_meta_name(data: dict) -> str:
+    path = (_approve_question(data) or {}).get('path')
+    return f'approve draft check design-record and reply-meta (run design_record.py markdown last): {path}'
+
+
+def _check_present(data: dict) -> bool:
+    """承認の問いに check が付いていれば True (confirm が off のときは付けない)。"""
+    return bool((_approve_question(data) or {}).get('check'))
+
+
+def _check_present_name(data: dict) -> str:
+    path = (_approve_question(data) or {}).get('path')
+    return f'approve question with no check (confirm is off, so drop check): {path}'
+
+
+def _is_finish_done(data: dict) -> bool:
+    return data.get('episode') == 'finish' and data.get('status') == 'done'
+
+
+def _report_missing(data: dict) -> bool:
+    """完了報告のファイルが無く、report_body も無ければ True。"""
+    try:
+        if Path(data.get('report')).is_file():
+            return False
+    except (TypeError, ValueError, OSError):
+        pass
+    body = data.get('report_body')
+    return not isinstance(body, str) or not body.strip()
+
+
+# done で揃っているべきもの: (当てはまる出番の条件, 欠けているかを調べる関数, `error: missing` のあとに出す名前)。
+# 欠けていれば done は exit 2 と `error: missing <名前>` の 1 行で拒まれる (docs/adr/0002 precondition over prose)
+DONE_REQUIRES = (
+    (_needs_draft_meta, _draft_meta_missing, _draft_meta_name),
+    (_needs_no_check, _check_present, _check_present_name),
+    (_is_finish_done, _report_missing, lambda data: 'completion report (docs/pbi/REPORT.md or report_body)'),
+)
+
+
+def missing_for_done(data: dict) -> str:
+    """DONE_REQUIRES で最初に欠けているものの名前。揃っていれば空。"""
+    for applies, missing, name in DONE_REQUIRES:
+        if applies(data) and missing(data):
+            return name(data)
+    return ''
+
+
 def stale_envelope(data: dict) -> str:
     """check が design-record の承認の問いで、下書きの封筒の draft_hash が今の中身と合わなければ、その説明。
 
     封筒を付けたあとで中身を書き換えると、ユーザーの返信がどれも check-reply で弾かれる。合っていれば空。
+    DONE_REQUIRES が先に保証すること: confirm が off でなければ、approve の問いは check design-record で、原稿は読めて
+    reply-meta-draft_hash の行がある。confirm が off なら、approve の問いに check は無い (ここへは来ない)。
+    ここで見るのは hash の不一致だけ (読めない・hash が無いときは空を返す)。
     """
     question = data.get('question') if isinstance(data.get('question'), dict) else {}
     if data.get('status') != 'question' or question.get('kind') != 'approve' or question.get('check') != 'design-record':
@@ -1702,10 +1773,10 @@ def stale_envelope(data: dict) -> str:
     try:
         draft = Path(path).read_text(encoding='utf-8')
     except (OSError, TypeError, ValueError):
-        return f'approve draft not readable: {path}'
+        return ''
     match = DRAFT_HASH.search(design_record.normalize(draft))
     if match is None:
-        return f'approve draft has no reply-meta-draft_hash: {path} (design_record.py markdown adds the envelope)'
+        return ''
     if match.group(1) != design_record.draft_hash(draft):
         return (f'approve draft changed after its envelope: {path} (reply-meta-draft_hash does not match; '
                 'add the envelope last, with design_record.py markdown)')
@@ -1793,10 +1864,8 @@ def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -
     elif episode == 'finish':
         report = Path(data['report'])
         if not report.is_file():
-            body = data.get('report_body')
-            if not isinstance(body, str) or not body.strip():
-                return fail(paths, run, running, f"completion report not found: {data['report']} "
-                            '(write it, or give its text in report_body)', 'invalid', summary)
+            # 報告も report_body も無い done は DONE_REQUIRES が先に拒んでいる
+            body = data['report_body']
             # サブエージェントが報告の .md を書けないとき、本文を受けて conductor が書く
             report.parent.mkdir(parents=True, exist_ok=True)
             report.write_text(body if body.endswith('\n') else body + '\n', encoding='utf-8', newline='\n')
@@ -1972,7 +2041,45 @@ def approvals_size(paths: Paths) -> int:
         return 0
 
 
-def checked_reply(paths: Paths, run: dict, q: dict, answer: Path):
+def reply_draft(paths: Paths, run: dict, q: dict) -> str:
+    """答えの下書き: present が残した今の run の原稿があればそれ、無ければ問いのパス。"""
+    saved = present.saved_draft(paths.base, q.get('seq'), q.get('kind'), run_id=run.get('run_id'))
+    return str(saved) if saved is not None else str(q['path'])
+
+
+def reply_meta(text: str):
+    """返事の末尾の am-reply-meta の囲みの中の JSON。囲みが無い・JSON のオブジェクトでないなら None。"""
+    _, raw = design_record.split_reply(text)
+    if raw is None:
+        return None
+    try:
+        meta = json.loads(raw)
+    except ValueError:
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
+def meta_mismatches(paths: Paths, run: dict, q: dict, meta: dict) -> list:
+    """approve 以外の返事の照合情報で、今の問いと合わない項目の名前 (run_id・seq・kind・draft_hash の順)。
+
+    期待値は run.json の run_id (無ければ none)・問いの seq・kind・present の原稿の reply-meta-draft_hash。
+    原稿が無い・hash の行が無ければ draft_hash は不一致。
+    """
+    expected_hash = None
+    saved = present.saved_draft(paths.base, q.get('seq'), q.get('kind'), run_id=run.get('run_id'))
+    if saved is not None:
+        try:
+            found = DRAFT_HASH.search(design_record.normalize(saved.read_text(encoding='utf-8-sig', errors='replace')))
+        except OSError:
+            found = None
+        expected_hash = found.group(1) if found else None
+    run_id = run.get('run_id')
+    expected = {'run_id': 'none' if run_id is None else str(run_id), 'seq': str(q.get('seq')),
+                'kind': str(q.get('kind')), 'draft_hash': expected_hash}
+    return [name for name, value in expected.items() if value is None or meta.get(name) != value]
+
+
+def checked_reply(paths: Paths, run: dict, q: dict, answer: Path, draft=None):
     """check-reply を呼ぶ。0 なら design-approvals.jsonl に 1 行足される。
 
     呼ぶ前に、答えの中身のハッシュと approvals の大きさを run.json に残す。前の answer が check-reply の
@@ -1985,7 +2092,7 @@ def checked_reply(paths: Paths, run: dict, q: dict, answer: Path):
         return 0, 'already recorded in design-approvals.jsonl'
     q['checking'] = {'sha256': digest, 'approvals_size': approvals_size(paths)}
     save(paths, run)
-    return check_reply(paths, answer, q['path'])
+    return check_reply(paths, answer, draft or q['path'])
 
 
 def full_run_token(paths: Paths) -> Path:
@@ -2018,17 +2125,41 @@ def cmd_answer(args, paths: Paths) -> int:
         if (args.full_run is not None) != (kind == 'full-run'):
             raise Refused('--full-run answers only a full-run question, and a full-run question takes only '
                           f'--full-run (this one is {kind})')
+        if not confirm_off() and not present.shown(paths.base, run.get('run_id'), q['seq'], kind=kind):
+            # 見せていない問いへの答えは受けない。state 行は付けない (Refused を使わない)
+            emit([f"error: not shown: run python {quoted(SKILL / 'present.py')} {quoted(str(q.get('path')))} "
+                  f'--kind {kind} first'])
+            return EXIT_USAGE
+        draft = reply_draft(paths, run, q)
         answer = paths.answers / f"{q['seq']}-{kind}.md"
         answer.parent.mkdir(parents=True, exist_ok=True)
+        check = 'none'
         if args.approve:
-            answer.write_text(approve_reply(q['path'], choices), encoding='utf-8', newline='\n')
+            reply_text = approve_reply(draft, choices)
+            answer.write_text(reply_text, encoding='utf-8', newline='\n')
         elif args.reply is not None:
+            try:
+                reply_text = Path(args.reply).read_bytes().decode('utf-8-sig', errors='replace')
+            except OSError as error:
+                raise Refused(f'{args.reply}: {error}')
+            if kind != 'approve':
+                # approve 以外は、返事の照合情報を今の問いと present の原稿に照らす。囲みが無ければ --text と同じ
+                meta = reply_meta(reply_text)
+                if meta is not None:
+                    problems = meta_mismatches(paths, run, q, meta)
+                    if problems:
+                        answer.unlink(missing_ok=True)  # 古いページ・別の問いへの返事は答えにしない
+                        present.log_answered(paths.base, run.get('run_id'), q['seq'], kind, reply_text, 'mismatch')
+                        emit([f"check: mismatch {', '.join(problems)}"])
+                        return design_record.EXIT_MISMATCH
+                    check = 'ok'
             try:
                 shutil.copyfile(args.reply, answer)
             except OSError as error:
                 raise Refused(f'{args.reply}: {error}')
         elif args.full_run is not None:
-            answer.write_text(f'full-run: {args.full_run}\n', encoding='utf-8', newline='\n')
+            reply_text = f'full-run: {args.full_run}\n'
+            answer.write_text(reply_text, encoding='utf-8', newline='\n')
             # 「はい」は 1 回の通しで使い切る: verify.py --final が読んで消す。「いいえ」は前の「はい」も消す
             token = full_run_token(paths)
             if args.full_run == 'yes':
@@ -2036,10 +2167,11 @@ def cmd_answer(args, paths: Paths) -> int:
             else:
                 token.unlink(missing_ok=True)
         else:
-            text = args.text
-            answer.write_text(text if text.endswith('\n') else text + '\n', encoding='utf-8', newline='\n')
+            reply_text = args.text
+            answer.write_text(reply_text if reply_text.endswith('\n') else reply_text + '\n',
+                              encoding='utf-8', newline='\n')
         if kind == 'approve' and q.get('check') == 'design-record' and not args.revise:
-            code, last = checked_reply(paths, run, q, answer)
+            code, last = checked_reply(paths, run, q, answer, draft)
             if code in (3, 4, 5):
                 emit(['state: question', f'check-reply exit {code}', f'detail: {last[:300]}',
                       'approve: ' + command('answer', '--approve', '[--choices 1=a,2=b]'),
@@ -2047,6 +2179,7 @@ def cmd_answer(args, paths: Paths) -> int:
                 return EXIT_ASK
             if code != 0:
                 raise Refused(f'check-reply exit {code}: {last[:300]}')
+            check = 'ok'
         episode = 'design' if args.revise else q['episode']
         continue_from = q.get('state') if kind != 'approve' else None
         # 前の出番の state が無い conductor の問いの答えは、承認の答えと取り違えないよう別の行の名前で渡す
@@ -2064,6 +2197,7 @@ def cmd_answer(args, paths: Paths) -> int:
             run['handoff']['count'] = 0
         run['state'] = 'ready'
         save(paths, run)
+        present.log_answered(paths.base, run.get('run_id'), q['seq'], kind, reply_text, check)
     # check-reply が 3・4・5 で問いを残した道はここに来ない (question.answered を出さない)
     _emit_question_answered(paths, run, q, choices, bool(args.revise))
     emit([*ready_lines(run)[:2], f'answer: {answer.as_posix()}', 'then: ' + command('next')])
@@ -2098,7 +2232,7 @@ def status_lines(run: dict) -> list:
             lines += ['stale: no live runner', 'relaunch: ' + command('next', '--relaunch')]
     elif state == 'question':
         q = run.get('question') or {}
-        lines += [episode_line(q), f"question: {q.get('kind')} {q.get('path')}", confirm_line()]
+        lines += [episode_line(q), f"question: {q.get('kind')} {q.get('path')}", present_line(q)]
     elif state in ('ready', 'retry'):
         pending = run.get('pending') or {}
         lines.append(episode_line(dict(pending, seq=int(run.get('seq') or 0) + 1)))

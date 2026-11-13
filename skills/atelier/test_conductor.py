@@ -9,6 +9,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -16,6 +17,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -257,6 +259,18 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         return out
 
+    def show_question(self):
+        """待っている問いを呼び出し側と同じ手順で見せる: `status` の `present:` の行を動かす。"""
+        rc, out = self.con('status')
+        line = next(l for l in out.splitlines() if l.startswith('present: '))
+        words = shlex.split(line[len('present: '):])
+        if not os.path.isfile(self.path(words[2])):  # 設計者が問いのファイルを書いていない試験のため
+            self.write(words[2], '# question\n\nplaceholder\n')
+        p = subprocess.run(words, cwd=self.tmp, env=self.env, capture_output=True,
+                           timeout=120)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        return p.stdout.decode('utf-8', errors='replace')
+
     def answer_line(self, request):
         return next((line.split(':', 1)[1].split()[0] for line in request.splitlines()
                      if line.startswith('Answer:')), '')
@@ -333,6 +347,7 @@ class ConductorTest(unittest.TestCase):
         self.assertIn('question: decision', out)
         self.assertTrue(os.path.isfile(self.path(STATE)))
 
+        self.show_question()
         rc, out = self.con('answer', '--text', 'run it')
         self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
         rc, out = self.con('answer', '--text', 'twice')
@@ -345,6 +360,7 @@ class ConductorTest(unittest.TestCase):
         self.assertIn('question: approve', out)
 
         # 囲みの無い返信は check-reply 4 (どの版にも結ばない)
+        self.show_question()
         rc, out = self.con('answer', '--text', 'ok')
         self.assertEqual(rc, 10, out)
         self.assertIn('check-reply exit 4', out)
@@ -371,6 +387,7 @@ class ConductorTest(unittest.TestCase):
         meta, rc, out = self.ask_approve(out)
         self.assertEqual(rc, 10, out)
 
+        self.show_question()
         rc, out = self.con('answer', '--revise', '--text', 'split PBI-006 in two')
         self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
         run = self.read_json(RUN)
@@ -391,6 +408,7 @@ class ConductorTest(unittest.TestCase):
         meta, rc, out = self.ask_approve(out, ['1. [Q] Which model?', '2. [Q] Which runner?'])
         self.assertEqual(rc, 10, out)
 
+        self.show_question()
         rc, out = self.con('answer', '--approve', '--choices', '1=a,2=b')
         self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
         reply = self.read('docs/pbi/conductor/answers/1-approve.md')
@@ -467,6 +485,7 @@ class ConductorTest(unittest.TestCase):
         run = self.read_json(RUN)
         self.assertEqual(run['question']['kind'], 'handoff-loop')
         self.assertTrue(os.path.isfile(self.path(run['question']['path'])))
+        self.show_question()
         rc, out = self.con('answer', '--text', 'go on')
         self.assertEqual(rc, 0, out)
 
@@ -491,6 +510,7 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
         self.assertEqual(self.read_json(RUN)['question']['state'], STATE)
 
+        self.show_question()
         rc, out = self.con('answer', '--text', 'go on')
         self.assertEqual(rc, 0, out)
         rc, out = self.con('next')
@@ -515,6 +535,7 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.con('run', env=broken)  # 2 回続いた失敗
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
         self.assertIn('launch-failure', out)
+        self.show_question()
         rc, out = self.con('answer', '--text', 'again')
         self.assertEqual(rc, 0, out)
         self.assertIsNone(self.read_json(RUN).get('failures'))  # どの答えのあとも 0
@@ -530,6 +551,7 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.con('done')
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
         self.assertIsNone(self.read_json(RUN).get('failures'))
+        self.show_question()
         rc, out = self.con('answer', '--text', 'ok')
         self.assertEqual(rc, 0, out)
 
@@ -663,7 +685,10 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.con('done')
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
         self.assertIn('decision', out)
-        self.assertIn('run --launch headless --detach', out)
+        self.assertIn('present:', out)
+        shown = self.show_question()  # 起こし直しのコマンドは present の then: の行に出る
+        self.assertTrue(any(l.startswith('then: ') and 'run --launch headless --detach' in l and l.endswith('# relaunch')
+                            for l in shown.splitlines()), shown)
         rc, out = self.con('answer', '--text', 'use headless')
         self.assertEqual(rc, 0, out)
         rc, out = self.con('next', '--launch', 'headless')
@@ -858,6 +883,7 @@ class ConductorTest(unittest.TestCase):
         self.assertFalse(any(row['api_key_seen'] for row in rows))
         self.assertTrue(os.path.isfile(self.path('docs/pbi/conductor/episodes/1-design.json')))
 
+        self.show_question()
         rc, out = self.con('answer', '--text', 'yes')
         self.assertEqual(rc, 0, out)
         rc, out = self.con('run', '--max-episodes', '1')
@@ -933,8 +959,12 @@ class ConductorTest(unittest.TestCase):
         self.result(out, status='error', reason='no-agent-tool')
         rc, out = self.con('done')
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
-        self.assertIn('run --launch headless --detach', self.line(out, 'relaunch'))
+        self.assertNotIn('relaunch:', out)  # 起こし直しのコマンドは present の then: の行に移った
         self.assertEqual(self.read_json(RUN)['question']['kind'], 'decision')
+        shown = self.show_question()
+        self.assertTrue(any(l.startswith('then: ') and 'run --launch headless --detach' in l and l.endswith('# relaunch')
+                            for l in shown.splitlines()), shown)
+        self.assertNotIn('Next:', self.read(self.read_json(RUN)['question']['path']))
 
         rc, out = self.con('run', '--launch', 'headless', '--detach', env={'FAKE_DESIGNER_SLEEP': '3'})
         self.assertEqual((rc, out.splitlines()[0]), (0, 'state: running'), out)
@@ -1046,6 +1076,8 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
         self.assertIn('launch-failure', out)
         self.assertIsNone(self.read_json(RUN)['question']['state'])
+        self.assertNotIn('Next:', self.read(self.read_json(RUN)['question']['path']))
+        self.show_question()
         rc, out = self.con('answer', '--text', 'try again')
         self.assertEqual(rc, 0, out)
         rc, out = self.con('next')
@@ -1076,6 +1108,7 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
         self.assertIn('launch-failure', out)
         self.assertEqual(self.read_json(RUN)['question']['state'], STATE)
+        self.show_question()
         rc, out = self.con('answer', '--text', 'after handoff')
         self.assertEqual(rc, 0, out)
         rc, out = self.con('next')
@@ -1174,6 +1207,7 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.con('done')  # 2 回目: launch-failure
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
         self.assertEqual(self.read_json(RUN)['question']['sent_by'], 'review')
+        self.show_question()
         rc, out = self.con('answer', '--text', 'go')
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.read_json(RUN)['pending']['sent_by'], 'review')
@@ -1299,9 +1333,11 @@ class ConductorTest(unittest.TestCase):
         self.con('start', '--goal', 'busy', '--launch', 'headless')
         child = self.sleeping_child()
         self.headless_running(child.pid)
+        self.setup_approve()  # 承認の原稿は design_record.py markdown を通したもの (DONE_REQUIRES の approve の行を満たす)
         self.write('docs/pbi/conductor/episodes/1-design.result.json', json.dumps({
             'schema': 'atelier.episode/1', 'episode': 'design', 'seq': 1, 'status': 'question', 'summary': ['early'],
-            'question': {'kind': 'approve', 'path': 'docs/pbi/notes/a.md', 'summary': 'ok?'}}))
+            'question': {'kind': 'approve', 'path': 'docs/pbi/notes/approve.md', 'summary': 'ok?',
+                         'check': 'design-record'}}))
         rc, out = self.con('done')
         self.assertEqual((rc, out.splitlines()[0]), (2, 'state: running'), out)
         self.assertIn('wait', self.line(out, 'then'))
@@ -1429,6 +1465,7 @@ class ConductorTest(unittest.TestCase):
         meta, rc, out = self.ask_approve(out, asks)
         self.assertEqual(rc, 10, out)
 
+        self.show_question()
         rc, out = self.con('answer', '--approve')
         self.assertNotEqual(out.splitlines()[0], 'state: ready', out)
         self.assertEqual(self.approvals(), 0)
@@ -1588,6 +1625,7 @@ class ConductorTest(unittest.TestCase):
         for command in ('status', 'wait'):
             rc, out = self.con(command, *(['--timeout', '0'] if command == 'wait' else []))
             self.assertIn('warn garbled:', out, command)
+        self.show_question()
         self.con('answer', '--text', 'rewrite the files')
         rc, out = self.con('status')
         self.assertNotIn('warn garbled', out)
@@ -1606,6 +1644,7 @@ class ConductorTest(unittest.TestCase):
         self.con('start', '--goal', 'garbled run', '--launch', 'headless')
         rc, out = self.con('run')
         self.assertEqual(rc, 10, out)
+        self.show_question()
         self.con('answer', '--text', 'go')
         rc, out = self.con('run', env={'FAKE_SUMMARY': 'design ????????'})
         self.assertEqual(out.splitlines()[0], 'state: finished', out)
@@ -1718,8 +1757,18 @@ class ConductorTest(unittest.TestCase):
         out = self.go_to_finish('no report')
         self.result(out, status='done', next=None, report='docs/pbi/REPORT.md')
         rc, out = self.con('done')
-        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
-        self.assertIn('completion report not found', out)
+        self.assertEqual(rc, 2, out)
+        self.assertTrue(out.splitlines()[0].startswith('error: missing completion report'), out)
+        self.assertNotEqual(self.read_json(RUN)['state'], 'finished')
+        self.assertEqual(self.read_json(RUN)['state'], 'retry')  # 出番は作り直しで、失敗に数える
+        self.assertEqual(self.read_json(RUN)['failures']['count'], 1)
+
+        # 続けてもう 1 回拒まれると launch-failure の問い
+        rc, out = self.con('next')
+        self.result(out, status='done', next=None, report='docs/pbi/REPORT.md')
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+        self.assertEqual(self.read_json(RUN)['question']['kind'], 'launch-failure')
 
     def test_finish_writes_report_from_report_body(self):
         """サブエージェントが報告の .md を書けないときは、report_body の本文を conductor が書く。"""
@@ -1736,7 +1785,8 @@ class ConductorTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.tmp, 'docs', 'pbi', 'REPORT.md')))
         self.result(out, status='done', next=None, report='docs/pbi/REPORT.md')
         rc, out = self.con('done')
-        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertEqual(rc, 2, out)
+        self.assertTrue(out.splitlines()[0].startswith('error: missing completion report'), out)
 
     def test_finish_does_not_start_when_the_old_report_cannot_be_removed(self):
         """消せない古い REPORT.md (ここではディレクトリ) があれば、finish の出番を起こさずに止まる。"""
@@ -1803,6 +1853,7 @@ class ConductorTest(unittest.TestCase):
         self.result(out, status='question', state=STATE,
                     question={'kind': 'decision', 'path': 'docs/pbi/notes/grill-1.md', 'summary': 'round 1'})
         self.con('done')
+        self.show_question()
         rc, out = self.con('answer', '--text', 'Q1 yes; aligned')
         answer = self.answer_line_from(out)
         grill['rounds'][0]['questions'][0]['answered_in'] = answer
@@ -1820,22 +1871,150 @@ class ConductorTest(unittest.TestCase):
     def answer_line_from(self, out):
         return next(line.split(': ', 1)[1] for line in out.splitlines() if line.startswith('answer: '))
 
-    def test_question_shows_confirm_skill_and_old_name(self):
-        """問いの行に見せ方 (confirm) が出る。新しい名前を優先し、古い名前だけなら warn 付きで使う。"""
-        skills = os.path.join(self.tmp, 'skills')
-        env = {'ATELIER_SKILLS_DIR': skills}
-        self.con('start', '--goal', 'confirm')
+    QUESTION_LINE_GONE = ('confirm:', 'yes:', 'no:', 'then:', 'approve:', 'revise:', 'relaunch:')
+
+    def test_question_line_is_a_present_command_not_confirm(self):
+        """問いの行は `present: python <skill>/present.py <path> --kind <種類>` で、confirm の行は無い。"""
+        self.con('start', '--goal', 'present line')
         rc, out = self.con('next')
         rc, out = self.approve_result(out)
-        self.assertIn('confirm: chat', out)
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+        for text in (out, self.con('status')[1]):
+            line = self.line(text, 'present')
+            self.assertTrue(re.fullmatch(r'python \S*present\.py docs/pbi/notes/approve\.md --kind approve', line),
+                            text)
+            self.assertNotIn('confirm:', text)
+        self.assertNotIn('confirm', self.con('status')[1])
 
-        self.write_abs(os.path.join(skills, 'answer-me-with-html', 'SKILL.md'), '---\nname: old\n---\n')
-        rc, out = self.con('status', env=env)
-        self.assertIn('confirm: skill answer-me-with-html (warn: old name, install answer-me-with-any and remove it)', out)
-        self.write_abs(os.path.join(skills, 'answer-me-with-any', 'SKILL.md'), '---\nname: new\n---\n')
-        rc, out = self.con('status', env=env)
-        self.assertIn('confirm: skill answer-me-with-any', out)
-        self.assertNotIn('old name', out)
+    def test_next_done_status_question_lines(self):
+        """決定・通し・承認・進行役の決定の問いの next・done・status は、present の行だけを答えの入口にする。"""
+        def check(kind, out):
+            self.assertTrue(self.line(out, 'summary'), out)
+            for text in (out, self.con('status')[1], self.con('next')[1]):
+                for key in ('question', 'present'):
+                    self.assertTrue(self.line(text, key), f'{key} missing: {text}')
+                self.assertTrue(self.line(text, 'present').endswith(f'--kind {kind}'), text)
+                for gone in self.QUESTION_LINE_GONE:
+                    self.assertFalse(any(l.startswith(gone) for l in text.splitlines()), f'{gone} in {text}')
+
+        self.write(STATE, '# state\n')
+        self.con('start', '--goal', 'question lines')
+        rc, out = self.con('next')
+        self.result(out, status='question', state=STATE,
+                    question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
+        rc, out = self.con('done')
+        check('decision', out)
+        self.show_question()
+        self.con('answer', '--text', 'go')
+
+        rc, out = self.con('next')
+        self.result(out, status='question', state=STATE,
+                    question={'kind': 'full-run', 'path': 'docs/pbi/notes/full-run.md', 'summary': 'run all?'})
+        rc, out = self.con('done')
+        check('full-run', out)
+        self.show_question()
+        self.con('answer', '--full-run', 'no')
+
+        rc, out = self.con('next')
+        rc, out = self.approve_result(out)
+        check('approve', out)
+        self.show_question()
+        self.con('answer', '--approve')
+
+        self.con('start', '--goal', 'conductor question lines', '--force')
+        rc, out = self.con('next')
+        self.result(out, status='error', reason='no-agent-tool')
+        rc, out = self.con('done')
+        check('decision', out)
+
+    def test_conductor_question_file_has_no_answer_commands(self):
+        """進行役の問い (handoff-loop・launch-failure・no-agent-tool の decision) のファイルは題と説明だけ。"""
+        def check(kind):
+            q = self.read_json(RUN)['question']
+            self.assertEqual(q['kind'], kind)
+            text = self.read(q['path'])
+            self.assertTrue(text.startswith('# '), text)
+            self.assertTrue(text.split('\n\n', 1)[1].strip(), text)
+            self.assertNotIn('Next:', text)
+            self.assertNotIn('conductor.py', text)
+            self.assertNotIn(' answer ', text)
+
+        # handoff-loop
+        self.write('docs/pbi/STATUS.md', '# status\n')
+        self.write('docs/pbi/runs.jsonl', '')
+        self.write(STATE, '# state\n')
+        out = self.to_build()
+        for _ in range(4):
+            self.result(out, status='handoff', state=STATE)
+            rc, done = self.con('done')
+            if rc == 10:
+                break
+            rc, out = self.con('next')
+        self.assertEqual(rc, 10, done)
+        check('handoff-loop')
+        # launch-failure
+        self.con('start', '--goal', 'launch failure file', '--force')
+        self.con('next')
+        self.con('done')
+        self.con('next')
+        rc, out = self.con('done')
+        self.assertEqual(rc, 10, out)
+        check('launch-failure')
+        # no-agent-tool
+        self.con('start', '--goal', 'no agent tool file', '--force')
+        rc, out = self.con('next')
+        self.result(out, status='error', reason='no-agent-tool')
+        rc, out = self.con('done')
+        self.assertEqual(rc, 10, out)
+        check('decision')
+
+    def decision_question(self, goal='shown row'):
+        """待っている decision の問い (state 付き) を作る。"""
+        self.write(STATE, '# state\n')
+        self.write('docs/pbi/notes/q.md', '# 設計の問い\n\nどれにしますか?\n')
+        self.con('start', '--goal', goal, '--force')
+        rc, out = self.con('next')
+        self.result(out, status='question', state=STATE,
+                    question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+        return self.read_json(RUN)
+
+    def test_answer_without_a_shown_row_is_refused(self):
+        """見せた記録 (shown 行) の無い問いへの答えは exit 2 の 1 行で断り、問いは残る。別の seq・run の行は数えない。"""
+        run = self.decision_question()
+        rc, out = self.con('answer', '--text', 'x')
+        self.assertEqual(rc, 2, out)
+        self.assertEqual(len(out.strip().splitlines()), 1, out)
+        self.assertTrue(re.fullmatch(r'error: not shown: run python \S*present\.py docs/pbi/notes/q\.md '
+                                     r'--kind decision first', out.strip()), out)
+        self.assertFalse(os.path.exists(self.path('docs/pbi/conductor/answers/1-decision.md')))
+        self.assertNotIn('state:', out)
+        self.assertEqual(self.read_json(RUN)['state'], 'question')
+
+        # 別の seq・別の run_id・別の kind (同じ seq の完了報告など) の shown 行は数えない
+        def shown(seq, run_id, kind='decision'):
+            return json.dumps({'schema': 'atelier.presentation/1', 'event': 'shown', 'run_id': run_id, 'seq': seq,
+                               'kind': kind, 'format': 'off', 'reason': 'setting'}) + '\n'
+        log = 'docs/pbi/presentations.jsonl'
+        self.assertFalse(os.path.exists(self.path(log)))
+        seq = run['question']['seq']
+        self.append(log, shown(seq + 5, run['run_id']) + shown(seq, 'other-run') + shown(seq, run['run_id'], 'report'))
+        rc, out = self.con('answer', '--text', 'x')
+        self.assertEqual(rc, 2, out)
+        self.assertIn('error: not shown', out)
+
+        self.show_question()
+        rc, out = self.con('answer', '--text', 'x')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+
+    def test_confirm_off_needs_no_shown_row(self):
+        """agents.json の adapters.confirm が off なら、見せた記録が無くても答えを受ける。"""
+        self.write_json(os.path.join(self.home, 'agents.json'), {'adapters': {'confirm': 'off'}})
+        self.decision_question('confirm off')
+        self.assertFalse(os.path.exists(self.path('docs/pbi/presentations.jsonl')))
+        rc, out = self.con('answer', '--text', 'x')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
 
     def test_full_run_answer_is_used_once(self):
         """通しの問いは --full-run だけで答える。yes は 1 回分の印を置き、no は前の印も消す。"""
@@ -1848,12 +2027,199 @@ class ConductorTest(unittest.TestCase):
                         question={'kind': 'full-run', 'path': 'docs/pbi/notes/full-run.md', 'summary': 'run all E2E?'})
             rc, out = self.con('done')
             self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
-            self.assertIn('--full-run yes', out)
+            self.assertNotIn('--full-run', out)  # yes・no の答えは present の then: の行が出す
+            self.assertIn('present:', out)
+            rc, out = self.con('answer', '--full-run', answer)  # 見せる前は断る
+            self.assertEqual(rc, 2, out)
+            self.assertIn('error: not shown', out)
+            self.assertFalse(os.path.exists(token))
+            shown = self.show_question()
+            self.assertIn('--full-run yes', shown)
+            self.assertIn('--full-run no', shown)
             rc, out = self.con('answer', '--text', 'yes')
             self.assertNotEqual(rc, 0, out)
             rc, out = self.con('answer', '--full-run', answer)
             self.assertEqual(rc, 0, out)
             self.assertEqual(os.path.exists(token), exists)
+
+    # ---- present の照合情報・--approve の原稿・done の precondition ----
+
+    def present_html(self, extra_path=None):
+        """待っている問いを html で見せる (偽の am と node)。保存された原稿のパスを返す。"""
+        sys.path.insert(0, os.path.join(HERE, 'testdata', 'present'))
+        try:
+            import fakes
+        finally:
+            sys.path.pop(0)
+        skills = os.path.join(self.tmp, 'skills')
+        nodebin = os.path.join(self.tmp, 'nodebin')
+        fakes.install_am(skills)
+        fakes.install_node(nodebin)
+        env = {key: value for key, value in self.env.items() if key.upper() != 'PATH'}
+        env.update(PATH=nodebin, FAKE_AM_LOG=os.path.join(self.tmp, 'am-calls.jsonl'),
+                   FAKE_AM_PAGES=os.path.join(self.tmp, 'pages'), FAKE_NODE_MARKER=os.path.join(self.tmp, 'node-ran'))
+        rc, out = self.con('status')
+        words = shlex.split(self.line(out, 'present'))
+        words[0] = sys.executable
+        p = subprocess.run([*words, '--format', 'html', '--home', self.home, '--skills-dir', skills],
+                           cwd=self.tmp, env=env, capture_output=True, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn('format: html', p.stdout.decode('utf-8', errors='replace'))
+        q = self.read_json(RUN)['question']
+        return self.path(f"docs/pbi/conductor/present/{self.read_json(RUN)['run_id'][:8]}-{q['seq']}-{q['kind']}.md")
+
+    def saved_meta(self, saved):
+        text = self.read(saved)
+        meta = {line.split(':', 1)[0][len('reply-meta-'):]: line.split(':', 1)[1].strip()
+                for line in text.splitlines() if line.startswith('reply-meta-')}
+        self.assertEqual(sorted(meta), ['draft_hash', 'kind', 'run_id', 'seq'], text)
+        return meta
+
+    def answered_checks(self):
+        rows = [json.loads(l) for l in self.read('docs/pbi/presentations.jsonl').splitlines() if l.strip()]
+        return [row['check'] for row in rows if row.get('event') == 'answered']
+
+    def test_reply_check_ok_mismatch_none(self):
+        """approve 以外の --reply は、返事の囲みを present の原稿に照らす: 合えば ok、合わなければ exit 3、囲み無しは none。"""
+        # (a) 合う囲み
+        self.decision_question('reply ok')
+        meta = self.saved_meta(self.present_html())
+        self.write('docs/pbi/notes/reply.md', reply_fence(meta))
+        rc, out = self.con('answer', '--reply', 'docs/pbi/notes/reply.md')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertEqual(self.answered_checks(), ['ok'])
+
+        # (b) 古い draft_hash・別の seq は exit 3 で、答えは残らず問いは待ったまま
+        for bad, name in (({'draft_hash': 'stale'}, 'draft_hash'), ({'seq': '99'}, 'seq')):
+            self.decision_question('reply mismatch')
+            meta = self.saved_meta(self.present_html())
+            self.write('docs/pbi/notes/reply.md', reply_fence(dict(meta, **bad)))
+            rc, out = self.con('answer', '--reply', 'docs/pbi/notes/reply.md')
+            self.assertEqual(rc, 3, out)
+            self.assertEqual(out.strip(), f'check: mismatch {name}')
+            self.assertFalse(os.path.exists(self.path('docs/pbi/conductor/answers/1-decision.md')))
+            self.assertEqual(self.read_json(RUN)['state'], 'question')
+            self.assertEqual(self.answered_checks()[-1], 'mismatch')
+
+        # (c) 囲みの無い返事は --text と同じ
+        self.decision_question('reply none')
+        self.present_html()
+        self.write('docs/pbi/notes/reply.md', 'just use headless\n')
+        rc, out = self.con('answer', '--reply', 'docs/pbi/notes/reply.md')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertEqual(self.answered_checks()[-1], 'none')
+
+    def test_approve_answer_uses_the_presented_draft(self):
+        """present を流した承認の問いの --approve は、保存した原稿から返事を組む。無ければ問いのパスから組む。"""
+        self.con('start', '--goal', 'approve draft')
+        rc, out = self.con('next')
+        meta, rc, out = self.ask_approve(out)
+        self.assertEqual(rc, 10, out)
+        self.show_question()
+        run = self.read_json(RUN)
+        saved = self.path(f"docs/pbi/conductor/present/{run['run_id'][:8]}-{run['question']['seq']}-approve.md")
+        self.assertTrue(os.path.isfile(saved))
+        # 問いのファイルが変わっても、見せた原稿を答えの元にする
+        self.write('docs/pbi/notes/approve.md', self.read('docs/pbi/notes/approve.md').replace('Which model?', 'Which tool?'))
+        rc, out = self.con('answer', '--approve', '--choices', '1=a')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        reply = self.read('docs/pbi/conductor/answers/1-approve.md')
+        self.assertIn('Which model?', reply)
+        self.assertNotIn('Which tool?', reply)
+        self.assertIn(meta['draft_hash'], reply)
+        self.assertEqual(self.approvals(), 1)
+
+        # 保存した原稿が無ければ問いのパス
+        self.con('start', '--goal', 'approve draft fallback', '--force')
+        rc, out = self.con('next')
+        meta, rc, out = self.ask_approve(out)
+        self.assertEqual(rc, 10, out)
+        self.show_question()
+        shutil.rmtree(self.path('docs/pbi/conductor/present'))
+        rc, out = self.con('answer', '--approve', '--choices', '1=b')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertIn(meta['draft_hash'], self.read('docs/pbi/conductor/answers/1-approve.md'))
+
+    def approve_without_meta(self, out, check='design-record'):
+        """下書きに reply-meta- の行が無い承認の問いの結果を書き、done を呼ぶ。check が None なら check を付けない。"""
+        self.setup_approve()
+        text = self.read('docs/pbi/notes/approve.md')
+        self.write('docs/pbi/notes/approve.md',
+                   '\n'.join(l for l in text.splitlines() if not l.startswith('reply-meta-')) + '\n')
+        question = {'kind': 'approve', 'path': 'docs/pbi/notes/approve.md', 'summary': 'approve 1 PBI'}
+        if check:
+            question['check'] = check
+        self.result(out, status='question', question=question)
+        return self.con('done')
+
+    def test_done_refuses_an_approve_draft_without_reply_meta(self):
+        """照合情報の無い承認の原稿の done は exit 2 の 1 行で断る。confirm が off なら問いにする。"""
+        self.con('start', '--goal', 'no envelope')
+        rc, out = self.con('next')
+        rc, out = self.approve_without_meta(out)
+        self.assertEqual(rc, 2, out)
+        self.assertEqual(len(out.strip().splitlines()), 1, out)
+        self.assertTrue(out.startswith('error: missing approve draft check design-record and reply-meta '
+                                       '(run design_record.py markdown last): '), out)
+        self.assertTrue(out.strip().endswith('docs/pbi/notes/approve.md'), out)
+
+        # confirm が off なら approve の問いに check は付けない。原稿に reply-meta- の行が無くても問いにする
+        self.write_json(os.path.join(self.home, 'agents.json'), {'adapters': {'confirm': 'off'}})
+        self.con('start', '--goal', 'no envelope, confirm off', '--force')
+        rc, out = self.con('next')
+        rc, out = self.approve_without_meta(out, check=None)
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+        self.assertIn('question: approve', out)
+
+    def test_build_reapproval_has_the_same_approve_preconditions(self):
+        """build の出番の再承認 (designer.md) も、design と同じ approve の行で調べる。"""
+        question = {'kind': 'approve', 'path': 'docs/pbi/notes/approve.md'}
+        for episode in ('design', 'build'):
+            data = {'episode': episode, 'status': 'question', 'question': question}
+            self.enterContext(unittest.mock.patch.object(conductor, 'confirm_off', return_value=False))
+            self.assertIsNotNone(conductor._approve_question(data), episode)
+            self.assertTrue(conductor.missing_for_done(data).startswith('approve draft check design-record'), episode)
+
+    def test_done_refuses_an_approve_question_with_check_when_confirm_is_off(self):
+        """confirm が off で承認の問いに check design-record が付いていれば、done は exit 2 の 1 行で断る。"""
+        self.write_json(os.path.join(self.home, 'agents.json'), {'adapters': {'confirm': 'off'}})
+        self.con('start', '--goal', 'check but confirm off')
+        rc, out = self.con('next')
+        meta, rc, out = self.ask_approve(out)  # check: design-record 付き
+        self.assertEqual(rc, 2, out)
+        self.assertEqual(len(out.strip().splitlines()), 1, out)
+        self.assertTrue(out.startswith('error: missing approve question with no check (confirm is off, so drop check): '), out)
+        self.assertTrue(out.strip().endswith('docs/pbi/notes/approve.md'), out)
+
+    def test_done_refuses_finish_without_report(self):
+        """報告のファイルも report_body も無い finish の done は exit 2 の 1 行。report_body があれば終わる。"""
+        out = self.go_to_finish('no report at all')
+        self.result(out, status='done', next=None, report='docs/pbi/REPORT.md')
+        rc, out = self.con('done')
+        self.assertEqual(rc, 2, out)
+        self.assertEqual(out.strip(), 'error: missing completion report (docs/pbi/REPORT.md or report_body)')
+        self.assertFalse(os.path.exists(self.path('docs/pbi/REPORT.md')))
+        rc, out = self.con('next')
+        self.result(out, status='done', next=None, report='docs/pbi/REPORT.md', report_body='# 完了')
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: finished'), out)
+
+    def test_two_refusals_in_a_row_ask_a_launch_failure_question(self):
+        """続けて 2 回 `error: missing` で断られると launch-failure の問い。見せたあとの answer は通る。"""
+        self.con('start', '--goal', 'two refusals')
+        rc, out = self.con('next')
+        rc, out = self.approve_without_meta(out)
+        self.assertEqual(rc, 2, out)
+        rc, out = self.con('next')
+        rc, out = self.approve_without_meta(out)
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+        self.assertIn('question: launch-failure', out)
+        rc, out = self.con('answer', '--text', 'again')
+        self.assertEqual(rc, 2, out)
+        self.assertIn('error: not shown', out)
+        self.show_question()
+        rc, out = self.con('answer', '--text', 'again')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
 
 
 if __name__ == '__main__':

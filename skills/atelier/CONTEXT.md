@@ -214,6 +214,10 @@ _Avoid_: parent/child context
 The `adapters` object in agents.json: per design, review and security, `auto`, `off`, or a skill name that replaces the template's components.
 _Avoid_: hook, integration
 
+**confirm setting (confirm の設定)**:
+The `confirm` key of the adapter setting: how a question is shown to the user, `html` (default), `md` or `off`. `auto` and a skill name are read as `html` with a warning. When answer-me-with-any or Node 20 is missing, the format falls back to `off` (reason `missing-am` or `missing-node`), but the setting is not `off`, so the `answer` shown check and the `done` reply-check-info check still run. Only the setting `off` skips them (`present.py`).
+_Avoid_: confirm skill, view
+
 **callee (呼び出し先)**:
 Another skill that a component calls. It never decides pass or fail, and never calls this skill back.
 _Avoid_: external skill, dependency
@@ -223,6 +227,18 @@ _Avoid_: external skill, dependency
 **approval draft (承認の原稿)**:
 The Markdown the designer writes to `docs/pbi/notes/approve.md` for the user to approve the run: seven fixed sections in a fixed order (`appendix/approve.md`), checked by `design_record.py lint`.
 _Avoid_: approval list, 承認の一覧, 下書き
+
+**Reply check info (照合情報)**:
+What lets a reply be matched to the question it answers: the `reply-meta-*` lines at the head of a draft and the `am-reply-meta` fence at the end of a reply. For an approve it holds the design record's id, revision and hashes; for any other question, `run_id`, `seq`, `kind` and `draft_hash`.
+_Avoid_: envelope (in the sense of an approval's check info), 封筒
+
+**Presentation format (見せ方)**:
+How `present.py` shows a question: `html` (a page, and the user sees a link), `md` (the Markdown in chat) or `off` (the file as it is). It comes from the confirm setting.
+_Avoid_: view, display mode
+
+**Presentation log (見せた記録)**:
+`docs/pbi/presentations.jsonl`: one line when a question was shown (`shown`) and one when it was answered (`answered`), schema `atelier.presentation/1`. `answer` refuses a question with no `shown` line unless the confirm setting is `off`.
+_Avoid_: shown log, transcript
 
 **before / after flow (今の流れ・あとの流れ)**:
 The two diagrams of an approval draft: the flow as the user sees it today, and the same flow after the run, with each changed line marked (`+`, `-`, `~`) and the PBI number in the node it changes.

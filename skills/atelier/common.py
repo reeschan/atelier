@@ -2,11 +2,14 @@
 
 パスの長さの扱い (long_path・shown)、プロジェクトのディレクトリ名 (project_dir_for)、
 JSON の読み込み (load_json) と書き込み (write_json)、単価表 (load_prices・price_for)、
-home の解決 (resolve_home)、表示の補助 (utf8_stdout・now・step_label) をここに集める。
+home の解決 (resolve_home)、表示の補助 (utf8_stdout・now・step_label)、
+呼び出し側に出すコマンドの行のパスの引用 (quoted) をここに集める。
 """
 import datetime
 import json
 import os
+import re
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -22,6 +25,21 @@ PROJECTS = Path.home() / '.claude' / 'projects'
 # home のディレクトリ名。旧名 (改名前) の home しか無ければそちらを使う
 HOME_NAME = 'atelier'
 OLD_HOME_NAME = 'pbi-orchestration-jev'
+
+# シェルが特別に読む文字 (空白を除く)。パスに入っていれば、コマンドの行で単引用符に包む
+SHELL_SPECIAL = re.compile(r'''["'`$;&|<>()*?!\[\]{}~#\\\n\r\t]''')
+
+
+def quoted(path) -> str:
+    """呼び出し側に「そのまま実行」させるコマンドの行に入れるパス。
+
+    パスは設計者の done から来るので、そのまま行に入れるとシェルの命令として走りうる。
+    空白だけなら二重引用符で包み、ほかの特別な文字 ($ ; | ` など) があれば shlex.quote で単引用符に包む。
+    """
+    text = Path(path).as_posix()
+    if SHELL_SPECIAL.search(text):
+        return shlex.quote(text)
+    return f'"{text}"' if ' ' in text else text
 
 
 def resolve_home(arg: str | None) -> Path:
