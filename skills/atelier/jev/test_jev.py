@@ -98,6 +98,19 @@ class CallJevTest(unittest.TestCase):
         self.assertEqual(len(m.requests), 2)
         self.assertEqual(waits, [0])
 
+    def test_3_401_redacts_a_key_that_crosses_the_excerpt(self):
+        key = 'cross-boundary-secret-key'
+        body = 'x' * 490 + key + '-tail'
+        with MockJev([(401, {}, body)]) as m:
+            with self.assertRaises(jev.JevError) as cm:
+                self.call(m, api_key=key)
+        message = str(cm.exception)
+        self.assertEqual(cm.exception.code, 'http')
+        self.assertNotIn(key, message)
+        self.assertNotIn('cross-boundary', message)
+        self.assertIn('[redacted]', message)
+        self.assertLessEqual(len(message), 500 + len('HTTP 401: '))
+
     def test_3_401_no_retry(self):
         with MockJev([(401, {}, {'error': 'unauthorized'})]) as m:
             with self.assertRaises(jev.JevError) as cm:
@@ -200,6 +213,16 @@ class CallJevTest(unittest.TestCase):
                 self.call(m)
         self.assertEqual(cm.exception.code, 'bad-response')
         self.assertEqual(len(m.requests), 1)
+
+    def test_7b_non_json_redacts_a_key_before_the_excerpt(self):
+        key = 'cross-boundary-secret-key'
+        with MockJev([(200, {}, 'x' * 490 + key + '-tail')]) as m:
+            with self.assertRaises(jev.JevError) as cm:
+                self.call(m, api_key=key)
+        message = str(cm.exception)
+        self.assertEqual(cm.exception.code, 'bad-response')
+        self.assertNotIn(key, message)
+        self.assertNotIn('cross-boundary', message)
 
     def test_7b_non_json_is_bad_response(self):
         with MockJev([(200, {}, 'not json')]) as m:
