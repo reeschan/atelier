@@ -388,5 +388,92 @@ class UsageTest(Base):
         self.assertTrue(self.read_agents()['runners']['agent']['enabled'])
 
 
+def load_module():
+    """同じフォルダの setup_agents を、関数を直接呼ぶテスト用に import する。"""
+    if str(HERE) not in sys.path:
+        sys.path.insert(0, str(HERE))
+    import setup_agents
+    return setup_agents
+
+
+def tree(root):
+    """root の下の全ファイルとフォルダ (相対パス) と、ファイルの中身。"""
+    result = {}
+    for path in sorted(Path(root).rglob('*')):
+        key = path.relative_to(root).as_posix()
+        result[key] = path.read_bytes() if path.is_file() else None
+    return result
+
+
+class ManualSkeletonTest(Base):
+    EXPECTED = {'runner': 'opencode', 'fetched_at': None, 'method': 'manual',
+                'error': None, 'failed_at': None,
+                'models': [{'id': 'm1', 'name': None, 'efforts': ['high'], 'manual': True}]}
+
+    def test_add_model_without_a_models_file_writes_the_whole_skeleton(self):
+        proc = self.run_cli('add-model', '--runner', 'opencode', '--id', 'm1', '--effort', 'high')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.read_models('opencode'), self.EXPECTED)
+
+    def test_add_model_over_a_broken_models_file_starts_from_the_skeleton(self):
+        (self.home / 'models').mkdir()
+        (self.home / 'models' / 'opencode.json').write_text('{not json', encoding='utf-8')
+        proc = self.run_cli('add-model', '--runner', 'opencode', '--id', 'm1', '--effort', 'high')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.read_models('opencode'), self.EXPECTED)
+
+
+class RejectedInputWritesNothingTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.setup_agents = load_module()
+        self.seed_agents({'opencode': {'enabled': True, 'models': ['keep']}})
+
+    def test_disabling_agent_raises_and_leaves_agents_json_as_it_was(self):
+        before = (self.home / 'agents.json').read_bytes()
+        with self.assertRaises(ValueError):
+            self.setup_agents.set_runner(self.home, 'agent', enabled=False)
+        self.assertEqual((self.home / 'agents.json').read_bytes(), before)
+
+    def test_models_with_an_empty_id_raise_and_leave_agents_json_as_it_was(self):
+        before = (self.home / 'agents.json').read_bytes()
+        with self.assertRaises(ValueError):
+            self.setup_agents.set_runner(self.home, 'opencode', models=['a', ''])
+        self.assertEqual((self.home / 'agents.json').read_bytes(), before)
+
+    def test_a_valid_models_list_is_written(self):
+        # 上の 2 件が「書けない入力だから書かない」ことの対 (有効な入力なら書く)
+        self.setup_agents.set_runner(self.home, 'opencode', models=['a', 'b'])
+        self.assertEqual(self.read_agents()['runners']['opencode']['models'], ['a', 'b'])
+
+    def test_empty_model_id_raises_and_creates_no_models_file(self):
+        for model_id in ('', '   '):
+            with self.assertRaises(ValueError):
+                self.setup_agents.add_manual_model(self.home, 'opencode', model_id, [])
+        self.assertFalse((self.home / 'models' / 'opencode.json').exists())
+
+
+class RunnerTableSettingsTest(Base):
+    def test_remove_drops_the_models_key_and_billing_is_recorded(self):
+        setup_agents = load_module()
+        self.seed_agents({'opencode': {'enabled': True, 'models': ['a'], 'path': '/x'}})
+        setup_agents.set_runner(self.home, 'opencode', models=setup_agents.REMOVE, billing='flat')
+        config = self.read_agents()['runners']['opencode']
+        self.assertEqual(config, {'enabled': True, 'path': '/x', 'billing': 'flat'})
+
+
+class PureFunctionsWriteNothingTest(Base):
+    def test_manual_models_and_runner_table_leave_the_home_tree_unchanged(self):
+        setup_agents = load_module()
+        before = tree(self.root)
+        models = setup_agents.manual_models(None, 'opencode', 'm1', ['high'])
+        table = setup_agents.runner_table(None, 'opencode', True, ['m1'], 'flat')
+        self.assertEqual(tree(self.root), before)
+        # 何も書かない代わりに、結果は返す
+        self.assertEqual([entry['id'] for entry in models['models']], ['m1'])
+        self.assertEqual(table['runners']['opencode'],
+                         {'enabled': True, 'models': ['m1'], 'billing': 'flat'})
+
+
 if __name__ == '__main__':
     unittest.main()
