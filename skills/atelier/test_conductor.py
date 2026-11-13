@@ -259,6 +259,13 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         return out
 
+    def assert_present_command(self, command, path, kind):
+        """`python <skill>/present.py <path> --kind <kind>` か。引数に分けて比べる (パスに空白があっても引用で通る)。"""
+        words = shlex.split(command)
+        self.assertEqual(words[0], 'python', command)
+        self.assertTrue(os.path.samefile(words[1], os.path.join(HERE, 'present.py')), command)
+        self.assertEqual(words[2:], [path, '--kind', kind], command)
+
     def show_question(self):
         """待っている問いを呼び出し側と同じ手順で見せる: `status` の `present:` の行を動かす。"""
         rc, out = self.con('status')
@@ -266,7 +273,8 @@ class ConductorTest(unittest.TestCase):
         words = shlex.split(line[len('present: '):])
         if not os.path.isfile(self.path(words[2])):  # 設計者が問いのファイルを書いていない試験のため
             self.write(words[2], '# question\n\nplaceholder\n')
-        p = subprocess.run(words, cwd=self.tmp, env=self.env, capture_output=True,
+        # `python` が PATH に無い・別の Python の環境でも、試験と同じ interpreter で動かす
+        p = subprocess.run([sys.executable, *words[1:]], cwd=self.tmp, env=self.env, capture_output=True,
                            timeout=120)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         return p.stdout.decode('utf-8', errors='replace')
@@ -1880,9 +1888,7 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.approve_result(out)
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
         for text in (out, self.con('status')[1]):
-            line = self.line(text, 'present')
-            self.assertTrue(re.fullmatch(r'python \S*present\.py docs/pbi/notes/approve\.md --kind approve', line),
-                            text)
+            self.assert_present_command(self.line(text, 'present'), 'docs/pbi/notes/approve.md', 'approve')
             self.assertNotIn('confirm:', text)
         self.assertNotIn('confirm', self.con('status')[1])
 
@@ -1986,8 +1992,10 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.con('answer', '--text', 'x')
         self.assertEqual(rc, 2, out)
         self.assertEqual(len(out.strip().splitlines()), 1, out)
-        self.assertTrue(re.fullmatch(r'error: not shown: run python \S*present\.py docs/pbi/notes/q\.md '
-                                     r'--kind decision first', out.strip()), out)
+        message = out.strip()
+        self.assertTrue(message.startswith('error: not shown: run ') and message.endswith(' first'), out)
+        self.assert_present_command(message[len('error: not shown: run '):-len(' first')],
+                                    'docs/pbi/notes/q.md', 'decision')
         self.assertFalse(os.path.exists(self.path('docs/pbi/conductor/answers/1-decision.md')))
         self.assertNotIn('state:', out)
         self.assertEqual(self.read_json(RUN)['state'], 'question')
@@ -2170,6 +2178,14 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.approve_without_meta(out, check=None)
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
         self.assertIn('question: approve', out)
+
+    def test_present_line_carries_a_non_default_dir(self):
+        """docs/pbi でない作業のディレクトリなら、present の行に --dir が付く (見せた記録を同じ場所に書くため)。"""
+        q = {'path': 'work/pbi/notes/q.md', 'kind': 'decision'}
+        self.assertFalse(conductor.present_line(q, 'docs/pbi').endswith('--kind decision --dir docs/pbi'))
+        self.assertTrue(conductor.present_line(q, 'docs/pbi').endswith('--kind decision'))
+        self.assertTrue(conductor.present_line(q, 'work/pbi').endswith('--kind decision --dir work/pbi'))
+        self.assertTrue(conductor.present_line(q, 'my work/pbi').endswith('--dir "my work/pbi"'))
 
     def test_build_reapproval_has_the_same_approve_preconditions(self):
         """build の出番の再承認 (designer.md) も、design と同じ approve の行で調べる。"""

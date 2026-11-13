@@ -96,8 +96,9 @@ def rows(home: Path, skills_dir: Path, env) -> list[tuple]:
     scan = flow.find_plugin_file('oh-my-mermaid', 'skills/omm-scan/SKILL.md', plugins)
     sac = skills_dir / 'sac-strategic-compact' / 'SKILL.md'
     principle = flow.find_plugin_file('pstack', 'skills/principle-test-behavior-not-implementation/SKILL.md', plugins)
+    # present.py と同じ探し方 (adapter_gate.find_am): SKILL.md だけで scripts/am.mjs の無い入れ方は ok にしない
+    am, old = adapter_gate.find_am(skills_dir)
     confirm = flow.find_skill_file(agents_module.CONFIRM_SKILL, skills_dir, env)
-    old = None if confirm else flow.find_skill_file(agents_module.CONFIRM_SKILL_OLD, skills_dir, env)
     node = adapter_gate.node_status(env)
     node_row = (f"ok {node['path']} {node['version']}" if node['status'] == 'ok' else
                 f"old {node['version']}" if node['status'] == 'old' else 'missing')
@@ -107,9 +108,10 @@ def rows(home: Path, skills_dir: Path, env) -> list[tuple]:
         'jevlint': jevlint_status(home),
         'sac-strategic-compact': f'ok {sac}' if sac.is_file() else 'missing',
         'principle-test-behavior-not-implementation': f'ok {principle}' if principle else 'missing',
-        'answer-me-with-any': (f'ok {confirm}' if confirm else
-                               f'ok {old} (old name {agents_module.CONFIRM_SKILL_OLD}; install '
-                               f'{agents_module.CONFIRM_SKILL} and remove it)' if old else 'missing'),
+        'answer-me-with-any': (f'ok {am} (old name {agents_module.CONFIRM_SKILL_OLD}; install '
+                               f'{agents_module.CONFIRM_SKILL} and remove it)' if am and old else
+                               f'ok {am}' if am else
+                               f'missing scripts/am.mjs (found {confirm})' if confirm else 'missing'),
         'node': node_row,
     }
     return [(tool, status[tool], INSTALL[tool], FALLBACK[tool]) for tool in INSTALL]

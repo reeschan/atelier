@@ -166,6 +166,7 @@ def emit(lines) -> None:
 
 
 quoted = common.quoted
+DEFAULT_DIR = 'docs/pbi'
 
 
 def command(*words) -> str:
@@ -952,15 +953,21 @@ def episode_line(item: dict) -> str:
     return line + (f" wave {item['wave']}" if item.get('wave') is not None else '')
 
 
-def present_line(q: dict) -> str:
+def dir_option(base) -> str:
+    """既定 (docs/pbi) でない作業のディレクトリなら ` --dir <base>`。present が見せた記録を同じ場所に書くため。"""
+    return '' if base is None or Path(base) == Path(DEFAULT_DIR) else f' --dir {quoted(base)}'
+
+
+def present_line(q: dict, base=None) -> str:
     """問いを見せる入口の 1 行。答えのコマンド (then・yes・approve など) は present.py の出力が出す。"""
-    return f"present: python {quoted(SKILL / 'present.py')} {quoted(str(q.get('path')))} --kind {q.get('kind')}"
+    return (f"present: python {quoted(SKILL / 'present.py')} {quoted(str(q.get('path')))} --kind {q.get('kind')}"
+            + dir_option(base))
 
 
-def question_lines(run: dict) -> list:
+def question_lines(run: dict, base=None) -> list:
     q = run.get('question') or {}
     lines = ['state: question', f"question: {q.get('kind')} {q.get('path')}", f"summary: {fold(q.get('summary'), SUMMARY_MAX)}",
-             present_line(q)]
+             present_line(q, base)]
     return with_warnings(lines, run.get('garbled') or [])
 
 
@@ -1480,7 +1487,7 @@ def cmd_next(args, paths: Paths) -> int:
             emit(closed_lines(run))
             return EXIT_OK
         if state == 'question':
-            emit(question_lines(run))
+            emit(question_lines(run, paths.base))
             return EXIT_ASK
         if state == 'running':
             if not args.relaunch:
@@ -1556,7 +1563,7 @@ def conductor_question(paths: Paths, run: dict, running: dict, kind: str, what: 
     run['pending'] = None
     save(paths, run)
     _emit_question_asked(paths, kind, topic, 1, running.get('seq'))
-    return EXIT_ASK, question_lines(run)
+    return EXIT_ASK, question_lines(run, paths.base)
 
 
 def fail(paths: Paths, run: dict, running: dict, reason: str, status: str, summary=None) -> tuple:
@@ -1846,7 +1853,7 @@ def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -
         run['running'] = None
         save(paths, run)
         _emit_question_asked(paths, q['kind'], topic, _question_items(q['path']), running['seq'])
-        return EXIT_ASK, question_lines(run)
+        return EXIT_ASK, question_lines(run, paths.base)
     if status == 'handoff':
         state_path = data['state']
         if not Path(state_path).is_file():
@@ -2139,9 +2146,11 @@ def cmd_answer(args, paths: Paths) -> int:
             answer.write_text(reply_text, encoding='utf-8', newline='\n')
         elif args.reply is not None:
             try:
-                reply_text = Path(args.reply).read_bytes().decode('utf-8-sig', errors='replace')
+                # 1 度だけ読み、確かめた中身と同じバイト列を答えに書く (読んだあとに差し替えられても混ざらない)
+                reply_bytes = Path(args.reply).read_bytes()
             except OSError as error:
                 raise Refused(f'{args.reply}: {error}')
+            reply_text = reply_bytes.decode('utf-8-sig', errors='replace')
             if kind != 'approve':
                 # approve 以外は、返事の照合情報を今の問いと present の原稿に照らす。囲みが無ければ --text と同じ
                 meta = reply_meta(reply_text)
@@ -2153,10 +2162,7 @@ def cmd_answer(args, paths: Paths) -> int:
                         emit([f"check: mismatch {', '.join(problems)}"])
                         return design_record.EXIT_MISMATCH
                     check = 'ok'
-            try:
-                shutil.copyfile(args.reply, answer)
-            except OSError as error:
-                raise Refused(f'{args.reply}: {error}')
+            answer.write_bytes(reply_bytes)
         elif args.full_run is not None:
             reply_text = f'full-run: {args.full_run}\n'
             answer.write_text(reply_text, encoding='utf-8', newline='\n')
@@ -2197,10 +2203,15 @@ def cmd_answer(args, paths: Paths) -> int:
             run['handoff']['count'] = 0
         run['state'] = 'ready'
         save(paths, run)
-        present.log_answered(paths.base, run.get('run_id'), q['seq'], kind, reply_text, check)
+        try:
+            present.log_answered(paths.base, run.get('run_id'), q['seq'], kind, reply_text, check)
+            log_warns = []
+        except OSError as error:
+            # 答えは保存済み。記録の失敗で答えを無かったことにはしない
+            log_warns = [f'warn presentations.jsonl: answered row not written ({error})']
     # check-reply が 3・4・5 で問いを残した道はここに来ない (question.answered を出さない)
     _emit_question_answered(paths, run, q, choices, bool(args.revise))
-    emit([*ready_lines(run)[:2], f'answer: {answer.as_posix()}', 'then: ' + command('next')])
+    emit([*ready_lines(run)[:2], *log_warns, f'answer: {answer.as_posix()}', 'then: ' + command('next')])
     return EXIT_OK
 
 
@@ -2220,7 +2231,7 @@ def stale_running(run: dict) -> bool:
     return run.get('state') == 'running' and bool(slots) and not any(pid_alive(pid) for _holder, _key, pid in slots)
 
 
-def status_lines(run: dict) -> list:
+def status_lines(run: dict, base=None) -> list:
     """status と wait が同じ形で出す行 (1 行目は state、全部で 8 行以内)。"""
     state = run.get('state')
     lines = [f'state: {state}']
@@ -2232,7 +2243,7 @@ def status_lines(run: dict) -> list:
             lines += ['stale: no live runner', 'relaunch: ' + command('next', '--relaunch')]
     elif state == 'question':
         q = run.get('question') or {}
-        lines += [episode_line(q), f"question: {q.get('kind')} {q.get('path')}", present_line(q)]
+        lines += [episode_line(q), f"question: {q.get('kind')} {q.get('path')}", present_line(q, base)]
     elif state in ('ready', 'retry'):
         pending = run.get('pending') or {}
         lines.append(episode_line(dict(pending, seq=int(run.get('seq') or 0) + 1)))
@@ -2256,7 +2267,7 @@ def cmd_status(args, paths: Paths) -> int:
     if run is None:
         emit(status_none_lines(paths))
         return EXIT_OK
-    emit(status_lines(run))
+    emit(status_lines(run, paths.base))
     return EXIT_OK
 
 
@@ -2590,7 +2601,7 @@ def cmd_run_detach(args, paths: Paths) -> int:
             emit(closed_lines(run))
             return EXIT_OK
         if state == 'question' and not relaunch_question(run, args.launch):
-            emit(question_lines(run))
+            emit(question_lines(run, paths.base))
             return EXIT_ASK
         state = run.get('state')
         if state == 'running':
@@ -2631,7 +2642,7 @@ def cmd_run_detach(args, paths: Paths) -> int:
                 save(paths, run)
                 emit(with_warnings(lines, warns))
                 return code
-            emit(status_lines(run) if run is not None else status_none_lines(paths))
+            emit(status_lines(run, paths.base) if run is not None else status_none_lines(paths))
             return EXIT_OK
     finally:
         if log is not None:
@@ -2771,7 +2782,7 @@ def run_episodes(args, paths: Paths) -> int:
                 return none_exit(['state: none', 'then: ' + command('start', '--goal', '"..."')])
             if episodes == 0 and not claimed_by_parent(args, run):
                 # run --detach の親が running にした出番がもう無い (start --force・abort・next --relaunch のあと): 何もしない
-                emit(status_lines(run))
+                emit(status_lines(run, paths.base))
                 return EXIT_OK
             if args.launch and run.get('launch') != args.launch:
                 run['launch'] = args.launch
@@ -2782,7 +2793,7 @@ def run_episodes(args, paths: Paths) -> int:
                 return EXIT_OK
             if state == 'question':
                 if not relaunch_question(run, args.launch):
-                    emit(question_lines(run))
+                    emit(question_lines(run, paths.base))
                     return EXIT_ASK
                 save(paths, run)
             state = run.get('state')
@@ -2825,7 +2836,7 @@ def run_episodes(args, paths: Paths) -> int:
             elif (run.get('run_id') != run_id or run.get('state') != 'running'
                   or (run.get('running') or {}).get('seq') != seq):
                 # 待つ間に abort・next --relaunch・start --force が動いた: この出番の結果は読まない
-                final = (EXIT_OK, status_lines(run))
+                final = (EXIT_OK, status_lines(run, paths.base))
             else:
                 episodes += 1
                 done_code, lines, stopping = settle_episode(paths, run, code, out_json)
@@ -2858,7 +2869,7 @@ def cmd_wait(args, paths: Paths) -> int:
             return EXIT_OK
         if stale_running(run):
             # 生きている runner がいない: timeout を待たずに、立て直しの行を出して返る
-            emit(status_lines(run))
+            emit(status_lines(run, paths.base))
             return EXIT_OK
         if run.get('state') != 'running':
             wait_lock_gone(paths)
@@ -2866,10 +2877,10 @@ def cmd_wait(args, paths: Paths) -> int:
                 run = load_run(paths) or run
             except Unusable:
                 pass
-            emit(status_lines(run))
+            emit(status_lines(run, paths.base))
             return state_exit(run.get('state'))
         if time.monotonic() >= deadline:
-            emit(status_lines(run))
+            emit(status_lines(run, paths.base))
             return EXIT_OK
         time.sleep(WAIT_POLL)
 
@@ -2882,7 +2893,7 @@ def parser() -> argparse.ArgumentParser:
 
     def add(name, help_text):
         p = sub.add_parser(name, help=help_text, description=help_text)
-        p.add_argument('--dir', default='docs/pbi', help='PBI のディレクトリ (既定 docs/pbi)')
+        p.add_argument('--dir', default=DEFAULT_DIR, help='PBI のディレクトリ (既定 docs/pbi)')
         return p
 
     p = add('start', 'run を始める (状態 ready、次は design)')
