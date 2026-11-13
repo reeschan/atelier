@@ -24,6 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CON = os.path.join(HERE, 'conductor.py')
 sys.path.insert(0, HERE)
 import conductor  # noqa: E402  (無い /proc の道のテストだけ、関数を直接呼ぶ)
+import design_record  # noqa: E402  (問いの原稿の点検の警告だけを確かめる試験で lint_text を呼ぶ)
 DESIGN_RECORD = os.path.join(HERE, 'design_record.py')
 STATE = 'docs/pbi/CONTEXT_STATE.md'
 RUN = 'docs/pbi/conductor/run.json'
@@ -54,6 +55,9 @@ if episode == 'design' and not re.search(r'^Answer: ', prompt, re.M):
     state = Path('docs/pbi/CONTEXT_STATE.md')
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text('# state\nImmediate next action: read the answer\n', encoding='utf-8')
+    draft = Path('docs/pbi/notes/q.md')
+    draft.parent.mkdir(parents=True, exist_ok=True)
+    draft.write_text(Path(os.environ['FAKE_QUESTION_DRAFT']).read_text(encoding='utf-8'), encoding='utf-8')
     data.update(status='question', state=state.as_posix(),
                 question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
 elif episode == 'design':
@@ -82,6 +86,20 @@ if 'exec' in sys.argv[1:]:
 print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': is_error, 'session_id': 'fake-session',
                   'total_cost_usd': 0.25, 'result': 'Credit balance is too low' if is_error else 'fake'}))
 '''
+
+
+def question_draft(summary='Choose whether to run the design. Running it starts the next episode.', extra=''):
+    """done の点検を通る問いの原稿 (承認以外。4 つの必ずの節)。extra は最後に足す行。"""
+    return '\n'.join([
+        '## Summary', '```callout info What to decide', summary, '```', '',
+        '## Before', '```flow', '(earlier episodes) -> the design asks', '```', '',
+        '## After', '```flow', '{run the design?} -> the design runs: yes', '{run the design?} -> the run closes: no',
+        '```', '',
+        '## Decisions', '```ask', 'Run the design?', '* Run it | the design episode starts',
+        '- Close the run | no more episodes start', '```', '']) + extra
+
+
+QUESTION_KINDS = ('decision', 'send-approval', 'rework-limit', 'destructive', 'full-run')
 
 
 def reply_fence(meta):
@@ -117,6 +135,8 @@ class ConductorTest(unittest.TestCase):
         self.fake = os.path.join(self.tmp, 'fake_designer.py')
         self.write_abs(self.fake, FAKE_DESIGNER)
         self.log = os.path.join(self.tmp, 'fake.log')
+        self.good = os.path.join(self.tmp, 'good-question.md')
+        self.write_abs(self.good, question_draft())
         self.home = os.path.join(self.tmp, 'home')
         self.env = dict(os.environ, ATELIER_HOME=self.home, PYTHONIOENCODING='utf-8', PYTHONUTF8='1',
                         HOME=self.user, USERPROFILE=self.user,
@@ -124,7 +144,8 @@ class ConductorTest(unittest.TestCase):
                         ATELIER_DESIGNER_CMD=json.dumps([sys.executable, self.fake]),
                         HARNESS_LOG_CONFIG=os.path.join(self.tmp, 'no-harness-log.json'),
                         ATELIER_EVENTS_SETTLE='off',
-                        FAKE_DESIGNER_LOG=self.log)
+                        PBI_PLUGINS_DIR=os.path.join(self.tmp, 'plugins'),
+                        FAKE_DESIGNER_LOG=self.log, FAKE_QUESTION_DRAFT=self.good)
         # codex のホーム: サインインと shared-memory の MCP の設定がある (本物の ~/.codex は読まない)
         self.codex_home = os.path.join(self.tmp, 'codex-home')
         self.write_abs(os.path.join(self.codex_home, 'auth.json'), '{}')
@@ -493,7 +514,7 @@ class ConductorTest(unittest.TestCase):
         run = self.read_json(RUN)
         self.assertEqual(run['question']['kind'], 'handoff-loop')
         self.assertTrue(os.path.isfile(self.path(run['question']['path'])))
-        self.show_question()
+        self.check_conductor_question('handoff-loop', out)
         rc, out = self.con('answer', '--text', 'go on')
         self.assertEqual(rc, 0, out)
 
@@ -512,6 +533,7 @@ class ConductorTest(unittest.TestCase):
         self.assertNotIn('Continue from:', self.request(out))
 
         self.write(STATE, '# state\nImmediate next action: ask\n')
+        self.write('docs/pbi/notes/q.md', question_draft())
         self.result(out, status='question', state=STATE,
                     question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'run the design?'})
         rc, out = self.con('done')
@@ -543,7 +565,7 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.con('run', env=broken)  # 2 回続いた失敗
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
         self.assertIn('launch-failure', out)
-        self.show_question()
+        self.check_conductor_question('launch-failure', out)
         rc, out = self.con('answer', '--text', 'again')
         self.assertEqual(rc, 0, out)
         self.assertIsNone(self.read_json(RUN).get('failures'))  # どの答えのあとも 0
@@ -554,6 +576,7 @@ class ConductorTest(unittest.TestCase):
         # 失敗 1 回のあとの question を読む done も 0 に戻す (戻さなければ 1 が残る)
         rc, out = self.con('next')
         self.write(STATE, '# state\n')
+        self.write('docs/pbi/notes/q.md', question_draft())
         self.result(out, status='question', state=STATE,
                     question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
         rc, out = self.con('done')
@@ -969,10 +992,7 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
         self.assertNotIn('relaunch:', out)  # 起こし直しのコマンドは present の then: の行に移った
         self.assertEqual(self.read_json(RUN)['question']['kind'], 'decision')
-        shown = self.show_question()
-        self.assertTrue(any(l.startswith('then: ') and 'run --launch headless --detach' in l and l.endswith('# relaunch')
-                            for l in shown.splitlines()), shown)
-        self.assertNotIn('Next:', self.read(self.read_json(RUN)['question']['path']))
+        self.check_conductor_question('decision', out, relaunch=True)
 
         rc, out = self.con('run', '--launch', 'headless', '--detach', env={'FAKE_DESIGNER_SLEEP': '3'})
         self.assertEqual((rc, out.splitlines()[0]), (0, 'state: running'), out)
@@ -1620,7 +1640,7 @@ class ConductorTest(unittest.TestCase):
         self.con('start', '--goal', 'garbled')
         rc, out = self.con('next')
         self.write(STATE, '# state\nImmediate next action: ask\n')
-        self.write('docs/pbi/notes/q.md', '# ?????\n\n????????????\n')
+        self.write('docs/pbi/notes/q.md', question_draft(summary='????????????'))
         self.result(out, status='question', state=STATE, summary=['design: ??????'],
                     question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': '???????'})
         rc, out = self.con('done')
@@ -1640,7 +1660,7 @@ class ConductorTest(unittest.TestCase):
 
         self.con('start', '--goal', 'clean', '--force')
         rc, out = self.con('next')
-        self.write('docs/pbi/notes/q.md', '# 設計の問い\n\nどれにしますか?\n')
+        self.write('docs/pbi/notes/q.md', question_draft(summary='設計を進めるかを決めます。進めると次の出番が始まります。'))
         self.result(out, status='question', state=STATE, summary=['design: 問いがある'],
                     question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': '進めますか?'})
         rc, out = self.con('done')
@@ -1739,6 +1759,152 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.con('done')
         self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
         self.assertIn('changed after its envelope', out)
+
+    def ask_draft(self, kind, text):
+        """新しい run の running の出番の結果を kind の問いとして書き、原稿 text を置いて done を呼ぶ (text が None なら原稿は無い)。"""
+        self.con('start', '--goal', f'draft {kind}', '--force')
+        rc, out = self.con('next')
+        self.write(STATE, '# state\n')
+        if text is not None:
+            self.write('docs/pbi/notes/q.md', text)
+        elif os.path.exists(self.path('docs/pbi/notes/q.md')):
+            os.remove(self.path('docs/pbi/notes/q.md'))
+        self.result(out, status='question', state=STATE,
+                    question={'kind': kind, 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
+        return self.con('done')
+
+    def test_question_draft_with_errors_is_refused(self):
+        """approve 以外の問いの原稿に誤りがあれば、done は失敗 (retry) にし、run は問いにならない。"""
+        broken = {
+            'extra section': question_draft(extra='\n## PBI\n| PBI | 何をするか |\n|---|---|\n| PBI-001 | x |\n'),
+            'no ask': question_draft().replace('```ask', '```text'),
+            'no draft file': None,
+        }
+        for kind in QUESTION_KINDS:
+            for name, text in broken.items():
+                with self.subTest(kind=kind, draft=name):
+                    rc, out = self.ask_draft(kind, text)
+                    self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+                    error = self.line(out, 'error')
+                    self.assertIn('question draft has errors', error)
+                    self.assertIn('docs/pbi/notes/q.md', error)
+                    self.assertNotIn('design_record.py', error)
+                    run = self.read_json(RUN)
+                    self.assertEqual(run['state'], 'retry')
+                    self.assertIsNone(run.get('question'))
+                    self.assertTrue(self.line(out, 'then'))
+
+    def test_question_draft_error_names_the_line_and_what_is_wrong(self):
+        """理由には誤りの行と中身 (✗ の中身) を最初の数件だけ入れ、残りは件数で言う。"""
+        rc, out = self.ask_draft('decision', question_draft(extra='\n## PBI\ntext\n'))
+        self.assertEqual(rc, 12, out)
+        error = self.line(out, 'error')
+        self.assertRegex(error, r'L\d+ ')
+        self.assertIn('PBI', error)
+        rc, out = self.ask_draft('decision', '## PBI\ntext\n')  # 誤りが 4 件以上
+        error = self.line(out, 'error')
+        self.assertRegex(error, r'\(\+\d+ more\)')
+        self.assertLessEqual(len(error), len('error: ') + 300)
+
+    def test_good_question_draft_becomes_a_question(self):
+        """誤りの無い原稿は、どの kind でも今までどおり問いになり、present: の行で見せる。"""
+        for kind in QUESTION_KINDS:
+            with self.subTest(kind=kind):
+                rc, out = self.ask_draft(kind, question_draft())
+                self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+                self.assertEqual(self.read_json(RUN)['state'], 'question')
+                self.assertEqual(self.read_json(RUN)['question']['kind'], kind)
+                self.assertIn('present.py', self.line(out, 'present'), out)
+                self.assertFalse(self.read_json(RUN)['question'].get('conductor'))
+
+    def test_two_refused_drafts_give_a_launch_failure_file_without_a_command(self):
+        """原稿の断りが 2 回続いて launch-failure の問いになっても、ファイルにコマンドは入らない。"""
+        self.con('start', '--goal', 'two refusals')
+        for _ in range(2):
+            rc, out = self.con('next')
+            self.write(STATE, '# state\n')
+            self.write('docs/pbi/notes/q.md', question_draft(extra='\n## PBI\ntext\n'))
+            self.result(out, status='question', state=STATE,
+                        question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
+            rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+        question = self.read_json(RUN)['question']
+        self.assertEqual(question['kind'], 'launch-failure')
+        text = self.read(question['path'])
+        self.assertIn('question draft has errors', text)
+        for word in ('design_record.py', 'conductor.py'):
+            self.assertNotIn(word, text)
+
+    def test_question_draft_with_a_bom_is_accepted(self):
+        """lint (utf-8-sig) が通す原稿は、先頭に BOM があっても done が受け付ける。"""
+        rc, out = self.ask_draft('decision', '﻿' + question_draft())
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+
+    def test_refused_garbled_draft_still_shows_the_garbled_warning(self):
+        """見出しまで化けた原稿は形の誤りで断るが、化けの warn も出して原因を見せる。"""
+        rc, out = self.ask_draft('decision', '# ?????\n')
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('question draft has errors', self.line(out, 'error'))
+        self.assertIn('warn garbled:', out)
+        self.assertIn('docs/pbi/notes/q.md', self.line(out, 'warn garbled'))
+        # wait・status・切り離した run の呼び手にも届くよう、断った道でも run.json に残す
+        self.assertTrue(self.read_json(RUN).get('garbled'))
+        self.assertIn('warn garbled:', self.con('status')[1])
+
+    def test_invalid_bytes_in_a_draft_are_read_the_same_way_as_lint(self):
+        """lint (utf-8-sig、置き換え) が通す原稿は、不正なバイトがあっても done が受け付ける。"""
+        text = question_draft()
+        self.assertEqual(design_record.lint_text(text, 'decision')[0], [])
+        self.con('start', '--goal', 'bad bytes', '--force')
+        rc, out = self.con('next')
+        self.write(STATE, '# state\n')
+        self.write('docs/pbi/notes/q.md', text)
+        with open(self.path('docs/pbi/notes/q.md'), 'ab') as f:
+            f.write(b'\n\xff\xfe broken bytes\n')
+        self.result(out, status='question', state=STATE,
+                    question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+
+    def test_status_of_a_question_gives_the_present_line(self):
+        """status と wait も、問いの答え方を出す present: の行を出す (headless の呼び手もそこから答えられる)。"""
+        rc, out = self.ask_draft('decision', question_draft())
+        self.assertEqual(rc, 10, out)
+        rc, status = self.con('status')
+        self.assertIn('state: question', status)
+        self.assertIn('present.py', self.line(status, 'present'), status)
+
+    def test_question_draft_with_only_warnings_is_accepted(self):
+        """内部の言葉の警告だけの原稿は止めない。"""
+        text = question_draft(summary='The stale files changed after the design. Decide whether to redo it.')
+        errors, warnings = design_record.lint_text(text, 'rework-limit')
+        self.assertEqual(errors, [])
+        self.assertTrue(warnings, 'the draft must carry a warning for this test to mean anything')
+        rc, out = self.ask_draft('rework-limit', text)
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+
+    def check_conductor_question(self, kind, out, relaunch=False):
+        """進行役の問いのファイルが lint --kind を誤り無く通り、コマンドを含まず、標準出力に then: が出る。"""
+        question = self.read_json(RUN)['question']
+        self.assertEqual(question['kind'], kind)
+        text = self.read(question['path'])
+        for word in ('Next:', 'conductor.py', 'Conductor question', ' answer --text'):
+            self.assertNotIn(word, text)
+        for heading in ('## Summary', '## Before', '## After', '## Decisions'):
+            self.assertIn(heading, text)
+        p = subprocess.run([sys.executable, DESIGN_RECORD, 'lint', '--draft', question['path'], '--kind', kind],
+                           cwd=self.tmp, env=self.env, capture_output=True, text=True, encoding='utf-8',
+                           errors='replace', timeout=60)
+        self.assertEqual(p.returncode, 0, text + p.stderr)
+        self.assertNotIn('✗', p.stderr)
+        self.assertTrue(question.get('conductor'))
+        self.assertIn('present.py', self.line(out, 'present'), out)
+        # 答え・起こし直し・閉じるのコマンドは present.py の then: の行が出す
+        then = [l for l in self.show_question().splitlines() if l.startswith('then: ')]
+        self.assertTrue(any(' answer ' in l for l in then), then)
+        self.assertEqual(any(l.endswith('# relaunch') and 'run --launch headless --detach' in l for l in then),
+                         relaunch, then)
+        self.assertTrue(any(l.endswith('# abort') and ' abort' in l for l in then), then)
 
     def test_workflow_line_only_when_named(self):
         """--workflow を渡さない run の依頼文には Workflow の行を出さない (既定の名前を探させない)。"""
@@ -1858,6 +2024,7 @@ class ConductorTest(unittest.TestCase):
         self.con('start', '--goal', 'grill', '--force')
         rc, out = self.con('next')
         self.write(STATE, '# state\n')
+        self.write('docs/pbi/notes/grill-1.md', question_draft())
         self.result(out, status='question', state=STATE,
                     question={'kind': 'decision', 'path': 'docs/pbi/notes/grill-1.md', 'summary': 'round 1'})
         self.con('done')
@@ -1904,6 +2071,8 @@ class ConductorTest(unittest.TestCase):
                     self.assertFalse(any(l.startswith(gone) for l in text.splitlines()), f'{gone} in {text}')
 
         self.write(STATE, '# state\n')
+        self.write('docs/pbi/notes/q.md', question_draft())
+        self.write('docs/pbi/notes/full-run.md', question_draft())
         self.con('start', '--goal', 'question lines')
         rc, out = self.con('next')
         self.result(out, status='question', state=STATE,
@@ -1934,16 +2103,16 @@ class ConductorTest(unittest.TestCase):
         check('decision', out)
 
     def test_conductor_question_file_has_no_answer_commands(self):
-        """進行役の問い (handoff-loop・launch-failure・no-agent-tool の decision) のファイルは題と説明だけ。"""
+        """進行役の問い (handoff-loop・launch-failure・no-agent-tool の decision) のファイルは 4 つの節の本文だけ。"""
         def check(kind):
             q = self.read_json(RUN)['question']
             self.assertEqual(q['kind'], kind)
             text = self.read(q['path'])
-            self.assertTrue(text.startswith('# '), text)
-            self.assertTrue(text.split('\n\n', 1)[1].strip(), text)
+            self.assertTrue(text.startswith('## Summary'), text)
+            self.assertNotIn('# Conductor question', text)
             self.assertNotIn('Next:', text)
             self.assertNotIn('conductor.py', text)
-            self.assertNotIn(' answer ', text)
+            self.assertNotIn(' answer --', text)  # 答えのコマンドの形 (本文の英語の answer は除く)
 
         # handoff-loop
         self.write('docs/pbi/STATUS.md', '# status\n')
@@ -1977,7 +2146,7 @@ class ConductorTest(unittest.TestCase):
     def decision_question(self, goal='shown row'):
         """待っている decision の問い (state 付き) を作る。"""
         self.write(STATE, '# state\n')
-        self.write('docs/pbi/notes/q.md', '# 設計の問い\n\nどれにしますか?\n')
+        self.write('docs/pbi/notes/q.md', question_draft())
         self.con('start', '--goal', goal, '--force')
         rc, out = self.con('next')
         self.result(out, status='question', state=STATE,
@@ -2031,6 +2200,7 @@ class ConductorTest(unittest.TestCase):
             self.con('start', '--goal', f'full run {answer}', '--force')
             rc, out = self.con('next')
             self.write(STATE, '# state\n')
+            self.write('docs/pbi/notes/full-run.md', question_draft())
             self.result(out, status='question', state=STATE,
                         question={'kind': 'full-run', 'path': 'docs/pbi/notes/full-run.md', 'summary': 'run all E2E?'})
             rc, out = self.con('done')

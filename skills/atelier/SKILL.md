@@ -51,7 +51,7 @@ With launch `agent` (headless is below):
 ## headless
 
 - `run --detach` starts the designer and returns at once.
-- Repeat `python <skill>/conductor.py wait --timeout 300` until it prints a state other than running, then read its lines.
+- Repeat `python <skill>/conductor.py wait --timeout 300` until it prints a state other than running, then read its lines. On `state: question`, show it with its `present:` line (`## Questions`).
 - With launch `headless`, `next` prints `launch: headless` and `then: ... run --detach`: run that line and do not launch the designer. The same happens on an `agent` run when the designer runs on codex or claude (`launch: headless (designer runner codex)`).
 - Claude Code's auto mode may refuse `run --detach` when it starts codex with `-a never` and no sandbox. Then show the refusal and ask the user to allow the command or to run it themselves.
 - `--launch` is taken by `start` and `run` only. `next` does not take it.
@@ -64,6 +64,8 @@ With launch `agent` (headless is below):
 1. Run the command on the question's `present:` line as it is (`python <skill>/present.py <path> --kind <kind>`).
 2. Show the user only what follows `show:` in its output. Pass a `warn:` line on once. Do not show `then:`, `format:`, `log:` or `page:`.
 3. Give the user's reply back with one of the `then:` lines: a reply saved to a file with `--reply <file>`, free text with `--text`, an approval of an approve with `--approve [--choices 1=a,2=b]`, a change request with `--revise --text`, and the full-run question with `--full-run yes|no`.
+
+A question file other than `approve` (the `question:` path) has the form of `appendix/questions.md`: the text for the user only, with no command. The commands are on present's `then:` lines (a conductor question also has the `# relaunch` and `# abort` lines there).
 
 - Hand the files over, not only links. The page (`~/.answer-me-with-html/pages/`) and the run's `docs/pbi/` may sit outside the folders the user's app opens, so a `file://` link alone can show nothing. When your host has a tool that sends a file to the user (Claude Code: `SendUserFile` with `display: render`), send through it, in one call, right after the page is drawn: the page (the file on present's `page:` line in `html`), the file at the `question:` path, and for `approve` every `docs/pbi/PBI-<n>.md` and every `docs/pbi/notes/*.md` the draft names. Then give the link beside them. A host without such a tool: the link as before.
 - Also write the points in chat, whatever the host, in the user's language, taken from the question file as it is: the conclusion, the PBI table (for `approve`), what the user decides, and the choice the file recommends. Then the user can answer from the chat alone.

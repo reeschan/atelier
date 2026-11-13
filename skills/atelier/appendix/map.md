@@ -33,7 +33,7 @@ The map tells the design and the lint survey which layers and modules the reques
 A scan takes minutes and tokens, and a diagram in the repository is a file the user keeps, so the user decides both.
 
 1. Read `docs/pbi/adapters.json`. A `map` entry with `"asked": true` holds the answer: use it and do not ask again (resume).
-2. Otherwise end the episode with a question (kind `decision`, with `state`; inline: AskUserQuestion once) with three choices:
+2. Otherwise end the episode with a question (kind `decision`, with `state`; inline: AskUserQuestion once) with three choices, laid out as the `decision (design choice, ask-user, map, optional)` row of `appendix/questions.md` (`## What goes in each kind`):
    - `repo`: scan, and leave `.omm/` in the working tree at the end of the run, for the user to commit with the change;
    - `cache`: scan, and keep it only in the cache outside the repository;
    - `skip`: do not create it; the fallback prompt writes the note from the code and its dependencies.

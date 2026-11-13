@@ -9,13 +9,15 @@
   install  入れ方 (入れるのはユーザーが許可したときだけ)
   fallback 入れずに進むときの代わり
 
-道具: omm (oh-my-mermaid の CLI)、omm-scan (oh-my-mermaid のプラグインのスキル)、jevlint、jev、
+道具: omm (oh-my-mermaid の CLI)、omm-scan (oh-my-mermaid のプラグインのスキル)、jevlint、yomiyasu (日本語の言い回しの点検)、jev、
 sac-strategic-compact、principle-test-behavior-not-implementation (pstack)、answer-me-with-any (Approve と問いを HTML で
 見せる confirm のスキル。古い名前 answer-me-with-html しか無ければそれを ok にし、新しい名前で入れ直して古いほうを消すよう添える。
 appendix/adapters.md の `## Confirm`)。
 jevlint は agents.find_cli で探し (home の agents.json の tools.jevlint.path、PATH、fnm・nvm の Node の版)、
 `jevlint auth list` に typesafe があるかを見る (キーの値は出ない)。流すときは見つけた CLI のディレクトリを PATH の先頭に置く
 (agents.cli_env)。シェルで `jevlint` や `which jevlint` を叩いた結果は、PATH の Node の版しだいなので有無の根拠にしない。
+yomiyasu は design_record.yomiyasu_path で探す (lint と同じ。home の agents.json の tools.yomiyasu.path、無ければ
+プラグインのキャッシュのいちばん新しい版)。
 jev は既定ではキーの有無と読み込み元だけを見る (env か資格情報ファイルのパス、失敗ならその理由)。通信しない。
 --probe を付けたときだけ GET https://api.typesafe.ai/v1/models で疎通を確認する。キーの値はどの列にも出さない。
 プラグインの置き場は PBI_PLUGINS_DIR、無ければ ~/.claude/plugins。スキルの置き場は --skills-dir、無ければ ~/.claude/skills。
@@ -33,6 +35,7 @@ from pathlib import Path
 import adapter_gate
 import agents as agents_module
 import common
+import design_record
 import flow
 
 # Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
@@ -47,6 +50,8 @@ INSTALL = {
     'omm-scan': '/plugin marketplace add oh-my-mermaid/oh-my-mermaid, then /plugin install oh-my-mermaid@oh-my-mermaid',
     'jevlint': 'fnm install 26.12.1; npm install -g @indxjp/jevlint (with that Node first in PATH); '
                'jevlint auth set typesafe',
+    'yomiyasu': 'claude plugin marketplace add nanaism/yomiyasu, then '
+                'claude plugin install yomiyasu@yomiyasu --scope user',
     'jev': 'set TYPESAFE_API_KEY, or write {"api_key": "<key>"} to ~/.config/typesafe/credentials.json '
            '(or TYPESAFE_CREDENTIALS_FILE). Never print the key',
     'sac-strategic-compact': 'https://github.com/reeschan/sac-strategic-compact (into ~/.claude/skills/sac-strategic-compact)',
@@ -60,6 +65,7 @@ FALLBACK = {
     'omm': 'map: prompts/map-fallback.md',
     'omm-scan': 'map: prompts/map-fallback.md',
     'jevlint': 'lint-survey and lint-recheck: prompts/lint-fallback.md',
+    'yomiyasu': 'lint の yomiyasu の点検を飛ばす',
     'jev': 'route and gates: prepare.py uses facts only (score 1) and records the failure code',
     'sac-strategic-compact': 'appendix/kiln.md and prompts/kiln-chamber.md',
     'principle-test-behavior-not-implementation': 'appendix/tests-at-end.md, Test principle (fallback)',
@@ -176,6 +182,7 @@ def rows(home: Path, skills_dir: Path, env, probe: bool = False) -> list[tuple]:
     # present.py と同じ探し方 (adapter_gate.find_am): SKILL.md だけで scripts/am.mjs の無い入れ方は ok にしない
     am, old = adapter_gate.find_am(skills_dir)
     confirm = flow.find_skill_file(agents_module.CONFIRM_SKILL, skills_dir, env)
+    yomiyasu = design_record.yomiyasu_path(home, env)
     node = adapter_gate.node_status(env)
     node_row = (f"ok {node['path']} {node['version']}" if node['status'] == 'ok' else
                 f"old {node['version']}" if node['status'] == 'old' else 'missing')
@@ -183,6 +190,7 @@ def rows(home: Path, skills_dir: Path, env, probe: bool = False) -> list[tuple]:
         'omm': f'ok {omm}' if omm else 'missing',
         'omm-scan': f'ok {scan}' if scan else 'missing',
         'jevlint': jevlint_status(home),
+        'yomiyasu': f'ok {yomiyasu}' if yomiyasu else 'missing',
         'jev': jev_status(env, probe=probe),
         'sac-strategic-compact': f'ok {sac}' if sac.is_file() else 'missing',
         'principle-test-behavior-not-implementation': f'ok {principle}' if principle else 'missing',

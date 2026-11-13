@@ -29,9 +29,5 @@ Reviews have their own limit: a PBI is reviewed at most twice, its first report 
 Stop a PBI when it still fails after the last allowed rework, when its bundle row has `limit`, or when it needs a third continue. Raise its tier, rewrite the PBI or build it yourself only when the user picks that. An unusable runner is not a stop of this kind: it has its own question (`runners.md`, When a runner is unusable).
 
 - PBIs of the same wave that do not depend on it keep running; PBIs that depend on it are held.
-- End the episode with a question (kind `rework-limit`) once every running attempt in the same wave has returned and been reconciled; do not end the episode with an attempt still running. Put this in the question's draft:
-  - which PBI stopped, and on which model
-  - what failed on each attempt
-  - the likely cause: the PBI said too little, the model fell short, or the design is wrong
-  - the choices: raise the tier and run again, rewrite or split the PBI, revisit the design, or the user takes it over
+- End the episode with a question (kind `rework-limit`) once every running attempt in the same wave has returned and been reconciled; do not end the episode with an attempt still running. Lay it out as the `rework-limit` row of `appendix/questions.md` (`## What goes in each kind`). A stale case (a target file changed after the design) is the same kind, `rework-limit`, laid out as the stale row of that table (each of its columns differs from the plain row, not only the summary).
 - Raising the tier: `python <skill>/prepare.py docs/pbi --only PBI-<n> --tier <tier>` rewrites its `route.json` from the routing in force at that time; start from the head of the new route.

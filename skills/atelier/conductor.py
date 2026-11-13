@@ -1545,11 +1545,51 @@ def last_handoff_state(run: dict, running: dict):
     return None
 
 
+# 進行役の問いの、止まった所 (Before の線のラベル) と、選択肢を説明する文 (Summary の終わり)。
+# 内部の言葉 (handoff・headless・Agent tool) は同じ文の中で括弧に説明を付ける
+CONDUCTOR_STOPS = {
+    'handoff-loop': ('handoffs repeated without progress',
+                     'The episode handed off (saved its state and stopped so that a new episode can continue) '
+                     'again and again, so the run stopped before it loops forever.'),
+    'launch-failure': ('failed repeatedly',
+                       'The episode could not be started or finished (the launch failed several times in a row), '
+                       'so the run stopped instead of trying again.'),
+    'decision': ('the designer cannot start sub-agents',
+                 'The designer episode cannot start sub-agents (it has no Agent tool), so the run cannot go on '
+                 'this way.'),
+}
+
+
+def conductor_question_text(running: dict, kind: str, what: str, relaunch=None) -> str:
+    """進行役の問いの本文。英語の決まった文で、承認の原稿と同じ 4 つの節 (Summary・Before・After・Decisions) を書く。
+    コマンドは書かない (答え・起こし直し・閉じるのコマンドは present.py の then: の行が出す)。"""
+    stop, meaning = CONDUCTOR_STOPS[kind]
+    where = f"{running.get('episode')} seq {running.get('seq')}"
+    restart = 'Restart the same episode with your answer (the answer is attached to its request)'
+    headless = 'Run the episodes headless (each episode as its own background process, without sub-agents)'
+    again = (restart, 'the same episode starts again with your answer attached')
+    options = [again, ('Close the run', 'the run ends here and no more episodes start')]
+    if relaunch:
+        # headless で走らせる道があるときは、それを推す (Agent tool が無いままでは同じ出番がまた止まる)
+        options.insert(0, (headless, 'the run closes this question and starts the same episode headless'))
+    branches = {restart: ('the same episode runs again', 'answer and restart'),
+                headless: ('the episodes run headless', 'run headless'),
+                'Close the run': ('the run is closed', 'close the run')}
+    lines = ['## Summary', f'```callout info Run stopped', f'{what} {meaning}', '```', '',
+             '## Before', '```flow', f'(episodes so far) -> {where}', f'{where} -> {{stopped here}}: {stop}', '```', '',
+             '## After', '```flow']
+    lines += [f'{{how to go on}} -> {branches[name][0]}: {branches[name][1]}' for name, _ in options]
+    lines += ['```', '', '## Decisions', '```ask', 'How should the run go on?']
+    lines += [f"{'*' if i == 0 else '-'} {name} | {change}" for i, (name, change) in enumerate(options)]
+    lines += ['```']
+    return '\n'.join(lines) + '\n'
+
+
 def conductor_question(paths: Paths, run: dict, running: dict, kind: str, what: str, relaunch=None) -> tuple:
-    """進行役が作る問い (handoff-loop・launch-failure・decision)。説明だけを episodes/<seq>-<種類>.question.md に書く
+    """進行役が作る問い (handoff-loop・launch-failure・decision)。本文を episodes/<seq>-<種類>.question.md に書く
     (答えのコマンドは書かない。答えの行は present.py が出す)。(終了コード, 出す行) を返す (出すのは呼び出し側)。"""
     path = paths.episode_file(running.get('seq'), kind, '.question.md')
-    lines = [f'# Conductor question: {kind}', '', what]
+    lines = conductor_question_text(running, kind, what, relaunch).rstrip('\n').split('\n')
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='\n')
     topic = 'headless' if kind == 'decision' else 'other'
@@ -1557,7 +1597,7 @@ def conductor_question(paths: Paths, run: dict, running: dict, kind: str, what: 
                        'state': last_handoff_state(run, running), 'seq': running.get('seq'),
                        'episode': running.get('episode'), 'wave': running.get('wave'), 'pbis': running.get('pbis'),
                        'relaunch': relaunch, 'sent_by': running.get('sent_by'),
-                       'asked_at': iso_now(), 'topic': topic}
+                       'asked_at': iso_now(), 'topic': topic, 'conductor': True}
     run['state'] = 'question'
     run['running'] = None
     run['pending'] = None
@@ -1659,16 +1699,23 @@ def _process_done(paths: Paths, run: dict) -> tuple:
         code, lines = fail(paths, run, running, f'missing {absent}', 'invalid', summary)
         # 状態の扱いは fail と同じ。launch-failure の問いになったときはその行を返し、そうでなければ exit 2 の 1 行
         return (EXIT_USAGE, [f'error: missing {absent}']) if code == EXIT_FAIL else (code, lines)
-    stale = stale_envelope(data) or grill_open(paths, run, data)
+    stale = stale_envelope(data) or grill_open(paths, run, data) or question_draft_errors(data)
     if stale:
-        return fail(paths, run, running, stale, 'invalid', summary)
+        code, lines = fail(paths, run, running, stale, 'invalid', summary)
+        # 断った原稿の化けも見せる (見出しまで化けた原稿は形の誤りだけでは原因が分からない)
+        return code, with_warnings(lines, keep_garbled(paths, run, data))
     code, lines = settle_result(paths, run, running, data, summary)
+    garbled = keep_garbled(paths, run, data)
+    return code, with_warnings(lines, garbled) if lines else lines
+
+
+def keep_garbled(paths: Paths, run: dict, data: dict) -> list:
+    """結果の化けの警告を返す。wait・status・切り離した run の呼び手にも届くよう、答えるまで run.json に残す。"""
     garbled = garbled_warnings(data)
     if garbled:
-        # wait・status・切り離した run の呼び手にも届くよう、答えるまで run.json に残す
         run['garbled'] = merge_warnings(run.get('garbled') or [], garbled)[-GARBLED_KEEP:]
         save(paths, run)
-    return code, with_warnings(lines, garbled) if lines else lines
+    return garbled
 
 
 DRAFT_HASH = re.compile(r'^reply-meta-draft_hash:\s*(\S+)\s*$', re.M)
@@ -1788,6 +1835,33 @@ def stale_envelope(data: dict) -> str:
         return (f'approve draft changed after its envelope: {path} (reply-meta-draft_hash does not match; '
                 'add the envelope last, with design_record.py markdown)')
     return ''
+
+
+DRAFT_ERRORS_SHOWN = 2
+
+
+def question_draft_errors(data: dict) -> str:
+    """approve 以外の問いの結果で、question.path の原稿に誤りがあれば (読めないのも誤り)、その説明。
+
+    誤りは最初の DRAFT_ERRORS_SHOWN 件と残りの件数にまとめる。警告 (内部の言葉) では止めない。合っていれば空。
+    """
+    question = data.get('question') if isinstance(data.get('question'), dict) else {}
+    kind = question.get('kind')
+    if data.get('status') != 'question' or kind not in design_record.QUESTION_DRAFT_KINDS:
+        return ''
+    path = question.get('path')
+    try:
+        # design_record.py lint と同じ復号 (BOM を読み飛ばし、不正なバイトは置き換える)。lint が通す原稿を断らない
+        text = Path(path).read_bytes().decode('utf-8-sig', errors='replace')
+    except (OSError, TypeError, ValueError):
+        return f'question draft has errors: {path}: not readable'
+    errors, _ = design_record.lint_text(text, kind)
+    if not errors:
+        return ''
+    shown = '; '.join(f'L{number} {what}' for number, what, _ in errors[:DRAFT_ERRORS_SHOWN])
+    more = f' (+{len(errors) - DRAFT_ERRORS_SHOWN} more)' if len(errors) > DRAFT_ERRORS_SHOWN else ''
+    # コマンドは理由に書かない: 2 回続けて断ると launch-failure の問いの本文に入る
+    return f'question draft has errors: {path}: {shown}{more}'
 
 
 GRILL = 'atelier.grill/1'
