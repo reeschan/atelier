@@ -419,14 +419,17 @@ class ComponentRulesParityTest(CatalogTest):
         self.component('custom.note', description='first')
         target = self.home / 'components' / 'custom.note.json'
         changed = target.read_bytes().replace(b'first', b'second')
-        original = flow.load_components
+        original = desk_catalog._read_object
 
-        def swapped(*args, **kwargs):
-            target.write_bytes(changed)
-            return original(*args, **kwargs)
+        def swapped(path):
+            data = original(path)
+            if path == target:  # 厳密に読んだ直後に中身を変える
+                target.write_bytes(changed)
+            return data
 
-        with mock.patch.object(flow, 'load_components', swapped):
+        with mock.patch.object(desk_catalog, '_read_object', swapped):
             code, out, err = run('components', '--home', self.home)
+        self.assertEqual(target.read_bytes(), changed)  # 差し替えが本当に起きたこと
         if code == 0:
             items = {item['id']: item['data'] for item in json.loads(out)['items']}
             self.assertEqual(items['custom.note']['description'], 'first')
