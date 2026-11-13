@@ -5,7 +5,6 @@ dsh は PBI_DSH_NODE と PBI_DSH_BIN で偽物を差す。偽物は受け取っ�
 """
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -163,22 +162,6 @@ class RoleRunTest(unittest.TestCase):
         args = self.calls()[-1]['args']
         self.assertEqual(args[0], '-p')
         self.assertEqual(args[args.index('--mode') + 1], 'accept-edits')
-        self.assertTrue(args[args.index('--settings') + 1].endswith('agy.settings.json'))
-
-    def test_agy_settings_allow_commands_and_deny_destructive_ones(self):
-        settings = json.loads((HERE / 'agy.settings.json').read_text(encoding='utf-8'))
-        self.assertEqual(settings['permissions']['allow'], ['command(*)'])
-        rules = [re.compile(r[len('command(regex:'):-1]) for r in settings['permissions']['deny']]
-
-        def denied(command):
-            return any(rule.fullmatch(command) for rule in rules)
-        for command in ('git commit -m x', 'Set-Content b.txt hi; git add b.txt; git commit -m t',
-                        'Write-Output start; git push', 'git checkout -- .', 'rm -rf node_modules',
-                        'Remove-Item -Path dist -Recurse -Force'):
-            self.assertTrue(denied(command), command)
-        for command in ('rg foo src', 'git status --short; git diff', 'pnpm run check',
-                        'Get-Content a.txt | Select-String foo', 'git log --oneline', 'rm a.txt'):
-            self.assertFalse(denied(command), command)
 
     def test_refusals(self):
         self.prompt()

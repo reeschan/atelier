@@ -12,7 +12,7 @@
     claude:   claude_run.py <名前> --folder roles (claude -p。MCP なし)。ログは <名前>.json・.err・.run.json
     dsh:      dsh_run.py <名前> --folder roles。ログは <名前>.jsonl・.err・.final.md・.run.json
     opencode: opencode run -m <model>[#<effort>] --format json (OPENCODE_CONFIG はスキルの opencode.config.json)
-    agy:      agy -p ... --mode accept-edits --settings <スキルの agy.settings.json> --output-format json
+    agy:      agy -p ... --mode accept-edits --output-format json
   CLI は runner_cli.find_command (ATELIER_<RUNNER>_CMD・agents.json の path・PATH) で探す。
 - 合否は役割が書く結果の JSON (reviews/<報告名>.review.json・verify/tests/<名前>.test-result.json) が決める。
   ここが返すのは子の終了コード。引数・依頼文・CLI の不備は 2。
@@ -104,8 +104,7 @@ def run_opencode(args, base: Path, prompt: Path) -> int:
 
 def run_agy(args, base: Path, prompt: Path) -> int:
     argv = [*command_or_fail('agy'), '-p', f'Read {prompt.as_posix()} and follow it.', '--model', args.model,
-            '--mode', 'accept-edits', '--settings', str(SKILL / 'agy.settings.json'),
-            '--output-format', 'json', '--print-timeout', '3600s']
+            '--mode', 'accept-edits', '--output-format', 'json', '--print-timeout', '3600s']
     with open(base / f'{args.name}.json', 'wb') as out, open(base / f'{args.name}.err', 'wb') as err:
         return subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
                               creationflags=NO_WINDOW, check=False).returncode

@@ -128,7 +128,7 @@ codex -a never exec -m <model> -c model_reasoning_effort='"<effort>"' -s danger-
 
 ```bash
 mkdir -p docs/pbi/agy
-agy -p "Read docs/pbi/agy/<report>.prompt.md and follow it." --model <model> --mode accept-edits --settings "<skill>/agy.settings.json" --output-format json --print-timeout 3600s < /dev/null > docs/pbi/agy/<report>.json 2> docs/pbi/agy/<report>.err
+agy -p "Read docs/pbi/agy/<report>.prompt.md and follow it." --model <model> --mode accept-edits --output-format json --print-timeout 3600s < /dev/null > docs/pbi/agy/<report>.json 2> docs/pbi/agy/<report>.err
 ```
 
 **Unusable when.**
@@ -139,14 +139,9 @@ agy -p "Read docs/pbi/agy/<report>.prompt.md and follow it." --model <model> --m
 | output mentions a usage limit, quota, rate limit, `RESOURCE_EXHAUSTED` or authentication | |
 | `.last.md` missing or empty | |
 
-**Permissions.** `<skill>/agy.settings.json` is applied to this run only (`--settings`, never saved) on top of `~/.gemini/antigravity-cli/settings.json`. It allows every command (`command(*)`) and denies, anywhere in a command line, `git` commit, push, reset, rebase, checkout, switch, restore, stash, clean, merge, cherry-pick, tag and worktree, `rm -rf` and `Remove-Item -Recurse`. Commands run outside the terminal sandbox, as a codex worker does with `danger-full-access`. A denied command comes back to the model as an error and the run goes on. The deny rules match the command text; they guard against mistakes, not against a worker that sets out to get round them.
+**Known issues** (checked 2026-10-13 with agy 1.4).
 
-**Known issues** (checked 2026-11-13 with agy 1.5.7).
-
-- Without `--settings`, headless runs auto-deny any command the user's allow list does not match (`denied_actions: [{action: command}]`, no `.last.md`). A command line is matched as a whole, so `rg`, `Get-Content`, `;` chains and pipes stop the run even when `pnpm` or `git status` are allowed. When a PBI still shows `denied_actions`, write "Antigravity: commands denied headless (<time>)" at the top of STATUS.md and route the rest with `--skip agy`.
-- `--sandbox`, and the default mode (no `--mode`), do not help: the first still denies, the second runs commands in a sandbox that cannot write to the workspace. `--mode auto` is not offered on every account and falls back to the default mode.
-- `--settings` reads regular expressions through a second layer of escapes: `\s` and `\b` are refused as invalid escapes. Use character classes such as `[^A-Za-z0-9_-]` and ` +`.
-- A search with no path (`rg foo`) waits on standard input until `--print-timeout`. Give it a path (`rg foo .`).
+- Headless runs auto-deny commands (`RunCommand`; `denied_actions: [{action: command}]`, no `.last.md`). When the first PBI shows this, write "Antigravity: commands denied headless (<time>)" at the top of STATUS.md and route the rest with `--skip agy`. A permission rule in `~/.gemini/antigravity-cli/settings.json` may fix it; that file is outside the repository, so ask the user first.
 - A denial still exits 0 with status SUCCESS. Check `grep -o '"denied_actions":\[[^]]*\]' <report>.json` and `tail -n 5 <report>.err`.
 - Tokens are not reported; the session stats leave agy out.
 

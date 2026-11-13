@@ -432,9 +432,9 @@ Without the flag file (`~/.claude/state/rtk/<session_id>.on`), or without `rtk` 
 
 ### Notes on Antigravity
 
-- Headless runs (`agy -p`) auto-deny any command the allow list does not match. A command line is matched as a whole, so allowing `pnpm` or `git status` still leaves `rg`, `Get-Content`, `;` chains and pipes denied.
-- The skill therefore passes the bundled `skills/atelier/agy.settings.json` with `--settings` on every worker and role launch (that run only; `~/.gemini/antigravity-cli/settings.json` is not changed). It allows every command (`command(*)`) and denies, anywhere in a command line, git commit, push, reset, rebase, checkout, switch, restore, stash, clean, merge, cherry-pick, tag and worktree, `rm -rf` and `Remove-Item -Recurse`. Commands run outside the sandbox, with about the rights of a Codex worker on `danger-full-access`. The deny rules match text: they guard against mistakes, not a security boundary (checked with agy 1.5.7).
-- `agy` **denies commands it has no permission for and still exits 0**. Denials only show up in `denied_actions` in the JSON result and on stderr. The skill checks `denied_actions` every time and drops `agy` for the rest of the session when one still shows up. A command that hits a deny rule comes back to the model as an error, not in `denied_actions`, and the run goes on.
+- As of 2026-10, headless runs (`agy -p`) had command execution auto-denied (`RunCommand`), so work did not progress. The skill drops `agy` for the rest of the session after the first such denial.
+- `agy` **denies commands it has no permission for and still exits 0**. Denials only show up in `denied_actions` in the JSON result and on stderr. The skill checks `denied_actions` every time.
+- Permissions live in `permissions.allow` in `~/.gemini/antigravity-cli/settings.json`. The sandbox is off by default, so `command(node)` alone was not enough; `unsandboxed(node)` was also needed (checked with agy 1.3.3).
 
 ## Usage
 
