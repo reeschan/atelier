@@ -2174,11 +2174,12 @@ class ConductorTest(unittest.TestCase):
     def test_build_reapproval_has_the_same_approve_preconditions(self):
         """build の出番の再承認 (designer.md) も、design と同じ approve の行で調べる。"""
         question = {'kind': 'approve', 'path': 'docs/pbi/notes/approve.md'}
-        for episode in ('design', 'build'):
-            data = {'episode': episode, 'status': 'question', 'question': question}
-            self.enterContext(unittest.mock.patch.object(conductor, 'confirm_off', return_value=False))
-            self.assertIsNotNone(conductor._approve_question(data), episode)
-            self.assertTrue(conductor.missing_for_done(data).startswith('approve draft check design-record'), episode)
+        with unittest.mock.patch.object(conductor, 'confirm_off', return_value=False):
+            for episode in ('design', 'build'):
+                data = {'episode': episode, 'status': 'question', 'question': question}
+                self.assertIsNotNone(conductor._approve_question(data), episode)
+                self.assertTrue(conductor.missing_for_done(data).startswith('approve draft check design-record'),
+                                episode)
 
     def test_done_refuses_an_approve_question_with_check_when_confirm_is_off(self):
         """confirm が off で承認の問いに check design-record が付いていれば、done は exit 2 の 1 行で断る。"""
