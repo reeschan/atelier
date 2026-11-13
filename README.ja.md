@@ -597,12 +597,14 @@ python skills/atelier/jev_mcp.py --http --port 7830 --root /path/to/repo   # htt
 
 ```sh
 cd skills/atelier
-python -m unittest discover -p 'test_*.py'
-python -m unittest discover -s studio -p 'test_*.py'
+python run_tests.py
+python run_tests.py -s studio
 cd jev
 python -m unittest test_jev
 node --test --test-reporter=tap jev.test.mjs
 ```
+
+`run_tests.py` は `python -m unittest discover -p 'test_*.py'` と同じテストを、CPU の数だけのプロセスに分けて流します (`-j N` で数を変えられます)。スキルのテストは約 13 分から約 1.5 分になります。1 つのモジュールやテストだけを流すときは、今までどおり `python -m unittest` を使えます。
 
 Jev クライアントのテストは 127.0.0.1 のモックサーバーだけを相手にします (本物の Jev は呼びません)。
 
