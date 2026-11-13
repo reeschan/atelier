@@ -966,7 +966,7 @@ def confirm_line() -> str:
         return f'confirm: {kind}'
     name = reason.split(' found at ', 1)[0]
     if name == agents_module.CONFIRM_SKILL_OLD:
-        return f'confirm: skill {name} (warn: old name, rename it to {agents_module.CONFIRM_SKILL})'
+        return f'confirm: skill {name} (warn: old name, install {agents_module.CONFIRM_SKILL} and remove it)'
     return f'confirm: skill {name}'
 
 
