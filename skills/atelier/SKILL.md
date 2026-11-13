@@ -38,7 +38,7 @@ With launch `agent` (headless is below):
 3. When the Agent tool runs in the background, call `done` only after the completion notice.
 4. Run `python <skill>/conductor.py done`. Call it even when the designer's reply was empty: the result is in the file.
 5. Show the user the lines it printed, one or two lines.
-6. Exit 10: a question is waiting, go to Questions. Exit 12: the episode failed, run the `then:` line it prints and launch again. Exit 2: the state or the command is wrong, show the `error:` line and stop.
+6. Exit 10: a question is waiting, go to Questions. Exit 12: the episode failed, run the `then:` line it prints and launch again. Exit 2 with `error: missing <what>` (the designer left out a required part): go on with step 1 (`next` launches the designer again; the conductor counts the tries). Any other exit 2: the state or the command is wrong, show the `error:` line and stop.
 7. Back to 1.
 
 ## Running
@@ -55,22 +55,30 @@ With launch `agent` (headless is below):
 - With launch `headless`, `next` prints `launch: headless` and `then: ... run --detach`: run that line and do not launch the designer. The same happens on an `agent` run when the designer runs on codex or claude (`launch: headless (designer runner codex)`).
 - Claude Code's auto mode may refuse `run --detach` when it starts codex with `-a never` and no sandbox. Then show the refusal and ask the user to allow the command or to run it themselves.
 - `--launch` is taken by `start` and `run` only. `next` does not take it.
-- A `decision` question with a `relaunch:` line (`no-agent-tool`): run that line, then follow the headless steps.
+- A `decision` question of `no-agent-tool`: `present` prints a `then:` line that ends with `# relaunch`. Run that line (do not show it to the user), then follow the headless steps.
 
 ## Questions
 
-`next` and `done` end with exit 10 while the run waits on the user: `question: <kind> <path>`, `summary:`, `confirm:`, and the `then:`, `approve:` and `revise:` lines (`yes:` and `no:` for `full-run`).
+`next` and `done` end with exit 10 while the run waits on the user: `question: <kind> <path>`, `summary:` and `present:`. Every question, approve or not, is shown the same way:
 
-- `confirm: skill <name>`: show every question, approve or not, through that skill (Skill tool), even when the adapters say `auto`. Never only paste the Markdown in chat: the page goes out too. A `warn: old name` on the line: pass it on to the user once, saying that renaming the folder is not enough (the old skill keeps its old name inside): install `answer-me-with-any` with the line `tools_check.py` prints, then remove `answer-me-with-html`. The old one works until then.
-- `confirm: chat` or `confirm: off`: show the file as it is in chat.
-- Hand the files over, not only links. The page (`~/.answer-me-with-html/pages/`) and the run's `docs/pbi/` may sit outside the folders the user's app opens, so a `file://` link alone can show nothing. When your host has a tool that sends a file to the user (Claude Code: `SendUserFile` with `display: render`), send through it, in one call, right after the page is drawn: the page (the path on the skill's `✓` line), the file at the `question:` path, and for `approve` every `docs/pbi/PBI-<n>.md` and every `docs/pbi/notes/*.md` the draft names. Then give the link beside them. A host without such a tool: the link as before.
+1. Run the command on the question's `present:` line as it is (`python <skill>/present.py <path> --kind <kind>`).
+2. Show the user only what follows `show:` in its output. Pass a `warn:` line on once. Do not show `then:`, `format:`, `log:` or `page:`.
+3. Give the user's reply back with one of the `then:` lines: a reply saved to a file with `--reply <file>`, free text with `--text`, an approval of an approve with `--approve [--choices 1=a,2=b]`, a change request with `--revise --text`, and the full-run question with `--full-run yes|no`.
+
+- Hand the files over, not only links. The page (`~/.answer-me-with-html/pages/`) and the run's `docs/pbi/` may sit outside the folders the user's app opens, so a `file://` link alone can show nothing. When your host has a tool that sends a file to the user (Claude Code: `SendUserFile` with `display: render`), send through it, in one call, right after the page is drawn: the page (the file on present's `page:` line in `html`), the file at the `question:` path, and for `approve` every `docs/pbi/PBI-<n>.md` and every `docs/pbi/notes/*.md` the draft names. Then give the link beside them. A host without such a tool: the link as before.
 - Also write the points in chat, whatever the host, in the user's language, taken from the question file as it is: the conclusion, the PBI table (for `approve`), what the user decides, and the choice the file recommends. Then the user can answer from the chat alone.
 
-- `approve`: show the file at the `question:` path the way the `confirm:` line says (`appendix/adapters.md`, `## Confirm`), with the `summary:`. Save the user's reply to a file and run `python <skill>/conductor.py answer --reply <file>`.
+Never build the pipe yourself (`design_record.py markdown --draft ... | am render -`): `present.py` does it, and writes what it shows to `docs/pbi/presentations.jsonl`.
+
+- `present` exit 3: am could not draw the draft (the designer's mistake; the run does not stop). Tell the user the `error:` line in one line, show what follows the `show:` line (present gives it in the `off` form), and take the answer as usual.
+- `answer` exit 3 (`check: mismatch`) on a question that is not an approve: the reply is for an old page or another question. Show the same question again with `present`, and ask again.
+- `answer` exit 2 with `error: not shown: ...`: run the command on that line, then answer again.
+- `approve`: save the user's reply to a file and run `python <skill>/conductor.py answer --reply <file>`.
 - `check-reply exit 4` (a reply with no fence): an approval is `answer --approve --choices ...`, a request to change the list is `answer --revise --text ...`. A revise comes back as a new design episode; that is normal.
 - Exit 3 (the reply does not match the draft) or 5 (a choice left unanswered): show it and ask the user again.
 - `full-run`: the run asks whether to run the whole E2E suite once (`appendix/tests-at-end.md`). Run `answer --full-run yes` or `answer --full-run no` by the user's answer; a yes is used up by one full run.
-- Other kinds (`rework-limit`, `destructive`, `send-approval`, `decision`): take the answer as text and run `answer --text`. A `decision` may be a round of grill questions: show it whole and pass the user's answers on as they are.
+- Other kinds (`rework-limit`, `destructive`, `send-approval`, `decision`): a reply pasted from the page (it has an `am-reply-meta` fence) is saved to a file and given with `answer --reply <file>`, so the reply check runs; free text in chat goes with `answer --text`. A `decision` may be a round of grill questions: show it whole and pass the user's answers on as they are.
+- The completion report is shown with `python <skill>/present.py <report> --kind report`.
 
 A finished run prints `report: <path>` (`docs/pbi/REPORT.md`): hand that file over the same way (the send tool, then its path), and write its conclusion and what is left for the user in chat, from the report as it is.
 

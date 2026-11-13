@@ -64,6 +64,8 @@ OUTSIDE_SKILL_NAMES = {
     'AGENTS.md',
     'AGENTS.project.md',
     'CLAUDE.md',
+    # answer-me-with-any スキルの中にある
+    'am.mjs',
 }
 
 

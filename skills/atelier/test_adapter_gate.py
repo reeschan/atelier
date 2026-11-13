@@ -5,6 +5,9 @@ PBI の境目 (diff 299/300/301・PBI 2/3 件・deep・sensitive・route.json �
 UTF-16)・読めない行・空のファイル、agents.json の設定 (off・スキル名・警告)、
 終了コード 2 を、一時ディレクトリに作った入力で見る。home は必ず一時ディレクトリにして、
 実際のユーザーの agents.json を読まないようにする。
+confirm (Approve の見せ方) は am.mjs と node の有無で決まる。偽の node・am (testdata/present/fakes.py) を
+一時ディレクトリに置き、CLI の PATH をそのディレクトリだけ (node 無しは空のディレクトリ) にして、
+本物の node やユーザーのスキルを読まないようにする。
 """
 import json
 import os
@@ -14,9 +17,15 @@ import sys
 import tempfile
 import unittest
 import uuid
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, 'adapter_gate.py')
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, 'testdata', 'present'))
+
+import adapter_gate  # noqa: E402
+import fakes  # noqa: E402
 
 HEADER = 'phase\tsetting\tdecision\treason'
 DESIGN_REASON = 'decided by the orchestrator (appendix/design.md)'
@@ -49,6 +58,8 @@ class AdapterGateTest(unittest.TestCase):
         os.makedirs(self.home)
         os.makedirs(self.skills)
         os.makedirs(self.plugins)
+        self.nodeless = os.path.join(self.dir, 'nodeless')
+        os.makedirs(self.nodeless)
 
     def reset(self):
         """PBI と home の中身を空にして、境目ごとの入力をまっさらな状態から作る。"""
@@ -80,14 +91,18 @@ class AdapterGateTest(unittest.TestCase):
     def write_adapters(self, adapters):
         write_json(os.path.join(self.home, 'agents.json'), {'adapters': adapters})
 
-    def gate(self, *args, numstat=True, home=None, pbi_dir=None):
-        """CLI を起動して完成したプロセスを返す。--numstat は numstat=False のときだけ省く。"""
+    def gate(self, *args, numstat=True, home=None, pbi_dir=None, path_dir=None, extra_env=None):
+        """CLI を起動して完成したプロセスを返す。--numstat は numstat=False のときだけ省く。
+
+        PATH は path_dir だけ (省くと node の無い空のディレクトリ)。extra_env は環境変数を足す。
+        """
         command = [sys.executable, SCRIPT, pbi_dir or self.base]
         if numstat:
             command += ['--numstat', self.numstat]
         command += ['--home', home or self.home, '--skills-dir', self.skills]
         command += list(args)
-        env = dict(os.environ, PBI_PLUGINS_DIR=self.plugins)
+        env = dict(os.environ, PBI_PLUGINS_DIR=self.plugins, PATH=path_dir or self.nodeless)
+        env.update(extra_env or {})
         return subprocess.run(command, capture_output=True, text=True, encoding='utf-8', env=env)
 
     def table(self, result):
@@ -230,7 +245,7 @@ class AdapterGateTest(unittest.TestCase):
         self.assertRow(rows, 'design', 'auto', 'manual', DESIGN_REASON)
         self.assertRow(rows, 'review', 'auto', 'skip', 'diff 0 lines, 0 PBIs, no deep or sensitive')
         self.assertRow(rows, 'security', 'auto', 'skip', 'no sensitive or deep PBI')
-        self.assertEqual(rows['confirm'][:2], ['auto', 'chat'])
+        self.assertEqual(rows['confirm'][:2], ['html', 'ask'])
         self.assertEqual(len(rows), 4)
 
     def test_off_setting(self):
@@ -264,38 +279,160 @@ class AdapterGateTest(unittest.TestCase):
                          ['warn adapters.review: invalid value, using auto',
                           'warn adapters.zzz: unknown phase, ignored'])
 
-    def touch_skill(self, *parts):
-        path = os.path.join(*parts, 'SKILL.md')
-        write_text(path, '---\nname: x\n---\n')
+    def node_dir(self, version=None):
+        """PATH に載せる偽の node のディレクトリ (version を渡すとその版を出す)。"""
+        return fakes.install_node(os.path.join(self.dir, 'node'), version)
+
+    @staticmethod
+    def am_url(path):
         return path.replace(os.sep, '/')
 
-    def test_confirm_auto_uses_chat_until_the_skill_is_installed(self):
-        """auto は answer-me-with-any。古い名前しか無ければそれを使い、どちらも無ければ chat で、何も入れない。"""
+    def confirm_row(self, **kwargs):
         self.write_numstat()
-        rows = self.table(self.gate())
-        self.assertRow(rows, 'confirm', 'auto', 'chat',
-                       'answer-me-with-any not installed; show the same Markdown in chat (no install, no CLI)')
-        self.assertEqual(os.listdir(self.skills), [])
-        old = self.touch_skill(self.skills, 'answer-me-with-html')
-        rows = self.table(self.gate())
-        self.assertRow(rows, 'confirm', 'auto', 'skill',
-                       f'answer-me-with-html found at {old} (old name; install answer-me-with-any and remove it); '
-                       'use it only if it is in the skill list')
-        found = self.touch_skill(self.skills, 'answer-me-with-any')
-        rows = self.table(self.gate())
-        self.assertRow(rows, 'confirm', 'auto', 'skill',
-                       f'answer-me-with-any found at {found}; use it only if it is in the skill list')
+        return self.table(self.gate(**kwargs))['confirm']
 
-    def test_confirm_skill_name_and_plugin_skill(self):
+    def test_confirm_without_am_asks_and_installs_nothing(self):
+        """am.mjs が無ければ ask。node があっても何も入れない。"""
+        for path_dir in (None, self.node_dir()):
+            with self.subTest(node=path_dir is not None):
+                self.assertEqual(self.confirm_row(path_dir=path_dir),
+                                 ['html', 'ask', 'format off (missing-am)'])
+                self.assertEqual(os.listdir(self.skills), [])
+
+    def test_confirm_with_am_and_node_uses_the_setting_as_format(self):
+        am = self.am_url(fakes.install_am(self.skills))
+        node = self.node_dir()
+        self.assertEqual(self.confirm_row(path_dir=node), ['html', 'html', f'format html (am at {am})'])
+        self.write_adapters({'confirm': 'md'})
+        self.assertEqual(self.confirm_row(path_dir=node), ['md', 'md', f'format md (am at {am})'])
+
+    def test_confirm_old_name_am_works_with_a_warn(self):
+        am = self.am_url(fakes.install_am(self.skills, 'answer-me-with-html'))
+        row = self.confirm_row(path_dir=self.node_dir())
+        self.assertEqual(row[:2], ['html', 'html'])
+        self.assertEqual(row[2], f'format html (am at {am}); '
+                                 'warn: confirm: old name answer-me-with-html, install answer-me-with-any and remove it')
+
+    def test_confirm_without_a_usable_node_asks(self):
+        """am はあっても node が無いか 20 未満なら ask。"""
+        fakes.install_am(self.skills)
+        for label, path_dir in (('no node', None), ('node 18', self.node_dir('v18.19.0'))):
+            with self.subTest(label):
+                self.assertEqual(self.confirm_row(path_dir=path_dir),
+                                 ['html', 'ask', 'format off (missing-node)'])
+
+    def test_confirm_off_does_not_look_for_am_or_node(self):
+        fakes.install_am(self.skills)
+        marker = os.path.join(self.dir, 'launched')
+        self.write_adapters({'confirm': 'off'})
+        row = self.confirm_row(path_dir=self.node_dir(), extra_env={'FAKE_NODE_MARKER': marker})
+        self.assertEqual(row, ['off', 'off', OFF_REASON])
+        self.assertFalse(os.path.exists(marker))
+
+    def test_confirm_skill_names_are_read_as_html_with_a_warn(self):
         self.write_numstat()
-        self.write_adapters({'confirm': 'my-confirm'})
-        self.assertEqual(self.table(self.gate())['confirm'][:2], ['my-confirm', 'chat'])
-        self.touch_skill(self.skills, 'my-confirm')
-        self.assertEqual(self.table(self.gate())['confirm'][:2], ['my-confirm', 'skill'])
-        self.write_adapters({'confirm': 'am:answer-me-with-html'})
-        self.assertEqual(self.table(self.gate())['confirm'][:2], ['am:answer-me-with-html', 'chat'])
-        self.touch_skill(self.plugins, 'am', '1.0.0', 'skills', 'answer-me-with-html')
-        self.assertEqual(self.table(self.gate())['confirm'][:2], ['am:answer-me-with-html', 'skill'])
+        for value in ('my-confirm', 'am:answer-me-with-html'):
+            with self.subTest(value=value):
+                self.write_adapters({'confirm': value})
+                result = self.gate()
+                rows = self.table(result)
+                self.assertEqual(rows['confirm'][:2], ['html', 'ask'])
+                self.assertEqual(result.stdout.splitlines()[5:],
+                                 [f'warn adapters.confirm: {value} is read as html'])
+
+    def env_with_node(self, version=None):
+        return {'PATH': self.node_dir(version)}
+
+    def test_node_status_by_version(self):
+        """20 以上は ok (20.0.0 が境目)、20 未満は old。path は PATH の node、version は出力のまま。"""
+        cases = [('v22.1.0', 'ok'), ('v20.0.0', 'ok'), ('v19.9.9', 'old'), ('v18.19.0', 'old')]
+        for version, status in cases:
+            with self.subTest(version=version), mock.patch.dict(os.environ, {'FAKE_NODE_VERSION': version}):
+                env = self.env_with_node()
+                result = adapter_gate.node_status(env)
+                self.assertEqual(result['status'], status)
+                self.assertEqual(result['version'], version)
+                self.assertEqual(os.path.normcase(os.path.dirname(result['path'])),
+                                 os.path.normcase(env['PATH']))
+
+    def test_node_status_without_node_is_missing(self):
+        result = adapter_gate.node_status({'PATH': self.nodeless})
+        self.assertEqual(result, {'status': 'missing', 'path': None, 'version': None})
+
+    def test_node_status_is_missing_when_node_cannot_be_read(self):
+        """終了コードが 0 でない・版が読めない・止まった node は、例外を出さず missing。"""
+        env = self.env_with_node()
+        cases = [({'FAKE_NODE_EXIT': '1'}, 1), ({'FAKE_NODE_VERSION': 'junk'}, 10), ({'FAKE_NODE_SLEEP': '3'}, 1)]
+        for extra, timeout in cases:
+            with self.subTest(extra=extra), mock.patch.dict(os.environ, extra), \
+                    mock.patch.object(adapter_gate, 'NODE_TIMEOUT', timeout):
+                self.assertEqual(adapter_gate.node_status(env)['status'], 'missing')
+
+    def test_node_status_defaults_to_the_process_environment(self):
+        with mock.patch.dict(os.environ, {'PATH': self.node_dir()}):
+            self.assertEqual(adapter_gate.node_status()['status'], 'ok')
+
+    def test_find_am_prefers_the_new_name(self):
+        self.assertEqual(adapter_gate.find_am(self.skills), (None, False))
+        write_text(os.path.join(self.skills, 'answer-me-with-any', 'SKILL.md'), '---\nname: x\n---\n')
+        self.assertEqual(adapter_gate.find_am(self.skills), (None, False), 'SKILL.md alone is not enough')
+        old = fakes.install_am(self.skills, 'answer-me-with-html')
+        found, is_old = adapter_gate.find_am(self.skills)
+        self.assertEqual((os.path.normcase(str(found)), is_old), (os.path.normcase(old), True))
+        new = fakes.install_am(self.skills)
+        found, is_old = adapter_gate.find_am(self.skills)
+        self.assertEqual((os.path.normcase(str(found)), is_old), (os.path.normcase(new), False))
+
+    def test_find_am_without_skills_dir_reads_atelier_skills_dir(self):
+        am = fakes.install_am(self.skills)
+        with mock.patch.dict(os.environ, {'ATELIER_SKILLS_DIR': self.skills}):
+            found, is_old = adapter_gate.find_am(None)
+        self.assertEqual((os.path.normcase(str(found)), is_old), (os.path.normcase(am), False))
+
+    def test_resolve_confirm_off_never_starts_node(self):
+        fakes.install_am(self.skills)
+        marker = os.path.join(self.dir, 'launched')
+        with mock.patch.dict(os.environ, {'FAKE_NODE_MARKER': marker}):
+            resolved = adapter_gate.resolve_confirm('off', self.skills, self.env_with_node())
+        self.assertEqual(resolved, {'setting': 'off', 'format': 'off', 'reason': 'setting',
+                                    'am': None, 'node': None, 'warnings': []})
+        self.assertFalse(os.path.exists(marker))
+
+    def test_resolve_confirm_without_am_never_starts_node(self):
+        marker = os.path.join(self.dir, 'launched')
+        with mock.patch.dict(os.environ, {'FAKE_NODE_MARKER': marker}):
+            resolved = adapter_gate.resolve_confirm('html', self.skills, self.env_with_node())
+        self.assertEqual((resolved['format'], resolved['reason'], resolved['am'], resolved['node']),
+                         ('off', 'missing-am', None, None))
+        self.assertFalse(os.path.exists(marker))
+
+    def test_resolve_confirm_without_a_usable_node(self):
+        am = self.am_url(fakes.install_am(self.skills))
+        for label, env in (('no node', {'PATH': self.nodeless}), ('node 18', self.env_with_node('v18.19.0'))):
+            with self.subTest(label):
+                resolved = adapter_gate.resolve_confirm('md', self.skills, env)
+                self.assertEqual((resolved['format'], resolved['reason'], resolved['node'], resolved['warnings']),
+                                 ('off', 'missing-node', None, []))
+                self.assertEqual(os.path.normcase(resolved['am']), os.path.normcase(am))
+
+    def test_resolve_confirm_with_am_and_node_uses_the_setting(self):
+        am = self.am_url(fakes.install_am(self.skills))
+        env = self.env_with_node()
+        for setting in ('html', 'md'):
+            with self.subTest(setting=setting):
+                resolved = adapter_gate.resolve_confirm(setting, self.skills, env)
+                self.assertEqual((resolved['setting'], resolved['format'], resolved['reason'], resolved['warnings']),
+                                 (setting, setting, 'setting', []))
+                self.assertEqual(os.path.normcase(resolved['am']), os.path.normcase(am))
+                self.assertEqual(os.path.normcase(os.path.dirname(resolved['node'])),
+                                 os.path.normcase(env['PATH']))
+
+    def test_resolve_confirm_old_name_warns(self):
+        fakes.install_am(self.skills, 'answer-me-with-html')
+        resolved = adapter_gate.resolve_confirm('html', self.skills, self.env_with_node())
+        self.assertEqual(resolved['format'], 'html')
+        self.assertEqual(resolved['warnings'],
+                         ['confirm: old name answer-me-with-html, install answer-me-with-any and remove it'])
 
     def test_missing_pbi_dir_exits_2(self):
         result = self.gate(pbi_dir=os.path.join(self.dir, 'nowhere'))

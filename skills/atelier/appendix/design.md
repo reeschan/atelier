@@ -50,5 +50,6 @@ An unknown is a point the request and the code do not settle (a behaviour, a bou
 2. When the lines settle it, write the decision in the spec and go on.
 3. When it is still open and its answer changes the PBI split, an interface or the data model: collect every such point and end the episode with one question (kind `decision`, with `state`) before plan, with the choices you see and the one you would pick. Ask once for all of them.
 4. When it is still open and its answer changes only details inside a PBI: put it in the approval draft as an `ask` block (the choices, yours first), under `## 決めること` (`## Decisions`, `appendix/approve.md`). Nothing goes on with an open question unanswered:
-   - With the `confirm` adapter on, `design_record.py check-reply` refuses a reply that leaves an `ask` unanswered or out.
+   - With the `confirm` adapter `html` (the default), `design_record.py check-reply` refuses a reply that leaves an `ask` unanswered or out.
+   - With `confirm` `md` the page carries no reply check info, so the reply always takes the path without it: for an approve, `check-reply` exits 4 and the caller uses `answer --approve --choices` or `--revise`. Read the reply against the questions under `## 決めること` yourself.
    - With `confirm` `off` there is no check, and any reply comes back as the `Answer:`. Read it against the questions under `## 決めること` first: when it leaves one unanswered, end with kind `approve` again, asking only those, before anything goes to build.
