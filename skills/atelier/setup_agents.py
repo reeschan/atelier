@@ -126,7 +126,16 @@ def add_manual_model(home, runner, model_id, efforts, now=None) -> dict:
     if not isinstance(model_id, str) or not model_id.strip():
         raise ValueError('the model id must not be empty.')
     home = Path(home)
-    data = load_models(home, runner)
+    data = manual_models(load_models(home, runner), runner, model_id, efforts)
+    common.write_json(_models_path(home, runner), data)
+    return data
+
+
+def manual_models(data, runner, model_id, efforts) -> dict:
+    """models/<runner>.json に手入力のモデルを足したあとの中身 (何も書かない。data は書き換える)。
+
+    data は load_models の結果 (None なら新しい骨組みから作る)。add_manual_model と保存予定が共有する。
+    """
     if data is None:
         data = {'runner': runner, 'fetched_at': None, 'method': 'manual',
                 'error': None, 'failed_at': None, 'models': []}
@@ -142,7 +151,6 @@ def add_manual_model(home, runner, model_id, efforts, now=None) -> dict:
     else:
         entries.append({'id': model_id, 'name': None, 'efforts': effort_list, 'manual': True})
     data['models'] = entries
-    common.write_json(_models_path(home, runner), data)
     return data
 
 
@@ -152,10 +160,22 @@ def set_runner(home, runner, enabled=None, models=None, billing=None) -> dict:
     models に [] を渡すと空にし、REMOVE を渡すとキーを消す。agent の enabled false は ValueError。
     """
     _check_runner(runner)
-    if runner == common.AGENT and enabled is False:
+    if runner == common.AGENT and enabled is False:  # 読む前に判定する (旧版と同じ順)
         raise ValueError('agent cannot be disabled.')
     home = Path(home)
-    table = agents.load_agents(home)
+    table = runner_table(agents.load_agents(home), runner, enabled, models, billing)
+    common.write_json(home / AGENTS_FILE, table)
+    return table
+
+
+def runner_table(table, runner, enabled=None, models=None, billing=None) -> dict:
+    """agents.json のその runner だけを更新したあとの中身 (何も書かない。table は書き換える)。
+
+    table は agents.load_agents の結果 (None なら空から作る)。set_runner と保存予定が共有する。
+    """
+    _check_runner(runner)
+    if runner == common.AGENT and enabled is False:
+        raise ValueError('agent cannot be disabled.')
     if not isinstance(table, dict):
         table = {}
     if not isinstance(table.get('runners'), dict):
@@ -178,7 +198,6 @@ def set_runner(home, runner, enabled=None, models=None, billing=None) -> dict:
     if billing is not None:
         config['billing'] = billing
     table['runners'][runner] = config
-    common.write_json(home / AGENTS_FILE, table)
     return table
 
 
