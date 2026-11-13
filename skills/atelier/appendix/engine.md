@@ -140,4 +140,5 @@ stage <stage|gate after stage>: <component> <run|skip|fallback|off> (<reason>) [
 - `skip`: its `when` did not hold. `fallback`: it was not usable or failed, and the next row ran. `off`: turned off in agents.json.
 - Add `findings` only for a review or security component.
 - A final review that runs again writes a new line, with `#1` or `#2` after `run` (`appendix/review.md`, `## Findings`). The earlier line stays.
+- Whether Jev can be used is this run's result, the same way a tool's presence is the fresh `tools_check.py` row and not the `Tools missing` line above. `prepare.py` prints `Jev: ok n/n (<model>)` or `Jev: unavailable (<code>)`, and `tools_check.py` has a `jev` row. STATUS.md, HANDOFF.md, `docs/handoff` and memory are not evidence. On resume, ask Jev again and append a gate line; the earlier line stays. Example: `gate.jev run #2 (local Jev ok n/n)`.
 - The approval list and the completion report copy these lines as they are.

@@ -10,10 +10,13 @@
 - jev.config.json が無ければ、このディレクトリの jev.config.template.json をコピーする
 - 応答 (docs/pbi/jev/<PBI>.brief.json・.pbi_quality.json) が既にあれば呼び直さない (--only で指定した PBI は呼び直す。--tier と一緒のときは呼び直さない)
 - sensitive な PBI (facts の sensitive が true) には pbi_quality を送らず、brief だけを送る (本文を外部に出さない)
-- Jev の呼び出しは並列 (同時 4 件)。失敗したゲートは飛ばし、表の「メモ」に出す (select_model.py は score を 1 として扱う)
+- Jev の呼び出しは並列 (同時 4 件)。失敗したゲートは飛ばし、表の「メモ」に code 付きで出す
+  (例: brief の Jev 失敗 (no-key) (score は 1 扱い)。select_model.py は score を 1 として扱う)
 - jev-log.jsonl には、PBI の判定 (段・route・template の note・補正後の値・品質の警告・dropped) が、
   同じ PBI・ゲート brief の前回の行と変わったときだけ 1 行書く (変わらなければ書かない。ts はタイムゾーン付き)
 - 表の前に 1 行「優先テンプレート: …」を出し (写しと適用の状態。templates.load_overrides・state_of)、
+  その次に 1 行「Jev: ok n/n (<model>)」か「Jev: unavailable (<code>)」を出す
+  (全部のゲートが成功したときだけ ok。model は応答の model。無ければ unknown)。
   表の列「優先テンプレート」に route.json の template.note を出す (無ければ —)
 - 表の列「補正後の値」は route.json の scores、「理由」は reasons[0] から「決定: 」を除いたもの、
   「外した手順」は route.json の dropped を `<runner> <model> (<理由>)` の `; ` つなぎにする。
@@ -46,7 +49,9 @@ OUTSIDE_HIGH = 0.4  # needs_outside_context がこれより大きければ警告
 def call_jev(config, gate, text_file, out_file):
     r = subprocess.run([sys.executable, str(JEV), str(config), gate, str(text_file)],
                        capture_output=True, text=True, encoding="utf-8", creationflags=NO_WINDOW)
-    out_file.write_text(r.stdout or json.dumps({"error": r.stderr[-300:]}), encoding="utf-8")
+    out_file.write_text(
+        r.stdout or json.dumps({"error": (r.stderr or "")[-300:], "code": "unknown", "where": None}),
+        encoding="utf-8")
     try:
         data = json.loads(r.stdout)
     except json.JSONDecodeError:
@@ -58,6 +63,48 @@ def load(path):
     """JSON を読む。読めない・JSON でない・error のキーがあるときは None。"""
     data = common.load_json(path)
     return None if isinstance(data, dict) and "error" in data else data
+
+
+def jev_failure_code(data):
+    """Jev の応答が使えるなら None。失敗なら code（無ければ unknown）。ファイルが無いときは 未実行。"""
+    if isinstance(data, dict) and "error" not in data and isinstance(data.get("answers"), dict):
+        return None
+    if not isinstance(data, dict):
+        return "未実行"
+    code = data.get("code")
+    return code if isinstance(code, str) and code else "unknown"
+
+
+def jev_status_line(records):
+    """表の前の 1 行。全部成功なら Jev: ok n/n (<model>)。1 件でも失敗なら Jev: unavailable (<code>)。"""
+    total = len(records)
+    models = []
+    codes = []
+    ok = 0
+    for data in records:
+        code = jev_failure_code(data)
+        if code is None:
+            ok += 1
+            model = data.get("model") if isinstance(data, dict) else None
+            if isinstance(model, str) and model and model not in models:
+                models.append(" ".join(model.split()))
+        elif code not in codes:
+            codes.append(code)
+    if total and not codes:
+        model = ", ".join(models) if models else "unknown"
+        return f"Jev: ok {ok}/{total} ({model})"
+    return "Jev: unavailable (" + (", ".join(codes) if codes else "unknown") + ")"
+
+
+def failure_memo(name, data, with_score=False):
+    """失敗したゲートのメモ。成功なら None。code を括弧に入れる。"""
+    code = jev_failure_code(data)
+    if code is None:
+        return None
+    text = f"{name} の Jev 失敗 ({code})"
+    if with_score:
+        text += " (score は 1 扱い)"
+    return text
 
 
 def answers(data):
@@ -234,23 +281,35 @@ def main():
     ts = common.now().isoformat(timespec="seconds")
     previous = previous_decisions(base / "jev-log.jsonl")
     lines = []
+    jev_rows = []
+    for p in pbis:
+        jev_rows.append(common.load_json(base / "jev" / f"{p}.brief.json"))
+        if not facts_by[p].get("sensitive"):
+            jev_rows.append(common.load_json(base / "jev" / f"{p}.pbi_quality.json"))
     print(template_line(home, now))
+    print(jev_status_line(jev_rows))
     print("| PBI | 段 | route の先頭 | review | 補正後の値 (新規性/結合度/あいまいさ) | 理由 | 優先テンプレート | "
           "外した手順 | 品質の警告 | メモ |")
     print("|---|---|---|---|---|---|---|---|---|---|")
     for p in pbis:
-        brief, quality = load(base / "jev" / f"{p}.brief.json"), load(base / "jev" / f"{p}.pbi_quality.json")
+        brief_raw = common.load_json(base / "jev" / f"{p}.brief.json")
+        quality_raw = common.load_json(base / "jev" / f"{p}.pbi_quality.json")
+        brief = None if jev_failure_code(brief_raw) else brief_raw
+        quality = None if jev_failure_code(quality_raw) else quality_raw
         route = load(base / f"{p}.route.json") or {}
         facts = facts_by[p]
         sensitive = bool(facts.get("sensitive"))
         warns = [] if sensitive else quality_warnings(quality)
         memo = []
-        if brief is None:
-            memo.append("brief の Jev 失敗 (score は 1 扱い)")
+        brief_memo = failure_memo("brief", brief_raw, with_score=True)
+        if brief_memo:
+            memo.append(brief_memo)
         if sensitive:
             memo.append("sensitive のため pbi_quality を送らない")
-        elif quality is None:
-            memo.append("pbi_quality の Jev 失敗")
+        else:
+            quality_memo = failure_memo("pbi_quality", quality_raw)
+            if quality_memo:
+                memo.append(quality_memo)
         print(f"| {p} | {route.get('tier')} | {common.step_label(route['route'][0])} | {route.get('review')} | "
               f"{score_text(route)} | {reason_text(route)} | {template_note(route)} | {dropped_text(route)} | "
               f"{', '.join(warns) or 'なし'} | {'; '.join(memo) or '—'} |")
@@ -258,6 +317,9 @@ def main():
                  "route": route.get("route"), "template": route.get("template"),
                  "scores": route.get("scores"), "warnings": warns, "dropped": route.get("dropped") or [],
                  "action": "担当を決定 (prepare.py)"}
+        model = brief_raw.get("model") if isinstance(brief_raw, dict) else None
+        if jev_failure_code(brief_raw) is None and isinstance(model, str) and model:
+            entry["model"] = model
         old = previous.get(p)
         if old is None or decision_key(old) != decision_key(entry):
             lines.append(entry)

@@ -129,7 +129,8 @@ class PrepareTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         lines = out.stdout.splitlines()
         self.assertEqual(lines[0], f'優先テンプレート: all-tiers を適用中 ({UNTIL} まで、期限切れは ask) / 写し: {SYNCED} 時点')
-        self.assertEqual(cells(lines[1]), HEADER)
+        self.assertEqual(lines[1], 'Jev: ok 2/2 (unknown)')
+        self.assertEqual(cells(lines[2]), HEADER)
         self.assertIn(f'all-tiers を当てた ({UNTIL} まで)', rows(out)[0])
         brief = [line for line in self.log() if line['gate'] == 'brief'][0]
         self.assertEqual(brief['template']['name'], 'all-tiers')
@@ -184,7 +185,8 @@ class PrepareTest(unittest.TestCase):
         self.add_pbi(brief={'novelty': LOW_TWO, 'coupling': ZERO, 'ambiguity': ZERO})
         out = self.run_prepare('--now', NOW)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertEqual(cells(out.stdout.splitlines()[1]), HEADER)
+        self.assertEqual(out.stdout.splitlines()[1], 'Jev: ok 2/2 (unknown)')
+        self.assertEqual(cells(out.stdout.splitlines()[2]), HEADER)
         row = cells(rows(out)[0])
         route = self.route()
         self.assertEqual(row[4], '/'.join(str(route['scores'][k]) for k in ('novelty', 'coupling', 'ambiguity')))
@@ -353,6 +355,33 @@ class PrepareTest(unittest.TestCase):
         self.add_pbi()
         out = self.run_prepare('--now', NOW, '--tier', 'sonnet')
         self.assertNotEqual(out.returncode, 0)
+
+    def test_jev_failure_names_the_code_in_the_line_and_the_memo(self):
+        self.use_home(app=None)
+        self.add_pbi(brief=None, quality=None)
+        out = self.run_prepare('--now', NOW)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.splitlines()[1], 'Jev: unavailable (no-key)')
+        memo = cells(rows(out)[0])[-1]
+        self.assertIn('brief の Jev 失敗 (no-key) (score は 1 扱い)', memo)
+        self.assertIn('pbi_quality の Jev 失敗 (no-key)', memo)
+        self.assertTrue(self.route()['reasons'][0].startswith('Jev 失敗 (no-key): facts だけで判定'))
+
+    def test_jev_ok_line_and_log_record_the_model(self):
+        self.use_home(app=None)
+        self.add_pbi()
+        model = 'jev-1.13.0'
+        for gate in ('brief', 'pbi_quality'):
+            path = os.path.join(self.base, 'jev', f'PBI-001.{gate}.json')
+            with open(path, encoding='utf-8') as f:
+                data = json.load(f)
+            data['model'] = model
+            write_json(path, data)
+        out = self.run_prepare('--now', NOW)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.splitlines()[1], f'Jev: ok 2/2 ({model})')
+        self.assertEqual(self.log()[0]['model'], model)
+        self.assertNotIn('Jev 失敗', rows(out)[0])
 
 
 def write_json_home(d, templates_, app, agents):
