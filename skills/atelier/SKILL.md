@@ -51,15 +51,19 @@ With launch `agent` (headless is below):
 ## headless
 
 - `run --detach` starts the designer and returns at once.
-- Repeat `python <skill>/conductor.py wait --timeout 300` until it prints a state other than running, then read its lines.
+- Repeat `python <skill>/conductor.py wait --timeout 300` until it prints a state other than running, then read its lines. On `state: question`, run its `then:` line (`next`): `next` prints the lines to answer, relaunch or close the run.
 - With launch `headless`, `next` prints `launch: headless` and `then: ... run --detach`: run that line and do not launch the designer. The same happens on an `agent` run when the designer runs on codex or claude (`launch: headless (designer runner codex)`).
 - Claude Code's auto mode may refuse `run --detach` when it starts codex with `-a never` and no sandbox. Then show the refusal and ask the user to allow the command or to run it themselves.
 - `--launch` is taken by `start` and `run` only. `next` does not take it.
-- A `decision` question with a `relaunch:` line (`no-agent-tool`): run that line, then follow the headless steps.
+- A `decision` question with a `relaunch:` line (`no-agent-tool`): show it to the user like any question and wait for the answer. When the user picks running the episodes headless, run that `relaunch:` line (it closes the question), then follow the headless steps. Otherwise answer with the `then:` line, or close the run with the `abort:` line.
 
 ## Questions
 
 `next` and `done` end with exit 10 while the run waits on the user: `question: <kind> <path>`, `summary:`, `confirm:`, and the `then:`, `approve:` and `revise:` lines (`yes:` and `no:` for `full-run`).
+
+A question file other than `approve` (the `question:` path) has the form of `appendix/questions.md`: the text for the user only, with no `Next:` command. Take the commands from the stdout lines the command printed, as before.
+
+For a conductor question, when the user picks "Close the run", run the `abort:` line the command printed instead of the `then:` line.
 
 - `confirm: skill <name>`: show every question, approve or not, through that skill (Skill tool), even when the adapters say `auto`. Never paste the Markdown in chat instead. A `warn: old name` on the line: pass it on to the user once.
 - `confirm: chat` or `confirm: off`: show the file as it is in chat.

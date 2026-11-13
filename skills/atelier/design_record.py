@@ -4,7 +4,7 @@
 使い方 (リポジトリのルートで):
   python <このディレクトリ>/design_record.py slice <id> --question Q [--read PATH:START-END ...] [--unknown U ...] [--dir docs/pbi]
   python <このディレクトリ>/design_record.py write --id ID --target PBI-<n> [--target ...] [--concern notes/<id>.slice.json ...] [--work PBI-<n>.work.json ...] [--dir docs/pbi]
-  python <このディレクトリ>/design_record.py lint --draft FILE
+  python <このディレクトリ>/design_record.py lint --draft FILE [--kind approve|decision|send-approval|rework-limit|destructive|full-run|handoff-loop|launch-failure]
   python <このディレクトリ>/design_record.py markdown --draft FILE [--dir docs/pbi]
   python <このディレクトリ>/design_record.py check-reply [--reply FILE] [--draft FILE] [--dry-run] [--dir docs/pbi]
   python <このディレクトリ>/design_record.py work PBI-<n> [--dir docs/pbi]
@@ -28,9 +28,18 @@ write   正本を書く。中身は schema・design_id・revision・targets・co
         --work も前の /2 の正本も無いときは schema 1 のまま書く (既存の承認のハッシュを変えない)。同じ id の正本があり、
         targets・concerns・works (並びか中身) が変わったときだけ revision を 1 上げる。別の id なら 1 から。
         concerns や --work のファイルが無ければ 2。slice は atelier.design-slice/2 (base_sha を持つ。/1 も読む)。
-lint    承認の原稿 (appendix/approve.md) を点検する。7 つの節の名前と順・前後の図・あとの図の印・PBI の表の見出し・
-        ask の置き場所と選択肢の補足を見る。誤りは標準エラーに `✗ L<行>` と `例:` の行で全部出し、終了コード 6。
+lint    原稿を点検する。--kind を省く (approve) と承認の原稿 (appendix/approve.md): 7 つの節の名前と順・前後の図・
+        あとの図の印・PBI の表の見出し・ask の置き場所と選択肢の補足を見る。--kind に approve 以外
+        (decision・send-approval・rework-limit・destructive・full-run・handoff-loop・launch-failure) を渡すと問いの原稿:
+        6 つの節 (必ずは結論・今の流れ・答えたあとの流れ・決めること)・前後の図・あとの図の印か線のラベル・
+        ask が 1 つ以上 (「なし」は誤り)・ask の置き場所と選択肢の補足を見る。
+        誤りは標準エラーに `✗ L<行>` と `例:` の行で全部出し、終了コード 6。
         説明の無い内部の言葉は `! L<行> <言葉> → <言い換えの案>` の警告で、終了コードは 0 のまま。正本は読まない。
+        進行役は lint_text(text, kind) を関数で呼べる (yomiyasu は呼ばない)。
+        日本語の原稿 (frontmatter が lang: ja か、本文にかな・漢字) には、CLI の lint と markdown が yomiyasu の
+        yomiyasu_lint.py --json もかけ、候補を `! L<行> yomiyasu <規則> → <中身>` の警告で足す (終了コードは変えない)。
+        道具の場所は yomiyasu_path()。無い・時間切れ (ATELIER_YOMIYASU_TIMEOUT 秒、既定 30)・異常終了は
+        `! yomiyasu skipped: <理由> (tools_check.py)` の 1 行だけ。
 markdown 先に lint と同じ点検をし、誤りがあれば何も出さずに 6 で止める。通れば、設計の下書き (Markdown) に返信の封筒 reply-meta-<name>: <value> (design_id・revision・record_hash・draft_hash) を
         frontmatter として足して標準出力に出す。skill に渡すのも、skill が無いときチャットに出すのも、この同じ Markdown。
 check-reply 貼られた返信 (--reply、無ければ標準入力) を正本と照合する。\\r\\n を \\n にし、行頭で始まる最後の
@@ -280,16 +289,26 @@ def compare(meta: dict, record: dict, draft: str | None) -> list[str]:
 APPROVAL_SECTIONS = [('結論', 'Summary'), ('今の流れ', 'Before'), ('この run のあとの流れ', 'After'),
                      ('決めること', 'Decisions'), ('PBI', 'PBIs'), ('影響範囲', 'Impact'),
                      ('作る人と見直し', 'Who builds')]
+# 問いの原稿 (承認以外の問い)。先頭の 4 つが必ずの節で、あとの 2 つは任意。前 3 つの位置は承認の原稿と同じ
+QUESTION_SECTIONS = [('結論', 'Summary'), ('今の流れ', 'Before'), ('答えたあとの流れ', 'After'),
+                     ('決めること', 'Decisions'), ('判断の材料', 'Details'), ('影響範囲', 'Impact')]
+QUESTION_REQUIRED = 4
+QUESTION_DRAFT_KINDS = ('decision', 'send-approval', 'rework-limit', 'destructive', 'full-run', 'handoff-loop',
+                        'launch-failure')
 SECTION_BEFORE, SECTION_AFTER, SECTION_DECISIONS, SECTION_PBI = 1, 2, 3, 4
 PBI_HEADERS = (['PBI', '何をするか', '終わると何ができるか', '先に要る PBI'],
                ['PBI', 'What it does', 'What works after', 'Needs'])
 DIAGRAMS = ('flow', 'tree', 'er', 'sequence')
+# 中身が地の文の囲み。yomiyasu の点検に渡す
+PROSE_FENCES = ('callout', 'ask')
 NO_DECISIONS = ('なし', 'none')
 HEADING = re.compile(r'^##\s+(.*?)\s*$')
 PANEL_ID = re.compile(r'^[A-Z]\s+(?=\S)')
 PANEL_ATTRS = re.compile(r'\s*\{[^}]*\}\s*$')
 FENCE = re.compile(r'^\s*(```+|~~~+|:::)\s*([A-Za-z-]*)')
 CHANGE_MARK = re.compile(r'^\s*[+~-] ')
+# 線のラベル: am の flow の `a -> b: ラベル` と `a -|ラベル|-> b` (コロンは全角も認める)
+EDGE_LABEL = re.compile(r'-\|[^|]+\|-+>|-+>[^:：]*[:：]\s*\S')
 TABLE_ROW = re.compile(r'^\s*\|(.*)\|\s*$')
 OPTION = re.compile(r'^\s*[*-] ')
 EXPLAINED = re.compile(r'[(（]')
@@ -325,6 +344,14 @@ INTERNAL_TERMS = [
     (re.compile(_word('blast[ -]radius'), re.I), 'blast radius', '影響範囲の点検'),
     (re.compile(_word(r'P-\d+')), '課題の番号', '番号でなく、その課題の中身を言葉で書く'),
     (re.compile('封筒|' + _word('envelope|reply-meta'), re.I), '封筒 (reply-meta)', '照合情報'),
+    (re.compile(_word('rework-limit'), re.I), 'rework-limit', '作り直しの上限'),
+    (re.compile(_word('send-approval'), re.I), 'send-approval', '送信の許可 (外のモデルにファイルの中身を送ってよいか)'),
+    (re.compile(_word('full-run'), re.I), 'full-run', 'E2E を通しで走らせること'),
+    (re.compile(_word('handoff-loop'), re.I), 'handoff-loop', '引き継ぎが何度もくり返されて止まったこと'),
+    (re.compile(_word('launch-failure'), re.I), 'launch-failure', '設計者の出番を続けて起こせなかったこと'),
+    (re.compile(_word('no-agent-tool'), re.I), 'no-agent-tool', '設計者に実装担当を起こす道具 (Agent ツール) が無いこと'),
+    (re.compile(_word('grill'), re.I), 'grill', '設計の前に認識をそろえる聞き取り'),
+    (re.compile(_word('stale'), re.I), 'stale', '設計のあとで対象のファイルが変わっていること'),
 ]
 
 
@@ -343,9 +370,9 @@ def section_name(title: str) -> str:
     return PANEL_ID.sub('', PANEL_ATTRS.sub('', title)).strip()
 
 
-def section_index(title: str) -> int | None:
+def section_index(title: str, table=APPROVAL_SECTIONS) -> int | None:
     name = section_name(title)
-    return next((i for i, names in enumerate(APPROVAL_SECTIONS) if name in names), None)
+    return next((i for i, names in enumerate(table) if name in names), None)
 
 
 def parse_draft(draft: str) -> list[dict]:
@@ -399,18 +426,38 @@ def table_headers(rows) -> list[list[str]]:
     return headers
 
 
-def lint_draft(draft: str) -> tuple[list[tuple[int, str, str]], list[tuple[int, str, str]]]:
+Finding = tuple[int, str, str]
+
+
+def lint_draft(draft: str) -> tuple[list[Finding], list[Finding]]:
     """承認の原稿を点検する。(誤り, 警告)。どちらも (行番号, 何が違うか, 例か言い換えの案) の並び。"""
+    return lint_text(draft, 'approve')
+
+
+def lint_text(text: str, kind: str = 'approve') -> tuple[list[Finding], list[Finding]]:
+    """原稿を点検する。(誤り, 警告)。approve は承認の原稿、QUESTION_DRAFT_KINDS は問いの原稿の規則。
+    yomiyasu は呼ばない (進行役がプロセスの中から呼べるように、外の道具に頼らない)。"""
+    if kind == 'approve':
+        return lint_sections(text, APPROVAL_SECTIONS, len(APPROVAL_SECTIONS), True)
+    if kind in QUESTION_DRAFT_KINDS:
+        return lint_sections(text, QUESTION_SECTIONS, QUESTION_REQUIRED, False)
+    raise ValueError(f'unknown kind {kind!r}: use approve or one of {", ".join(QUESTION_DRAFT_KINDS)}')
+
+
+def lint_sections(draft: str, table: list, required: int, approval: bool) -> tuple[list[Finding], list[Finding]]:
+    """節の表 table (先頭の required 個が必ずの節) に沿って原稿を点検する。approval は承認の原稿の規則を足す。"""
     errors, warnings = [], []
     sections = parse_draft(draft)
-    names = ' → '.join(f'## {ja}' for ja, _ in APPROVAL_SECTIONS)
+    names = ' → '.join(f'## {ja}' for ja, _ in table)
+    owner = '承認' if approval else '問い'
     found = {}
     last = -1
     for section in sections[1:]:
-        index = section_index(section['title'])
+        index = section_index(section['title'], table)
         if index is None:
-            errors.append((section['line'], f'承認の原稿に無い節「{section["title"]}」',
-                           f'決まった 7 つの節 ({names}) のどれかに入れる。段ごとの記録は載せない'))
+            errors.append((section['line'], f'{owner}の原稿に無い節「{section["title"]}」',
+                           f'決まった {len(table)} つの節 ({names}) のどれかに入れる。'
+                           + ('段ごとの記録は載せない' if approval else 'PBI・作る人の節は承認の原稿の節')))
             continue
         if index in found:
             errors.append((section['line'], f'節「{section_name(section["title"])}」が 2 つある', '1 つにまとめる'))
@@ -422,10 +469,10 @@ def lint_draft(draft: str) -> tuple[list[tuple[int, str, str]], list[tuple[int, 
         last = max(last, index)
     body = draft_lines(draft)
     end_line = body[-1][0] if body else 1
-    for index, (ja, en) in enumerate(APPROVAL_SECTIONS):
+    for index, (ja, en) in enumerate(table[:required]):
         if index not in found:
             later = [found[i]['line'] for i in found if i > index]
-            place = f'## {APPROVAL_SECTIONS[index - 1][0]} のあと' if index else 'ページの最初'
+            place = f'## {table[index - 1][0]} のあと' if index else 'ページの最初'
             errors.append((min(later) if later else end_line, f'節「{ja}」({en}) が無い', f'## {ja} を{place}に置く'))
 
     def diagram_rows(section):
@@ -439,15 +486,20 @@ def lint_draft(draft: str) -> tuple[list[tuple[int, str, str]], list[tuple[int, 
         if not body:
             errors.append((section['line'], f'節「{section_name(section["title"])}」に図が無いか、図が空',
                            '```flow で利用者から見た流れを描く (ファイルだけを変える run は ```tree)'))
-        elif index == SECTION_AFTER and not any(CHANGE_MARK.match(line) for _, line in diagram_rows(section)):
-            errors.append((section['line'], 'あとの流れの図に変わる所の印 (+ ・- ・~ ) が無い',
-                           '+ 返事を照合する (PBI-003)'))
-    section = found.get(SECTION_PBI)
+        elif index == SECTION_AFTER and approval:
+            if not any(CHANGE_MARK.match(line) for _, line in diagram_rows(section)):
+                errors.append((section['line'], 'あとの流れの図に変わる所の印 (+ ・- ・~ ) が無い',
+                               '+ 返事を照合する (PBI-003)'))
+        elif index == SECTION_AFTER and not any(CHANGE_MARK.match(line) or EDGE_LABEL.search(line)
+                                                for line in body):
+            errors.append((section['line'], '答えたあとの流れの図に変わる所の印 (+ ・- ・~ ) も線のラベルも無い',
+                           '+ 返事を照合する    または    {続けるか} -> 作業を続ける: 続けるとき'))
+    section = found.get(SECTION_PBI) if approval else None
     if section is not None and not any(h in PBI_HEADERS for h in table_headers(section['rows'])):
         errors.append((section['line'], 'PBI の表の見出しが「' + ' | '.join(PBI_HEADERS[0]) + '」でない',
                        '| ' + ' | '.join(PBI_HEADERS[0]) + ' |'))
     for section in sections:
-        index = section_index(section['title']) if section['title'] is not None else None
+        index = section_index(section['title'], table) if section['title'] is not None else None
         for number, line, lang in section['rows']:
             if lang == 'ask' and index != SECTION_DECISIONS:
                 errors.append((number, '問い (ask) が決めることの節の外にある', '問いは ## 決めること にまとめる'))
@@ -457,9 +509,12 @@ def lint_draft(draft: str) -> tuple[list[tuple[int, str, str]], list[tuple[int, 
         asks = ask_blocks(section['rows'])
         plain = [line.strip().lstrip('-* ').rstrip('。.').lower() for _, line, lang in section['rows']
                  if lang is None and line.strip() and not FENCE.match(line)]
-        if not asks and not any(text in NO_DECISIONS for text in plain):
+        if not asks and approval and not any(text in NO_DECISIONS for text in plain):
             errors.append((section['line'], '決めることに問い (ask) も「なし」も無い',
                            '問いが無ければ「なし」の 1 行を書く'))
+        elif not asks and not approval:
+            errors.append((section['line'], '決めることに問い (ask) が無い (「なし」は書けない)',
+                           '```ask の囲みを 1 つ以上置く。ask が 1 つも無い問いは、問いにしない'))
         for opener, body in asks:
             number, line = opener
             if line.strip() != ASK_OPEN:
@@ -483,13 +538,148 @@ def lint_draft(draft: str) -> tuple[list[tuple[int, str, str]], list[tuple[int, 
     return errors, warnings
 
 
-def report_lint(errors: list, warnings: list) -> None:
+def report_lint(errors: list, warnings: list, label: str = 'approval draft') -> None:
     for number, what, example in errors:
         print(f'✗ L{number} {what}\n  例: {example}', file=sys.stderr)
     for number, term, rewording in warnings:
         print(f'! L{number} {term} → {rewording}', file=sys.stderr)
     if errors:
-        print(f'✗ {len(errors)} errors in the approval draft: fix each line and run again', file=sys.stderr)
+        print(f'✗ {len(errors)} errors in the {label}: fix each line and run again', file=sys.stderr)
+
+
+# yomiyasu (日本語の言い回しの点検)。CLI の lint・markdown だけがかける。lint_text には入れない
+YOMIYASU_TIMEOUT = 30.0
+YOMIYASU_TIMEOUT_ENV = 'ATELIER_YOMIYASU_TIMEOUT'
+YOMIYASU_FORMAT_VERSION = 2
+JAPANESE = re.compile('[぀-ヿ㐀-䶿一-鿿]')
+FRONT_LANG_JA = re.compile(r'^lang:\s*["\']?ja(?![A-Za-z])', re.M)
+
+
+def _plugins_root(env) -> Path:
+    """プラグインの置き場。PBI_PLUGINS_DIR、無ければ ~/.claude/plugins (flow.plugins_root と同じ。flow は読まない)。"""
+    return Path(env['PBI_PLUGINS_DIR']) if env.get('PBI_PLUGINS_DIR') else Path.home() / '.claude' / 'plugins'
+
+
+def _yomiyasu_home(home, env) -> Path:
+    if home is None and env is not None:
+        for name in ('ATELIER_HOME', 'PBI_HOME', 'PBI_TEMPLATES_HOME'):
+            if env.get(name):
+                return Path(env[name]).expanduser()
+    return common.resolve_home(home)
+
+
+def yomiyasu_path(home=None, env=None) -> Path | None:
+    """yomiyasu_lint.py の場所。home の agents.json の tools.yomiyasu.path (ファイルがあるとき)、
+    無ければ <プラグインの置き場>/cache/yomiyasu/yomiyasu/<版>/scripts/yomiyasu_lint.py のいちばん新しい版 (数の大きさで比べる)。
+    見つからなければ None。tools_check.py も同じ関数を呼ぶ。"""
+    env = os.environ if env is None else env
+    agents = common.load_json(_yomiyasu_home(home, env) / 'agents.json', {})
+    tools = agents.get('tools') if isinstance(agents, dict) else None
+    tool = tools.get('yomiyasu') if isinstance(tools, dict) else None
+    configured = tool.get('path') if isinstance(tool, dict) else None
+    if isinstance(configured, str) and configured and Path(configured).expanduser().is_file():
+        return Path(configured).expanduser()
+    versions = []
+    try:
+        for folder in (_plugins_root(env) / 'cache' / 'yomiyasu' / 'yomiyasu').iterdir():
+            script = folder / 'scripts' / 'yomiyasu_lint.py'
+            if script.is_file():
+                versions.append((tuple(int(n) for n in re.findall(r'\d+', folder.name)), folder.name, script))
+    except OSError:
+        return None
+    return max(versions)[2] if versions else None
+
+
+def is_japanese_draft(text: str, prose: str) -> bool:
+    """frontmatter が lang: ja か、囲みの外の本文にひらがな・カタカナ・漢字があるとき。"""
+    lines = normalize(text).split('\n')
+    if lines and lines[0].strip() == '---':
+        end = next((i for i in range(1, len(lines)) if lines[i].strip() == '---'), None)
+        if end is not None and FRONT_LANG_JA.search('\n'.join(lines[1:end])):
+            return True
+    return bool(JAPANESE.search(prose))
+
+
+def yomiyasu_input(draft: str) -> tuple[str, list[int]]:
+    """yomiyasu に渡す文と、その各行が原稿のファイルの何行目かの表。
+
+    frontmatter と図・コードの囲みは渡さない (yomiyasu は囲みの中を読み飛ばす)。callout と ask の囲みは、中身を
+    地の文として渡す (囲みの記号の行は除く)。ask の選択肢は箇条書きの印を外して渡す (印のままだと yomiyasu が
+    箇条書きの多さを数える)。行の数え方は draft_lines と同じ。"""
+    sent, numbers = [], []
+    fence, kind = None, ''
+    for number, line in draft_lines(draft):
+        match = FENCE.match(line)
+        if fence is None and match:
+            fence, kind = match.group(1), match.group(2).lower()
+            continue
+        if fence is not None and match and line.strip() == fence:
+            fence, kind = None, ''
+            continue
+        if fence is None or kind in PROSE_FENCES:
+            sent.append(OPTION.sub('', line, count=1) if kind == 'ask' else line)
+            numbers.append(number)
+    return '\n'.join(sent) + '\n', numbers
+
+
+def yomiyasu_timeout(env) -> float:
+    try:
+        value = float(env.get(YOMIYASU_TIMEOUT_ENV, ''))
+    except ValueError:
+        return YOMIYASU_TIMEOUT
+    return value if value > 0 else YOMIYASU_TIMEOUT
+
+
+def run_yomiyasu(script: Path, text: str, timeout: float) -> list:
+    """yomiyasu_lint.py - --json --no-words に文を UTF-8 のバイト列で渡し、findings を返す。失敗は例外 (呼び側で skipped にする)。"""
+    done = subprocess.run([sys.executable, str(script), '-', '--json', '--no-words'], input=text.encode('utf-8'),
+                          capture_output=True, timeout=timeout,
+                          creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if done.returncode != 0:
+        raise ValueError(f'exit code {done.returncode}')
+    data = json.loads(done.stdout.decode('utf-8', errors='replace'))
+    if data['format_version'] != YOMIYASU_FORMAT_VERSION:
+        raise ValueError(f'unsupported format_version {data["format_version"]!r}')
+    if not isinstance(data['findings'], list):
+        raise ValueError('findings is not a list')
+    return data['findings']
+
+
+def yomiyasu_warnings(draft: str, home=None, env=None) -> tuple[list[Finding], str | None]:
+    """日本語の原稿に yomiyasu をかける。(警告, 飛ばした理由)。警告は (行, 'yomiyasu <規則>', 候補の中身)。
+    日本語でない・渡す文が無いときは何も起こさない。見つからない・時間切れ・異常終了は理由だけを返し、例外は出さない。"""
+    env = os.environ if env is None else env
+    text, numbers = yomiyasu_input(draft)
+    if not numbers or not is_japanese_draft(draft, text):
+        return [], None
+    script = yomiyasu_path(home, env)
+    if script is None:
+        return [], 'not found'
+    timeout = yomiyasu_timeout(env)
+    try:
+        findings = run_yomiyasu(script, text, timeout)
+        warnings = []
+        for finding in findings:
+            line = finding['line']
+            if isinstance(line, int) and 1 <= line <= len(numbers):
+                warnings.append((numbers[line - 1], f'yomiyasu {finding["rule"]}',
+                                 ' '.join(str(finding['message']).split())))
+    except subprocess.TimeoutExpired:
+        return [], f'timed out after {timeout:g}s'
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
+        reason = str(error) if isinstance(error, ValueError) else f'{type(error).__name__}: {error}'
+        return [], ' '.join(reason.split())[:200]
+    return warnings, None
+
+
+def lint_with_yomiyasu(draft: str, errors: list, warnings: list, label: str) -> list:
+    """点検の結果に yomiyasu の候補を足して出す。足した警告を含む警告の並びを返す。終了コードには関わらない。"""
+    found, skipped = yomiyasu_warnings(draft)
+    warnings = [*warnings, *found]
+    report_lint(errors, warnings, label)
+    if skipped:
+        print(f'! yomiyasu skipped: {skipped} (tools_check.py)', file=sys.stderr)
+    return warnings
 
 
 def load_record(base: Path) -> dict:
@@ -901,8 +1091,9 @@ def read_stdin() -> str:
 
 
 def cmd_lint(args) -> int:
-    errors, warnings = lint_draft(read_text(args.draft))
-    report_lint(errors, warnings)
+    draft = read_text(args.draft)
+    errors, warnings = lint_text(draft, args.kind)
+    warnings = lint_with_yomiyasu(draft, errors, warnings, 'approval draft' if args.kind == 'approve' else 'question draft')
     if errors:
         return EXIT_DRAFT
     print(f'ok	{len(warnings)} warning(s)')
@@ -913,7 +1104,7 @@ def cmd_markdown(args) -> int:
     record = load_record(Path(args.dir))
     draft = read_text(args.draft)
     errors, warnings = lint_draft(draft)
-    report_lint(errors, warnings)
+    lint_with_yomiyasu(draft, errors, warnings, 'approval draft')
     if errors:
         return EXIT_DRAFT
     draft = envelope_base(draft)
@@ -996,6 +1187,7 @@ def main(argv=None) -> int:
     md.add_argument('--draft', required=True)
     li = sub.add_parser('lint')
     li.add_argument('--draft', required=True)
+    li.add_argument('--kind', default='approve', choices=['approve', *QUESTION_DRAFT_KINDS])
     ck = sub.add_parser('check-reply')
     ck.add_argument('--reply')
     ck.add_argument('--draft')

@@ -64,7 +64,7 @@
 - 設計者が出すすべての問い: decision (grill の 1 回、design の判断の問い、ask-user の選択肢、道具を入れるかの問い、map・optional の問いを含む)・send-approval・rework-limit (stale を含む)・destructive・full-run。
 - 進行役が出す 3 つ: decision (no-agent-tool)・handoff-loop・launch-failure。
 - approve は今の `approval-draft.md` のまま。inline (呼び出し側が自分で `designer.md` に従い、ユーザーに直接聞く) は対象から外す。inline には問いのファイルが無いため。
-- kind は増やさない。stale は rework-limit のまま、結論の文で書き分ける。
+- kind は増やさない。stale は rework-limit のまま、「kind ごとに載せるもの」の表の stale の行で書き分ける (結論・今の流れ・答えたあとの流れ・判断の材料のどれも、ふつうの rework-limit と違う)。
 
 ### 問いの原稿の節
 
@@ -93,13 +93,15 @@
 | decision (grill の終わり) | 認識がそろったかを聞く。決まった点の数 | 今の振る舞い | これまでに決まったことの総まとめ (印) | 決定の一覧の表 |
 | decision (設計の判断・ask-user・map・optional) | 何を選ぶと何が変わるか | 今の振る舞い | 推す答えでの流れ (印) | 比べる表 |
 | decision (道具を入れるか) | 入れるか、代わりの手段で進めるか | ここまでの流れと止まった所 | 入れる・代わりで進めるの分かれ道 (ラベル) | 入れ方と代わりの手段 |
-| send-approval | 何をどこへ送るか、送らないとどうなるか | ここまでの流れと止まった所 | 送る・送らないの分かれ道 (ラベル) | 送るものの一覧 |
-| rework-limit | 作り直しの上限に達したこと。どうするか | ここまでの流れと止まった所 | 続ける・設計に戻す・止めるの分かれ道 (ラベル) | 失敗の中身 |
+| decision (lint の見直しの作り直し候補) | 見直しで確かめた候補の数と、候補ごとに作り直すか報告だけにするか | ここまでの流れと止まった所 (最後の見直しの前) | 作り直す (作業に戻り、上限に数える)・報告だけ (最後の見直しへ) の分かれ道 (ラベル) | **必ず**: 候補ごとの PBI・ファイル・中身 |
+| send-approval | どの段で何をどこへ送るか、費用の見込み、送らない (AST だけ) とどうなるか | ここまでの流れと止まった所 | 送る・AST だけ (手元の点検だけ走らせる) の分かれ道 (ラベル) | **必ず**: 試し送りの数 (ファイル数・トークン・費用・送り先) と送るファイルの一覧 |
+| rework-limit | どの PBI がどのモデルで作り直しの上限に達したか。どうするか | ここまでの流れと止まった所 | 段を上げてやり直す・PBI を書き直す/分ける・設計に戻す・利用者が引き取るの分かれ道 (ラベル。`appendix/rework.md` の `## Stop` の 4 つ) | **必ず**: 試みごとに何が失敗したかと、考えられる原因 (PBI の書き足りなさ・モデルの力不足・設計の誤り) |
 | rework-limit (stale) | 設計のあとで対象のファイルが変わったこと。どの PBI の設計をやり直すか | 設計 → 承認 → 作業の流れと、変わったファイル | やり直す PBI と、そのほかの PBI の分かれ道 (ラベル) | 変わったファイルと設計のときの版 |
 | destructive | 何を消す・上書きするか。戻せるか | ここまでの流れと止まった所 | する・しないの分かれ道 (ラベル) | 対象の一覧 |
 | full-run | E2E を通しで 1 回走らせるか。かかる時間 | ここまでの流れと止まった所 | 走らせる・走らせないの分かれ道 (ラベル) | 対象の spec の数と見込みの時間 |
 | decision (no-agent-tool)・handoff-loop・launch-failure (進行役) | 何が起きて止まったか | ここまでの流れと止まった所 | 選択肢ごとの分かれ道 (ラベル) | なし |
 
+- 判断の材料はふつう任意だが、表の欄に「必ず」と書いた kind (send-approval・rework-limit) では省かない。送る許可は費用がかかり取り消せず、作り直しの上限は何が起きたかが分からないと選べないため。点検 (`lint --kind`) は節の形だけを見るので、これは付録の表と見本で伝える。
 - grill の 1 回は 1 枚のページにする。流れの図は 1 組だけ描き、Q ごとに ask を 1 つ置く。推す答えを先頭 (`*`) にする。
 - `appendix/design.md` の grill の手順、`appendix/lint.md` の send-approval の手順、`appendix/rework.md` の rework-limit の手順、`appendix/tests-at-end.md` の full-run の手順は、載せるものを自分で並べるのをやめ、`appendix/questions.md` の表を指す。
 
@@ -148,7 +150,7 @@
 - `appendix/approve.md`: yomiyasu の警告が出ることを 1 行足す。
 - `appendix/episodes.md`: `question.path` の原稿は `appendix/questions.md` の形で書き、`done` が点検することを 1 行足す。
 - `SKILL.md` の `## Questions`: 問いのファイルにコマンドが無くなったこと (呼び出し側は標準出力の `then:` を使う) を書く。
-- `examples/question-send-approval.md` (run を進める問いの見本、線のラベル) と `examples/question-grill.md` (設計の問いの見本、印) を日本語で置く。
+- `examples/question-send-approval.md` (run を進める問いの見本、線のラベル。試し送りの数と費用を判断の材料に載せ、送らない枝は「AST だけ」で手元の点検は走る) と `examples/question-grill.md` (設計の問いの見本、印) を日本語で置く。
 - `CHANGELOG.md`: 「未リリース」の節に書く。版の番号はマージのときに決める。
 
 ## Testing Decisions

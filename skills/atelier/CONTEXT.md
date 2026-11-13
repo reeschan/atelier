@@ -222,11 +222,20 @@ _Avoid_: external skill, dependency
 
 **approval draft (承認の原稿)**:
 The Markdown the designer writes to `docs/pbi/notes/approve.md` for the user to approve the run: seven fixed sections in a fixed order (`appendix/approve.md`), checked by `design_record.py lint`.
+Unlike a question draft, it has a PBI section and a Who builds section, and `なし` is allowed under Decisions.
 _Avoid_: approval list, 承認の一覧, 下書き
 
 **before / after flow (今の流れ・あとの流れ)**:
 The two diagrams of an approval draft: the flow as the user sees it today, and the same flow after the run, with each changed line marked (`+`, `-`, `~`) and the PBI number in the node it changes.
 _Avoid_: 設計図, 構成図
+
+**question draft (問いの原稿)**:
+The Markdown the designer writes to `question.path` for a question other than approval: six fixed sections in a fixed order, four required and two optional (`appendix/questions.md`), checked by `design_record.py lint --kind`.
+_Avoid_: 質問票, 問いのメモ
+
+**after-answer flow (答えたあとの流れ)**:
+The second diagram of a question draft: for a design question, the flow when the recommended answer is picked, marked with change lines (`+`, `-`, `~`); for a question that moves the run on, the flow for each choice, with the branches as edge labels.
+_Avoid_: 変更後の図, 予想図
 
 **internal term (内部の言葉)**:
 A word only Atelier's insides use (route, tier, stage, a quality score's name, a component's name). Text the user reads rewords it or explains it on the same line.
