@@ -3,9 +3,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { callJev, getApiKey, JevError, DEFAULT_ENDPOINT } from "./jev.mjs";
+import { callJev, getApiKey, resolveApiKey, publicCode, JevError, DEFAULT_ENDPOINT } from "./jev.mjs";
 
 const DUMMY_KEY = "dummy-test-key";
 const OK_BODY = {
@@ -178,4 +179,86 @@ test("7b. JSON でない 200 は bad-response", async () => {
   await withMock([{ status: 200, body: "not json" }], async ({ url }) => {
     await assert.rejects(call(url), (e) => e.code === "bad-response");
   });
+});
+
+test("publicCode は http-401 と http-403 を分ける", () => {
+  assert.equal(publicCode({ code: "http", status: 401 }), "http-401");
+  assert.equal(publicCode({ code: "http", status: 403 }), "http-403");
+  assert.equal(publicCode({ code: "network" }), "network");
+  assert.equal(publicCode({ code: "timeout" }), "timeout");
+  assert.equal(publicCode(new JevError("x", { code: "no-key", where: "env無し" })), "no-key");
+});
+
+test("キーの場所と失敗の理由 (env無し・ファイル無し・BOM・壊れた JSON・api_key 無し)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "jev-key-"));
+  try {
+    const home = { HOME: dir, USERPROFILE: dir };
+    assert.deepEqual(resolveApiKey(home), { key: null, where: "env無し" });
+    assert.equal(getApiKey(home), null);
+
+    const missing = join(dir, "missing.json");
+    const missingEnv = { ...home, TYPESAFE_CREDENTIALS_FILE: missing };
+    assert.deepEqual(resolveApiKey(missingEnv), { key: null, where: `ファイル無し: ${missing}` });
+
+    const broken = join(dir, "broken.json");
+    writeFileSync(broken, "{");
+    assert.equal(resolveApiKey({ ...home, TYPESAFE_CREDENTIALS_FILE: broken }).where, `JSONが壊れている: ${broken}`);
+
+    const nokey = join(dir, "nokey.json");
+    writeFileSync(nokey, JSON.stringify({ token: "x" }));
+    assert.equal(resolveApiKey({ ...home, TYPESAFE_CREDENTIALS_FILE: nokey }).where, `api_keyが無い: ${nokey}`);
+
+    const bom = join(dir, "bom.json");
+    writeFileSync(bom, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{"api_key":"bom-key"}')]));
+    assert.deepEqual(resolveApiKey({ ...home, TYPESAFE_CREDENTIALS_FILE: bom }), { key: "bom-key", where: bom });
+
+    assert.deepEqual(
+      resolveApiKey({ ...home, TYPESAFE_API_KEY: "env-key", TYPESAFE_CREDENTIALS_FILE: missing }),
+      { key: "env-key", where: "env" },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("6d. ファイルが無いキーは HTTP を呼ばず no-key と where", async () => {
+  const missing = join(tmpdir(), "jev-test-no-such-dir", "credentials.json");
+  await withEnv({ TYPESAFE_API_KEY: undefined, TYPESAFE_CREDENTIALS_FILE: missing }, async () => {
+    await withMock([{ status: 200, body: OK_BODY }], async ({ url, requests }) => {
+      await assert.rejects(
+        callJev({ state: "t", questions: QUESTIONS, model: "jev-1.13.0", endpoint: url, sleep: async () => {} }),
+        (e) => e instanceof JevError && e.code === "no-key" && e.where === `ファイル無し: ${missing}`,
+      );
+      assert.equal(requests.length, 0);
+    });
+  });
+});
+
+test("接続できないときは network、応答が止まると timeout", async () => {
+  const closed = createNetServer();
+  await new Promise((r) => closed.listen(0, "127.0.0.1", r));
+  const port = closed.address().port;
+  closed.close();
+  await new Promise((r) => closed.close(r));
+  await assert.rejects(
+    callJev({
+      state: "t", questions: QUESTIONS, model: "m", apiKey: DUMMY_KEY,
+      endpoint: `http://127.0.0.1:${port}/v1/systemone`, timeoutMs: 1000, sleep: async () => {},
+    }),
+    (e) => e instanceof JevError && e.code === "network" && publicCode(e) === "network",
+  );
+
+  const hang = createNetServer((socket) => { socket.on("error", () => {}); });
+  await new Promise((r) => hang.listen(0, "127.0.0.1", r));
+  try {
+    await assert.rejects(
+      callJev({
+        state: "t", questions: QUESTIONS, model: "m", apiKey: DUMMY_KEY,
+        endpoint: `http://127.0.0.1:${hang.address().port}/v1/systemone`, timeoutMs: 200, sleep: async () => {},
+      }),
+      (e) => e instanceof JevError && e.code === "timeout" && !e.message.includes(DUMMY_KEY),
+    );
+  } finally {
+    hang.close();
+  }
 });
