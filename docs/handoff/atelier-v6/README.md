@@ -22,7 +22,7 @@
 
 - Claude Code のサブエージェントは、既定で 3 層まで入れ子にできる (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`、https://code.claude.com/docs/en/sub-agents.md)。これで「呼び出し側 → 設計者 → 作業者・レビュー担当・テスト担当」がそのまま組める。
 - `claude -p` は `~/.claude/agents` を読み、`--agent` でメインのスレッドの定義を選べる。`--permission-prompts none` は、許可を求める呼び出しを拒む。
-- **Jev はクラウドで使えなかった。** API キー (`TYPESAFE_API_KEY` か `~/.config/typesafe/credentials.json`) が無く、`api.typesafe.ai` への通信もネットワークの設定で止められていた。そのため段は facts だけで決め、5 件を設計者が上書きした。ローカルでは route をやり直す。
+- **Jev はクラウドのコンテナで使えなかった。** API キー (`TYPESAFE_API_KEY` か `~/.config/typesafe/credentials.json`) が無く、`api.typesafe.ai` への通信もネットワークの設定で止められていた。そのため段は facts だけで決め、5 件を設計者が上書きした。これはユーザー PC の状態ではない。使えるかは、その回の `prepare.py` と `tools_check.py` で判断する（[pbi/README.md](pbi/README.md)）。ローカルでは route をやり直す。
 
 ## ローカルで続ける手順
 
@@ -42,7 +42,7 @@
    mkdir -p docs/pbi && cp -R docs/handoff/atelier-v6/pbi/. docs/pbi/
    ```
 
-3. `docs/pbi/HANDOFF.md` の 1 行目の `Repository:` を、ローカルの clone の絶対パスに書き換える。
+3. `docs/pbi/HANDOFF.md` の `Repository:` の行を、ローカルの clone の絶対パスに書き換える。
 4. Claude Code で `/atelier resume` を実行する。HANDOFF.md の「次にやること」に、Jev で route をやり直し、承認の下書きを作り直してから承認を見せる、と書いてある (今の v5 の流れでは、resume は build の前をやり直さないので、その例外として書いた)。
 5. 承認で答える 3 つの問い:
    - Claude Code から呼ぶときの既定の起動: agent (推奨) / headless

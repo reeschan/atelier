@@ -120,18 +120,26 @@ class ServeTest(unittest.TestCase):
 
     def request(self, method, path, body=None, token='tok', host=None,
                 content_type='application/json', raw=None):
-        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=10)
         headers = {'Host': host or f'127.0.0.1:{self.port}'}
         if content_type:
             headers['Content-Type'] = content_type
         if token:
             headers['X-Studio-Token'] = token
         data = raw if raw is not None else (json.dumps(body).encode('utf-8') if body is not None else None)
-        conn.request(method, path, body=data, headers=headers)
-        response = conn.getresponse()
-        out = response.status, response.read()
-        conn.close()
-        return out
+        # Windows の Python 3.10 で、続けて PUT すると WinError 10053 で接続が切れることがある。1 回だけ送り直す。
+        last = None
+        for _ in range(2):
+            conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=10)
+            try:
+                conn.request(method, path, body=data, headers=headers)
+                response = conn.getresponse()
+                out = response.status, response.read()
+                conn.close()
+                return out
+            except (ConnectionAbortedError, ConnectionResetError, http.client.RemoteDisconnected) as exc:
+                last = exc
+                conn.close()
+        raise last
 
     def get_state(self):
         code, body = self.request('GET', '/api/state')
