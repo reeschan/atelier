@@ -597,12 +597,14 @@ Only repositories under `--root` (or `PBI_MCP_ROOTS`) are served. HTTP listens o
 
 ```sh
 cd skills/atelier
-python -m unittest discover -p 'test_*.py'
-python -m unittest discover -s studio -p 'test_*.py'
+python run_tests.py
+python run_tests.py -s studio
 cd jev
 python -m unittest test_jev
 node --test --test-reporter=tap jev.test.mjs
 ```
+
+`run_tests.py` runs the same tests as `python -m unittest discover -p 'test_*.py'`, split over one process per CPU (`-j N` to change it), so the skill's suite takes about 1.5 minutes instead of about 13. `python -m unittest` still works, for a single module or test.
 
 The Jev client tests only talk to a mock server on 127.0.0.1; they never call the real Jev.
 
