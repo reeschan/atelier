@@ -229,10 +229,10 @@ class StateTest(unittest.TestCase):
         self.assertEqual(state, self.expected())
 
     def test_template_with_uppercase_extension_is_checked_like_load_all(self):
-        # Studio (templates.load_all) は glob('*.json') で読む。Windows など大文字小文字を区別しない FS では foo.JSON も読む
+        # Studio (templates.load_all) は glob('*.json') で読む。foo.JSON を拾うかは OS で違う
+        # (Windows は拾う。macOS は FS が大文字小文字を区別しなくても glob の照合は区別するので拾わない)
         path = self.put('templates/foo.JSON', b'{')
-        reads = (self.home / 'templates' / 'foo.json').exists()  # load_all が foo.JSON を読む FS か
-        self.assertEqual(reads, [p.name for p in (self.home / 'templates').glob('*.json')] == ['foo.JSON'])
+        reads = [p.name for p in (self.home / 'templates').glob('*.json')] == ['foo.JSON']  # load_all が読むか
         if reads:
             message = self.fails(4, '--home', self.home)
             self.assertIn('templates/foo.json is not readable JSON', message)
