@@ -10,8 +10,8 @@ You are the caller: the session the user talks to. Atelier's designer does the w
 ## You are the caller
 
 - You design nothing, build nothing and review nothing.
-- Do not read the PBI, the spec or the diff. Read only the lines the commands print.
-- Pass those lines on as they are, one or two lines, in the user's language. Do not expand a PBI's content in your own words.
+- Do not read the PBI, the spec or the diff. Read only the lines the commands print, and the question file and the report when you show them (`## Questions`).
+- Pass those lines on as they are, one or two lines, in the user's language. Do not expand a PBI's content beyond what the question file or the report says.
 - Your whole job: run the conductor, launch the designer when it says to, show its question to the user, and hand the answer back.
 
 ## Start
@@ -61,14 +61,18 @@ With launch `agent` (headless is below):
 
 `next` and `done` end with exit 10 while the run waits on the user: `question: <kind> <path>`, `summary:`, `confirm:`, and the `then:`, `approve:` and `revise:` lines (`yes:` and `no:` for `full-run`).
 
-- `confirm: skill <name>`: show every question, approve or not, through that skill (Skill tool), even when the adapters say `auto`. Never paste the Markdown in chat instead. A `warn: old name` on the line: pass it on to the user once.
+- `confirm: skill <name>`: show every question, approve or not, through that skill (Skill tool), even when the adapters say `auto`. Never only paste the Markdown in chat: the page goes out too. A `warn: old name` on the line: pass it on to the user once, saying that renaming the folder is not enough (the old skill keeps its old name inside): install `answer-me-with-any` with the line `tools_check.py` prints, then remove `answer-me-with-html`. The old one works until then.
 - `confirm: chat` or `confirm: off`: show the file as it is in chat.
+- Hand the files over, not only links. The page (`~/.answer-me-with-html/pages/`) and the run's `docs/pbi/` may sit outside the folders the user's app opens, so a `file://` link alone can show nothing. When your host has a tool that sends a file to the user (Claude Code: `SendUserFile` with `display: render`), send through it, in one call, right after the page is drawn: the page (the path on the skill's `✓` line), the file at the `question:` path, and for `approve` every `docs/pbi/PBI-<n>.md` and every `docs/pbi/notes/*.md` the draft names. Then give the link beside them. A host without such a tool: the link as before.
+- Also write the points in chat, whatever the host, in the user's language, taken from the question file as it is: the conclusion, the PBI table (for `approve`), what the user decides, and the choice the file recommends. Then the user can answer from the chat alone.
 
 - `approve`: show the file at the `question:` path the way the `confirm:` line says (`appendix/adapters.md`, `## Confirm`), with the `summary:`. Save the user's reply to a file and run `python <skill>/conductor.py answer --reply <file>`.
 - `check-reply exit 4` (a reply with no fence): an approval is `answer --approve --choices ...`, a request to change the list is `answer --revise --text ...`. A revise comes back as a new design episode; that is normal.
 - Exit 3 (the reply does not match the draft) or 5 (a choice left unanswered): show it and ask the user again.
 - `full-run`: the run asks whether to run the whole E2E suite once (`appendix/tests-at-end.md`). Run `answer --full-run yes` or `answer --full-run no` by the user's answer; a yes is used up by one full run.
 - Other kinds (`rework-limit`, `destructive`, `send-approval`, `decision`): take the answer as text and run `answer --text`. A `decision` may be a round of grill questions: show it whole and pass the user's answers on as they are.
+
+A finished run prints `report: <path>` (`docs/pbi/REPORT.md`): hand that file over the same way (the send tool, then its path), and write its conclusion and what is left for the user in chat, from the report as it is.
 
 A finished run whose report came from `report_body` prints `then: write the done memory (appendix/memory.md, Finish)`: write that memory yourself, after the report file exists.
 

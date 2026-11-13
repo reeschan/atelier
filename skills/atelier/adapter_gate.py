@@ -118,7 +118,7 @@ def confirm_row(setting, skills_dir, env) -> tuple:
     old = agents_module.CONFIRM_SKILL_OLD
     found = flow.find_skill_file(old, skills_dir, env) if setting == 'auto' else None
     if found:
-        return setting, 'skill', (f'{old} found at {found.as_posix()} (old name; rename it to {name}); '
+        return setting, 'skill', (f'{old} found at {found.as_posix()} (old name; install {name} and remove it); '
                                   'use it only if it is in the skill list')
     return setting, 'chat', f'{name} not installed; show the same Markdown in chat (no install, no CLI)'
 
