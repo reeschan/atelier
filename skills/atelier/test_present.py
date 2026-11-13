@@ -23,6 +23,7 @@ sys.path.insert(0, HERE)
 FIXTURES = os.path.join(HERE, 'testdata', 'present')
 DESIGN_FIXTURES = os.path.join(HERE, 'testdata', 'design')
 sys.path.insert(0, FIXTURES)
+import common  # noqa: E402
 import design_record  # noqa: E402
 import fakes  # noqa: E402
 import present  # noqa: E402  (tokens_est・shown・saved_draft・log_answered は conductor も使う公開の契約)
@@ -100,8 +101,6 @@ ANSWER_TEXT = 'answer --text "..."'
 REVISE_TEXT = 'answer --revise --text "..."'
 
 
-def command(rest):
-    return f'python {CONDUCTOR} {rest}'
 
 
 class PresentTest(unittest.TestCase):
@@ -192,6 +191,12 @@ class PresentTest(unittest.TestCase):
         with open(self.am_log, encoding='utf-8') as stream:
             return [json.loads(line) for line in stream if line.strip()]
 
+    def command(self, rest):
+        """present が出す conductor のコマンド。パスは present と同じ引用 (common.quoted)、作業のディレクトリは --dir で渡る。"""
+        sub, _, tail = rest.partition(' ')
+        return (f'python {common.quoted(CONDUCTOR)} {sub} --dir {common.quoted(self.pbi)}'
+                + (f' {tail}' if tail else ''))
+
     def present(self, path, kind, *extra, env=None, skills=True):
         cmd = [sys.executable, SCRIPT, str(path), '--kind', kind, '--dir', self.pbi, '--home', self.home]
         if skills:
@@ -232,8 +237,9 @@ class PresentTest(unittest.TestCase):
         link = body.rstrip('\n')
         self.assertEqual(head, ['format: html (setting)',
                                 f'log: {Path(self.pbi).as_posix()}/presentations.jsonl',
-                                f'then: {command(ANSWER_TEXT)}  # answer',
-                                f'then: {command("answer --reply <file>")}  # reply'])
+                                f'page: {Path(link).as_posix()}',
+                                f'then: {self.command(ANSWER_TEXT)}  # answer',
+                                f'then: {self.command("answer --reply <file>")}  # reply'])
         self.assertEqual(body, link + '\n')
         self.assertEqual(len(link.split('\n')), 1, body)
         self.assertTrue(os.path.isfile(link), (link, out, err))
@@ -270,9 +276,9 @@ class PresentTest(unittest.TestCase):
         head, body = split_show(out)
         self.assertEqual(head[0], 'format: html (setting)')
         self.assertEqual(self.then_lines(head), [
-            f'then: {command("answer --reply <file>")}  # reply',
-            f'then: {command("answer --approve [--choices 1=a,2=b]")}  # approve',
-            f'then: {command(REVISE_TEXT)}  # revise'])
+            f'then: {self.command("answer --reply <file>")}  # reply',
+            f'then: {self.command("answer --approve [--choices 1=a,2=b]")}  # approve',
+            f'then: {self.command(REVISE_TEXT)}  # revise'])
         self.assertTrue(os.path.isfile(body.strip()), (body, err))
         saved_bytes = Path(self.saved(2, 'approve')).read_bytes()
         self.assertEqual(saved_bytes, expected)
@@ -290,9 +296,9 @@ class PresentTest(unittest.TestCase):
         self.assertEqual(code, 0, out + err)
         head, _ = split_show(out)
         self.assertEqual(self.then_lines(head), [
-            f'then: {command("answer --approve [--choices 1=a,2=b]")}  # approve',
-            f'then: {command(REVISE_TEXT)}  # revise',
-            f'then: {command(ANSWER_TEXT)}  # answer'])
+            f'then: {self.command("answer --approve [--choices 1=a,2=b]")}  # approve',
+            f'then: {self.command(REVISE_TEXT)}  # revise',
+            f'then: {self.command(ANSWER_TEXT)}  # answer'])
         self.assertEqual(self.read_saved(0, 'approve', 'inline'), APPROVE)
 
     def test_approve_with_no_or_broken_design_record_shows_the_body_and_exits_3(self):
@@ -590,15 +596,15 @@ class PresentTest(unittest.TestCase):
         code, out, err = self.present(question, 'full-run')
         self.assertEqual(code, 0, out + err)
         head, _ = split_show(out)
-        self.assertEqual(self.then_lines(head), [f'then: {command("answer --full-run yes")}  # yes',
-                                                 f'then: {command("answer --full-run no")}  # no'])
+        self.assertEqual(self.then_lines(head), [f'then: {self.command("answer --full-run yes")}  # yes',
+                                                 f'then: {self.command("answer --full-run no")}  # no'])
 
     def test_runner_questions_and_relaunch(self):
         self.confirm('html')
         relaunch = 'python tools/relaunch.py --resume'
-        abort = f'then: {command("abort")}  # abort'
-        answer = f'then: {command(ANSWER_TEXT)}  # answer'
-        reply = f'then: {command("answer --reply <file>")}  # reply'
+        abort = f'then: {self.command("abort")}  # abort'
+        answer = f'then: {self.command(ANSWER_TEXT)}  # answer'
+        reply = f'then: {self.command("answer --reply <file>")}  # reply'
         cases = [('handoff-loop', relaunch, [answer, f'then: {relaunch}  # relaunch', abort]),
                  ('launch-failure', relaunch, [answer, f'then: {relaunch}  # relaunch', abort]),
                  ('handoff-loop', None, [answer, abort]),

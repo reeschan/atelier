@@ -31,8 +31,15 @@ def install_node(directory, version=None):
             stream.write(text)
     if os.name == 'nt':
         launcher = os.path.join(directory, 'node.cmd')
-        with open(launcher, 'w', encoding='ascii', newline='') as stream:
-            stream.write(f'@echo off\r\n"{sys.executable}" "{fake}" %*\r\nexit /b %ERRORLEVEL%\r\n')
+        # cmd.exe はバッチファイルを OEM のコードページで読む。ASCII に限ると、日本語のユーザー名の一時ディレクトリなどで
+        # 書けない。fake_node.py は %~dp0 (このファイルのフォルダ) で指し、埋め込むパスを Python だけにする
+        text = f'@echo off\r\n"{sys.executable}" "%~dp0fake_node.py" %*\r\nexit /b %ERRORLEVEL%\r\n'
+        try:
+            data = text.encode('oem')
+        except UnicodeEncodeError as error:
+            raise RuntimeError(f'the Python path cannot be written in the OEM code page: {sys.executable}') from error
+        with open(launcher, 'wb') as stream:
+            stream.write(data)
     else:
         launcher = os.path.join(directory, 'node')
         with open(launcher, 'w', encoding='utf-8', newline='\n') as stream:

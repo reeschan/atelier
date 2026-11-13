@@ -25,7 +25,8 @@ run の下で html の approve を見せるとき、問いの check が design-r
   format: <html|md|off> (<reason>)
   warn: <警告>                   (0 行以上)
   log: <dir>/presentations.jsonl
-  then: <command>  # <label>     (0 行以上)
+  page: <ページのファイル>         (html で、am がページのファイルを出したときだけ)
+  then: <command>  # <label>     (0 行以上、作業のディレクトリが docs/pbi でなければ --dir 付き)
   show:
   <見せる部分>                    (html はページのリンク 1 行、md・off は本文)
 
@@ -69,6 +70,7 @@ READ_WAIT = 1.0
 # Windows で子 (node) のコンソールのウインドウを出さない (test_no_window.py)
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 # am の標準出力の印 (ページのファイルと、am serve のときの URL)
+DEFAULT_DIR = 'docs/pbi'
 PAGE_PREFIX = '✓ '
 LINK_PREFIX = '  link:'
 
@@ -314,19 +316,21 @@ def write_draft(path: Path, text: str) -> None:
 quoted = common.quoted
 
 
-def then_lines(kind: str, info: RunInfo, skill: Path = SKILL) -> list:
-    """呼び出し側が打つコマンドの行 (then: <command>  # <label>)。"""
+def then_lines(kind: str, info: RunInfo, base=None, skill: Path = SKILL) -> list:
+    """呼び出し側が打つコマンドの行 (then: <command>  # <label>)。
+    base が既定 (docs/pbi) でなければ、conductor が同じ run を読むよう --dir を付ける。"""
     if kind == 'report':
         return []
+    d = f' --dir {quoted(base)}' if base is not None and Path(base) != Path(DEFAULT_DIR) else ''
     c = f"python {quoted(skill / 'conductor.py')}"
-    answer = (f'{c} answer --text "..."', 'answer')
-    reply = (f'{c} answer --reply <file>', 'reply')
-    approve = (f'{c} answer --approve [--choices 1=a,2=b]', 'approve')
-    revise = (f'{c} answer --revise --text "..."', 'revise')
+    answer = (f'{c} answer{d} --text "..."', 'answer')
+    reply = (f'{c} answer{d} --reply <file>', 'reply')
+    approve = (f'{c} answer{d} --approve [--choices 1=a,2=b]', 'approve')
+    revise = (f'{c} answer{d} --revise --text "..."', 'revise')
     if kind == 'approve':
         pairs = [reply, approve, revise] if info.check else [approve, revise, answer]
     elif kind == 'full-run':
-        pairs = [(f'{c} answer --full-run yes', 'yes'), (f'{c} answer --full-run no', 'no')]
+        pairs = [(f'{c} answer{d} --full-run yes', 'yes'), (f'{c} answer{d} --full-run no', 'no')]
     elif kind in RUNNER_KINDS:
         pairs = [answer]
     else:
@@ -334,7 +338,7 @@ def then_lines(kind: str, info: RunInfo, skill: Path = SKILL) -> list:
     if kind in RUNNER_KINDS or info.relaunch:
         if info.relaunch:
             pairs.append((info.relaunch, 'relaunch'))
-        pairs.append((f'{c} abort', 'abort'))
+        pairs.append((f'{c} abort{d}', 'abort'))
     return [f'then: {command}  # {label}' for command, label in pairs]
 
 
@@ -404,7 +408,7 @@ def render_html(choice: Choice, kind: str, saved: Path, env) -> dict:
     counted = am_run(choice, render_words(saved, kind, 'md'), env)
     md_tokens = tokens_est(counted.stdout) if counted is not None and counted.returncode == 0 else None
     page_bytes = Path(page).stat().st_size if page and Path(page).is_file() else None
-    return {'shown': link, 'md_tokens': md_tokens, 'page_bytes': page_bytes}
+    return {'shown': link, 'md_tokens': md_tokens, 'page_bytes': page_bytes, 'page': page}
 
 
 def render_md(choice: Choice, kind: str, saved: Path, body: str, env) -> dict:
@@ -429,11 +433,13 @@ def render(choice: Choice, kind: str, saved: Path, body: str, env) -> dict:
 
 # --- 出力と記録 ---
 
-def emit(choice: Choice, base: Path, then: list, shown_text: str, errors: list) -> None:
+def emit(choice: Choice, base: Path, then: list, shown_text: str, errors: list, page=None) -> None:
     out = [f'error: {line}' for line in errors]
     out.append(f'format: {choice.format} ({choice.reason})')
     out += [f'warn: {warning}' for warning in choice.warnings]
     out.append(f'log: {log_path(base).as_posix()}')
+    if page:
+        out.append(f'page: {Path(page).as_posix()}')
     out += then
     out.append('show:')
     sys.stdout.write('\n'.join(out) + '\n')
@@ -454,7 +460,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument('path', help='問い (または完了報告) のファイル')
     ap.add_argument('--kind', required=True, choices=KINDS, help='問いの種類 (完了報告は report)')
     ap.add_argument('--format', choices=FORMATS, help='見せ方 (省くと agents.json の confirm)')
-    ap.add_argument('--dir', default='docs/pbi', help='作業の docs/pbi')
+    ap.add_argument('--dir', default=DEFAULT_DIR, help='作業の docs/pbi')
     ap.add_argument('--home', help=argparse.SUPPRESS)
     ap.add_argument('--skills-dir', help=argparse.SUPPRESS)
     return ap.parse_args(argv)
@@ -487,7 +493,7 @@ def main(argv=None) -> int:
         result = {'shown': design_record.strip_meta_lines(body), 'md_tokens': None, 'page_bytes': None}
         errors, code = error.lines, EXIT_DRAFT
     shown_text = result['shown']
-    emit(choice, base, then_lines(args.kind, info), shown_text, errors)
+    emit(choice, base, then_lines(args.kind, info, base), shown_text, errors, result.get('page'))
     append_row(base, shown_row(args.kind, info, choice, raw, shown_text, result))
     return code
 

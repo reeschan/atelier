@@ -69,6 +69,7 @@ class ToolsCheckTest(unittest.TestCase):
         self.touch('plugins', 'pstack', '0.15.32', 'skills', 'principle-test-behavior-not-implementation', 'SKILL.md')
         self.touch('skills', 'sac-strategic-compact', 'SKILL.md')
         self.touch('skills', 'answer-me-with-any', 'SKILL.md')
+        self.touch('skills', 'answer-me-with-any', 'scripts', 'am.mjs')
         rows = self.rows()
         self.assertTrue(rows['jevlint'][1].startswith('ok ') and rows['jevlint'][1].endswith('0.0.0-fake'))
         for tool in ('omm-scan', 'sac-strategic-compact', 'principle-test-behavior-not-implementation',
@@ -78,9 +79,16 @@ class ToolsCheckTest(unittest.TestCase):
         self.assertTrue(self.rows(FAKE_JEVLINT_KEYS='')['jevlint'][1].startswith('no-key '))
 
 
+    def test_confirm_without_am_mjs_is_missing(self):
+        """SKILL.md があっても scripts/am.mjs が無ければ ok にしない (present.py は am.mjs で見せる)。"""
+        self.touch('skills', 'answer-me-with-any', 'SKILL.md')
+        status = self.rows()['answer-me-with-any'][1]
+        self.assertTrue(status.startswith('missing scripts/am.mjs (found '), status)
+
     def test_confirm_old_name_is_ok_with_a_rename_note(self):
         """古い名前のスキルしか無いときも ok にし、新しい名前に変えるよう添える。"""
         self.touch('skills', 'answer-me-with-html', 'SKILL.md')
+        self.touch('skills', 'answer-me-with-html', 'scripts', 'am.mjs')
         status = self.rows()['answer-me-with-any'][1]
         self.assertTrue(status.startswith('ok '), status)
         self.assertIn('old name answer-me-with-html; install answer-me-with-any and remove it', status)
