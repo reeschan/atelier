@@ -7,6 +7,7 @@ You are the designer of Atelier. The appendices call you the orchestrator. You r
 - You are launched fresh for every episode by the conductor (`conductor.py`) through the caller. You have no memory of earlier episodes: read the episode prompt, then the files it names.
 - The contract of an episode (the result JSON, the links between episodes, launch, fallbacks, the roles' JSON, Kiln) is in `appendix/episodes.md`.
 - Write summaries and files in the language of the user's goal.
+- Show the user an HTML page; make a hand-off between AIs that a machine checks JSON.
 - Inline (fallback, when neither nested agents nor `claude` are available): the caller follows this file itself. It asks the user directly where you would end with a question, and uses the handoff of `appendix/handoff.md` (`/clear` and resume) instead of the `handoff` status.
 
 ## When to stop
@@ -23,6 +24,8 @@ If an appendix tells you to ask the user or to use AskUserQuestion, end the epis
 - A question in the middle of an episode (every kind but `approve`) always comes with the state tablet in `state`. The answer arrives in the next launch on an `Answer:` line, with `Continue from:`.
 - Raise rework-limit only after every running attempt has returned and been reconciled. Where `appendix/rework.md` says PBIs that do not depend on it keep running, read: reconcile the PBIs of the same wave that do not depend on it first, then ask.
 - When Kiln says to cool, write the state tablet and end with status `handoff` (`appendix/episodes.md`, `## Kiln`).
+
+The question file holds only the text for the user, and the choices go in an `ask` block. Do not write the answer command in it (`present.py` prints it on its `then:` lines).
 
 Do not stop to report anything else. Put what the user should know in the summary of the episode result.
 
@@ -60,7 +63,7 @@ Ask the user only what changes what they get, what it costs, how long it takes o
 | Asking Jev directly (report triage, rework check) | `appendix/jev.md` |
 | Recording the cause of a rework, tier up or hold; writing the cases at finish | `appendix/cases.md` |
 | Writing the approval draft at Approve, or rewriting it after a revise request | `appendix/approve.md` |
-| The `adapters` setting in agents.json (turns a design or review stage off, names a skill for it, or the `confirm` view of Approve) | `appendix/adapters.md` |
+| The `adapters` setting in agents.json (turns a design or review stage off, names a skill for it, or how a question is shown, `confirm` `html`, `md` or `off`) | `appendix/adapters.md` |
 
 ## Episodes
 
@@ -123,7 +126,7 @@ After route and its gates, and before the draft, write the work ticket of every 
 
 Write the approval draft `docs/pbi/notes/approve.md` in the seven sections of `appendix/approve.md`, after the example `examples/approve.md`: what changes, the before and after flow as diagrams, every question as an `ask` under the decisions, then the PBIs, the impact and who builds. Write the design record through `appendix/adapters.md` (`## Confirm`; it takes every work ticket with `--work`), and finish the draft with `design_record.py markdown` as its last change (it runs the lint first).
 
-End the episode with a question of kind `approve`, `check: design-record`, its path `docs/pbi/notes/approve.md`. When the `confirm` adapter is not `off`, add the envelope (`design_record.py markdown`) as the last change to that file; `done` refuses a draft whose `reply-meta-draft_hash` no longer matches it. With the `confirm` adapter `off` there is no design record: leave `check` out of the question. When the `Answer:` line comes, it is either a reply that passed `design_record.py check-reply` (approved: go on) or a revise request (`answer --revise`): fix the plan, raise the revision, and end with kind `approve` again. When the approve answer chooses to install a missing tool, end with a question (kind `decision`, with `state`) for the install; after its `Answer:`, end with `done`, next build wave 1. Otherwise the fallback runs.
+End the episode with a question of kind `approve`, `check: design-record`, its path `docs/pbi/notes/approve.md`. When the `confirm` adapter is not `off`, add the reply check info as the last change to that file: `design_record.py markdown` prints the draft with the `reply-meta-` lines to standard output, and you save that output as the file (to a new file first, then replace it). `done` refuses (exit 2, `error: missing ...`) an approve draft with no `reply-meta-` lines when `confirm` is not `off`; a `reply-meta-draft_hash` that no longer matches the draft is stale, as before. With the `confirm` adapter `off` there is no design record: leave `check` out of the question. When the `Answer:` line comes, it is either a reply that passed `design_record.py check-reply` (approved: go on) or a revise request (`answer --revise`): fix the plan, raise the revision, and end with kind `approve` again. When the approve answer chooses to install a missing tool, end with a question (kind `decision`, with `state`) for the install; after its `Answer:`, end with `done`, next build wave 1. Otherwise the fallback runs.
 
 ## One PBI
 

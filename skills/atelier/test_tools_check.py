@@ -11,8 +11,12 @@ import uuid
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, 'tools_check.py')
 FAKE = os.path.join(HERE, 'testdata', 'fake_jevlint.py')
+FIXTURES = os.path.join(HERE, 'testdata', 'present')
+sys.path.insert(0, FIXTURES)
+import fakes  # noqa: E402
 TOOLS = ['omm', 'omm-scan', 'jevlint', 'sac-strategic-compact', 'principle-test-behavior-not-implementation',
-         'answer-me-with-any']
+         'answer-me-with-any', 'node']
+CONFIRM_OFF = 'confirm: off (the question file in chat, no reply check)'
 
 
 class ToolsCheckTest(unittest.TestCase):
@@ -52,7 +56,10 @@ class ToolsCheckTest(unittest.TestCase):
         for part in ('https://github.com/reeschan/answer-me-with-any', 'skills/answer-me-with-any',
                      '~/.claude/skills/answer-me-with-any', 'only after the user says yes'):
             self.assertIn(part, install)
-        self.assertIn('the same Markdown in chat', rows['answer-me-with-any'][3])
+        self.assertIn(CONFIRM_OFF, rows['answer-me-with-any'][3])
+        self.assertEqual(rows['node'][1], 'missing')
+        self.assertIn('fnm install 22', rows['node'][2])
+        self.assertIn(CONFIRM_OFF, rows['node'][3])
         self.assertEqual(os.listdir(os.path.join(self.dir, 'skills')), [])
 
     def test_found_tools_and_a_missing_key(self):
@@ -62,6 +69,7 @@ class ToolsCheckTest(unittest.TestCase):
         self.touch('plugins', 'pstack', '0.15.32', 'skills', 'principle-test-behavior-not-implementation', 'SKILL.md')
         self.touch('skills', 'sac-strategic-compact', 'SKILL.md')
         self.touch('skills', 'answer-me-with-any', 'SKILL.md')
+        self.touch('skills', 'answer-me-with-any', 'scripts', 'am.mjs')
         rows = self.rows()
         self.assertTrue(rows['jevlint'][1].startswith('ok ') and rows['jevlint'][1].endswith('0.0.0-fake'))
         for tool in ('omm-scan', 'sac-strategic-compact', 'principle-test-behavior-not-implementation',
@@ -71,12 +79,35 @@ class ToolsCheckTest(unittest.TestCase):
         self.assertTrue(self.rows(FAKE_JEVLINT_KEYS='')['jevlint'][1].startswith('no-key '))
 
 
+    def test_confirm_without_am_mjs_is_missing(self):
+        """SKILL.md があっても scripts/am.mjs が無ければ ok にしない (present.py は am.mjs で見せる)。"""
+        self.touch('skills', 'answer-me-with-any', 'SKILL.md')
+        status = self.rows()['answer-me-with-any'][1]
+        self.assertTrue(status.startswith('missing scripts/am.mjs (found '), status)
+
     def test_confirm_old_name_is_ok_with_a_rename_note(self):
         """古い名前のスキルしか無いときも ok にし、新しい名前に変えるよう添える。"""
         self.touch('skills', 'answer-me-with-html', 'SKILL.md')
+        self.touch('skills', 'answer-me-with-html', 'scripts', 'am.mjs')
         status = self.rows()['answer-me-with-any'][1]
         self.assertTrue(status.startswith('ok '), status)
         self.assertIn('old name answer-me-with-html; install answer-me-with-any and remove it', status)
+
+    def test_node_row_ok_with_a_fake_node(self):
+        """偽の node (v22.1.0) だけを PATH に載せると、node の行は ok <場所> v22.1.0 になる。"""
+        self.env['PATH'] = fakes.install_node(os.path.join(self.dir, 'nodebin'))
+        status = self.rows(FAKE_NODE_VERSION='v22.1.0')['node'][1]
+        self.assertTrue(status.startswith('ok '), status)
+        self.assertTrue(status.endswith('v22.1.0'), status)
+
+    def test_node_row_old_below_20(self):
+        """版が 20 未満の偽の node (v18.19.0) は old。install と fallback の列は埋まっている。"""
+        self.env['PATH'] = fakes.install_node(os.path.join(self.dir, 'nodebin'))
+        row = self.rows(FAKE_NODE_VERSION='v18.19.0')['node']
+        self.assertEqual(row[1], 'old v18.19.0')
+        self.assertIn('fnm install 22', row[2])
+        self.assertIn(CONFIRM_OFF, row[3])
+
 
 if __name__ == '__main__':
     unittest.main()
