@@ -2,6 +2,7 @@
 import json
 import os
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -66,6 +67,33 @@ class MockJev:
     def __exit__(self, *exc):
         self.server.shutdown()
         self.server.server_close()
+
+
+def reset_endpoint():
+    """受けた接続をすぐ RST する。閉じたポートは Windows でタイムアウトになることがある。"""
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+    sock.listen(8)
+    url = f'http://127.0.0.1:{sock.getsockname()[1]}/v1/systemone'
+    stop = threading.Event()
+
+    def serve():
+        sock.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                conn, _ = sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            try:
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+                conn.close()
+            except OSError:
+                pass
+
+    threading.Thread(target=serve, daemon=True).start()
+    return sock, stop, url
 
 
 def sleep_recorder():
@@ -190,14 +218,15 @@ class CallJevTest(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
-        sock = socket.socket()
-        sock.bind(('127.0.0.1', 0))
-        port = sock.getsockname()[1]
-        sock.close()
-        with self.assertRaises(jev.JevError) as cm:
-            jev.call_jev('t', QUESTIONS, 'jev-1.13.0', endpoint=f'http://127.0.0.1:{port}/v1/systemone',
-                         api_key=DUMMY_KEY, timeout=1, sleep=lambda s: None)
-        self.assertEqual(cm.exception.code, 'network')
+        sock, stop, url = reset_endpoint()
+        try:
+            with self.assertRaises(jev.JevError) as cm:
+                jev.call_jev('t', QUESTIONS, 'jev-1.13.0', endpoint=url,
+                             api_key=DUMMY_KEY, timeout=1, sleep=lambda s: None)
+            self.assertEqual(cm.exception.code, 'network')
+        finally:
+            stop.set()
+            sock.close()
 
     def test_6e_public_code_splits_http_status(self):
         self.assertEqual(jev.public_code(jev.JevError('x', 'http', 401)), 'http-401')
@@ -298,16 +327,17 @@ class CliTest(unittest.TestCase):
         self.assertNotIn(DUMMY_KEY, body['error'])
 
     def test_9e_network_and_timeout_codes(self):
-        sock = socket.socket()
-        sock.bind(('127.0.0.1', 0))
-        port = sock.getsockname()[1]
-        sock.close()
-        with tempfile.TemporaryDirectory() as d:
-            req = os.path.join(d, 'request.json')
-            with open(req, 'w', encoding='utf-8') as f:
-                json.dump({'state': 's', 'model': 'jev-1.13.0', 'questions': QUESTIONS,
-                           'endpoint': f'http://127.0.0.1:{port}/v1/systemone', 'timeout': 1}, f)
-            p = self.run_cli(['--request', req])
+        sock, stop, url = reset_endpoint()
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                req = os.path.join(d, 'request.json')
+                with open(req, 'w', encoding='utf-8') as f:
+                    json.dump({'state': 's', 'model': 'jev-1.13.0', 'questions': QUESTIONS,
+                               'endpoint': url, 'timeout': 1}, f)
+                p = self.run_cli(['--request', req])
+        finally:
+            stop.set()
+            sock.close()
         body = json.loads(p.stdout.decode('utf-8'))
         self.assertEqual(p.returncode, 1)
         self.assertEqual(body['code'], 'network')
