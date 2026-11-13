@@ -15,7 +15,10 @@ from common import AGENT, RUNNERS, load_json
 # confirm は工程ではなく、Approve の見せ方 (appendix/adapters.md、`## Confirm`)
 ADAPTER_PHASES = ('design', 'review', 'security', 'confirm')
 ADAPTER_SETTINGS = ('auto', 'off')
-# confirm が auto のときに探すスキル (repo answer-me-with-any)。古い名前しか入っていなければそれを使い、warn を出す
+# confirm の値: html (既定)・md・off。auto とスキル名は html と読む (load_adapters)
+CONFIRM_SETTINGS = ('html', 'md', 'off')
+CONFIRM_DEFAULT = 'html'
+# confirm の am を探すスキル (repo answer-me-with-any)。古い名前しか入っていなければそれを使い、warn を出す
 CONFIRM_SKILL = 'answer-me-with-any'
 CONFIRM_SKILL_OLD = 'answer-me-with-html'
 
@@ -55,10 +58,12 @@ def load_agents(home) -> dict | None:
 def load_adapters(home) -> tuple[dict, list[str]]:
     """<home>/agents.json の adapters を読む。(フェーズごとの設定, 警告) を返す。
 
-    1 つ目は常に design・review・security・confirm の 4 つのキーを持つ辞書で、既定は "auto"。
+    1 つ目は常に design・review・security・confirm の 4 つのキーを持つ辞書で、既定は "auto"
+    (confirm だけ "html"。値は html・md・off。auto とスキル名は html と読み、不正値も html)。
     2 つ目は英語の警告を 1 件 1 行にしたリスト。runners の有無・中身は見ない。
     """
     settings = {phase: 'auto' for phase in ADAPTER_PHASES}
+    settings['confirm'] = CONFIRM_DEFAULT
     warnings = []
     data = load_json(Path(home) / 'agents.json')
     if not isinstance(data, dict) or 'adapters' not in data:
@@ -69,6 +74,11 @@ def load_adapters(home) -> tuple[dict, list[str]]:
     for key, value in adapters.items():
         if key not in settings:
             warnings.append(f'adapters.{key}: unknown phase, ignored')
+        elif key == 'confirm':
+            confirm, warning = _confirm_value(value)
+            settings[key] = confirm
+            if warning:
+                warnings.append(warning)
         elif not _valid_adapter_value(value):
             warnings.append(f'adapters.{key}: invalid value, using auto')
         else:
@@ -162,6 +172,15 @@ def _runner_config(runner, agents) -> dict:
     runners = agents.get('runners') if isinstance(agents, dict) else None
     config = runners.get(runner) if isinstance(runners, dict) else None
     return config if isinstance(config, dict) else {}
+
+
+def _confirm_value(value) -> tuple[str, str | None]:
+    """adapters.confirm の (設定, 警告)。html・md・off はそのまま、auto とスキル名は html と読む、ほかは html。"""
+    if isinstance(value, str) and value in CONFIRM_SETTINGS:
+        return value, None
+    if _valid_adapter_value(value):
+        return CONFIRM_DEFAULT, f'adapters.confirm: {value} is read as html'
+    return CONFIRM_DEFAULT, 'adapters.confirm: invalid value, using html'
 
 
 def _valid_adapter_value(value) -> bool:

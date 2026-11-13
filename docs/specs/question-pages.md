@@ -109,7 +109,7 @@
 
 - `conductor_question` は、英語の決まった文で `## Summary`・`## Before`・`## After`・`## Decisions` の 4 つの節を書く。日本語にはしない (進行役は利用者の言語を知らないため)。
 - Before は「ここまでの出番 → 止まった所」の `flow`、After は選択肢ごとの分かれ道の `flow` (線のラベル) にする。Decisions は ask 1 つで、選択肢は「同じ出番を答え付きでやり直す」「headless で走らせる」(relaunch があるときだけ)「run を閉じる」。どれにも `| what changes when you pick it` を付ける。
-- `# Conductor question: <kind>` の見出しと `Next:` のコマンドの一覧は消す。コマンドは今の `question_lines` が出す標準出力の `then:` と relaunch の行にだけ出す。呼び出し側は今までどおりそれを読む。
+- `# Conductor question: <kind>` の見出しと `Next:` のコマンドの一覧は消す。コマンドは、問いを見せる `present.py` の `then:` の行にだけ出す (答え・起こし直し `# relaunch`・閉じる `# abort`)。呼び出し側はそれを読む。
 - 内部の言葉 (handoff・headless など) は、決まった文の中で括弧の説明を付ける。
 
 ### 点検 (`design_record.py lint --kind`)

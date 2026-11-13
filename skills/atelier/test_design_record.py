@@ -3,7 +3,9 @@
 testdata/design/ の返信 (reply-*.md) は answer-me-with-any (8856dde) の replyText と withReplyMeta で作ったもの。
 同じフォルダの pbi/design-record.json と draft.md に対する封筒が付いている。HTML の生成や skill の手順は起動しない。
 """
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -430,6 +432,75 @@ class DesignRecordTest(unittest.TestCase):
         self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
         self.assertEqual(result.stdout, '')
         self.assertIn('✗ L', result.stderr)
+
+    # approve_meta と question_meta (CLI ではなく、同じ関数を直接呼ぶ)
+
+    @staticmethod
+    def design_record_module():
+        """design_record.py を同じフォルダから読む。この試験のプロセスで、CLI と同じ関数を呼ぶため。"""
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import design_record
+        return design_record
+
+    def test_approve_meta_equals_the_markdown_output(self):
+        """approve_meta の戻り値は、同じ原稿で `markdown --draft` が出す標準出力と一致する (末尾の改行も)。
+        呼んでも標準出力・標準エラーには何も出ず、終了もしない。LF と CRLF の原稿、frontmatter の無い原稿も同じ。"""
+        design_record = self.design_record_module()
+        with open(self.path('approve-good.md'), encoding='utf-8-sig', newline='') as f:
+            raw = f.read()
+        lf = raw.replace('\r\n', '\n')
+        copies = {'approve-lf.md': lf, 'approve-crlf.md': lf.replace('\n', '\r\n'),
+                  'approve-plain.md': lf.split('---\n', 2)[2]}
+        for name, text in copies.items():
+            with open(self.path(name), 'w', encoding='utf-8', newline='') as f:
+                f.write(text)
+        record = self.read_record()
+        for name, text in {'approve-good.md': raw, **copies}.items():
+            with self.subTest(draft=name):
+                cli = self.run_cli('markdown', '--draft', self.path(name))
+                self.assertEqual(cli.returncode, 0, cli.stdout + cli.stderr)
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    result = design_record.approve_meta(text, record)
+                self.assertEqual((out.getvalue(), err.getvalue()), ('', ''))
+                self.assertEqual(result, cli.stdout)
+
+    def test_approve_meta_raises_draft_error_on_a_lint_error(self):
+        """lint の誤りがある原稿では DraftError (ValueError の子) を投げ、SystemExit では止めない。
+        errors と warnings は lint_draft が返すものと同じ (draft.md は markdown が 6 で止める原稿)。"""
+        design_record = self.design_record_module()
+        with open(self.path('draft.md'), encoding='utf-8-sig', newline='') as f:
+            text = f.read()
+        errors, warnings = design_record.lint_draft(text)
+        self.assertTrue(errors)
+        try:
+            design_record.approve_meta(text, self.read_record())
+        except SystemExit:
+            self.fail('approve_meta exited instead of raising DraftError')
+        except design_record.DraftError as error:
+            self.assertEqual(error.errors, errors)
+            self.assertEqual(error.warnings, warnings)
+        else:
+            self.fail('approve_meta returned without raising DraftError')
+
+    def test_question_meta_writes_the_four_items_and_the_draft_hash(self):
+        """question_meta は frontmatter に reply-meta の 4 項目 (run_id・seq・kind・draft_hash) だけを足す。
+        draft_hash は envelope_base の原稿から取り、出力から取り直しても同じ。渡し直すと同じ出力になる。run_id が None なら none。"""
+        design_record = self.design_record_module()
+        with open(self.path('approve-good.md'), encoding='utf-8-sig', newline='') as f:
+            text = f.read()
+        h = design_record.draft_hash(design_record.envelope_base(text))
+        out = design_record.question_meta(text, 'run-1234', 3, 'decision')
+        lines = out.split('\n')
+        front = lines[1:lines.index('---', 1)]
+        self.assertEqual([line for line in front if line.startswith('reply-meta-')],
+                         ['reply-meta-run_id: run-1234', 'reply-meta-seq: 3', 'reply-meta-kind: decision',
+                          f'reply-meta-draft_hash: {h}'])
+        self.assertEqual(design_record.draft_hash(out), h)
+        self.assertEqual(design_record.question_meta(out, 'run-1234', 3, 'decision'), out)
+        without_run = design_record.question_meta(text, None, 3, 'decision')
+        self.assertIn('reply-meta-run_id: none', without_run.split('\n'))
 
     # 返信の照合
 

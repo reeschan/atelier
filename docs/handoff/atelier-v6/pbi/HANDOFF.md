@@ -1,3 +1,5 @@
+> **注記:** cloud container 2026-11-10 の記録。API キーと外部通信が無い環境での結果で、ユーザー PC の状態ではない。Jev やツールが使えるかは、その回の確認結果で判断すること。
+
 Repository: <ローカルの clone の絶対パス (クラウドでは /home/user/atelier)>
 Branch: claude/intelligent-ritchie-xmydhe
 Run id: e242f76d-977b-459c-9352-c1a7460b67a6

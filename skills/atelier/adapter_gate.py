@@ -14,11 +14,13 @@ route.json が無い・読めない PBI は deep、facts.json が無い・読め
 
 review は diff が 300 行以下・PBI が 2 件以下・deep も sensitive も無い、のすべてで skip。ほかは run。
 security は sensitive か deep の PBI が 1 件でもあれば run。design はスクリプトでは決めず manual。
-confirm は Approve の見せ方 (appendix/adapters.md、`## Confirm`)。auto は answer-me-with-any (古い名前 answer-me-with-html しか無ければそれ)、スキル名はそのスキルを
---skills-dir (無ければ ~/.claude/skills) かプラグインの置き場 (<プラグイン>:<スキル>) で探し、あれば skill、無ければ chat
-(同じ Markdown をチャットに出す)。どちらでも何も入れない・作らない。off は今までどおりの一覧だけ。
+confirm は Approve の見せ方 (appendix/adapters.md、`## Confirm`)。値は html (既定)・md・off (auto とスキル名は agents.load_adapters が
+html と読む)。resolve_confirm が、<skills-dir>/answer-me-with-any/scripts/am.mjs (無ければ旧名 answer-me-with-html) と node 20 以上の
+有無から実際の見せ方 (format) と理由 (setting / missing-am / missing-node) を決める。decision は format (html / md)。
+設定が off でないのに am か node が無いときは ask (reason に `format off (missing-am)` など。旧名の am なら旧名の warn を添える)。
+どれでも何も入れない・作らない。skills-dir は無ければ ~/.claude/skills。
 設定が off のフェーズは判定にかかわらず off で、理由は turned off in agents.json。
-設定がスキル名のときは判定はそのまま (run / skip) で、setting の列に名前を出す。
+設定がスキル名のときは判定はそのまま (run / skip) で、setting の列に名前を出す (design・review・security)。
 
 標準出力はタブ区切りの表 (phase / setting / decision / reason。1 行目は見出し)。
 agents.load_adapters の警告は表のあとに `warn <警告>` の形で 1 行ずつ出す。
@@ -28,12 +30,13 @@ agents.load_adapters の警告は表のあとに `warn <警告>` の形で 1 行
 import argparse
 import os
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import agents as agents_module
 import common
-import flow
 
 # PBI として数えるファイルの形 (.rework-1・.brief などの付いたものは数えない)
 PBI_NAME = re.compile(r'^PBI-(\d+)\.md$')
@@ -45,6 +48,13 @@ MAX_PBIS = 2
 DESIGN_REASON = 'decided by the orchestrator (appendix/design.md)'
 OFF_REASON = 'turned off in agents.json'
 SECURITY_SKIP_REASON = 'no sensitive or deep PBI'
+
+# am.mjs を流す node の最低の版
+MIN_NODE_MAJOR = 20
+# node --version を待つ上限 (秒)。止まった node で全体を止めない
+NODE_TIMEOUT = 10
+# Windows で子のコンソールのウインドウを出さない (ヘッドレス)。ほかの OS では 0
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
 def pbi_files(base) -> list:
@@ -107,20 +117,93 @@ def design_row(setting) -> tuple:
     return setting, 'manual', DESIGN_REASON
 
 
+def node_status(env=None) -> dict:
+    """node の {"status": ok|old|missing, "path", "version"}。20 以上で ok。
+
+    env の PATH で node を探し (env を省くと os.environ)、`node --version` を読む。
+    流せない・止まった・終了コードが 0 でない・版が読めないときは、例外を出さず missing (版が読めて 20 未満は old)。
+    """
+    env = os.environ if env is None else env
+    found = shutil.which('node', path=env.get('PATH'))
+    result = {'status': 'missing', 'path': found, 'version': None}
+    if not found:
+        return result
+    try:
+        run = subprocess.run([found, '--version'], capture_output=True, text=True, encoding='utf-8',
+                             timeout=NODE_TIMEOUT, creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return result
+    if run.returncode != 0:
+        return result
+    version = run.stdout.strip()
+    match = re.fullmatch(r'v?([0-9]+)(?:\.[0-9]+)*.*', version)
+    if match is None:
+        return result
+    result['version'] = version
+    result['status'] = 'ok' if int(match.group(1)) >= MIN_NODE_MAJOR else 'old'
+    return result
+
+
+def find_am(skills_dir=None) -> tuple:
+    """(am.mjs のパス or None, 旧名で見つけたか)。answer-me-with-any を先に、次に旧名 answer-me-with-html を見る。
+
+    skills_dir を省くと ATELIER_SKILLS_DIR、無ければ ~/.claude/skills。
+    """
+    if skills_dir is None:
+        skills_dir = os.environ.get('ATELIER_SKILLS_DIR') or Path.home() / '.claude' / 'skills'
+    for name, old in ((agents_module.CONFIRM_SKILL, False), (agents_module.CONFIRM_SKILL_OLD, True)):
+        candidate = Path(skills_dir) / name / 'scripts' / 'am.mjs'
+        if candidate.is_file():
+            return candidate, old
+    return None, False
+
+
+def resolve_confirm(setting, skills_dir, env) -> dict:
+    """Approve の見せ方を決める。{"setting","format","reason","am","node","warnings"}。
+
+    setting は html・md・off (agents.load_adapters を通した値)。off なら format off・reason setting。
+    am.mjs が無ければ format off・reason missing-am。node が無いか 20 未満なら format off・reason missing-node。
+    ほかは format=setting・reason setting。旧名で am を見つけたら warnings に旧名の warn。
+    off のときと am が無いときは node を起動しない (node は None)。node は 20 以上の node のパス。
+    """
+    resolved = {'setting': setting, 'format': 'off', 'reason': 'setting', 'am': None, 'node': None, 'warnings': []}
+    if setting == 'off':
+        return resolved
+    am, old = find_am(skills_dir)
+    if am is None:
+        resolved['reason'] = 'missing-am'
+        return resolved
+    resolved['am'] = am.as_posix()
+    if old:
+        resolved['warnings'].append(f'confirm: old name {agents_module.CONFIRM_SKILL_OLD}, '
+                                    f'install {agents_module.CONFIRM_SKILL} and remove it')
+    node = node_status(env)
+    if node['status'] != 'ok':
+        resolved['reason'] = 'missing-node'
+        return resolved
+    resolved['node'] = node['path']
+    resolved['format'] = setting
+    return resolved
+
+
 def confirm_row(setting, skills_dir, env) -> tuple:
-    """Approve の見せ方。skill (スキルの手順で HTML)・chat (同じ Markdown をチャット)・off (今までの一覧)。"""
+    """Approve の見せ方の行 (setting, decision, reason)。decision は html・md・off・ask。
+
+    setting が off なら off。am か node が無いときは ask (入れ方を選択肢に書く合図) で、reason に format と reason
+    (例 `format off (missing-am)`) を書く。旧名の am なら reason に旧名の warn を添える。
+    """
     if setting == 'off':
         return setting, 'off', OFF_REASON
-    name = agents_module.CONFIRM_SKILL if setting == 'auto' else setting
-    found = flow.find_skill_file(name, skills_dir, env)
-    if found:
-        return setting, 'skill', f'{name} found at {found.as_posix()}; use it only if it is in the skill list'
-    old = agents_module.CONFIRM_SKILL_OLD
-    found = flow.find_skill_file(old, skills_dir, env) if setting == 'auto' else None
-    if found:
-        return setting, 'skill', (f'{old} found at {found.as_posix()} (old name; rename it to {name}); '
-                                  'use it only if it is in the skill list')
-    return setting, 'chat', f'{name} not installed; show the same Markdown in chat (no install, no CLI)'
+    resolved = resolve_confirm(setting, skills_dir, env)
+    if resolved['format'] != 'off':
+        reason = f"format {resolved['format']} (am at {resolved['am']})"
+        decision = resolved['format']
+    else:
+        reason = f"format off ({resolved['reason']})"
+        decision = 'ask'
+    for warning in resolved['warnings']:
+        reason += f'; warn: {warning}'
+    return setting, decision, reason
 
 
 def review_row(setting, diff, records, unknown_reason='diff size unknown (no --numstat)') -> tuple:

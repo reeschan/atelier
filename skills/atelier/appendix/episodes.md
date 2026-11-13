@@ -69,13 +69,29 @@ A `PBIs:` build carries a `Sent by:` line naming the episode that sent those PBI
 
 | Kind | When | Next launch |
 |---|---|---|
-| `approve` | the PBI list (`check: design-record`; no `check` with the `confirm` adapter `off`) | `Answer:` (approved, or a revise request) |
+| `approve` | the PBI list (`check: design-record` with `confirm` `html` or `md`; no `check` with `confirm` `off`) | `Answer:` (approved, or a revise request) |
 | `rework-limit` | a PBI at the rework limit or a redesign | `Answer:` and `Continue from:` |
 | `destructive` | before deleting data, a force push, a change outside the repository | `Answer:` and `Continue from:` |
 | `send-approval` | right before jevlint sends file contents out | `Answer:` and `Continue from:` |
 | `decision` | anything an appendix says to ask the user | `Answer:` and `Continue from:` |
 
-An answer to a conductor question with no state to continue from (`launch-failure`, `handoff-loop`) arrives on a `Conductor answer:` line, not `Answer:`. A conductor question (`launch-failure`, `handoff-loop`, or the `decision` for `no-agent-tool`) has four sections, `## Summary`, `## Before`, `## After` and `## Decisions`, in fixed English sentences. Its file holds no commands: they are on the `then:` and `relaunch:` lines the conductor prints.
+A question file holds only the text for the user. The command for the answer is printed in the `then:` line of `present.py`.
+
+An answer to a conductor question with no state to continue from (`launch-failure`, `handoff-loop`) arrives on a `Conductor answer:` line, not `Answer:`. A conductor question (`launch-failure`, `handoff-loop`, or the `decision` for `no-agent-tool`) has four sections, `## Summary`, `## Before`, `## After` and `## Decisions`, in fixed English sentences.
+
+A precondition of `answer`: when `confirm` is not `off` and `docs/pbi/presentations.jsonl` has no `shown` line with the same run_id and seq, it exits 2 with the one line `error: not shown: run python <skill>/present.py <path> --kind <kind> first`.
+
+## Done preconditions
+
+`done` refuses an episode that lacks what its kind must leave behind. The table has one row per entry of `DONE_REQUIRES` in the conductor.
+
+| Episode | Must be there |
+|---|---|
+| any episode (design, or a build re-approval) that ends with a question of kind `approve`, `confirm` not `off` | `check: design-record` on the question, and the `reply-meta-` lines in the draft (run `design_record.py markdown` last) |
+| any episode that ends with a question of kind `approve`, `confirm` is `off` | no `check` on the question |
+| finish | `docs/pbi/REPORT.md`, or `report_body` in the result |
+
+When one is missing, `done` exits 2 with the one line `error: missing <what>` and relaunches the same episode; two in a row make a `launch-failure` question. A hash that does not match still exits 12, as before.
 
 ## Status
 
