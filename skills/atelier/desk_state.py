@@ -27,6 +27,7 @@ import enum  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
 import re  # noqa: E402
+import stat  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import BinaryIO  # noqa: E402
 
@@ -102,10 +103,19 @@ def _reject_constant(name: str):
 def _check_json(home: Path, relative: str) -> None:
     """home の下の相対パスが JSON として読めることを確かめる。無ければ通す。通常ファイルでない・読めない・不正は BROKEN。"""
     path = home / relative
+    # 書き手のいない FIFO を開くと止まるので、ブロックしない形で開き、開いたハンドルで通常ファイルか確かめてから読む
+    flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NONBLOCK', 0)
     try:
-        raw = path.read_bytes()
+        descriptor = os.open(path, flags)
     except FileNotFoundError:
         return
+    except OSError as error:
+        raise _StateError(_Exit.BROKEN, f'cannot read {relative}: {error}')
+    try:
+        with os.fdopen(descriptor, 'rb') as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise _StateError(_Exit.BROKEN, f'cannot read {relative}: not a regular file')
+            raw = handle.read()
     except OSError as error:
         raise _StateError(_Exit.BROKEN, f'cannot read {relative}: {error}')
     try:
