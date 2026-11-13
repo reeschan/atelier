@@ -1103,6 +1103,24 @@ class QuestionDraftLintTest(unittest.TestCase):
         start, end = self.good.index(heading), self.good.index(next_heading)
         return self.good[:start] + body + self.good[end:]
 
+    def ask_close(self, text):
+        """ask の囲みを閉じる行の位置 (文字の位置)。"""
+        start = text.index('```ask\n')
+        return text.index('\n```\n', start) + 1
+
+    def test_a_longer_closing_fence_closes_the_block(self):
+        # 結論の callout を ```` で閉じる。閉じないと、あとの必ずの節が囲みの中に消える
+        start = self.good.index('```callout')
+        at = self.good.index('\n```\n', start) + 1
+        text = self.good[:at] + '````' + self.good[at + 3:]
+        result = self.lint(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_an_unclosed_ask_at_the_end_is_an_error(self):
+        at = self.ask_close(self.good)
+        text = self.good[:at]  # 4 つの必ずの節だけで、最後の ask の閉じが無い
+        self.assert_error(text, self.line_of(text, '```ask'), '閉じていない')
+
     def test_good_draft_passes_for_every_kind(self):
         for kind in QUESTION_KINDS:
             with self.subTest(kind=kind):

@@ -414,18 +414,25 @@ def section_index(title: str, table=APPROVAL_SECTIONS) -> int | None:
     return next((i for i, names in enumerate(table) if name in names), None)
 
 
+def closes_fence(opening: str, line: str) -> bool:
+    """line が opening (```・~~~・:::) で開いた囲みを閉じるか。同じ記号だけの行で、開きと同じかより長いとき。"""
+    mark = line.strip()
+    return bool(mark) and set(mark) == {opening[0]} and len(mark) >= len(opening)
+
+
 def parse_draft(draft: str) -> list[dict]:
     """本文を `##` の節に分ける。囲み (```・:::) の中の `##` は見出しにしない。
-    [{title, line, rows: [(行番号, 行, 囲みの言語 or None)]}]。最初の見出しの前の行は title None の節に入る。"""
-    sections = [{'title': None, 'line': 1, 'rows': []}]
-    fence, lang = None, None
+    [{title, line, rows: [(行番号, 行, 囲みの言語 or None)]}]。最初の見出しの前の行は title None の節に入る。
+    最後まで閉じない囲みがあれば、その開きの行番号を先頭の節の unclosed に入れる (無ければ None)。"""
+    sections = [{'title': None, 'line': 1, 'rows': [], 'unclosed': None}]
+    fence, lang, opened = None, None, None
     for number, line in draft_lines(draft):
         match = FENCE.match(line)
         if fence is None and match:
-            fence, lang = match.group(1), match.group(2).lower()
+            fence, lang, opened = match.group(1), match.group(2).lower(), number
             sections[-1]['rows'].append((number, line, lang))
             continue
-        if fence is not None and match and line.strip() == fence:
+        if fence is not None and closes_fence(fence, line):
             fence, lang = None, None
             sections[-1]['rows'].append((number, line, None))
             continue
@@ -434,6 +441,8 @@ def parse_draft(draft: str) -> list[dict]:
             sections.append({'title': heading.group(1), 'line': number, 'rows': []})
             continue
         sections[-1]['rows'].append((number, line, lang if fence is not None else None))
+    if fence is not None:
+        sections[0]['unclosed'] = opened
     return sections
 
 
@@ -506,6 +515,9 @@ def lint_sections(draft: str, table: list, required: int, approval: bool) -> tup
                            f'節は {names} の順に置く'))
         found[index] = section
         last = max(last, index)
+    if sections[0]['unclosed'] is not None:
+        # 閉じない囲みは、中の問いや選択肢を数えても、ページでは描けない
+        errors.append((sections[0]['unclosed'], '囲みが最後まで閉じていない', '囲みの最後に ``` の行を置く'))
     body = draft_lines(draft)
     end_line = body[-1][0] if body else 1
     for index, (ja, en) in enumerate(table[:required]):
@@ -652,7 +664,7 @@ def yomiyasu_input(draft: str) -> tuple[str, list[int]]:
         if fence is None and match:
             fence, kind = match.group(1), match.group(2).lower()
             continue
-        if fence is not None and match and line.strip() == fence:
+        if fence is not None and closes_fence(fence, line):  # parse_draft と同じ閉じ方
             fence, kind = None, ''
             continue
         if fence is None or kind in PROSE_FENCES:
