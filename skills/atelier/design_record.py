@@ -31,7 +31,7 @@ write   正本を書く。中身は schema・design_id・revision・targets・co
 lint    承認の原稿 (appendix/approve.md) を点検する。7 つの節の名前と順・前後の図・あとの図の印・PBI の表の見出し・
         ask の置き場所と選択肢の補足を見る。誤りは標準エラーに `✗ L<行>` と `例:` の行で全部出し、終了コード 6。
         説明の無い内部の言葉は `! L<行> <言葉> → <言い換えの案>` の警告で、終了コードは 0 のまま。正本は読まない。
-markdown 先に lint と同じ点検をし、誤りがあれば何も出さずに 6 で止める。通れば、設計の下書き (Markdown) に返信の封筒 reply-meta-<name>: <value> (design_id・revision・record_hash・draft_hash) を
+markdown 先に lint と同じ点検をし、誤りがあれば何も出さずに 6 で止める。通れば、設計の下書き (Markdown) に返信の照合情報 reply-meta-<name>: <value> (design_id・revision・record_hash・draft_hash) を
         frontmatter として足して標準出力に出す。skill に渡すのも、skill が無いときチャットに出すのも、この同じ Markdown。
 check-reply 貼られた返信 (--reply、無ければ標準入力) を正本と照合する。\\r\\n を \\n にし、行頭で始まる最後の
         ```am-reply-meta フェンスだけを読む (返信の末尾にあるもの。`  > ` の引用の中は行頭ではないので読まない)。
@@ -74,7 +74,7 @@ APPROVALS_NAME = 'design-approvals.jsonl'
 SLICE_SCHEMA = 'atelier.design-slice/2'
 SLICE_SCHEMAS = ('atelier.design-slice/1', SLICE_SCHEMA)
 
-# renderer (answer-me-with-any の src/parse.js) が受ける封筒の名前と値の形・件数
+# renderer (answer-me-with-any の src/parse.js) が受ける照合情報の名前と値の形・件数
 META_NAME = re.compile(r'^[a-z][a-z0-9_]{0,31}$')
 META_VALUE = re.compile(r'^[A-Za-z0-9._:+/=-]{1,128}$')
 META_MAX = 16
@@ -143,7 +143,7 @@ def draft_hash(draft: str) -> str:
 
 
 def check_meta(entries: list) -> list[str]:
-    """封筒の名前・値・件数が renderer の規則に合うか。合わないものの説明 (英語) を返す。"""
+    """照合情報の名前・値・件数が renderer の規則に合うか。合わないものの説明 (英語) を返す。"""
     errors = []
     if len(entries) > META_MAX:
         errors.append(f'too many reply-meta entries ({len(entries)} > {META_MAX})')
@@ -161,7 +161,7 @@ def meta_entries(record: dict, draft: str) -> list:
 
 
 def envelope_base(draft: str) -> str:
-    """封筒を入れる前の、出力と同じ形の下書き: frontmatter が無ければ空の frontmatter を付け、末尾を改行で終える。
+    """照合情報を入れる前の、出力と同じ形の下書き: frontmatter が無ければ空の frontmatter を付け、末尾を改行で終える。
 
     draft_hash はこの形で取る。入力のまま取ると、markdown が足す frontmatter と改行のぶん、出力と合わない。
     """
@@ -174,7 +174,7 @@ def envelope_base(draft: str) -> str:
 
 
 def with_envelope(draft: str, entries: list) -> str:
-    """下書きの frontmatter に封筒の行を足す (前からある reply-meta- の行は置き換える)。frontmatter が無ければ作る。"""
+    """下書きの frontmatter に照合情報の行を足す (前からある reply-meta- の行は置き換える)。frontmatter が無ければ作る。"""
     body = strip_meta_lines(draft)
     meta = [f'{META_PREFIX}{name}: {value}' for name, value in entries]
     lines = body.split('\n')
@@ -183,6 +183,45 @@ def with_envelope(draft: str, entries: list) -> str:
         if end is not None:
             return '\n'.join([*lines[:end], *meta, *lines[end:]])
     return '\n'.join(['---', *meta, '---', *lines])
+
+
+class DraftError(ValueError):
+    """下書きに lint の誤りがある。errors と warnings は lint_draft の戻り値の形のまま。"""
+
+    def __init__(self, errors: list, warnings: list):
+        super().__init__(f'{len(errors)} error(s) in the approval draft')
+        self.errors = errors
+        self.warnings = warnings
+
+
+def approve_meta(draft_text: str, record: dict) -> str:
+    """承認の原稿に照合情報 (design_id・revision・record_hash・draft_hash) を足した原稿を返す。
+
+    順は今の markdown と同じ: lint (誤りがあれば DraftError)、envelope_base、meta_entries、
+    check_meta (誤りがあれば ValueError)、with_envelope。sys.exit も print もしない。
+    警告が要るときは呼び手が lint_draft を別に呼ぶ。record は正本 (読めて正しい形のもの) を渡す。
+    """
+    errors, warnings = lint_draft(draft_text)
+    if errors:
+        raise DraftError(errors, warnings)
+    base = envelope_base(draft_text)
+    entries = meta_entries(record, base)
+    problems = check_meta(entries)
+    if problems:
+        raise ValueError('; '.join(problems))
+    return with_envelope(base, entries)
+
+
+def question_meta(draft_text: str, run_id: str | None, seq: int, kind: str) -> str:
+    """approve 以外の問いの原稿に照合情報 (run_id・seq・kind・draft_hash) を足した原稿を返す。
+
+    draft_hash は approve と同じ規則 (envelope_base の原稿から取る)。run_id が None なら none と書く。
+    check_meta は通さない (approve の 4 項目用)。
+    """
+    base = envelope_base(draft_text)
+    entries = [('run_id', 'none' if run_id is None else run_id), ('seq', str(seq)), ('kind', kind),
+               ('draft_hash', draft_hash(base))]
+    return with_envelope(base, entries)
 
 
 def split_reply(text: str) -> tuple[str, str | None]:
@@ -257,7 +296,7 @@ def reply_choice(found: list[dict]):
 
 
 def compare(meta: dict, record: dict, draft: str | None) -> list[str]:
-    """封筒と正本の食い違い。空なら一致。revision が正本より古いときはそう書く。"""
+    """照合情報と正本の食い違い。空なら一致。revision が正本より古いときはそう書く。"""
     problems = []
     if not isinstance(meta, dict) or not all(isinstance(v, str) for v in meta.values()):
         return ['reply-meta is not an object of strings']
@@ -912,16 +951,18 @@ def cmd_lint(args) -> int:
 def cmd_markdown(args) -> int:
     record = load_record(Path(args.dir))
     draft = read_text(args.draft)
-    errors, warnings = lint_draft(draft)
-    report_lint(errors, warnings)
-    if errors:
+    # 警告は approve_meta が返さないので、lint_draft を別に呼んで出す。照合情報の誤り (check_meta) で
+    # 止めるときも、今と同じく警告を先に出す。
+    _, warnings = lint_draft(draft)
+    try:
+        text = approve_meta(draft, record)
+    except DraftError as error:
+        report_lint(error.errors, error.warnings)
         return EXIT_DRAFT
-    draft = envelope_base(draft)
-    entries = meta_entries(record, draft)
-    errors = check_meta(entries)
-    if errors:
-        fail('; '.join(errors))
-    text = with_envelope(draft, entries)
+    except ValueError as error:
+        report_lint([], warnings)
+        fail(str(error))
+    report_lint([], warnings)
     # 改行は \n のまま出す (Windows の標準出力の \r\n への変換を通さない)
     sys.stdout.flush()
     sys.stdout.buffer.write((text if text.endswith('\n') else text + '\n').encode('utf-8'))

