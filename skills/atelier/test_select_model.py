@@ -167,13 +167,13 @@ class SelectModelTest(unittest.TestCase):
         self.assertEqual(r['tier'], 'haiku')
         self.assertEqual(r['review'], 'normal')
         self.assertEqual(r['route'], [AGENT_STEPS['haiku']])
-        self.assertTrue(r['reasons'][0].startswith('Jev なし: facts だけで判定'))
+        self.assertTrue(r['reasons'][0].startswith('Jev 未実行: facts だけで判定。決定: haiku。'))
 
     def test_no_jev_many_files_is_sonnet(self):
         code, r = run({**SMALL, 'files_changed': 4}, None)
         self.assertEqual(code, 0)
         self.assertEqual(r['tier'], 'sonnet')
-        self.assertTrue(r['reasons'][0].startswith('Jev なし: facts だけで判定'))
+        self.assertTrue(r['reasons'][0].startswith('Jev 未実行: facts だけで判定'))
 
     def test_no_jev_two_modules_is_sonnet(self):
         code, r = run({**SMALL, 'modules': 2}, None)
@@ -195,6 +195,33 @@ class SelectModelTest(unittest.TestCase):
                 code, r = run(facts, None)
                 self.assertEqual(code, 0)
                 self.assertNotEqual(r['tier'], 'opus')
+
+    def test_jev_error_file_names_the_failure_code(self):
+        with temp_dir() as d:
+            fp = os.path.join(d, 'facts.json')
+            bp = os.path.join(d, 'brief.json')
+            with open(fp, 'w', encoding='utf-8') as f:
+                json.dump(SMALL, f)
+            with open(bp, 'w', encoding='utf-8') as f:
+                json.dump({'error': 'HTTP 401', 'code': 'http-401', 'where': 'env'}, f)
+            out = subprocess.run([sys.executable, SCRIPT, fp, bp], capture_output=True, text=True,
+                                 encoding='utf-8', errors='replace', env=env_with_agents(d))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        reasons = json.loads(out.stdout)['reasons']
+        self.assertTrue(reasons[0].startswith('Jev 失敗 (http-401): facts だけで判定'))
+
+    def test_jev_error_without_code_is_unknown(self):
+        with temp_dir() as d:
+            fp = os.path.join(d, 'facts.json')
+            bp = os.path.join(d, 'brief.json')
+            with open(fp, 'w', encoding='utf-8') as f:
+                json.dump(SMALL, f)
+            with open(bp, 'w', encoding='utf-8') as f:
+                json.dump({'error': 'old'}, f)
+            out = subprocess.run([sys.executable, SCRIPT, fp, bp], capture_output=True, text=True,
+                                 encoding='utf-8', errors='replace', env=env_with_agents(d))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertTrue(json.loads(out.stdout)['reasons'][0].startswith('Jev 失敗 (unknown): facts だけで判定'))
 
     def test_partial_jev_answer_treats_missing_keys_as_one(self):
         code, r = run(SMALL, {'novelty': ZERO})

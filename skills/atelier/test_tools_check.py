@@ -5,14 +5,19 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import tools_check  # noqa: E402
 SCRIPT = os.path.join(HERE, 'tools_check.py')
 FAKE = os.path.join(HERE, 'testdata', 'fake_jevlint.py')
-TOOLS = ['omm', 'omm-scan', 'jevlint', 'sac-strategic-compact', 'principle-test-behavior-not-implementation',
-         'answer-me-with-any']
+TOOLS = ['omm', 'omm-scan', 'jevlint', 'jev', 'sac-strategic-compact',
+         'principle-test-behavior-not-implementation', 'answer-me-with-any']
+SECRET = 'super-secret-jev-key'
 
 
 class ToolsCheckTest(unittest.TestCase):
@@ -24,6 +29,8 @@ class ToolsCheckTest(unittest.TestCase):
         empty = os.path.join(self.dir, 'empty')
         self.env = dict(os.environ, PATH=empty, FNM_DIR=empty, NVM_DIR=empty, HOME=empty, APPDATA=empty,
                         LOCALAPPDATA=empty, USERPROFILE=empty, PBI_PLUGINS_DIR=os.path.join(self.dir, 'plugins'))
+        self.env.pop('TYPESAFE_API_KEY', None)
+        self.env['TYPESAFE_CREDENTIALS_FILE'] = os.path.join(self.dir, 'no-such-credentials.json')
 
     def rows(self, **env):
         result = subprocess.run([sys.executable, SCRIPT, '--home', os.path.join(self.dir, 'home'),
@@ -44,8 +51,12 @@ class ToolsCheckTest(unittest.TestCase):
         self.assertEqual(list(rows), TOOLS)
         for tool, row in rows.items():
             with self.subTest(tool=tool):
-                self.assertEqual(row[1], 'missing')
                 self.assertTrue(row[2] and row[3])
+                if tool == 'jev':
+                    self.assertTrue(row[1].startswith('no-key ファイル無し: '), row[1])
+                    self.assertIn('no-such-credentials.json', row[1])
+                else:
+                    self.assertEqual(row[1], 'missing')
         self.assertIn('https://github.com/reeschan/sac-strategic-compact', rows['sac-strategic-compact'][2])
         self.assertIn('prompts/lint-fallback.md', rows['jevlint'][3])
         install = rows['answer-me-with-any'][2]
@@ -77,6 +88,53 @@ class ToolsCheckTest(unittest.TestCase):
         status = self.rows()['answer-me-with-any'][1]
         self.assertTrue(status.startswith('ok '), status)
         self.assertIn('old name answer-me-with-html; install answer-me-with-any and remove it', status)
+
+    def test_jev_row_names_the_source_and_hides_the_key(self):
+        cred = os.path.join(self.dir, 'credentials.json')
+        with open(cred, 'w', encoding='utf-8') as f:
+            json.dump({'api_key': SECRET}, f)
+        from_file = self.rows(TYPESAFE_CREDENTIALS_FILE=cred)
+        self.assertEqual(from_file['jev'][1], f'ok {cred}')
+        self.assertNotIn(SECRET, '\t'.join(from_file['jev']))
+        from_env = self.rows(TYPESAFE_API_KEY=SECRET)
+        self.assertEqual(from_env['jev'][1], 'ok env')
+        self.assertNotIn(SECRET, '\t'.join(from_env['jev']))
+        self.assertIn('facts only', from_env['jev'][3])
+
+    def test_jev_probe_reports_http_status_without_the_key_and_default_does_not_connect(self):
+        seen = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append(self.path)
+                auth = self.headers.get('Authorization') or ''
+                if SECRET not in auth:
+                    self.send_response(401)
+                else:
+                    self.send_response(401)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        url = f'http://127.0.0.1:{server.server_address[1]}/v1/models'
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            quiet = tools_check.jev_status({'TYPESAFE_API_KEY': SECRET, 'HOME': self.dir}, probe=False,
+                                           models_url=url)
+            self.assertEqual(quiet, 'ok env')
+            self.assertEqual(seen, [])
+            probed = tools_check.jev_status({'TYPESAFE_API_KEY': SECRET, 'HOME': self.dir}, probe=True,
+                                            models_url=url)
+            self.assertEqual(probed, 'http-401 env')
+            self.assertNotIn(SECRET, probed)
+            self.assertEqual(seen, ['/v1/models'])
+        finally:
+            server.shutdown()
+            server.server_close()
 
 if __name__ == '__main__':
     unittest.main()

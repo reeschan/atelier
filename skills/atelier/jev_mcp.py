@@ -469,14 +469,15 @@ class Tasks:
         if not isinstance(facts, dict):
             raise ToolError(f'facts が無い (判定できない): docs/pbi/{pbi}.facts.json')
         brief = base / 'jev' / f'{pbi}.brief.json'
-        answers = select_model.load_answers(brief if brief.is_file() else None)
+        answers, jev_code = select_model.read_brief(brief if brief.is_file() else None)
         home = templates.resolve_home(None)
         try:
             routing, _ = select_model.find_routing(None, str(base), home)
         except SystemExit as error:
             raise ToolError(f'振り分けテンプレートを読めない: {error.code}') from None
         return select_model.decide(facts, answers, datetime.date.today(), forced=tier, skip=skipped,
-                                   routing=routing, home=home, pbi=select_model.pbi_number(report))
+                                   routing=routing, home=home, pbi=select_model.pbi_number(report),
+                                   jev_code=jev_code)
 
     def run(self, repo: str, report: str, runner: str, model: str, prompt: str, effort: str | None = None,
             workdir: str | None = None, timeout: int = RUN_TIMEOUT_DEFAULT, setting: str = 'default') -> dict:

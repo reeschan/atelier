@@ -391,7 +391,7 @@ class JevMcpTest(unittest.TestCase):
         ])
         self.assertEqual(out['dropped'], [])
         self.assertEqual(set(out), {'tier', 'route', 'dropped', 'review', 'scores', 'reasons', 'template'})
-        self.assertTrue(out['reasons'][0].startswith('Jev なし: facts だけで判定。決定: haiku。'))
+        self.assertTrue(out['reasons'][0].startswith('Jev 未実行: facts だけで判定。決定: haiku。'))
 
     def test_route_tier_is_the_same_as_the_tier_option(self):
         out = self.route(tier='sonnet')

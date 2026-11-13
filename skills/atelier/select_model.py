@@ -51,7 +51,8 @@ CLI の Claude）/ dsh（DeepSeek Harness の headless。dsh_run.py。優先テ�
 外部の実行先を使うときは自分の routing.json（docs/pbi か home）に書く。見本は examples/routing/multi-runner.json。
 - Jev の応答に novelty・coupling・ambiguity のどれも無いときは facts だけで決める。sensitive → sonnet（review は deep、
   route は agent だけ）、files_changed >= 4 か modules >= 2 → sonnet、それ以外 → haiku。opus にはしない
-  （設計判断は facts では分からない。必要なら設計者が段を指定する）。理由の先頭は「Jev なし: facts だけで判定」。
+  （設計判断は facts では分からない。必要なら設計者が段を指定する）。応答ファイルが error のときは理由の先頭は
+  「Jev 失敗 (<code>): facts だけで判定」。ファイルが無い、または答えが無く失敗でもないときは「Jev 未実行: facts だけで判定」。
   一部のキーだけ欠けるときは、欠けたキーを 1 とする。
 - Jev の応答があるとき: novelty=2 かつ ambiguity=2 の段を opus にする（agent の opus で実装する）。
 - sensitive・coupling=2 は sonnet の段で実装し、review を "deep" にする（Opus のオーケストレーターが重点的に読む）。
@@ -313,19 +314,36 @@ def apply_template(tier: str, sensitive: bool, skip: frozenset, today: datetime.
     return {'name': name, 'applied': True, 'note': note, 'route': steps, 'dropped': dropped}
 
 
-def load_answers(path) -> dict:
+def read_brief(path) -> tuple[dict, str | None]:
+    """(answers, jev_code)。jev_code は失敗の code。未実行（パスが無い）と、答えがあるときは None。
+
+    error がある応答は失敗。code が無ければ unknown。壊れた JSON も unknown。
+    """
     if not path:
-        return {}
+        return {}, None
     try:
-        return json.load(open(path, encoding='utf-8')).get('answers', {})
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
     except (OSError, ValueError):
-        return {}
+        return {}, 'unknown'
+    if not isinstance(data, dict):
+        return {}, 'unknown'
+    if 'error' in data:
+        code = data.get('code')
+        return {}, code if isinstance(code, str) and code else 'unknown'
+    answers = data.get('answers')
+    return (answers if isinstance(answers, dict) else {}), None
+
+
+def load_answers(path) -> dict:
+    answers, _ = read_brief(path)
+    return answers
 
 
 def decide(facts: dict, answers: dict, today: datetime.date, forced: str | None = None,
            skip: frozenset = frozenset(), routing: dict | None = None, home: Path | None = None,
            now: datetime.datetime | None = None, pbi: int = 0, agents: dict | None = None,
-           found: dict | None = None) -> dict:
+           found: dict | None = None, *, jev_code: str | None = None) -> dict:
     """1 件の PBI の段と route を決める。
 
     agents は agents.json の中身、found は runner → CLI の場所。省くと home と環境から求める。
@@ -341,7 +359,10 @@ def decide(facts: dict, answers: dict, today: datetime.date, forced: str | None 
         head = f'決定: {tier}。'
     elif no_jev:
         tier, why = facts_tier(facts)
-        head = f'Jev なし: facts だけで判定。決定: {tier}。'
+        if jev_code:
+            head = f'Jev 失敗 ({jev_code}): facts だけで判定。決定: {tier}。'
+        else:
+            head = f'Jev 未実行: facts だけで判定。決定: {tier}。'
     else:
         tier, why = claude_tier(facts, scores)
         head = f'決定: {tier}。'
@@ -407,9 +428,10 @@ def run_all(base: Path, today: datetime.date, skip: frozenset, routing: dict | N
             kept.append(pbi)
             continue
         brief = base / 'jev' / f'{pbi}.brief.json'
-        out = decide(common.load_json(fp), load_answers(brief if brief.exists() else None),
+        answers, jev_code = read_brief(brief if brief.exists() else None)
+        out = decide(common.load_json(fp), answers,
                      today, forced=tier if names else None, skip=skip, routing=routing, home=home, now=now,
-                     pbi=pbi_number(pbi), agents=agents, found=found)
+                     pbi=pbi_number(pbi), agents=agents, found=found, jev_code=jev_code)
         (base / f'{pbi}.route.json').write_text(json.dumps(out, ensure_ascii=False), encoding='utf-8')
         print(f"| {pbi} | {out['tier']} | {label(out['route'][0])} | {out['review']} | {out['template']['note']} | "
               f"{len(out['dropped'])} | {out['reasons'][0].removeprefix('決定: ')} |")
@@ -453,8 +475,9 @@ def write_override(base: Path, pbi: str, steps: list, why: str, today: datetime.
         if not facts_path.is_file():
             sys.exit(f'--override の PBI の route.json も facts も無い: {pbi}')
         brief = base / 'jev' / f'{pbi}.brief.json'
-        out = decide(common.load_json(facts_path), load_answers(brief if brief.exists() else None), today,
-                     forced, routing=routing, home=home, now=now, pbi=pbi_number(pbi))
+        answers, jev_code = read_brief(brief if brief.exists() else None)
+        out = decide(common.load_json(facts_path), answers, today,
+                     forced, routing=routing, home=home, now=now, pbi=pbi_number(pbi), jev_code=jev_code)
     if forced:
         out['tier'] = forced
     reasons = [r for r in out.get('reasons') or [] if not str(r).startswith('決定: override')]
@@ -524,9 +547,10 @@ def main():
         return
 
     facts = json.load(open(args[0], encoding='utf-8'))
-    answers = load_answers(args[1] if len(args) > 1 else None)
+    answers, jev_code = read_brief(args[1] if len(args) > 1 else None)
     pbi = int(pbi_s) if pbi_s is not None else pbi_number(Path(args[0]).name)
-    print(json.dumps(decide(facts, answers, today, forced, skip, routing, home, now, pbi), ensure_ascii=False))
+    print(json.dumps(decide(facts, answers, today, forced, skip, routing, home, now, pbi,
+                            jev_code=jev_code), ensure_ascii=False))
 
 
 if __name__ == '__main__':
