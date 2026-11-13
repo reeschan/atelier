@@ -43,6 +43,7 @@ Write the file on the prompt's `Result:` line as your last action, schema `ateli
 - `summary`: up to 5 lines, 200 characters each. Your reply is these lines only.
 - `next`: with `done`, `{"episode": ..., "wave": n, "pbis": [...]}`; `wave` must be in `docs/pbi/waves.json`; `pbis` only for a rework build.
 - `question`: with `question`, `{"kind", "path", "summary", "check"}`. It may also carry an optional `topic` (an identifier such as `omm` or `design-approval`); the values and which question takes which are in `appendix/events.md`. Kinds: `approve`, `rework-limit`, `destructive`, `send-approval`, `decision` (a grill round is one) and `full-run` (whether to run the whole E2E suite once, `appendix/tests-at-end.md`).
+- `question.path` (every kind but `approve`): the draft is written in the form of `appendix/questions.md`. `done` runs the same check as `lint --kind` on it, and a draft with an error is not accepted (`state: retry`).
 - `report_body` (finish only, optional): the completion report's text, when you could not write `docs/pbi/REPORT.md`; the conductor writes it.
 - `state`: the path of the state tablet; required with `handoff` and with every question kind but `approve`.
 - `report`: the path of the completion report (finish).
@@ -74,7 +75,7 @@ A `PBIs:` build carries a `Sent by:` line naming the episode that sent those PBI
 | `send-approval` | right before jevlint sends file contents out | `Answer:` and `Continue from:` |
 | `decision` | anything an appendix says to ask the user | `Answer:` and `Continue from:` |
 
-An answer to a conductor question with no state to continue from (`launch-failure`, `handoff-loop`) arrives on a `Conductor answer:` line, not `Answer:`.
+An answer to a conductor question with no state to continue from (`launch-failure`, `handoff-loop`) arrives on a `Conductor answer:` line, not `Answer:`. A conductor question (`launch-failure`, `handoff-loop`, or the `decision` for `no-agent-tool`) has four sections, `## Summary`, `## Before`, `## After` and `## Decisions`, in fixed English sentences. Its file holds no commands: they are on the `then:` and `relaunch:` lines the conductor prints.
 
 ## Status
 
