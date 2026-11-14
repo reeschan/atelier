@@ -3,6 +3,7 @@
 使い方 (リポジトリのルートで):
   python <このディレクトリ>/role_results.py check <file> [<file> ...]
   python <このディレクトリ>/role_results.py bundle --wave <n> [--dir docs/pbi] --out docs/pbi/reviews/wave-<n>.bundle.json
+  python <このディレクトリ>/role_results.py classify <test-result> [--dir docs/pbi]
 
 check   schema ごとに中身を確かめ、1 ファイル 1 行 (`<パス>: ok` か `<パス>: <誤り>; <誤り>`) を出す。
         atelier.review/1 (レビュー担当)・atelier.test-result/1 (テスト担当)・atelier.episode/1 (設計者の出番)。
@@ -26,6 +27,11 @@ bundle  波 n の PBI を <dir>/waves.json から決め、PBI ごとにいちば
             まだ通らない行には limit を付ける。設計者はその PBI を手直しせずに止める (appendix/rework.md)
         表のあとに `bundle: <--out のパス>` を出す。束のファイル (--out) は引き継ぎ用の写しで、schema を持たず、
         check の対象にしない。誤りがあっても束のファイルは書く。
+classify  テスト担当や e2e_run.py の test-result (atelier.test-result/1) の落ちたテストのうち、PBI の Notes の
+        `Breaks by design: <test file か spec>[::<テストの名前>] — <理由>` の行に合うものを、cause intended・
+        pbi その PBI に書き直す (設計どおり壊れる印。appendix/tests-at-end.md)。file が印のファイルと同じか、
+        パスの末尾が一致すれば合う。印に ::<名前> があれば、test にその名前を含むものだけ。合わない行は変えない。
+        書き直した行ごとに `intended <test> (<PBI>)` を出し、最後に `classify: <intended の数> intended, <残りの数> left`。
 
 終了コード: 0 正しい / 3 誤り・欠け (設計者はその報告のレビューだけやり直す) / 2 引数の誤り・waves.json に波が無い
 """
@@ -218,6 +224,55 @@ def check_episode(data) -> list[str]:
 
 
 CHECKS = {REVIEW: check_review, TEST_RESULT: check_test_result, EPISODE: check_episode}
+
+
+# ---- 設計どおり壊れる印 (classify) ----
+
+BREAKS = re.compile(r'^\s*(?:[-*]\s+)?Breaks by design:\s*(\S+?)(?:::(.+?))?\s*(?:[—–-]+\s+(.*))?$')
+PBI_FILE = re.compile(r'^PBI-\d+\.md$')
+
+
+def breaks_by_design(base: Path) -> list[dict]:
+    """PBI ごとの Breaks by design: の行。[{pbi, file, test (無ければ None), why}]。"""
+    marks = []
+    for path in sorted(base.glob('PBI-*.md')):
+        if not PBI_FILE.match(path.name):
+            continue
+        try:
+            text = path.read_text(encoding='utf-8')
+        except OSError:
+            continue
+        for line in text.splitlines():
+            match = BREAKS.match(line.strip('`'))
+            if match:
+                file, test, why = match.groups()
+                marks.append({'pbi': path.stem, 'file': file.strip('`').replace('\\', '/'),
+                              'test': test.strip() if test else None, 'why': (why or '').strip()})
+    return marks
+
+
+def _same_file(failing: str, mark: str) -> bool:
+    a, b = failing.replace('\\', '/').lstrip('./'), mark.lstrip('./')
+    return a == b or a.endswith('/' + b) or b.endswith('/' + a)
+
+
+def classify(data: dict, marks: list[dict]) -> list[tuple[str, str]]:
+    """test-result の failing を印で書き直す (data を変える)。書き直した (test, pbi) の一覧を返す。"""
+    changed = []
+    for row in data.get('failing') or []:
+        if not isinstance(row, dict):
+            continue
+        for mark in marks:
+            if not _same_file(str(row.get('file') or ''), mark['file']):
+                continue
+            if mark['test'] and mark['test'] not in str(row.get('test') or ''):
+                continue
+            row['cause'] = 'intended'
+            row['pbi'] = mark['pbi']
+            row['why'] = f"breaks by design ({mark['pbi']}): {mark['why'] or row.get('why') or ''}".rstrip(': ')
+            changed.append((str(row.get('test')), mark['pbi']))
+            break
+    return changed
 
 
 # ---- イベント (review.judged・test.judged) ----
@@ -593,7 +648,24 @@ def main(argv=None) -> int:
     p_bundle.add_argument('--wave', type=int, required=True)
     p_bundle.add_argument('--out', required=True)
     p_bundle.add_argument('--dir', default='docs/pbi')
+    p_classify = sub.add_parser('classify')
+    p_classify.add_argument('file')
+    p_classify.add_argument('--dir', default='docs/pbi')
     args = ap.parse_args(argv)
+
+    if args.command == 'classify':
+        data = common.load_json(args.file)
+        if not isinstance(data, dict) or check_test_result(data):
+            print(f'role_results: {args.file} is not a valid {TEST_RESULT}', file=sys.stderr)
+            return EXIT_USAGE
+        changed = classify(data, breaks_by_design(Path(args.dir)))
+        if changed:
+            common.write_json(args.file, data)
+        for test, pbi in changed:
+            print(f'intended {test} ({pbi})')
+        left = sum(1 for row in data['failing'] if row['cause'] != 'intended')
+        print(f'classify: {len(changed)} intended, {left} left')
+        return EXIT_OK
 
     if args.command == 'check':
         bad = False
