@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -22,6 +23,11 @@ name = args[args.index('--name') + 1]
 (base / 'verify').mkdir(parents=True, exist_ok=True)
 with open(os.environ['FAKE_VERIFY_LOG'], 'a', encoding='utf-8') as log:
     log.write(json.dumps(args) + '\n')
+if os.environ.get('FAKE_VERIFY_HANG'):
+    import subprocess, time
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    Path(os.environ['FAKE_VERIFY_HANG']).write_text(str(child.pid))
+    time.sleep(60)
 if '--final' in args:
     code = os.environ.get('FAKE_FULL_CODE', '0')
     code = int(code) if code.lstrip('-').isdigit() else code
@@ -148,6 +154,29 @@ class E2ERunTest(unittest.TestCase):
         self.assertEqual(result['failing'][-1]['test'], 'full suite')
         self.assertEqual(result['commands'][-1]['code'], 2)
         self.assertIn('full suite: failed', episode['summary'][1])
+
+    def test_stopping_the_script_stops_verify_and_its_children(self):
+        """conductor が e2e_run.py を止めると、verify.py とその子も止まる (止めた出番の横でテストが残らない)。"""
+        sys.path.insert(0, str(HERE))
+        import conductor
+        self.write('docs/pbi/tests-at-end.json', json.dumps(self.settings))
+        marker = self.root / 'grandchild.pid'
+        env = dict(os.environ, PYTHONIOENCODING='utf-8', FAKE_VERIFY_LOG=str(self.log), FAKE_VERIFY_HANG=str(marker),
+                   ATELIER_VERIFY_CMD=json.dumps([sys.executable, str(self.root / 'fake_verify.py')]))
+        proc = subprocess.Popen([sys.executable, str(SCRIPT), '--dir', 'docs/pbi', '--result', 'r.json', '--seq', '1'],
+                                cwd=self.root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(proc.kill)
+        deadline = time.monotonic() + 30
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertTrue(marker.exists(), 'the fake verify never started its child')
+        time.sleep(0.5)
+        grandchild = int(marker.read_text())
+        self.assertTrue(conductor.stop_child(proc.pid))
+        deadline = time.monotonic() + 15
+        while conductor.pid_alive(grandchild) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertFalse(conductor.pid_alive(grandchild), 'the test process outlived the stopped script')
 
     def test_symbols_off_and_no_investigate(self):
         self.settings['e2e']['symbols'] = False

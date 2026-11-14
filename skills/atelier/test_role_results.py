@@ -669,6 +669,17 @@ class ClassifyTest(unittest.TestCase):
         code, out = run('classify', str(self.result), '--dir', str(self.base))
         self.assertIn('classify: 0 intended, 2 left', out)
 
+    def test_fences_close_only_on_a_matching_fence(self):
+        (self.base / 'PBI-002.md').write_text(
+            '# PBI-002\n\n## Notes\n~~~\nBreaks by design: e2e/tilde.cy.ts\n~~~\n'
+            '````\n```\nBreaks by design: e2e/long.cy.ts\n## Notes\n````\n'
+            'Breaks by design: e2e/real.cy.ts\n', encoding='utf-8')
+        self.write_result([self.row('t', 'e2e/tilde.cy.ts'), self.row('l', 'e2e/long.cy.ts'),
+                           self.row('r', 'e2e/real.cy.ts')])
+        code, out = run('classify', str(self.result), '--dir', str(self.base))
+        self.assertIn('intended r (PBI-002)', out)
+        self.assertIn('classify: 1 intended, 2 left', out)
+
     def test_path_suffix_matches(self):
         self.write_result([self.row('cart', 'e2e/cart.cy.ts'), self.row('x', 'checkout/e2e/cart.cy.ts.bak')])
         code, out = run('classify', str(self.result), '--dir', str(self.base))
