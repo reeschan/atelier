@@ -344,6 +344,10 @@ class VerifyEnvAndModesTest(unittest.TestCase):
         self.assertTrue(verify.runs_command('cd web && CI=1 npx  eslint src/a.ts', 'npx eslint'))
         self.assertFalse(verify.runs_command('npx eslintx src/a.ts', 'npx eslint'))
         self.assertFalse(verify.runs_command('true # npx eslint', 'npx eslint'))
+        # 複数のコマンドの頭も、tests_plan.py が書く形 (<頭> <file>) で通る
+        head = 'cd app && npx eslint --fix'
+        self.assertEqual(verify.missing_checks([(1, f'{head} tests/a.test.ts')], {'lint': head}), [])
+        self.assertEqual(verify.missing_checks([(1, 'npx eslint --fix tests/a.test.ts')], {'lint': head}), ['lint'])
 
     def test_final_stops_when_output_goes_quiet(self):
         self.settings(final='echo start; sleep 30; echo never', limits={'idle': 1})

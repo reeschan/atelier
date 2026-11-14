@@ -232,19 +232,29 @@ BREAKS = re.compile(r'^\s*(?:[-*]\s+)?Breaks by design:\s*(\S+?)(?:::(.+?))?\s*(
 PBI_FILE = re.compile(r'^PBI-\d+\.md$')
 
 
+FENCE = re.compile(r'^ {0,3}(`{3,}|~{3,})(.*)$')
+
+
 def notes_lines(text: str) -> list[str]:
-    """PBI の `## Notes` の節の行。囲み (```) の中の行は除く (例として引いた印を読まない)。"""
-    out, inside, fenced = [], False, False
+    """PBI の `## Notes` の節の行。囲み (``` か ~~~) の中の行は除く (例として引いた印を読まない)。
+
+    囲みは開いた文字と同じ文字で、開いた長さ以上の並びに空白だけが続く行で閉じる。見出しは囲みの外だけで数える。
+    """
+    out, inside, fence = [], False, None
     for line in text.splitlines():
+        match = FENCE.match(line)
+        if fence is not None:
+            mark = match.group(1) if match else ''
+            if mark and mark[0] == fence[0] and len(mark) >= len(fence) and not match.group(2).strip():
+                fence = None
+            continue
+        if match and not (match.group(1)[0] == '`' and '`' in match.group(2)):
+            fence = match.group(1)
+            continue
         if line.startswith('## '):
-            inside, fenced = line[3:].strip().lower() == 'notes', False
+            inside = line[3:].strip().lower() == 'notes'
             continue
-        if not inside:
-            continue
-        if line.lstrip().startswith('```'):
-            fenced = not fenced
-            continue
-        if not fenced:
+        if inside:
             out.append(line)
     return out
 

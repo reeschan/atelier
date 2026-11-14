@@ -35,6 +35,7 @@ import fnmatch
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -234,20 +235,106 @@ def verify_head() -> list[str]:
     return [sys.executable, str(VERIFY)]
 
 
+# 止められたとき (conductor の abort・relaunch) に、verify.py とその子 (テスト・サーバー) を道連れにする。
+# Windows: このプロセスが終わると閉じるジョブ (KILL_ON_JOB_CLOSE) に verify.py を入れる。子と孫はジョブを受け継ぐので、
+# TerminateProcess で止められても木ごと止まる。POSIX: verify.py を新しいセッションで起こし、SIGTERM でグループに送る
+_JOB = None
+_CHILD = None
+STOP_WAIT = 10
+
+
+def _windows_job():
+    """閉じると中のプロセスを止めるジョブ。作れなければ None (止めたときに子が残ることがある)。"""
+    global _JOB
+    if _JOB is not None or os.name != 'nt':
+        return _JOB
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class Basic(ctypes.Structure):
+            _fields_ = [('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
+                        ('LimitFlags', wintypes.DWORD), ('MinimumWorkingSetSize', ctypes.c_size_t),
+                        ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', wintypes.DWORD),
+                        ('Affinity', ctypes.c_size_t), ('PriorityClass', wintypes.DWORD),
+                        ('SchedulingClass', wintypes.DWORD)]
+
+        class Counters(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_uint64) for name in ('a', 'b', 'c', 'd', 'e', 'f')]
+
+        class Extended(ctypes.Structure):
+            _fields_ = [('BasicLimitInformation', Basic), ('IoInfo', Counters),
+                        ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
+                        ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
+
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+        kernel32.SetInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+        info = Extended()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            return None
+        _JOB = (kernel32, job)
+    except (OSError, AttributeError):
+        return None
+    return _JOB
+
+
+def _join_job(proc) -> None:
+    job = _windows_job()
+    if job is None:
+        return
+    import ctypes
+    from ctypes import wintypes
+    kernel32, handle = job
+    kernel32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+    kernel32.AssignProcessToJobObject(handle, wintypes.HANDLE(int(proc._handle)))
+
+
+def _on_stop(signum, _frame):
+    """POSIX で止められたら、verify.py のグループに同じ合図を送り、待ってから終わる。"""
+    child = _CHILD
+    if child is not None and child.poll() is None:
+        try:
+            os.killpg(child.pid, signal.SIGTERM)
+            child.wait(timeout=STOP_WAIT)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except OSError:
+                pass
+    sys.exit(128 + signum)
+
+
 def run_verify(base: Path, *args) -> int:
-    """verify.py を流し、出力を <dir>/verify/<名前>.run.log に書く。終了コードを返す。"""
+    """verify.py を流し、出力を <dir>/verify/<名前>.run.log に書く。終了コードを返す。
+
+    このスクリプトが止められたら verify.py の木も止まる (Windows はジョブ、POSIX はセッションへの合図)。
+    """
+    global _CHILD
     name = args[args.index('--name') + 1]
     log = base / 'verify' / f'{name}.run.log'
     log.parent.mkdir(parents=True, exist_ok=True)
     # 前の実行の <名前>.json を今回の結果と取り違えないよう、流す前に消す
     (base / 'verify' / f'{name}.json').unlink(missing_ok=True)
+    extra = {} if os.name == 'nt' else {'start_new_session': True}
     with open(log, 'wb') as out:
         try:
-            return subprocess.run([*verify_head(), *args, '--dir', str(base)], stdout=out, stderr=subprocess.STDOUT,
-                                  creationflags=NO_WINDOW).returncode
+            _CHILD = subprocess.Popen([*verify_head(), *args, '--dir', str(base)], stdout=out,
+                                      stderr=subprocess.STDOUT, creationflags=NO_WINDOW, **extra)
         except OSError as error:
             out.write(f'e2e_run: cannot start verify.py: {error}\n'.encode('utf-8'))
             return 127
+        try:
+            if os.name == 'nt':
+                _join_job(_CHILD)
+            return _CHILD.wait()
+        finally:
+            _CHILD = None
 
 
 def last_line(base: Path, name: str, prefix: str) -> str:
@@ -376,6 +463,8 @@ def main(argv=None) -> int:
     ap.add_argument('--result', required=True, help='出番の結果のパス (conductor の Result:)')
     ap.add_argument('--seq', type=int, required=True)
     args = ap.parse_args(argv)
+    if os.name != 'nt':
+        signal.signal(signal.SIGTERM, _on_stop)
     base = Path(args.dir)
     data, summary = run_e2e(base)
     test_result = base / 'verify' / 'tests' / f'{RESULT_NAME}.test-result.json'

@@ -281,10 +281,29 @@ def kill_tree(proc):
         proc.kill()
 
 
+# 流している最中のコマンド。止められたとき (SIGTERM) に木ごと止める
+RUNNING = set()
+
+
+def on_stop(signum, _frame):
+    """POSIX の SIGTERM: 流しているコマンドの木を止め、SystemExit で抜ける (serving の finally がサーバーを止める)。"""
+    for proc in list(RUNNING):
+        kill_tree(proc)
+    raise SystemExit(128 + signum)
+
+
 def stream(bash, cmd, env, timeout, idle):
     """cmd を流して (出力, 終了コード) を返す。上限なら終了コードは "timeout"、無出力なら "idle"。"""
     proc = subprocess.Popen([bash, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, env=env, creationflags=NO_WINDOW, **NEW_GROUP)
+    RUNNING.add(proc)
+    try:
+        return _stream(proc, timeout, idle)
+    finally:
+        RUNNING.discard(proc)
+
+
+def _stream(proc, timeout, idle):
     chunks, last = [], [time.monotonic()]
 
     def pump():
@@ -571,15 +590,29 @@ def required_checks(base):
 ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*\s+")
 
 
-def runs_command(cmd, head):
-    """cmd が head を実行するか。&&・||・;・| で区切った各コマンドの頭 (前の VAR=値 と ( を除く) が head の語で
-    始まるときだけ真。引数・引用符の中・コメントに現れるだけのものは数えない。"""
-    head = _squash(head)
+def _segments(cmd):
+    """&&・||・;・| で区切った各コマンド (前の VAR=値 と ( を除き、空白をまとめる)。# から後のコメントは見ない。"""
+    out = []
     for part in re.split(r"&&|\|\||;|\|", cmd.split("#", 1)[0]):
         part = _squash(part).lstrip("( ")
         while ENV_ASSIGN.match(part):
             part = ENV_ASSIGN.sub("", part, count=1)
-        if part == head or part.startswith(head + " "):
+        if part:
+            out.append(part)
+    return out
+
+
+def runs_command(cmd, head):
+    """cmd が head を実行するか。head の各コマンド (cd app && npx eslint なら 2 つ) が cmd の続いたコマンドと
+    同じで、最後の 1 つだけは cmd の側がその語で始まればよい (後ろにファイルが付く)。引数・引用符の中・コメントに
+    現れるだけのものは数えない。"""
+    want, have = _segments(head), _segments(cmd)
+    if not want:
+        return False
+    for i in range(len(have) - len(want) + 1):
+        window = have[i:i + len(want)]
+        last, wanted = window[-1], want[-1]
+        if window[:-1] == want[:-1] and (last == wanted or last.startswith(wanted + " ")):
             return True
     return False
 
@@ -651,6 +684,8 @@ def main():
     args = parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    if os.name != "nt":
+        signal.signal(signal.SIGTERM, on_stop)
     base = Path(args.dir)
     settings = load_settings(base)
     entries = deferred_entries(settings)
