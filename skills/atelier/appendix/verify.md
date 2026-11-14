@@ -19,7 +19,7 @@ The reviewer (`prompts/pbi-review.md`) does this; it runs the verify commands, j
 
 1. Run `python <skill>/verify.py PBI-<n> --name <report> --skip-deferred`, and read only the table; open a log only for the numbers whose output you need.
    - With tests at the end on, `--skip-deferred` leaves those numbers for the end of the wave (`appendix/tests-at-end.md`).
-   - When `verify.py` exits 2 (it cannot read the commands), run them by hand in one call, each to its own log.
+   - When `verify.py` exits 2 because it cannot read the commands, run them by hand in one call, each to its own log. When it exits 2 with `refused:` (a format or lint command of `checks.json` is missing, or a command runs the whole suite), fix the PBI's verify commands and run `verify.py` again; never run the commands by hand around a refusal.
 2. Judge each acceptance criterion: pass or fail.
 3. Read `git diff --stat`, then the diff; list only what should block the merge: file, line, why and a repro. Formatting and lint are not findings: verify commands 1 and 2 ran them (`appendix/plan.md`, `## Format and lint first`).
    - A broken rule in a CLAUDE.md file that applies to the changed files is a finding with the cause `convention`.
