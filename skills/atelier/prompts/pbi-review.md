@@ -1,6 +1,6 @@
 # Prompt: review of one report
 
-Give this to an `atelier-reviewer` subagent for every report (a first try or a rework) to check it and write `docs/pbi/reviews/<report>.review.json`. Start it only after every worker of the wave has returned. Fill in the brackets. The reviewer's model comes from the `Roles: reviewer deep=… other=…` line the conductor passes: deep for a deep PBI, other otherwise. A normal review uses other even when other built the attempt: the reviewer starts with a fresh context. A deep review whose deep model built the attempt uses other. Inline, with no Roles line, use opus for a deep PBI and sonnet at high effort otherwise. When a deep review finds both stages equal to the builder's model, use opus on agent. A stage value ending in `@<runner>` (or any stage when your prompt says `Agent tool: no`) runs through `role_run.py --role reviewer` with the `prompt:` part below (`runners.md`, `## Roles on a runner`); name it `<report>.review`.
+Give this to an `atelier-reviewer` subagent for every report (a first try or a rework) to check it and write `docs/pbi/reviews/<report>.review.json`. Start it only after every worker of the wave has returned. Fill in the brackets. The reviewer's model comes from the `Roles: reviewer deep=… other=…` line the conductor passes: deep for a deep PBI, other otherwise. A normal review uses other even when other built the attempt: the reviewer starts with a fresh context. A deep review whose deep model built the attempt uses other. Inline, with no Roles line, use opus for a deep PBI and sonnet at high effort otherwise. When a deep review finds both stages equal to the builder's model, use whichever of opus and sonnet at high effort on agent is not the builder's model; never start a reviewer on the builder's model for a deep review. A stage value ending in `@<runner>` (or any stage when your prompt says `Agent tool: no`) runs through `role_run.py --role reviewer` with the `prompt:` part below (`runners.md`, `## Roles on a runner`); name it `<report>.review`.
 
 ```text
 description: PBI-<n>.review <short text>   (<report>.review for a rework, for example PBI-<n>.rework-1.review)
@@ -15,7 +15,7 @@ Files that parallel PBIs touch: <the same line the worker got, or none>
 Deferred verify commands: <numbers from `verify.py PBI-<n> --list-deferred`, or none>
 Read docs/pbi/PBI-<n>.md, docs/pbi/reports/<report>.md and the refs in its Refs section (get them by id). Then, in this order:
 1. Run `python <skill>/verify.py PBI-<n> --name <report> --skip-deferred`. Pass or fail is its exit code, never your judgement.
-- When `verify.py` exits 2 (it cannot read the commands), run them by hand, each to its own log.
+- When `verify.py` exits 2 because it cannot read the commands, run them by hand, each to its own log. When it prints `refused:`, do not run them by hand: write the refusal as a critical finding and recommendation hold (the designer fixes the PBI's verify commands).
 2. Run `python <skill>/unchanged.py check PBI-<n>`. A changed "Do not touch" file is a finding.
 3. Judge the acceptance criteria one by one: pass, fail, or deferred (its verify command is in the deferred list). Each gets a reason in one line.
 4. Read `git diff -- <targets>`. A deep PBI: read the whole diff, narrowed to auth, permissions, input checks, data loss and module contracts. Any other PBI: read it against the acceptance criteria and the spec.
@@ -29,7 +29,7 @@ Read docs/pbi/PBI-<n>.md, docs/pbi/reports/<report>.md and the refs in its Refs 
 - Do not edit any other file. Do not call review skills or subagents. Do not run jevlint.
 - <the implementer block of prompts/kiln-chamber.md, when kiln is on>
 - Findings: critical = an acceptance criterion fails or something breaks; major = drift from the spec or an open behaviour decided; minor = a small mismatch that can mislead (a wrong name, a stale comment, a missing check). Taste and wording are not findings. One entry per problem that should block the merge, with file, line, why and a repro.
-- recommendation: pass (no fail, no critical or major finding), rework (fixable by the same model), tier-up (needs a stronger model), hold (the designer must decide).
+- recommendation: pass (no fail, no critical or major finding, and no minor of the rework note left unfixed), rework (fixable by the same model, including a minor of the rework note left unfixed), tier-up (needs a stronger model), hold (the designer must decide).
 JSON, with these keys:
 {"schema": "atelier.review/1", "report": "<report>", "pbi": "PBI-<n>", "reviewer": {"model": "sonnet", "effort": "high"},
  "built": {"runner": "agent", "model": "opus"}, "verify": {"failed": []},
