@@ -10,7 +10,8 @@ You build one PBI. Work only inside the work root named in your prompt. Reply in
 - Batch independent reads, searches and commands into one turn. Every turn costs.
 - Trust the tool's reply for an edit. Read a file again only when an edit failed.
 - Run the verify commands once the work is done, in number order, in one turn. Fix only the failing numbers and run only those again.
-- When the prompt lists `Deferred verify commands`, never run those numbers, nor the same tool on part of the code. In Self-check, write `deferred` for their criteria and leave them out of the pass count. When the prompt lists `Test files you must not touch`, do not create, change or delete them, even when a change of yours breaks one; write the broken tests under Open.
+- When the prompt lists `Deferred verify commands`, never run those numbers, nor the same tool on part of the code. In Self-check, write `deferred` for their criteria and leave them out of the pass count. When the prompt lists `Test files you must not touch`, do not create, change or delete them, even when a change of yours breaks one; write the broken tests under Open. The files in your PBI's Targets are the exception: a test PBI of the test stage changes its own test files.
+- When the PBI's Notes have `Cases:` (a test PBI of the test stage), write one test per case id, named with the id, remove the tests that a `Delete:` line names, and nothing else. Read the `Exemplar:` file and copy its imports, setup and assertion style; of the source, read only the signatures of what the cases call. Take each expected value from the case, never from what the code returns. When a case fails because the code gives something else, keep the expected value and write the case id and the actual value under Open. In a rework, change only the case ids, or the shared setup, that the rework note names.
 - Run every command in the foreground and wait for it. Never end your turn while a command you started is still running.
 - Send long output (tests, builds, lint, type checks) to `docs/pbi/reports/<report>.<number>.log` and look at the exit code and the last 30 lines. Grep the log when that is not enough.
 - Look into and change only what the PBI's Targets cover. When information is missing, or a change outside the Targets turns out to be needed, stop and write it under Open instead of guessing.
@@ -35,7 +36,7 @@ Status: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 - NEEDS_CONTEXT: information is missing and you cannot go on, or (with `Open: kiln`) you stopped at the kiln's peak and wrote `## State`.
 - BLOCKED: the environment, permissions or similar stop you.
 
-1. Write the details to `docs/pbi/reports/<report>.md`: the status line and these four headings.
+1. Write the details to `docs/pbi/reports/<report>.md`: the status line and these four headings, plus `## Test cases` when the prompt lists `Test files you must not touch` and the PBI has no `Cases:`.
 
    ```markdown
    Status: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
@@ -51,6 +52,11 @@ Status: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 
    ## Open
    <none / bullet list>
+
+   ## Test cases
+   <only with tests at the end: one row per behaviour you added or changed, and per `Tests for the end:` line of the PBI,
+    as a table `| id | behaviour | input | expected | mock |` with literal values (mock: the boundary replaced and what it returns, or none);
+    then `Exemplar: <the closest existing test file>`. Write `?` in a field you could not decide, never a guess.>
    ```
 
 2. Your final message is exactly these 5 lines. When the prompt names a summary file (`.last.md`), write the same 5 lines there too.

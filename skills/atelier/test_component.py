@@ -309,6 +309,19 @@ class ComponentCliTest(unittest.TestCase):
                 self.assertTrue(data['workflow']['build']['tests_at_end']['enabled'])
                 self.assertTrue(data['workflow']['kiln']['prompt_install'])
 
+    def test_bundled_templates_route_test_pbis_at_a_cheaper_tier(self):
+        # テストを書く PBI は安い段で作る (appendix/tests-at-end.md の implement_tier)
+        import common
+        workflows = [json.loads(p.read_text(encoding='utf-8'))['workflow']
+                     for p in sorted(component.EXAMPLES.glob('*.json'))]
+        workflows += [json.loads(p.read_text(encoding='utf-8'))
+                      for p in sorted((component.HERE / 'workflows').glob('*.json'))]
+        self.assertTrue(workflows)
+        for wf in workflows:
+            tier = wf['build']['tests_at_end']['implement_tier']
+            self.assertIn(tier, common.TIERS, wf['name'])
+            self.assertNotEqual(tier, 'opus', wf['name'])
+
     def test_example_check_lists_missing_skills_and_install_commands(self):
         shutil.rmtree(os.path.join(self.plugins, 'cache', 'market', 'yomiyasu'))
         code, out, err = self.run_cli('example', 'check', 'recommended')
