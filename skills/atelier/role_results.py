@@ -19,7 +19,9 @@ bundle  波 n の PBI を <dir>/waves.json から決め、PBI ごとにいちば
             review.json の verify.failed と食い違えば、または fail の基準があるのに recommendation が pass なら、
             その行に mismatch を付ける
           - 触らない範囲 (unchanged.py の記録) が変わっていないか
-          - 作ったモデルが分かり (分からなければ誤り)、reviewer.model と同じなら誤り
+          - 作ったモデルが分かり (分からなければ誤り)、深いレビューの PBI (route.json の review が deep。
+            route.json か review が無ければ deep とみなす) で reviewer.model と同じなら誤り。ふつうのレビューは
+            同じモデルでも通す (文脈は別。appendix/verify.md)
           - その PBI のレビューの回数 (初回の報告と手直しの報告を合わせた数)。上限の REVIEW_ROUNDS 回目で
             まだ通らない行には limit を付ける。設計者はその PBI を手直しせずに止める (appendix/rework.md)
         表のあとに `bundle: <--out のパス>` を出す。束のファイル (--out) は引き継ぎ用の写しで、schema を持たず、
@@ -54,11 +56,11 @@ SEVERITIES = ('critical', 'major', 'minor')
 REVIEW_ROUNDS = 2
 VERDICTS = ('pass', 'fail', 'deferred')
 RECOMMEND = ('pass', 'rework', 'tier-up', 'hold')
-TEST_KINDS = ('wave', 'survey', 'final', 'full')
+TEST_KINDS = ('wave', 'survey', 'investigate', 'e2e', 'final', 'full')
 TEST_CAUSES = ('intended', 'regression', 'unknown')
 TEST_RECOMMEND = ('pass', 'rework', 'needs-designer')
 
-EPISODES = ('design', 'build', 'test', 'review', 'finish')
+EPISODES = ('design', 'build', 'e2e', 'test', 'review', 'finish')
 EPISODE_STATUS = ('done', 'question', 'handoff', 'error')
 QUESTION_KINDS = ('approve', 'rework-limit', 'destructive', 'send-approval', 'decision', 'full-run')
 # 出番の結果の question の任意の topic (docs/specs/harness-metrics.md の question.asked と同じ値)
@@ -168,6 +170,8 @@ def _check_next(data, errors) -> None:
         return
     if nxt['episode'] == 'build' and (not _is_int(nxt.get('wave')) or nxt['wave'] < 1):
         errors.append('next.wave: a number from 1 for build')
+    if 'needs_designer' in nxt and not _is_str(nxt.get('needs_designer')):
+        errors.append('next.needs_designer: the reason, as text')
     if 'pbis' in nxt:
         pbis = nxt['pbis']
         if not isinstance(pbis, list) or not all(isinstance(p, str) and p.strip() for p in pbis):
@@ -452,6 +456,12 @@ def built_model(base: Path, report: str, pbi: str, attempt: int, review: dict) -
     return None
 
 
+def deep_review(base: Path, pbi: str) -> bool:
+    """その PBI のレビューが深いか (route.json の review が normal でなければ深い。adapter_gate.py と同じ倒し方)。"""
+    route = common.load_json(base / f'{pbi}.route.json', {})
+    return not (isinstance(route, dict) and route.get('review') == 'normal')
+
+
 def same_model(a: str, b: str) -> bool:
     """同じモデルか。小文字にし、opus・sonnet・haiku のどれを含むかで決める (どれも含まなければ文字列の一致)。"""
     x, y = a.lower(), b.lower()
@@ -534,8 +544,9 @@ def bundle_row(base: Path, pbi: str) -> dict:
     if built is None:
         row['errors'].append('built model unknown: no built.model in review.json, no row for '
                              f'{report} in runs.jsonl, no readable {pbi}.route.json')
-    elif same_model(built, reviewer):
-        row['errors'].append(f'reviewer {reviewer} is the model that built it ({built})')
+    elif same_model(built, reviewer) and deep_review(base, pbi):
+        # 作ったモデルで見ないのは深いレビューだけ。ふつうのレビューは中段のモデルが同じモデルの作を見てよい
+        row['errors'].append(f'reviewer {reviewer} is the model that built it ({built}) on a deep review')
     # レビュー担当の自己申告との食い違い: verify の失敗の集合、または fail の基準があるのに pass
     failing_but_pass = review['recommendation'] == 'pass' and any(c['verdict'] == 'fail' for c in review['criteria'])
     row.update({

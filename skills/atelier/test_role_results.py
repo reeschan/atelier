@@ -473,6 +473,19 @@ class BundleTest(unittest.TestCase):
                 self.assertEqual(code, 3, out)
                 self.assertIn('is the model that built it', self.row(out))
 
+    def test_bundle_same_model_is_fine_on_a_normal_review(self):
+        """ふつうのレビュー (route.json の review が normal) は、作ったモデルと同じモデルで見てよい。"""
+        edit_json(self.base / 'PBI-901.route.json', lambda d: d.update(review='normal'))
+        edit_json(self.base / 'reviews' / 'PBI-901.review.json', lambda d: d['reviewer'].update(model='sonnet'))
+        code, out, _ = self.bundle()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('is the model that built it', self.row(out))
+        # 深いレビューなら誤り
+        edit_json(self.base / 'PBI-901.route.json', lambda d: d.update(review='deep'))
+        code, out, _ = self.bundle()
+        self.assertEqual(code, 3, out)
+        self.assertIn('is the model that built it (sonnet) on a deep review', self.row(out))
+
     def test_bundle_built_model_unknown(self):
         """作ったモデルが分からない (built も runs.jsonl も route.json も無い) なら誤り。"""
         edit_json(self.base / 'reviews' / 'PBI-901.review.json', lambda d: d.pop('built', None))
