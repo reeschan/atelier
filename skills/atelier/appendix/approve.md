@@ -45,7 +45,7 @@ The table header is fixed: `| PBI | 何をするか | 終わると何ができ�
 
 ## Who builds
 
-One table `| PBI | 作るモデル | 見直しの深さ |` (`| PBI | Model | Review |`), the depth in words (ふつう / 深く). Then the tests: one table `| PBI | 関連する E2E |` with the `related_specs` of each PBI (`なし` when none), the test rules you took from the project (`appendix/tests-at-end.md`, `## Project test rules`: the full-run command, the one-spec command, the limits, and one line per point where the project's rule wins over Atelier's default), and that the full suite runs only when the user says yes at the end. The model-check chart when that stage ran. Scores and template names stay out.
+One table `| PBI | 作るモデル | 見直しの深さ |` (`| PBI | Model | Review |`), the depth in words (ふつう / 深く). Then the tests: one table `| PBI | 関連する E2E |` with the `related_specs` of each PBI (`なし` when none), the test rules you took from the project (`appendix/tests-at-end.md`, `## Project test rules`: the full-run command, the one-spec command, the limits, and one line per point where the project's rule wins over Atelier's default), that the full suite runs only when the user says yes at the end, and the model that writes the test PBIs (`implement_tier` of `docs/pbi/tests-at-end.json`, or the decision table when it is not set). The model-check chart when that stage ran. Scores and template names stay out.
 
 ## Check the draft
 

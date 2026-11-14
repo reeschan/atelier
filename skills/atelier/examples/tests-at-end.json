@@ -13,6 +13,7 @@
     "e2e/cypress/e2e/**"
   ],
   "principle": "principle-test-behavior-not-implementation",
+  "implement_tier": "sonnet",
   "server": {
     "start": "pnpm run start:e2e",
     "url": "http://localhost:10096/"

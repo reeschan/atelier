@@ -14,6 +14,7 @@ Use it when several workers share one working tree and the test run is slow or f
    - `test_paths`: globs of test files. Workers never create, change or delete them.
    - `principle`: the skill name of the test principle the test stage follows. The default is pstack's `principle-test-behavior-not-implementation`. Find its `SKILL.md` with Glob under `~/.claude/plugins/`; it cannot be invoked as a skill (`disable-model-invocation`), so pass its path. When it is missing, use `## Test principle (fallback)` below.
    - `skill` (optional): the name of a test skill the tester calls instead of `verify.py --deferred`. Without it, the tester runs `verify.py --deferred`.
+   - `implement_tier` (optional): the tier (`haiku`, `sonnet` or `opus`) that builds the test PBIs of the test stage (`## Test stage`, step 4). The bundled templates set `sonnet`. Without it (or `null`), the test PBIs are routed by the decision table like any PBI.
    - An entry of `deferred` is a substring, or an object `{"match", "when": "wave"|"end", "timeout", "server": {"start", "url"}}`. `when: end` runs only in the test stage. A command that runs the whole E2E suite goes to `final` (below), never to `deferred`.
    Then add the project's test rules (`## Project test rules`).
 3. When no test command is found, `deferred` stays empty and the option does nothing: write `Tests at end: off (no test command)` in STATUS.md, and workers run their verify commands as usual.
@@ -44,6 +45,7 @@ The project's rules win over Atelier's defaults, and the user's memory over a de
 - Keep test files out of the build PBIs. Their Targets name no file in `test_paths`, and their acceptance criteria ask for no new test. Write the behaviour a test should pin into the PBI's Notes under `Tests for the end:` (one line each, with the requirement it comes from). The test stage reads these lines.
 - A worker-run verify command must pass without touching a test file. When a command also checks the test files (a type check that includes the test project, a lint that runs the tests), split it: the part on the source stays with the worker, the part on the tests goes to `deferred`. Example: the type check of the source project for the worker, the type check of the test project deferred.
 - When a code change breaks existing tests by design (a renamed export, a changed signature), say so in the PBI's Notes. The test stage fixes them; the worker does not.
+- The worker of a build PBI writes the concrete test cases of what it changed under `## Test cases` in its report (`worker.md`). It has just read the code, so the cases cost it little; the test stage turns them into test PBIs that a cheaper model writes (`## Test cases`, below).
 - Give every build PBI its `related_specs`: the E2E specs that exercise what it changes (from the spec files' names and what they import or visit), or none. They go in the approval draft.
 - A build PBI's verify commands never run the whole E2E suite (the `final` command, or the E2E script with no spec filter). `verify.py` refuses such a command with exit 2.
 
@@ -94,12 +96,28 @@ Run it once, after the last wave and before the review stage.
    - `rewrite`: asserts an implementation detail, or proves nothing. The action says what behaviour to assert instead.
    - `delete`: pins implementation only, or repeats another test, and no behaviour is lost. The reason names the test that still covers the behaviour, or says none is needed.
    - `add`: a `Tests for the end:` line, or a behaviour the change introduced, that no test covers. The action names the observable result to assert.
+   Under the table, for every `fix`, `rewrite` and `add` row, the survey writes the cases in the shape of `## Test cases` (below), taken from the `## Test cases` of the build reports where they cover the row, and one `Exemplar:` line per test file (`## Test cases`).
    The subagent edits nothing. Read the counts per verdict from the table it wrote, not from the JSON.
-3. **Check the survey.** Read the rows for `delete` and `add` in full. Drop an `add` that asks for a test of an internal call, and a `delete` that would leave a behaviour of the change untested.
-4. **Test PBIs.** Turn the rows into PBIs (`appendix/plan.md`), grouped by test file, never two PBIs on the same file. Their Targets are test files only; source files are "Do not touch". Their verify commands run their own test files (one file per command, so the runs stay short), and the type check of the test project. Workers may run these commands. Route and build them as usual, at most 3 at once, because the test runs share the machine.
+3. **Check the survey.** Read the rows for `delete` and `add` in full. Drop an `add` that asks for a test of an internal call, and a `delete` that would leave a behaviour of the change untested. Read every case: its expected value comes from the requirement, not from what the code does now, and every field is filled. Fill a missing field yourself, or drop the case; a test PBI never carries a case with `?`.
+4. **Test PBIs.** Turn the rows into PBIs (`appendix/plan.md`), grouped by test file, never two PBIs on the same file. Their Targets are test files only; source files are "Do not touch". Copy the cases of the file into the PBI's Notes under `Cases:` and its `Exemplar:` line; each acceptance criterion names the case ids it covers. Their verify commands run their own test files (one file per command, so the runs stay short), and the type check of the test project. Workers may run these commands. When `implement_tier` is set, route the test PBIs at that tier: `python <skill>/prepare.py docs/pbi --only <the test PBIs> --tier <implement_tier>`. Otherwise route them as usual. Build them with `worker.md` as usual, at most 3 at once, because the test runs share the machine.
+   A test PBI that fails goes to rework at the same tier. The rework note (`appendix/rework.md`) names only the failing case ids, with the failing assertion and its output; the worker fixes those cases and leaves the passing ones as they are. When the failure shows that the expected value of a case is wrong, fix the case in the PBI's `Cases:` first (that is your decision, not the worker's). When it shows a real bug in the source, it is a build PBI's rework, as in step 5. Raise the tier only when the user picks that (`appendix/rework.md`, `## Stop`).
 5. **Close.** When every test PBI passes, start the tester (`prompts/tester.md`, kind `final`). It runs the verify commands of every report again with `--skip-deferred`, the deferred commands of `when: end` once, and the related specs of the whole run once (`verify.py --related`, plus `changed` when it was approved). Everything must pass. Reconcile its test-result: a failure here is a test PBI's rework, or a build PBI's when the test shows a real bug. After a fix, run only the specs that failed.
 6. **Full suite.** When the close passed and `final` is set, end the episode with a question of kind `full-run` (with `state`), laid out as the `full-run` row of `appendix/questions.md` (`## What goes in each kind`); its time is the one the project or the last full run says. On `full-run: yes` (the `Answer:` file), start the tester with kind `full` once (`verify.py --final`; it refuses without the user's yes and uses the yes up). On no, go on. When the full run fails, fix, run the failed specs, and ask `full-run` again before another full run.
 7. Write a stage record `tests` in STATUS.md: counts per verdict, the test PBIs, the final run, and whether the full suite ran.
+
+## Test cases
+
+A case is one row. Its fields are what a cheaper model needs to write the test without reading the source beyond the imports:
+
+| id | behaviour | input | expected | mock |
+|---|---|---|---|---|
+| C1 | <what the user of the code sees, one line> | <the concrete call or action and its arguments> | <the concrete result, error or output, from the requirement> | <what is replaced and what it returns, or none> |
+
+- `id` is unique in the test file (`C1`, `C2`, ...). `behaviour` names the requirement or the `Tests for the end:` line it comes from.
+- `input` and `expected` are literal values, not "a valid user" or "the right error". Name the function or the screen action, the arguments, and the exact value, message or state.
+- `mock` names each boundary that is replaced (a network call, the clock, a file system) and what it returns. Mock only at the boundaries of the code; never mock the unit under test.
+- `Exemplar: <path of an existing test file>`: one per test file, the closest existing test in style (same runner, same kind of target). The writer copies its imports, setup and assertion style. When the project has no test yet, write `Exemplar: none` and name the runner and its assertion style on the same line.
+- A case covers one behaviour. Boundaries (empty, one, limit, over the limit) are separate cases.
 
 ## Test principle (fallback)
 

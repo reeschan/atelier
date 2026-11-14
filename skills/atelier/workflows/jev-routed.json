@@ -82,7 +82,8 @@
       "enabled": true,
       "deferred": [],
       "test_paths": [],
-      "principle": "principle-test-behavior-not-implementation"
+      "principle": "principle-test-behavior-not-implementation",
+      "implement_tier": "sonnet"
     }
   },
   "kiln": {
