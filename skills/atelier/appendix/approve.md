@@ -30,7 +30,8 @@ Your stage records (the component picked per stage, skips, fallbacks) stay in th
 - Ask only what changes what the user gets, what it costs, how long it takes or what can go wrong. Decide the insides yourself (how the caller passes an answer, the shape of a command) and write the decision in the spec.
 - Every option carries `| what changes when you pick it`. Put the one you would pick first, with `*`.
 - When a question needs an internal term, explain it in the same sentence.
-- These go here, each as one `ask`: the open points from the design stage (`appendix/design.md`, `## Design: unknowns`), whether to run an optional stage placed after route (`appendix/optional.md`), each `Survey fix:` lead from the lint survey (`appendix/lint.md`), installing a missing tool with its fallback (`tools_check.py`), and a priority template or quality warning only when the user has something to decide about it.
+- These go here, each as one `ask`: the open points from the design stage (`appendix/design.md`, `## Design: unknowns`), whether to run an optional stage placed after route (`appendix/optional.md`), each `Survey fix:` lead from the lint survey (`appendix/lint.md`), installing a missing tool with its fallback (`tools_check.py`), whether the full E2E suite runs once after the last wave (when `tests-at-end.json` has `final`; `## Who builds`), and a priority template or quality warning only when the user has something to decide about it.
+- After the approval, write each answer where it acts. The full-suite answer goes to `e2e.full` of `docs/pbi/tests-at-end.json` (`true` only on a yes); nothing else turns it on.
 
 ## PBIs
 
@@ -45,7 +46,7 @@ The table header is fixed: `| PBI | 何をするか | 終わると何ができ�
 
 ## Who builds
 
-One table `| PBI | 作るモデル | 見直しの深さ |` (`| PBI | Model | Review |`), the depth in words (ふつう / 深く). Then the tests: one table `| PBI | 関連する E2E |` with the `related_specs` of each PBI (`なし` when none), the test rules you took from the project (`appendix/tests-at-end.md`, `## Project test rules`: the full-run command, the one-spec command, the limits, and one line per point where the project's rule wins over Atelier's default), that the full suite runs only when the user says yes at the end, and the model that writes the test PBIs (`implement_tier` of `docs/pbi/tests-at-end.json`, or the decision table when it is not set). The model-check chart when that stage ran. Scores and template names stay out.
+One table `| PBI | 作るモデル | 見直しの深さ |` (`| PBI | Model | Review |`), the depth in words (ふつう / 深く). Then the tests: one table `| PBI | 関連する E2E |` with the `Related specs:` of each PBI (`なし` when none), one line saying that the specs which read a symbol the run changes are added after the last wave (and the glob `e2e.specs` they come from, or that the search is off), the test rules you took from the project (`appendix/tests-at-end.md`, `## Project test rules`: the full-run command, the one-spec command, the limits, and one line per point where the project's rule wins over Atelier's default), the `ask` whether the full suite runs once after the last wave (with the time the project or the last full run says; a script runs it, and nobody is asked again), the model that leads the test stage (`episodes.test` of the `roles:` line) and the model that writes the test PBIs (`implement_tier` of `docs/pbi/tests-at-end.json`, or the decision table when it is not set). The model-check chart when that stage ran. Scores and template names stay out.
 
 ## Check the draft
 

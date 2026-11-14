@@ -41,6 +41,7 @@ BACKTICK = re.compile(r'`([^`\n]+)`')
 OUTSIDE_SKILL_NAMES = {
     # docs/pbi/ の設定
     'jev.config.json',
+    'checks.json',
     'routing.json',
     'routing.prev.json',
     # home の設定

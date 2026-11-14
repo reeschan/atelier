@@ -2,19 +2,22 @@
 
 Read this at Start of every run. The option is on by default: the bundled templates set `build.tests_at_end`. It is off when the run copy `docs/pbi/tests-at-end.json` says `"enabled": false`, when the user asks for workers to run their own tests, or when no test command is found (below).
 
-With the option on, workers change only the code during the waves. They write no tests, change no tests and run no slow checks. After each wave and each rework the tester runs the fast deferred checks and only the E2E specs related to the PBIs (`related_specs`); after the last wave one test stage reviews, fixes, adds and deletes the tests of the whole change, and runs the related specs of the whole run once. The full E2E suite never runs on its own: the run asks the user (`full-run`) and runs it once only on a yes. You reconcile each test-result and decide.
+With the option on, workers change only the code during the waves. They write no tests, change no tests and run no slow checks. After each wave and each rework the tester runs the fast deferred checks. E2E runs once, after the last wave, in the `e2e` episode: a script with no model (`e2e_run.py`), so no designer waits on it. Then the test stage runs on the lead of the test episode (the routing template's middle tier), which hands a point to the designer only when it cannot decide. The scope of the E2E and whether the full suite runs are decided at the approval. You reconcile each test-result and decide.
 
 Use it when several workers share one working tree and the test run is slow or flaky under load: their test runs fail on other PBIs' half-done changes, and you run the tests again at the end of the wave anyway.
 
 ## Start
 
-1. When `docs/pbi/tests-at-end.json` is missing, write it from the template's `build.tests_at_end` (shape: `<skill>/examples/tests-at-end.json`). The run copy wins; `verify.py` reads only the run copy. To turn the option off, write `{"enabled": false}`.
+1. When `docs/pbi/tests-at-end.json` is missing, write it from the template's `build.tests_at_end` (shape: `<skill>/examples/tests-at-end.json`). The run copy wins; `verify.py` and `e2e_run.py` read only the run copy. To turn the option off, write `{"enabled": false}`.
 2. The bundled template leaves `deferred` and `test_paths` empty. Draft them from the repository (its package scripts, test runner config, and where its test files live) and show the draft in the PBI list approval (`designer.md`, `## Approve`); do not stop to ask before that. The fields:
    - `deferred`: substrings of verify commands that workers never run. Every command that contains one of them runs by the tester after each wave (kind `wave`), or only in the test stage with `when: end`. Put here the test runs and the checks that need tests (for example a check that every domain file is read by a test).
    - `test_paths`: globs of test files. Workers never create, change or delete them.
+   - `test_command`: the command that runs one test file, with `{file}` for its path (for example `pnpm vitest run {file}`). `tests_plan.py` writes it into every test PBI.
+   - `test_typecheck` (optional): the type check of the test project. `tests_plan.py` adds it to every test PBI.
    - `principle`: the skill name of the test principle the test stage follows. The default is pstack's `principle-test-behavior-not-implementation`. Find its `SKILL.md` with Glob under `~/.claude/plugins/`; it cannot be invoked as a skill (`disable-model-invocation`), so pass its path. When it is missing, use `## Test principle (fallback)` below.
    - `skill` (optional): the name of a test skill the tester calls instead of `verify.py --deferred`. Without it, the tester runs `verify.py --deferred`.
    - `implement_tier` (optional): the tier (`haiku`, `sonnet` or `opus`) that builds the test PBIs of the test stage (`## Test stage`, step 4). The bundled templates set `haiku`, the bottom tier of the routing template: the runners and models of that tier come from the routing template and the priority template in force (`select_model.py`), so a routing that sends the bottom tier to an external runner writes the tests there. Without it (or `null`), the test PBIs are routed by the decision table like any PBI.
+   - `e2e`: how the `e2e` episode finds its scope (`## E2E`): `base` (the branch the work merges into, default `origin/main`), `specs` (a glob or a list of globs of the E2E spec files, for the specs that read a changed symbol), `symbols` (`false` turns that search off) and `full` (whether the full suite runs once; written only from the approval's answer, `appendix/approve.md`).
    - An entry of `deferred` is a substring, or an object `{"match", "when": "wave"|"end", "timeout", "server": {"start", "url"}}`. `when: end` runs only in the test stage. A command that runs the whole E2E suite goes to `final` (below), never to `deferred`.
    Then add the project's test rules (`## Project test rules`).
 3. When no test command is found, `deferred` stays empty and the option does nothing: write `Tests at end: off (no test command)` in STATUS.md, and workers run their verify commands as usual.
@@ -34,7 +37,7 @@ Write what you took into `docs/pbi/tests-at-end.json`:
 - `final`: the command that runs the whole suite the way the project says (for example `cd e2e && pnpm run cy:run:parallel`).
 - `investigate`: the command that runs some specs, with `{specs}` for the comma-joined list (for example `cd e2e && pnpm run cy:run:local --spec {specs}`).
 - `changed` (optional): the project's command that runs the specs a change touched, when the rules name one.
-- `limits`: `{"per_spec": 900, "retries": 2, "idle": 600}` unless the project says otherwise: one spec runs at most 15 minutes and is run again at most twice; the related specs of the whole run get 15 minutes per spec; the full suite has no time limit but stops after 10 minutes with no output.
+- `limits`: `{"per_spec": 900, "retries": 2, "idle": 600}` unless the project says otherwise: one spec runs at most 15 minutes and is run again at most twice; the full suite has no time limit but stops after 10 minutes with no output.
 - `notes`: other rules for the tester, one line each.
 - `sources`: where each rule came from (file or memory id).
 
@@ -44,10 +47,10 @@ The project's rules win over Atelier's defaults, and the user's memory over a de
 
 - Keep test files out of the build PBIs. Their Targets name no file in `test_paths`, and their acceptance criteria ask for no new test. Write the behaviour a test should pin into the PBI's Notes under `Tests for the end:` (one line each, with the requirement it comes from). The test stage reads these lines.
 - A worker-run verify command must pass without touching a test file. When a command also checks the test files (a type check that includes the test project, a lint that runs the tests), split it: the part on the source stays with the worker, the part on the tests goes to `deferred`. Example: the type check of the source project for the worker, the type check of the test project deferred.
-- When a code change breaks existing tests by design (a renamed export, a changed signature), say so in the PBI's Notes. The test stage fixes them; the worker does not.
+- When a code change breaks an existing test by design (a renamed export, a changed signature, a moved screen element), write one line per test in the PBI's Notes: `Breaks by design: <test file or spec>[::<test name>] — <why>`. `role_results.py classify` reads exactly this form and turns those failures into `intended` without a model; a breakage described any other way stays `unknown` and costs an investigation. The test stage fixes those tests; the worker does not.
 - The worker of a build PBI writes the concrete test cases of what it changed under `## Test cases` in its report (`worker.md`). It has just read the code, so the cases cost it little; the test stage turns them into test PBIs that a cheaper model writes (`## Test cases`, below).
-- Give every build PBI its `related_specs`: the E2E specs that exercise what it changes (from the spec files' names and what they import or visit), or none. They go in the approval draft.
-- A build PBI's verify commands never run the whole E2E suite (the `final` command, or the E2E script with no spec filter). `verify.py` refuses such a command with exit 2.
+- Give every build PBI the line `- Related specs: <spec>, <spec>` (or `none`) at its head: the E2E specs that exercise what it changes (from the spec files' names and what they import or visit). `e2e_run.py` reads this line; the approval draft shows it.
+- A build PBI's verify commands never run E2E specs or the whole E2E suite (the `final` command, or the E2E script with no spec filter). `verify.py` refuses a `final` command with exit 2; E2E runs only in the `e2e` episode.
 
 ## Build
 
@@ -66,26 +69,40 @@ Test files you must not touch: <the test_paths globs>
 
 ## End of a wave
 
-1. When every PBI of the wave has been checked, start the tester (`prompts/tester.md`, kind `wave`). It runs the deferred commands of `when: wave` once for all of them, then the related specs of the wave's PBIs:
+1. When every PBI of the wave has been checked, start the tester (`prompts/tester.md`, kind `wave`). It runs the deferred commands of `when: wave` once for all of them, and no E2E spec:
 
    ```bash
    python <skill>/verify.py <report>,<report>,... --deferred --when wave
-   python <skill>/verify.py --related <spec>,<spec>,... --name wave-<n>
+   python <skill>/role_results.py classify docs/pbi/verify/tests/wave-<n>.test-result.json
    ```
 
-   Each distinct command runs once, and its result is merged into each report's `<report>.json`. After a rework, the tester runs the same, for the reworked PBIs and their related specs only. When `docs/pbi/tests-at-end.json` has a `skill`, the tester calls that skill instead. It writes each failure as a test name, file, PBI and a `cause` guess (`intended`, `regression` or `unknown`).
+   Each distinct command runs once, and its result is merged into each report's `<report>.json`. After a rework, the tester runs the same, for the reworked PBIs only. When `docs/pbi/tests-at-end.json` has a `skill`, the tester calls that skill instead. It writes each failure as a test name, file, PBI and a `cause` guess (`intended`, `regression` or `unknown`); `classify` then marks the failures a `Breaks by design:` line names as `intended`.
 2. Reconcile the tester's test-result (`appendix/episodes.md`, `## Reconcile`). The `cause` is a proposal; you decide each one. Compare the failing tests with the previous wave's list (`docs/pbi/verify/tests-at-end.failing.md`; empty before wave 1). For each failure that is new:
-   - `intended` (a change a PBI made on purpose; its Notes say so, or the diff renames or removes what the test reads): add it to the list with the PBI. The test stage fixes it. It does not block the PBI.
+   - `intended`: add it to the list with the PBI. The test stage fixes it. It does not block the PBI.
    - `regression` (a behaviour the PBI should have kept): rework that PBI, as for a failing acceptance criterion (`appendix/rework.md`).
-   - `unknown`: find the files the failing test imports, and the PBI of the wave whose diff touches them. Run that test file alone and decide from its output. Never stash or reset to find out.
+   - `unknown`: start the tester with kind `investigate` on those failures. Decide from its proposal. Never stash or reset to find out, and do not run the tests yourself.
 3. Record each PBI with `record_run.py`. A deferred number that failed only for a reason in the list counts as pass; write `deferred: <numbers>, failing tests listed` in its STATUS.md note.
 4. Write the updated list to `docs/pbi/verify/tests-at-end.failing.md`, one line per test: file, test name, the PBI, why it fails.
+5. After the last wave, end the build episode with next `e2e` when `tests-at-end.json` has `investigate` or `final`; otherwise with next `test`.
+
+## E2E
+
+The `e2e` episode has no designer. The conductor runs `e2e_run.py` (`conductor.py run`; the caller waits with `wait`), which:
+
+1. takes the scope: every build PBI's `Related specs:`, then the specs matching `e2e.specs` that read a symbol the change defines or touches (the names of the definitions on the changed lines, and of the function around each changed hunk, since the merge-base), then the full suite once when `e2e.full` is `true`;
+2. runs the specs one at a time (`verify.py --related <specs> --each --name e2e`; the server starts once, a failing spec runs again up to `limits.retries` times), then the full suite (`verify.py --final`);
+3. writes `docs/pbi/verify/tests/e2e.test-result.json` (kind `e2e`, one failing row per spec, with the PBI that names it or changed the symbol it reads) and `docs/pbi/verify/e2e.scope.md` (each spec and why), marks the `Breaks by design:` failures `intended`, and ends the episode with next `test`.
+
+The script never asks. When it stops on a limit or a server, it writes `blocked` in the test-result and in its summary, and the test stage decides.
 
 ## Test stage
 
-Run it once, after the last wave and before the review stage.
+Run it once, after the `e2e` episode (or after the last wave when the run has no E2E) and before the review stage. The test episode runs on its lead: the `episodes.test` role, by default the first usable step of the routing template's middle tier (`appendix/setup.md`, `## roles`). Its prompt says `Lead: test`.
 
-1. **Range.** List the source files changed since the base (`git diff --name-only <base>...` plus untracked files). The range is the tests in `test_paths` that read those files, the failing list, and the `Tests for the end:` lines of every PBI.
+- The lead does every step below. When a step needs a judgement the lead cannot make from the requirement, the notes and the test-results (whether a failure is a regression, whether a test may be deleted, a case whose expected value the requirement leaves open but the user should not be asked), it writes the point in the state tablet and ends the episode with next `{"episode": "test", "needs_designer": "<the point>"}`. The designer gets the same episode with `Escalated: <the point>`, decides it, writes the decision in the state, and ends with next `test` to hand the stage back.
+- A question for the user (a `decision`) is asked as in any episode; the lead asks it itself.
+
+1. **Range.** List the source files changed since the base (`git diff --name-only <base>...` plus untracked files). The range is the tests in `test_paths` that read those files, the failing list, the failing rows of the e2e test-result, and the `Tests for the end:` lines of every PBI.
 2. **Survey.** Start the tester (`prompts/tester.md`, kind `survey`) with this brief: the principle's `SKILL.md` path, the range, the failing list and the `Tests for the end:` lines. It reads each test in the range and writes `docs/pbi/notes/test-survey.md`, one row per test or missing test:
 
    | file:test | verdict | reason | action |
@@ -94,16 +111,18 @@ Run it once, after the last wave and before the review stage.
    - `keep`: catches a broken behaviour and survives a change of internals.
    - `fix`: fails now, and the behaviour it asserts still holds. The action says what to change.
    - `rewrite`: asserts an implementation detail, or proves nothing. The action says what behaviour to assert instead.
-   - `delete`: pins implementation only, or repeats another test, and no behaviour is lost. The reason names the test that still covers the behaviour, or says none is needed.
+   - `delete`: pins implementation only, or repeats another test, and no behaviour is lost. The reason starts with `covered by <file:test>` (the test that still covers the behaviour) or `none needed`.
    - `add`: a `Tests for the end:` line, or a behaviour the change introduced, that no test covers. The action names the observable result to assert.
-   Under the table, for every `fix`, `rewrite` and `add` row, the survey writes the cases in the shape of `## Test cases` (below), taken from the `## Test cases` of the build reports where they cover the row, and one `Exemplar:` line per test file (`## Test cases`).
-   The subagent edits nothing. Read the counts per verdict from the table it wrote, not from the JSON.
-3. **Check the survey.** Read the rows for `delete` and `add` in full. Drop an `add` that asks for a test of an internal call, and a `delete` that would leave a behaviour of the change untested. Read every case: its expected value comes from the requirement, not from what the code does now, and every field is filled. Fill a missing field yourself from the requirement. Drop a case only when no `Tests for the end:` line and no behaviour of the change depends on it. When the requirement does not decide an expected value that such a case needs, keep the case open and ask the user (a question of kind `decision`) before the test stage closes. A test PBI never carries a case with `?`.
-4. **Test PBIs.** Turn the rows into PBIs (`appendix/plan.md`), grouped by test file, never two PBIs on the same file. Their Targets are test files only; source files are "Do not touch". Copy the cases of the file into the PBI's Notes under `Cases:` and its `Exemplar:` line, and each `delete` row as a `Delete: <file:test>` line; each acceptance criterion names the case ids it covers, or the test a `Delete:` line removes. Their verify commands run their own test files (one file per command, so the runs stay short), and the type check of the test project. Workers may run these commands. When `implement_tier` is set, route the test PBIs at that tier: `python <skill>/prepare.py docs/pbi --only <the test PBIs> --tier <implement_tier>`. Otherwise route them as usual. Build them with `worker.md` as usual, at most 3 at once, because the test runs share the machine.
-   A test PBI that fails goes to rework at the same tier. The rework note (`appendix/rework.md`) names only the failing case ids, with the failing assertion and its output; the worker fixes those cases and leaves the passing ones as they are. A failure before any case runs (the file does not compile or import, a shared setup fails, the type check of the test project fails) has no case id: the note names the failure, its output and the setup or import it comes from, and the worker fixes only that. When the failure shows that the expected value of a case is wrong, fix the case in the PBI's `Cases:` first (that is your decision, not the worker's). When it shows a real bug in the source, it is a build PBI's rework, as in step 5. Raise the tier only when the user picks that (`appendix/rework.md`, `## Stop`).
-5. **Close.** When every test PBI passes, start the tester (`prompts/tester.md`, kind `final`). It runs the verify commands of every report again with `--skip-deferred`, the deferred commands of `when: end` once, and the related specs of the whole run once (`verify.py --related`, plus `changed` when it was approved). Everything must pass. Reconcile its test-result: a failure here is a test PBI's rework, or a build PBI's when the test shows a real bug. After a fix, run only the specs that failed.
-6. **Full suite.** When the close passed and `final` is set, end the episode with a question of kind `full-run` (with `state`), laid out as the `full-run` row of `appendix/questions.md` (`## What goes in each kind`); its time is the one the project or the last full run says. On `full-run: yes` (the `Answer:` file), start the tester with kind `full` once (`verify.py --final`; it refuses without the user's yes and uses the yes up). On no, go on. When the full run fails, fix, run the failed specs, and ask `full-run` again before another full run.
-7. Write a stage record `tests` in STATUS.md: counts per verdict, the test PBIs, the final run, and whether the full suite ran.
+   Under the table, for every test file with a `fix`, `rewrite` or `add` row, the survey writes a `### Cases: <test file>` heading, one `Exemplar:` line and the cases in the shape of `## Test cases` (below), taken from the `## Test cases` of the build reports where they cover the row.
+   The subagent edits nothing.
+3. **Plan the test PBIs.** Run `python <skill>/tests_plan.py docs/pbi`. It writes one test PBI per test file (Targets that file only, Notes with `Cases:`, `Exemplar:` and `Delete:` lines, one acceptance criterion per case id and per delete, the format and lint of `checks.json`, `test_command` and `test_typecheck` as verify commands), adds them to `docs/pbi/waves.json` (at most 3 per wave, because the test runs share the machine), and prints only the exceptions (`exception: <file>: <why>`). Read the exceptions, not the survey:
+   - a case with `?` or an empty field: fill it from the requirement and rerun. When the requirement does not decide an expected value that a `Tests for the end:` line or a behaviour of the change depends on, ask the user (a question of kind `decision`) before the test stage closes. Drop the case only when nothing depends on it. A test PBI never carries a case with `?`.
+   - a `delete` with no covering test, an `add` that asks for a test of an internal call, a file outside `test_paths`, keep and delete on one test: fix the row in the survey (drop it, or correct it) and rerun. A file that already has a test PBI is kept as it is.
+4. **Build the test PBIs.** Write their work tickets (`design_record.py work PBI-<n>`). When `tests_plan.py` printed a `then:` line (`implement_tier` is set), route them with it: `python <skill>/prepare.py docs/pbi --only <the test PBIs> --tier <implement_tier>`. Otherwise route them as usual. Build them wave by wave with `worker.md` as usual.
+   A test PBI that fails goes to rework at the same tier. The rework note (`appendix/rework.md`) names only the failing case ids, with the failing assertion and its output; the worker fixes those cases and leaves the passing ones as they are. A failure before any case runs (the file does not compile or import, a shared setup fails, the type check of the test project fails) has no case id: the note names the failure, its output and the setup or import it comes from, and the worker fixes only that. When the failure shows that the expected value of a case is wrong, fix the case in the PBI's `Cases:` first (a decision; the lead hands it to the designer when the requirement does not settle it). When it shows a real bug in the source, it is a build PBI's rework, as in step 5. Raise the tier only when the user picks that (`appendix/rework.md`, `## Stop`).
+5. **Close.** When every test PBI passes, start the tester (`prompts/tester.md`, kind `final`). It runs the verify commands of every report again with `--skip-deferred`, the deferred commands of `when: end` once, and the specs that failed in the `e2e` episode plus the specs a test PBI changed, one at a time (`verify.py --related <specs> --each --name final-related`). Everything must pass. Reconcile its test-result: a failure here is a test PBI's rework, or a build PBI's when the test shows a real bug (`regression`; an `unknown` goes to the tester's kind `investigate` first). After a fix, run only the specs that failed. The full suite never runs here: it ran in the `e2e` episode when the approval said yes.
+6. Write a stage record `tests` in STATUS.md: counts per verdict, the test PBIs, the exceptions `tests_plan.py` printed, the final run, whether the full suite ran, and each point handed to the designer.
+7. End the episode with next `review`, or `build` with the wave and `pbis` of the build PBIs a regression sends back.
 
 ## Test cases
 
