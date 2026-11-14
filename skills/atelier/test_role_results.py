@@ -661,6 +661,14 @@ class ClassifyTest(unittest.TestCase):
         code, out = run('check', str(self.result))
         self.assertEqual(code, 0, out)
 
+    def test_only_notes_outside_fences_count(self):
+        (self.base / 'PBI-002.md').write_text(
+            '# PBI-002\n\n## Goal\nBreaks by design: e2e/goal.cy.ts\n\n## Notes\n'
+            '```\nBreaks by design: e2e/fenced.cy.ts\n```\n', encoding='utf-8')
+        self.write_result([self.row('goal', 'e2e/goal.cy.ts'), self.row('fenced', 'e2e/fenced.cy.ts')])
+        code, out = run('classify', str(self.result), '--dir', str(self.base))
+        self.assertIn('classify: 0 intended, 2 left', out)
+
     def test_path_suffix_matches(self):
         self.write_result([self.row('cart', 'e2e/cart.cy.ts'), self.row('x', 'checkout/e2e/cart.cy.ts.bak')])
         code, out = run('classify', str(self.result), '--dir', str(self.base))

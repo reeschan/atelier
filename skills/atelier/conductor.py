@@ -979,6 +979,8 @@ def roles_record(roles: dict, sources: dict) -> dict:
 
 def roles_from_record(record) -> dict | None:
     """running.roles から roles の形に戻す。形が違う・値が不正なら None (呼び出し側が load_roles で取り直す)。"""
+    if not isinstance(record, dict):
+        return None
     try:
         roles = _empty_roles()
         for name in ROLE_PARTS:
