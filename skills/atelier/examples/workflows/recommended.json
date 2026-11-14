@@ -129,7 +129,7 @@
     "fix": {"max_rework": 2},
     "build": {
       "external_memory": "none",
-      "tests_at_end": {"enabled": true, "deferred": [], "test_paths": [], "principle": "principle-test-behavior-not-implementation", "implement_tier": "sonnet"}
+      "tests_at_end": {"enabled": true, "deferred": [], "test_paths": [], "principle": "principle-test-behavior-not-implementation", "implement_tier": "haiku"}
     },
     "kiln": {
       "enabled": true,
