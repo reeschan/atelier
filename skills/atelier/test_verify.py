@@ -324,6 +324,21 @@ class VerifyEnvAndModesTest(unittest.TestCase):
         self.assertIn('blocked: limit (b.cy.ts', r.stdout)
         self.assertEqual(self.results('e2e'), {1: 0, 2: 'timeout'})
 
+    def test_checks_json_requires_format_and_lint_commands(self):
+        (self.base / 'checks.json').write_text(json.dumps({'format': 'npx prettier --write', 'lint': 'npx eslint'}),
+                                               encoding='utf-8')
+        (self.base / 'PBI-001.md').write_text(pbi('npx prettier --write src/a.ts > fmt.txt', 'echo ok > ran.txt'),
+                                              encoding='utf-8')
+        r = self.run_script('PBI-001')
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('refused: PBI-001 has no lint command (checks.json)', r.stdout)
+        self.assertFalse((self.root / 'ran.txt').exists())
+        self.assertEqual(self.run_script('PBI-001', '--list-deferred').returncode, 0)
+        (self.base / 'PBI-001.md').write_text(pbi('echo npx prettier --write src/a.ts', 'echo npx  eslint src/a.ts'),
+                                              encoding='utf-8')
+        r = self.run_script('PBI-001')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_final_stops_when_output_goes_quiet(self):
         self.settings(final='echo start; sleep 30; echo never', limits={'idle': 1})
         self.approve_full_run()

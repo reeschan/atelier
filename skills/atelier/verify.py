@@ -22,6 +22,11 @@ bash と Node:
   その版のディレクトリを子の PATH の先頭に置く。見つからなければ warn を出して今の PATH で流す。
   ログの先頭には `bash: <パス>` と `node: <node -v>` の行を書く。
 
+整形と lint (appendix/plan.md、`## Format and lint first`):
+  <dir>/checks.json ({"format": "<コマンドの頭>", "lint": "<コマンドの頭>"}) があれば、PBI の検証コマンドに
+  それぞれを含むコマンドが要る。無ければ流さずに `refused: <PBI> has no <format|lint> command (checks.json)` で
+  終了コード 2 (作業者が検証のたびに整形と lint を流し、レビューの前に済ませるため)。--list-deferred は断らない。
+
 テストを最後にまとめる選択肢 (appendix/tests-at-end.md):
   <dir>/tests-at-end.json の "deferred" のどれかを含むコマンドを、あとに回すコマンドとして扱う。
   要素は文字列か {"match", "when": "wave"|"end", "timeout": 秒, "server": {"start", "url"}} (when の既定は wave)。
@@ -552,6 +557,22 @@ def _squash(cmd):
     return " ".join(cmd.split())
 
 
+CHECK_KEYS = ("format", "lint")
+
+
+def required_checks(base):
+    """<dir>/checks.json の format・lint のコマンドの頭 ({キー: 文字列})。無い・読めないときは空。"""
+    data = load_json(base / "checks.json", {})
+    if not isinstance(data, dict):
+        return {}
+    return {key: data[key].strip() for key in CHECK_KEYS if isinstance(data.get(key), str) and data[key].strip()}
+
+
+def missing_checks(cmds, checks):
+    """PBI の検証コマンドに無い checks のキー。"""
+    return [key for key, head in checks.items() if not any(_squash(head) in _squash(cmd) for _, cmd in cmds)]
+
+
 def runs_final(cmd, final):
     """cmd が通し (final) を流すか。final と同じ・final を含む・final の最後のコマンド (cd などの前置きを除く) を含む。"""
     cmd, final = _squash(cmd), _squash(final)
@@ -572,6 +593,11 @@ def main_pbi(args, base, settings, entries):
     if args.list_deferred:
         print(",".join(str(n) for n, cmd in cmds if is_deferred(cmd, entries)))
         return
+    missing = missing_checks(cmds, required_checks(base)) if cmds else []
+    if missing:
+        print(f"refused: {args.pbi} has no {' or '.join(missing)} command (checks.json); "
+              "put the format and lint commands on its Targets first (appendix/plan.md)")
+        sys.exit(2)
     only = {int(x) for x in args.only.split(",") if x.strip()}
     # --only か --skip-deferred で絞ったか。絞った結果が空のときに「絞らない」と取り違えないため
     filtered = bool(only)
