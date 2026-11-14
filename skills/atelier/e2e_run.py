@@ -38,6 +38,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import common
@@ -240,7 +241,8 @@ def verify_head() -> list[str]:
 # TerminateProcess で止められても木ごと止まる。POSIX: verify.py を新しいセッションで起こし、SIGTERM でグループに送る
 _JOB = None
 _CHILD = None
-STOP_WAIT = 10
+# verify.py が自分の子の木を止める時間。conductor.stop_child の待ち (3 秒) より短くする
+STOP_WAIT = 2
 
 
 def _windows_job():
@@ -297,16 +299,26 @@ def _join_job(proc) -> None:
 
 def _on_stop(signum, _frame):
     """POSIX で止められたら、verify.py のグループに同じ合図を送り、待ってから終わる。"""
+    # 中断した本体が child.wait() のロックを持っているので、ここでは Popen.wait を使わず os.waitpid で回収する
+    # (Popen.wait はロックが空くまで timeout いっぱい待ち、conductor の待ち時間を超える)
     child = _CHILD
-    if child is not None and child.poll() is None:
+    if child is not None:
         try:
             os.killpg(child.pid, signal.SIGTERM)
-            child.wait(timeout=STOP_WAIT)
-        except (OSError, subprocess.TimeoutExpired):
+        except OSError:
+            pass
+        deadline = time.monotonic() + STOP_WAIT
+        while time.monotonic() < deadline:
             try:
-                os.killpg(child.pid, signal.SIGKILL)
-            except OSError:
-                pass
+                if os.waitpid(child.pid, os.WNOHANG)[0]:
+                    break
+            except ChildProcessError:
+                break
+            time.sleep(0.05)
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except OSError:
+            pass
     sys.exit(128 + signum)
 
 
