@@ -2510,6 +2510,21 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(run['history'][-1]['episode'], 'e2e')
         self.assertIn('Script episode: e2e', self.read(f"docs/pbi/conductor/episodes/{run['seq']}-e2e.prompt.md"))
 
+    def test_relaunching_a_running_e2e_points_to_run_again(self):
+        """agent の run でも、running の e2e を起こし直すと run --detach を案内する (設計者は起こさない)。"""
+        self.to_episode('e2e')
+        run = self.read_json(RUN)
+        run['state'] = 'running'
+        run['seq'] = int(run.get('seq') or 0) + 1
+        run['running'] = {'seq': run['seq'], 'episode': 'e2e', 'wave': 1, 'launcher': 'headless',
+                          'launched_at': '2026-01-01T00:00:00+00:00'}
+        run['pending'] = None
+        self.write_json(RUN, run)
+        rc, out = self.con('next', '--relaunch')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('launch: headless (e2e runs as a script)', out)
+        self.assertEqual(self.read_json(RUN)['state'], 'ready')
+
     def test_e2e_script_failure_is_a_failed_episode(self):
         """スクリプトが 0 以外で終われば出番の失敗として数える。"""
         self.to_episode('e2e')

@@ -1555,6 +1555,10 @@ def relaunch(paths: Paths, run: dict):
                       'escalated': running.get('escalated')}
     _emit_episode_ended(paths, run, running, before)
     run['running'] = None
+    if running.get('episode') in SCRIPT_EPISODES:
+        # スクリプトの出番は Agent ツールで起こせない。run (detach) が起こし直す
+        run['state'] = 'ready'
+        return headless_lines(run, warns, f"{running.get('episode')} runs as a script"), EXIT_OK
     if run.get('launch') == 'headless':
         run['state'] = 'ready'
         return headless_lines(run, warns), EXIT_OK
