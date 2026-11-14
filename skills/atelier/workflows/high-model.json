@@ -77,7 +77,7 @@
       "deferred": [],
       "test_paths": [],
       "principle": "principle-test-behavior-not-implementation",
-      "implement_tier": "sonnet"
+      "implement_tier": "haiku"
     }
   },
   "kiln": {
