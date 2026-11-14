@@ -8,7 +8,7 @@
       "fields": {
         "workflow": {"type": "id"},
         "launch": {"type": "id"},
-        "roles_from": {"type": "map", "keys": {"type": "id"}, "values": {"type": "enum", "values": ["run", "repo", "home", "default"]}}
+        "roles_from": {"type": "map", "keys": {"type": "id"}, "values": {"type": "enum", "values": ["run", "repo", "home", "template", "default"]}}
       }
     },
     "run.ended": {
@@ -22,30 +22,30 @@
     },
     "episode.started": {
       "fields": {
-        "episode": {"type": "enum", "values": ["design", "build", "test", "review", "finish"]},
+        "episode": {"type": "enum", "values": ["design", "build", "e2e", "test", "review", "finish"]},
         "wave": {"type": "int"},
         "launcher": {"type": "enum", "values": ["agent", "headless"]},
         "designer": {"type": "enum", "values": ["installed", "fallback"]},
         "roles": {"type": "map", "keys": {"type": "id"}, "values": {"type": "object", "fields": {
           "model": {"type": "id"},
           "effort": {"type": "id"},
-          "from": {"type": "enum", "values": ["run", "repo", "home", "default"]}
+          "from": {"type": "enum", "values": ["run", "repo", "home", "template", "default"]}
         }}}
       }
     },
     "episode.ended": {
       "fields": {
-        "episode": {"type": "enum", "values": ["design", "build", "test", "review", "finish"]},
+        "episode": {"type": "enum", "values": ["design", "build", "e2e", "test", "review", "finish"]},
         "status": {"type": "enum", "values": ["done", "question", "handoff", "error", "invalid", "missing", "launch-failed", "relaunched", "aborted", "other"]},
         "reason": {"type": "enum", "values": ["no-agent-tool", "result-missing", "result-invalid", "episode-error", "launch-failed", "timeout", "interrupted", "other"]},
         "seconds": {"type": "number"},
         "failures": {"type": "int"},
-        "next_episode": {"type": "enum", "values": ["design", "build", "test", "review", "finish"]}
+        "next_episode": {"type": "enum", "values": ["design", "build", "e2e", "test", "review", "finish"]}
       }
     },
     "episode.cost": {
       "fields": {
-        "episode": {"type": "enum", "values": ["design", "build", "test", "review", "finish"]},
+        "episode": {"type": "enum", "values": ["design", "build", "e2e", "test", "review", "finish"]},
         "method": {"type": "enum", "values": ["transcript", "headless", "unmeasured"]},
         "roles": {"type": "map", "keys": {"type": "id"}, "values": {"type": "object", "fields": {
           "requests": {"type": "int"},

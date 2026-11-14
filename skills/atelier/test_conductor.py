@@ -1417,7 +1417,8 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.con('next')
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.line(out, 'roles'),
-                         'designer fable (repo), reviewer.deep opus (run), reviewer.other sonnet (default)/low (run), '
+                         'designer fable (repo), episodes.test sonnet/high (template), reviewer.deep opus (run), '
+                         'reviewer.other sonnet (template)/low (run), '
                          'tester haiku (home)')
         self.assertIn('model=fable', self.line(out, 'launch'))
         self.assertIn('deep=opus other=sonnet/low', self.request(out))
@@ -2407,6 +2408,115 @@ class ConductorTest(unittest.TestCase):
         self.show_question()
         rc, out = self.con('answer', '--text', 'again')
         self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+
+
+    # ---- 出番の担当 (episodes.test) と e2e の出番 ----
+
+    def to_episode(self, target):
+        """design → build (波 1) と進め、build の結果の next を target にして ready にする。"""
+        self.write_json('docs/pbi/waves.json', {'waves': [{'n': 1, 'pbis': ['PBI-001']}]})
+        self.con('start', '--goal', 'lead')
+        rc, out = self.con('next')
+        self.result(out, status='done', next={'episode': 'build', 'wave': 1})
+        self.assertEqual(self.con('done')[0], 0)
+        rc, out = self.con('next')
+        self.result(out, status='done', next={'episode': target, 'wave': 1})
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+
+    def launch_model(self, out):
+        return re.search(r'model=(\S+)', self.line(out, 'launch')).group(1)
+
+    def test_test_episode_runs_on_the_lead_and_passes_to_the_designer(self):
+        """test の出番は振り分けテンプレートの中段の担当が受け、needs_designer で設計者に渡り、設計者が戻す。"""
+        self.to_episode('test')
+        rc, out = self.con('next')
+        self.assertEqual(self.launch_model(out), 'sonnet', out)
+        self.assertIn('episodes.test sonnet/high (template)', self.line(out, 'roles'))
+        self.assertIn('Lead: test on sonnet/high', self.request(out))
+        self.assertNotIn('Escalated:', self.request(out))
+
+        # 担当が同じ出番を needs_designer 無しで次にするのは断る
+        self.result(out, status='done', next={'episode': 'test', 'wave': 1})
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('test -> test needs needs_designer', out)
+
+        rc, out = self.con('next')
+        self.assertEqual(self.launch_model(out), 'sonnet', out)
+        self.result(out, status='done', next={'episode': 'test', 'wave': 1, 'needs_designer': 'is C3 intended?'})
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+
+        rc, out = self.con('next')
+        self.assertEqual(self.launch_model(out), 'opus', out)
+        prompt = self.request(out)
+        self.assertIn('Escalated: is C3 intended?', prompt)
+        self.assertNotIn('Lead:', prompt)
+        # 設計者がまた needs_designer を返すのは断り、起こし直しても設計者のまま
+        self.result(out, status='done', next={'episode': 'test', 'wave': 1, 'needs_designer': 'again'})
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('already passed to the designer', out)
+        rc, out = self.con('next')
+        self.assertEqual(self.launch_model(out), 'opus', out)
+
+        # 設計者が test を次にすると担当に戻る
+        self.result(out, status='done', next={'episode': 'test', 'wave': 1})
+        self.assertEqual(self.con('done')[0], 0)
+        rc, out = self.con('next')
+        self.assertEqual(self.launch_model(out), 'sonnet', out)
+        # needs_designer は同じ出番の next にだけ付く
+        self.result(out, status='done', next={'episode': 'review', 'wave': 1, 'needs_designer': 'x'})
+        rc, out = self.con('done')
+        self.assertIn('needs_designer goes with next test', out)
+
+    def test_lead_and_reviewer_other_come_from_the_routing_middle_tier(self):
+        """層が決めていなければ、episodes.test と reviewer.other は振り分けテンプレートの中段の、使える手順の先頭。"""
+        self.write_abs(os.path.join(self.home, 'routing.json'), json.dumps({'name': 'mine', 'tiers': {
+            'haiku': [{'runner': 'agent', 'model': 'haiku'}],
+            'sonnet': [{'runner': 'codex', 'model': 'gpt-mid'},
+                       {'runner': 'agent', 'model': 'sonnet', 'effort': 'medium'}],
+            'opus': [{'runner': 'agent', 'model': 'opus'}]}}))
+        self.write_json('docs/pbi/roles.json', {'roles': {'reviewer': {'other': {'model': 'fable'}}}})
+        self.to_episode('test')
+        rc, out = self.con('next')
+        roles = self.line(out, 'roles')
+        # codex は agents.json で使えないので飛ばし、agent の手順を取る。層が model を決めた部分は既定のまま
+        self.assertIn('episodes.test sonnet/medium (template)', roles)
+        self.assertIn('reviewer.other fable (repo)/high (default)', roles)
+        self.assertEqual(self.launch_model(out), 'sonnet', out)
+
+    def test_e2e_episode_runs_as_a_script_without_a_designer(self):
+        """e2e の出番は設計者を起こさず、run がスクリプトを流し、その結果で test に進む。"""
+        script = os.path.join(self.tmp, 'fake_e2e.py')
+        self.write_abs(script, '\n'.join([
+            'import json, sys',
+            'args = sys.argv[1:]',
+            "result, seq = args[args.index('--result') + 1], int(args[args.index('--seq') + 1])",
+            "open(result, 'w', encoding='utf-8').write(json.dumps({'schema': 'atelier.episode/1', 'episode': 'e2e',",
+            "    'seq': seq, 'status': 'done', 'summary': ['e2e: 2 specs, 0 failing'],",
+            "    'next': {'episode': 'test', 'wave': 1}}))", '']))
+        self.to_episode('e2e')
+        rc, out = self.con('next')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.line(out, 'launch'), 'headless (e2e runs as a script)', out)
+        before = len(self.read(self.log).splitlines())
+        rc, out = self.con('run', '--max-episodes', '1', env={'ATELIER_E2E_CMD': json.dumps([sys.executable, script])})
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertIn('next: test wave 1', out)
+        self.assertEqual(len(self.read(self.log).splitlines()), before, 'no designer for e2e')
+        run = self.read_json(RUN)
+        self.assertEqual(run['history'][-1]['episode'], 'e2e')
+        self.assertIn('Script episode: e2e', self.read(f"docs/pbi/conductor/episodes/{run['seq']}-e2e.prompt.md"))
+
+    def test_e2e_script_failure_is_a_failed_episode(self):
+        """スクリプトが 0 以外で終われば出番の失敗として数える。"""
+        self.to_episode('e2e')
+        broken = json.dumps([sys.executable, '-c', 'import sys; sys.exit(4)'])
+        rc, out = self.con('run', '--max-episodes', '1', env={'ATELIER_E2E_CMD': broken})
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('e2e script exited 4', out)
 
 
 if __name__ == '__main__':
