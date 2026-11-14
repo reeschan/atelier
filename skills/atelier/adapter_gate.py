@@ -1,6 +1,6 @@
 """最終レビューとセキュリティレビューを使うかを、毎回同じ基準で決めて表で返す (appendix/review.md)。
 
-  python adapter_gate.py <pbi-dir> [--numstat FILE] [--home DIR] [--skills-dir DIR]
+  python adapter_gate.py <pbi-dir> [--numstat FILE] [--home DIR] [--skills-dir DIR] [--root DIR]
 
 <pbi-dir> の PBI-<数字>.md を PBI として数える (.rework-1 や .brief の付いたファイルは数えない)。
 PBI ごとに PBI-<n>.route.json の review (deep / normal) と PBI-<n>.facts.json の sensitive (真偽値) を読む。
@@ -22,9 +22,19 @@ html と読む)。resolve_confirm が、<skills-dir>/answer-me-with-any/scripts/
 設定が off のフェーズは判定にかかわらず off で、理由は turned off in agents.json。
 設定がスキル名のときは判定はそのまま (run / skip) で、setting の列に名前を出す (design・review・security)。
 
+review-skill は最後のレビューに使うスキル (appendix/review.md、`## Pick the review`)。強い順に:
+  1. agents.json の review がスキル名なら decision `agents.json` (利用者が決めたもの)
+  2. --root (既定はカレント) の .claude/skills/*/SKILL.md と skills/*/SKILL.md のうち、フォルダの名前に review を
+     含む最初のもの (名前の順) を decision `repo:<名前>`
+  3. lens-review (lens-review:lens-review) がプラグインの置き場 (PBI_PLUGINS_DIR、無ければ ~/.claude/plugins) に
+     あれば decision `lens-review:lens-review`
+  4. どれも無ければ decision `template` (テンプレートの review の並び: code-review、組み込み)
+規約のファイル (REVIEW.md・docs/review*.md・.github/review*.md) があれば reason に `rules: <パス>, ...` を足す
+(どの決定でも、規約は最後のレビューの Rules: 行に渡す)。setting は review の設定のまま。off なら off。
+
 標準出力はタブ区切りの表 (phase / setting / decision / reason。1 行目は見出し)。
 agents.load_adapters の警告は表のあとに `warn <警告>` の形で 1 行ずつ出す。
-表は design・review・security・confirm の 4 行。
+表は design・review・review-skill・security・confirm の 5 行。
 終了コード: 0 = 正常 (PBI 0 件も正常)。2 = <pbi-dir> が無い・--numstat が読めない・引数の誤り。
 """
 import argparse
@@ -37,6 +47,7 @@ from pathlib import Path
 
 import agents as agents_module
 import common
+import flow
 
 # PBI として数えるファイルの形 (.rework-1・.brief などの付いたものは数えない)
 PBI_NAME = re.compile(r'^PBI-(\d+)\.md$')
@@ -223,6 +234,32 @@ def review_row(setting, diff, records, unknown_reason='diff size unknown (no --n
     return setting, 'skip', f'diff {diff} lines, {len(records)} PBIs, no deep or sensitive'
 
 
+REVIEW_SKILL_DIRS = ('.claude/skills', 'skills')
+REVIEW_RULES = ('REVIEW.md', 'docs/review*.md', '.github/review*.md')
+REVIEW_SETTINGS = ('auto', 'off')
+LENS_REVIEW = 'lens-review:lens-review'
+
+
+def review_skill_row(setting, root, env=None) -> tuple:
+    """最後のレビューに使うリポジトリ独自のスキル (decision repo:<名前> か none) と規約 (reason の rules:)。"""
+    root = Path(root)
+    rules = sorted({path.as_posix() for pattern in REVIEW_RULES for path in root.glob(pattern) if path.is_file()})
+    rules_note = f"; rules: {', '.join(Path(rule).relative_to(root).as_posix() for rule in rules)}" if rules else ''
+    if setting == 'off':
+        return setting, 'off', OFF_REASON
+    if setting not in REVIEW_SETTINGS:
+        return setting, 'agents.json', f'agents.json names {setting}; it wins over the repository{rules_note}'
+    for folder in REVIEW_SKILL_DIRS:
+        for skill in sorted((root / folder).glob('*/SKILL.md')):
+            if 'review' in skill.parent.name.lower():
+                return setting, f'repo:{skill.parent.name}', f'found {skill.relative_to(root).as_posix()}{rules_note}'
+    none_here = f"no review skill in {' or '.join(REVIEW_SKILL_DIRS)}"
+    found = flow.find_skill_file(LENS_REVIEW, Path(), env or os.environ)
+    if found is not None:
+        return setting, LENS_REVIEW, f'{none_here}; {LENS_REVIEW} at {found.as_posix()}{rules_note}'
+    return setting, 'template', f'{none_here}; {LENS_REVIEW} not installed{rules_note}'
+
+
 def security_row(setting, records) -> tuple:
     if setting == 'off':
         return setting, 'off', OFF_REASON
@@ -239,6 +276,7 @@ def main(argv=None) -> int:
     ap.add_argument('--numstat', help='git diff --numstat の出力を保存したファイル')
     ap.add_argument('--home', help='agents.json を置く home (common.resolve_home)')
     ap.add_argument('--skills-dir', help='スキルの置き場 (既定は ~/.claude/skills)')
+    ap.add_argument('--root', default='.', help='リポジトリのルート (review-skill を探す。既定はカレント)')
     args = ap.parse_args(argv)
     common.utf8_stdout()
 
@@ -263,6 +301,7 @@ def main(argv=None) -> int:
     records = pbi_records(base)
     rows = [('design', design_row(settings['design'])),
             ('review', review_row(settings['review'], diff, records, unknown_reason)),
+            ('review-skill', review_skill_row(settings['review'], args.root, os.environ)),
             ('security', security_row(settings['security'], records)),
             ('confirm', confirm_row(settings['confirm'], skills, os.environ))]
 
