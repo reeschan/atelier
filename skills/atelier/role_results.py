@@ -27,7 +27,7 @@ bundle  波 n の PBI を <dir>/waves.json から決め、PBI ごとにいちば
             まだ通らない行には limit を付ける。設計者はその PBI を手直しせずに止める (appendix/rework.md)
         表のあとに `bundle: <--out のパス>` を出す。束のファイル (--out) は引き継ぎ用の写しで、schema を持たず、
         check の対象にしない。誤りがあっても束のファイルは書く。
-classify  テスト担当や e2e_run.py の test-result (atelier.test-result/1) の落ちたテストのうち、PBI の Notes の
+classify  テスト担当や e2e_run.py の test-result (atelier.test-result/1) の落ちたテストのうち、PBI の `## Notes` の節 (囲みの中は除く) の
         `Breaks by design: <test file か spec>[::<テストの名前>] — <理由>` の行に合うものを、cause intended・
         pbi その PBI に書き直す (設計どおり壊れる印。appendix/tests-at-end.md)。file が印のファイルと同じか、
         パスの末尾が一致すれば合う。印に ::<名前> があれば、test にその名前を含むものだけ。合わない行は変えない。
@@ -232,6 +232,23 @@ BREAKS = re.compile(r'^\s*(?:[-*]\s+)?Breaks by design:\s*(\S+?)(?:::(.+?))?\s*(
 PBI_FILE = re.compile(r'^PBI-\d+\.md$')
 
 
+def notes_lines(text: str) -> list[str]:
+    """PBI の `## Notes` の節の行。囲み (```) の中の行は除く (例として引いた印を読まない)。"""
+    out, inside, fenced = [], False, False
+    for line in text.splitlines():
+        if line.startswith('## '):
+            inside, fenced = line[3:].strip().lower() == 'notes', False
+            continue
+        if not inside:
+            continue
+        if line.lstrip().startswith('```'):
+            fenced = not fenced
+            continue
+        if not fenced:
+            out.append(line)
+    return out
+
+
 def breaks_by_design(base: Path) -> list[dict]:
     """PBI ごとの Breaks by design: の行。[{pbi, file, test (無ければ None), why}]。"""
     marks = []
@@ -242,7 +259,7 @@ def breaks_by_design(base: Path) -> list[dict]:
             text = path.read_text(encoding='utf-8')
         except OSError:
             continue
-        for line in text.splitlines():
+        for line in notes_lines(text):
             match = BREAKS.match(line.strip('`'))
             if match:
                 file, test, why = match.groups()

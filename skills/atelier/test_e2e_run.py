@@ -26,8 +26,12 @@ if '--final' in args:
     code = os.environ.get('FAKE_FULL_CODE', '0')
     code = int(code) if code.lstrip('-').isdigit() else code
     approved = (base / 'full-run.approved.json').is_file()
+    log = base / 'verify' / 'full.log'
+    log.write_text(os.environ.get('FAKE_FULL_LOG', ''), encoding='utf-8')
+    if os.environ.get('FAKE_FULL_NO_RESULT') == '1':
+        sys.exit(2)
     (base / 'verify' / f'{name}.json').write_text(json.dumps({'results': [
-        {'n': 1, 'command': 'full', 'code': code if approved else 'no-approval', 'log': 'full.log'}]}))
+        {'n': 1, 'command': 'full', 'code': code if approved else 'no-approval', 'log': str(log)}]}))
     if code == 'idle':
         print('blocked: idle (1 seconds)')
         sys.exit(3)
@@ -126,6 +130,24 @@ class E2ERunTest(unittest.TestCase):
         self.assertEqual(result['commands'][-1], {'command': 'npm run e2e', 'code': 125})
         self.assertEqual(episode['status'], 'done')
         self.assertTrue(any(line.startswith('blocked: ') for line in episode['summary']))
+
+    def test_full_suite_failures_become_one_row_per_spec_from_the_log(self):
+        self.settings['e2e']['full'] = True
+        result, episode = self.run_e2e(FAKE_FULL_CODE='1', FAKE_FULL_LOG='  ✔  login.cy.ts  00:01\n'
+                                                                       '  ✖  cart.cy.ts   00:05  1 failing\n')
+        rows = {row['test']: row['pbi'] for row in result['failing']}
+        self.assertEqual(rows, {'e2e/cart.cy.ts': 'PBI-001'})
+        self.assertIn('failed in the full suite', result['failing'][0]['why'])
+
+    def test_an_old_full_result_never_stands_in_for_a_failed_run(self):
+        self.settings['e2e']['full'] = True
+        stale = self.root / 'docs/pbi/verify/e2e-full.json'
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text(json.dumps({'results': [{'n': 1, 'command': 'full', 'code': 0, 'log': 'old.log'}]}))
+        result, episode = self.run_e2e(FAKE_FULL_NO_RESULT='1')
+        self.assertEqual(result['failing'][-1]['test'], 'full suite')
+        self.assertEqual(result['commands'][-1]['code'], 2)
+        self.assertIn('full suite: failed', episode['summary'][1])
 
     def test_symbols_off_and_no_investigate(self):
         self.settings['e2e']['symbols'] = False

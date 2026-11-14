@@ -107,6 +107,18 @@ class TestsPlanTest(unittest.TestCase):
         waves = json.loads((self.base / 'waves.json').read_text(encoding='utf-8'))['waves']
         self.assertEqual(len(waves), 2)
 
+    def test_a_planned_pbi_with_no_wave_is_written_again_and_enrolled(self):
+        """前の実行が PBI を書いたあと波に入れる前に止まっても、流し直せば同じ番号で波に入る。"""
+        self.run_plan()
+        (self.base / 'waves.json').write_text(json.dumps({'waves': [{'n': 1, 'pbis': ['PBI-001', 'PBI-002']}]}),
+                                              encoding='utf-8')
+        (self.base / 'PBI-003.brief.md').unlink()
+        code, out = self.run_plan()
+        self.assertIn('wrote PBI-003 tests/price.test.ts', out)
+        self.assertIn('wave 2: PBI-003', out)
+        self.assertFalse((self.base / 'PBI-004.md').exists())
+        self.assertTrue((self.base / 'PBI-003.brief.md').is_file())
+
     def test_no_test_command_writes_nothing(self):
         self.settings({'test_paths': ['tests/**']})
         code, out = self.run_plan()

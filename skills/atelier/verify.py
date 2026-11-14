@@ -24,7 +24,7 @@ bash と Node:
 
 整形と lint (appendix/plan.md、`## Format and lint first`):
   <dir>/checks.json ({"format": "<コマンドの頭>", "lint": "<コマンドの頭>"}) があれば、PBI の検証コマンドに
-  それぞれを含むコマンドが要る。無ければ流さずに `refused: <PBI> has no <format|lint> command (checks.json)` で
+  それぞれをコマンドの頭として実行するコマンド (&&・;・| で区切った頭。echo の引数などは数えない) が要る。無ければ流さずに `refused: <PBI> has no <format|lint> command (checks.json)` で
   終了コード 2 (作業者が検証のたびに整形と lint を流し、レビューの前に済ませるため)。--list-deferred は断らない。
 
 テストを最後にまとめる選択肢 (appendix/tests-at-end.md):
@@ -568,9 +568,25 @@ def required_checks(base):
     return {key: data[key].strip() for key in CHECK_KEYS if isinstance(data.get(key), str) and data[key].strip()}
 
 
+ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*\s+")
+
+
+def runs_command(cmd, head):
+    """cmd が head を実行するか。&&・||・;・| で区切った各コマンドの頭 (前の VAR=値 と ( を除く) が head の語で
+    始まるときだけ真。引数・引用符の中・コメントに現れるだけのものは数えない。"""
+    head = _squash(head)
+    for part in re.split(r"&&|\|\||;|\|", cmd.split("#", 1)[0]):
+        part = _squash(part).lstrip("( ")
+        while ENV_ASSIGN.match(part):
+            part = ENV_ASSIGN.sub("", part, count=1)
+        if part == head or part.startswith(head + " "):
+            return True
+    return False
+
+
 def missing_checks(cmds, checks):
-    """PBI の検証コマンドに無い checks のキー。"""
-    return [key for key, head in checks.items() if not any(_squash(head) in _squash(cmd) for _, cmd in cmds)]
+    """PBI の検証コマンドに無い checks のキー (コマンドの頭として実行されるものだけを数える)。"""
+    return [key for key, head in checks.items() if not any(runs_command(cmd, head) for _, cmd in cmds)]
 
 
 def runs_final(cmd, final):

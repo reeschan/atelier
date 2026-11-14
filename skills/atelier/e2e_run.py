@@ -12,7 +12,9 @@ conductor.py run が、最後の build のあとの e2e の出番で起こす。
      定義 (関数・クラス・定数・型・def) の名前を集め、e2e.specs の glob に合う spec のうち、その名前を語として含むもの。
      e2e.symbols が false なら飛ばす。e2e.specs が無ければ飛ばす。3 文字に満たない名前は使わない (どこにでも合うため)
   3. e2e.full が true で final があれば、範囲の spec のあとに通しを 1 回 (verify.py --final。承認は承認のときに済んで
-     いるので、流す直前にこのスクリプトが full-run.approved.json を書く)
+     いるので、流す直前にこのスクリプトが full-run.approved.json を書く)。通しが落ちたら、そのログの落ちた印
+     (✖・✗・fail) のある行に出てくる spec (e2e.specs の glob のパスか、その名前) ごとに 1 行にする。読めなければ
+     `full suite` の 1 行に、ログを読んで落ちた spec を探すよう書く
 
 spec は verify.py --related <spec,...> --each --name e2e で 1 本ずつ流す (サーバーは 1 回だけ用意する)。
 結果は <dir>/verify/tests/e2e.test-result.json (atelier.test-result/1、kind e2e)。落ちた spec ごとに 1 行
@@ -237,6 +239,8 @@ def run_verify(base: Path, *args) -> int:
     name = args[args.index('--name') + 1]
     log = base / 'verify' / f'{name}.run.log'
     log.parent.mkdir(parents=True, exist_ok=True)
+    # 前の実行の <名前>.json を今回の結果と取り違えないよう、流す前に消す
+    (base / 'verify' / f'{name}.json').unlink(missing_ok=True)
     with open(log, 'wb') as out:
         try:
             return subprocess.run([*verify_head(), *args, '--dir', str(base)], stdout=out, stderr=subprocess.STDOUT,
@@ -252,6 +256,26 @@ def last_line(base: Path, name: str, prefix: str) -> str:
     except OSError:
         return ''
     return next((line[len(prefix):].strip() for line in reversed(lines) if line.startswith(prefix)), '')
+
+
+FAIL_WORDS = re.compile(r'✖|✗|\bfail(?:ed|ing|ure)?\b|\bFAIL\b', re.I)
+
+
+def failed_specs(log, known: list[str]) -> list[str]:
+    """通しのログの、落ちた印のある行に出てくる spec (known のパスか、その名前)。順は known のまま。"""
+    if not log or not known:
+        return []
+    try:
+        lines = Path(log).read_text(encoding='utf-8', errors='replace').splitlines()
+    except OSError:
+        return []
+    marked = [line for line in lines if FAIL_WORDS.search(line)]
+    found = []
+    for spec in known:
+        name = Path(spec).name
+        if any(spec in line or re.search(r'(?<![\w.-])' + re.escape(name) + r'(?![\w.-])', line) for line in marked):
+            found.append(spec)
+    return found
 
 
 def int_code(code) -> int:
@@ -306,12 +330,22 @@ def run_e2e(base: Path) -> tuple[dict, list[str]]:
         code = run_verify(base, '--final', '--name', FULL_NAME)
         ran = common.load_json(base / 'verify' / f'{FULL_NAME}.json', {})
         got = next(iter(ran.get('results') or []), {}) if isinstance(ran, dict) else {}
-        full_code = int_code(got.get('code', code))
+        # 結果の無い実行 (verify.py が起きない・断った) は、その終了コードで落ちたものとする
+        raw = got.get('code', code if code != 0 else 'no result')
+        full_code = int_code(raw)
         commands.append({'command': final, 'code': full_code})
-        full = 'passed' if full_code == 0 else f'failed (exit {got.get("code", code)})'
+        full = 'passed' if full_code == 0 else f'failed (exit {raw})'
         if full_code != 0:
-            failing.append({'test': 'full suite', 'file': final, 'pbi': 'none', 'cause': 'unknown',
-                            'why': f"the full suite exited {got.get('code', code)}; log {got.get('log')}"})
+            owners = {row['spec']: row['pbi'] for row in rows}
+            specs = failed_specs(got.get('log'), spec_files(e2e.get('specs')))
+            for spec in specs:
+                failing.append({'test': spec, 'file': spec, 'pbi': owners.get(spec, 'none'), 'cause': 'unknown',
+                                'why': f"failed in the full suite (exit {raw}); log {got.get('log')}"})
+            if not specs:
+                failing.append({'test': 'full suite', 'file': final, 'pbi': 'none', 'cause': 'unknown',
+                                'why': f"the full suite exited {raw} and no failing spec could be read from its "
+                                       f"log; read the log {got.get('log') or (base / 'verify' / f'{FULL_NAME}.run.log').as_posix()} "
+                                       'for the failing specs'})
         if code == BLOCKED_EXIT:
             blocked.append('full suite: ' + (last_line(base, FULL_NAME, 'blocked:') or 'stopped'))
     elif e2e.get('full') is True:

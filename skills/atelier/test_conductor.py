@@ -2525,6 +2525,13 @@ class ConductorTest(unittest.TestCase):
         self.assertIn('launch: headless (e2e runs as a script)', out)
         self.assertEqual(self.read_json(RUN)['state'], 'ready')
 
+    def test_roles_from_a_missing_record_fall_back(self):
+        """running.roles の無い古い run.json では None を返し、呼び出し側が load_roles で取り直す。"""
+        for record in (None, [], 'x'):
+            self.assertIsNone(conductor.roles_from_record(record))
+        roles = conductor.roles_from_record({'designer': {'model': {'value': 'opus', 'from': 'default'}}})
+        self.assertEqual(roles['episodes']['test']['model'], 'sonnet')
+
     def test_e2e_script_failure_is_a_failed_episode(self):
         """スクリプトが 0 以外で終われば出番の失敗として数える。"""
         self.to_episode('e2e')

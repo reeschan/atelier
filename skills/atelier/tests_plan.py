@@ -16,8 +16,9 @@ test file ごとに 1 つの PBI (PBI-<n>.md・.facts.json・.brief.md) を書�
 (1 つの波に MAX_PER_WAVE 件まで。テストの実行が同じ機械を分け合うため)。Targets はその test file だけ、
 Do not touch はそれ以外 (build PBI の Targets を名指す)、Notes に Exemplar:・Cases:・Delete:・fix と rewrite の
 action、受け入れ条件はケース id ごとと Delete: ごと、検証コマンドは checks.json の整形と lint (その file に。
-verify.py が求める)、tests-at-end.json の test_command ({file} を置き換える) と test_typecheck。keep だけの file には PBI を作らない。既に `- Test file: <file>` の PBI があれば
-書き直さない (流し直しても同じ PBI を二重に作らない)。
+verify.py が求める)、tests-at-end.json の test_command ({file} を置き換える) と test_typecheck。keep だけの file には PBI を作らない。既に `- Test file: <file>` の PBI があり
+waves.json の波に入っていれば書き直さない (流し直しても同じ PBI を二重に作らない)。波に入っていなければ (前の実行が
+途中で止まった) 同じ番号で書き直して波に入れる。
 
 lint (例外) は次のどれか。例外のある file の PBI は書かない。
   - tests-at-end.json に test_command が無い (このときは何も書かない)
@@ -271,6 +272,9 @@ def main(argv=None) -> int:
         by_file.setdefault(row['file'], []).append(row)
     checks = list(verify.required_checks(base).values())
     planned = planned_files(base)
+    waves_data = common.load_json(base / 'waves.json', {})
+    waved = {pbi for wave in (waves_data.get('waves') or [] if isinstance(waves_data, dict) else [])
+             if isinstance(wave, dict) for pbi in wave.get('pbis') or []}
     test_paths = [glob for glob in settings.get('test_paths') or [] if isinstance(glob, str)]
     others = build_targets(base, set(planned.values()))
     number = (pbi_numbers(base) or [0])[-1]
@@ -278,7 +282,7 @@ def main(argv=None) -> int:
     for file, file_rows in by_file.items():
         if all(row['verdict'] == 'keep' for row in file_rows):
             continue
-        if file in planned:
+        if file in planned and planned[file] in waved:
             print(f'kept {planned[file]} {file} (already planned)')
             continue
         problems = file_exceptions(file, file_rows, cases.get(file), test_paths)
@@ -287,8 +291,12 @@ def main(argv=None) -> int:
             for problem in dict.fromkeys(problems):
                 print(f'exception: {file}: {problem}')
             continue
-        number += 1
-        name = f'PBI-{number:03d}'
+        if file in planned:
+            # 前の実行が PBI を書いたあと波に入れる前に止まった: 同じ番号で書き直し、波に入れる
+            name = planned[file]
+        else:
+            number += 1
+            name = f'PBI-{number:03d}'
         section = cases.get(file)
         body, criteria = pbi_text(name, file, file_rows, section, settings, others, checks)
         case_count = len(section['cases']) if section else 0
