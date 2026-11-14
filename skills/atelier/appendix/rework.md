@@ -20,7 +20,7 @@ Reviews have their own limit: a PBI is reviewed at most twice, its first report 
    - Out-of-scope change: <file and what to revert, if any>
    ```
 
-   For a test PBI of the test stage, list only the failing case ids, each with the failing assertion and its output, and add `Keep the other cases as they are.` (`appendix/tests-at-end.md`, `## Test stage`).
+   For a test PBI of the test stage, list only the failing case ids, each with the failing assertion and its output, and add `Keep the other cases as they are.` A failure before any case runs (the file does not compile or import, a shared setup fails, the type check of the test project fails) has no case id: name the failure, its output and the setup or import it comes from instead (`appendix/tests-at-end.md`, `## Test stage`).
 
 2. Record the attempt with its cause (`appendix/cases.md`) if you have not yet.
 3. Check the note with the Jev gate `rework_quality` (names_condition, states_current_and_expected, has_repro; `appendix/jev.md`). Rewrite any item under 0.6 before sending.
