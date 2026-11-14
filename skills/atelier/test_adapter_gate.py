@@ -246,7 +246,7 @@ class AdapterGateTest(unittest.TestCase):
         self.assertRow(rows, 'review', 'auto', 'skip', 'diff 0 lines, 0 PBIs, no deep or sensitive')
         self.assertRow(rows, 'security', 'auto', 'skip', 'no sensitive or deep PBI')
         self.assertEqual(rows['confirm'][:2], ['html', 'ask'])
-        self.assertEqual(len(rows), 4)
+        self.assertEqual(len(rows), 5)
 
     def test_off_setting(self):
         self.add_pbi(1)
@@ -275,7 +275,7 @@ class AdapterGateTest(unittest.TestCase):
         result = self.gate()
         rows = self.table(result)
         self.assertRow(rows, 'review', 'auto', 'skip', 'diff 0 lines, 1 PBIs, no deep or sensitive')
-        self.assertEqual(result.stdout.splitlines()[5:],
+        self.assertEqual(result.stdout.splitlines()[6:],
                          ['warn adapters.review: invalid value, using auto',
                           'warn adapters.zzz: unknown phase, ignored'])
 
@@ -337,7 +337,7 @@ class AdapterGateTest(unittest.TestCase):
                 result = self.gate()
                 rows = self.table(result)
                 self.assertEqual(rows['confirm'][:2], ['html', 'ask'])
-                self.assertEqual(result.stdout.splitlines()[5:],
+                self.assertEqual(result.stdout.splitlines()[6:],
                                  [f'warn adapters.confirm: {value} is read as html'])
 
     def env_with_node(self, version=None):
@@ -433,6 +433,30 @@ class AdapterGateTest(unittest.TestCase):
         self.assertEqual(resolved['format'], 'html')
         self.assertEqual(resolved['warnings'],
                          ['confirm: old name answer-me-with-html, install answer-me-with-any and remove it'])
+
+    def test_review_skill_row_finds_the_repository_skill_and_rules(self):
+        root = os.path.join(self.dir, 'repo')
+        self.add_pbi(1)
+        self.write_numstat(1)
+        rows = self.table(self.gate('--root', root))
+        self.assertRow(rows, 'review-skill', 'auto', 'template',
+                       'no review skill in .claude/skills or skills; lens-review:lens-review not installed')
+        lens = os.path.join(self.plugins, 'cache', 'm', 'lens-review', '1.0.0', 'skills', 'lens-review', 'SKILL.md')
+        write_text(lens, 'x')
+        rows = self.table(self.gate('--root', root))
+        self.assertEqual(rows['review-skill'][:2], ['auto', 'lens-review:lens-review'])
+        write_text(os.path.join(root, 'skills', 'deploy', 'SKILL.md'), 'x')
+        write_text(os.path.join(root, '.claude', 'skills', 'review-changes', 'SKILL.md'), 'x')
+        write_text(os.path.join(root, 'docs', 'review-rules.md'), 'x')
+        rows = self.table(self.gate('--root', root))
+        self.assertRow(rows, 'review-skill', 'auto', 'repo:review-changes',
+                       'found .claude/skills/review-changes/SKILL.md; rules: docs/review-rules.md')
+        self.write_adapters({'review': 'lens-review:lens-review'})
+        rows = self.table(self.gate('--root', root))
+        self.assertEqual(rows['review-skill'][1], 'agents.json')
+        self.write_adapters({'review': 'off'})
+        rows = self.table(self.gate('--root', root))
+        self.assertRow(rows, 'review-skill', 'off', 'off', OFF_REASON)
 
     def test_missing_pbi_dir_exits_2(self):
         result = self.gate(pbi_dir=os.path.join(self.dir, 'nowhere'))

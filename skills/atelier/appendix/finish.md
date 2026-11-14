@@ -56,6 +56,7 @@ Open with one line that restates the user's goal in your own words, as at the st
 - **Changes**: the PBIs that passed and the files they changed.
 - **Findings**:
   - problems found on the way
+  - the skipped minors of the final review (`appendix/review.md`, `## Minor findings`): file, line, what is wrong, and why it was skipped (the user's answer, no owning PBI, or `limit`). A minor the user did not see never goes here
   - the stage records from STATUS.md, as they are (`appendix/engine.md`)
   - the two tables of `python <skill>/model_report.py`, pasted as they are: runs, outcome breakdown, unavailable rate, tokens, cost and API equivalent, time, and the provisional grades. The grades are a guide for a person to adjust later; add no reading of them here. Whether a rotate group split evenly shows in the run counts
   - runs whose archive copy failed (`archive.ok` false in `runs.jsonl`)

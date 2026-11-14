@@ -31,8 +31,11 @@ CODEX_TEXT_RULE = "On Windows, Windows PowerShell 5.1 sends text piped into anot
 
 
 def runners_for(part: str) -> tuple:
-    """役割の部分 (designer・reviewer.deep・reviewer.other・tester) に置ける実行先。"""
-    return DESIGNER_RUNNERS if part == 'designer' else ROLE_RUNNERS
+    """役割の部分 (designer・episodes.<出番>・reviewer.deep・reviewer.other・tester) に置ける実行先。
+
+    episodes.<出番> はその出番の設計者なので、設計者と同じ実行先に限る。
+    """
+    return DESIGNER_RUNNERS if part == 'designer' or part.startswith('episodes.') else ROLE_RUNNERS
 
 
 def _agents(home=None) -> dict:
