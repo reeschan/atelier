@@ -26,6 +26,14 @@ Reviews have their own limit: a PBI is reviewed at most twice, its first report 
 3. Check the note with the Jev gate `rework_quality` (names_condition, states_current_and_expected, has_repro; `appendix/jev.md`). Rewrite any item under 0.6 before sending.
 4. Launch it with the prompt of `runners.md`, report name `PBI-<n>.rework-<k>`, and add one to the PBI's rework count in STATUS.md.
 
+## Minor fixes
+
+A minor of the final review that the user chose to fix (`appendix/review.md`, `## Minor findings`) is a rework like any other, with these differences:
+
+- The note lists each minor as `- Minor <file>:<line>: <what is wrong>` with `Expected: <the fix>`; there is no failing criterion.
+- It counts toward `fix.max_rework` and the two reviews of the PBI. A PBI already at either limit gets no minor rework: its minors go to the completion report as skipped, with the reason `limit`.
+- Its review (`prompts/pbi-review.md`) judges the minors listed in the note as well as the acceptance criteria. No final review runs after it.
+
 ## Stop
 
 Stop a PBI when it still fails after the last allowed rework, when its bundle row has `limit`, or when it needs a third continue. Raise its tier, rewrite the PBI or build it yourself only when the user picks that. An unusable runner is not a stop of this kind: it has its own question (`runners.md`, When a runner is unusable).

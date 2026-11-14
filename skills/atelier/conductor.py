@@ -96,17 +96,24 @@ STATES = ('none', 'ready', 'running', 'question', 'retry', 'finished', 'aborted'
 # none は「無い」と誤らせ、finished・aborted は start を誘うので、起こし直し待ちの retry にする
 UNREADABLE_STATE = 'retry'
 
+# モデルを使わず、conductor がスクリプトで流す出番 (設計者を起こさない)
+SCRIPT_EPISODES = ('e2e',)
+E2E_SCRIPT = SKILL / 'e2e_run.py'
 # 出番のつながり (done の next に許すもの)。finish は run を閉じる
 NEXT_ALLOWED = {
     'design': ('build',),
-    'build': ('build', 'test', 'review', 'finish'),
-    'test': ('build', 'review'),
+    'build': ('build', 'e2e', 'test', 'review', 'finish'),
+    'e2e': ('test',),
+    # test -> test は、担当が設計者に渡す (needs_designer) か、設計者が担当に戻すときだけ
+    'test': ('build', 'test', 'review'),
     'review': ('build', 'finish'),
     'finish': (),
 }
 
 DEFAULT_ROLES = {
     'designer': {'runner': 'agent', 'model': 'opus', 'effort': None, 'permission_mode': 'auto'},
+    # 出番ごとの設計者。層が決めなければ振り分けテンプレートの中段 (TEMPLATE_TIER) から取り、ここは最後の頼り
+    'episodes': {'test': {'runner': 'agent', 'model': 'sonnet', 'effort': 'high', 'permission_mode': 'auto'}},
     'reviewer': {'deep': {'runner': 'agent', 'model': 'opus', 'effort': None},
                  'other': {'runner': 'agent', 'model': 'sonnet', 'effort': 'high'}},
     'tester': {'runner': 'agent', 'model': 'sonnet', 'effort': None},
@@ -119,8 +126,8 @@ META_PREFIX = 'reply-meta-'
 FENCE_OPEN = '```am-reply-meta'
 
 # イベントの値の語彙 (skills/atelier/harness.schema.json と合わせる。外れた値は dropped に落ちる)
-EPISODE_TYPES = ('design', 'build', 'test', 'review', 'finish')
-ROLE_SOURCES = ('run', 'repo', 'home', 'default')
+EPISODE_TYPES = ('design', 'build', 'e2e', 'test', 'review', 'finish')
+ROLE_SOURCES = ('run', 'repo', 'home', 'template', 'default')
 QUESTION_TOPICS = ('runner-unavailable', 'omm', 'recheck', 'unknown', 'approve-ask',
                    'design-approval', 'headless', 'other')
 QUESTION_CHOICES = tuple('abcdefghijklmnopqrstuvwxyz') + ('yes', 'no', 'revise')
@@ -670,8 +677,14 @@ _RELEASED = set()
 # 役割の値は、キーごとに強い順の層から取る: run (start --role) → repo (docs/pbi/roles.json) → home (agents.json) → 既定。
 # 取った値の出所は running.roles と history に残し、next の roles: の行に出す。
 
-ROLE_PARTS = ('designer', 'reviewer.deep', 'reviewer.other', 'tester')
+ROLE_PARTS = ('designer', 'episodes.test', 'reviewer.deep', 'reviewer.other', 'tester')
 ROLE_KEYS = ('runner', 'model', 'effort', 'permission_mode')
+ROLE_HEADS = ('designer', 'episodes', 'reviewer', 'tester')
+# 層 (run・repo・home) が runner も model も決めていない部分は、振り分けテンプレートのこの段から既定を取る
+TEMPLATE_TIER = 'sonnet'
+TEMPLATE_PARTS = ('episodes.test', 'reviewer.other')
+# 自分の出番の設計者を持つ出番 (episodes.<出番> の部分がある)
+LEAD_EPISODES = ('test',)
 
 
 def _default_part(name: str) -> dict:
@@ -709,22 +722,33 @@ def _layer_part(roles, name: str, source: str, warns: list):
     return node
 
 
-def resolve_roles(layers: list):
+def _empty_roles() -> dict:
+    return {head: ({} if isinstance(DEFAULT_ROLES[head], dict) and 'model' not in DEFAULT_ROLES[head] else None)
+            for head in ROLE_HEADS}
+
+
+def resolve_roles(layers: list, template=None):
     """layers は強い順の [(出所, roles の辞書か None)]。(roles, 出所, warn の行) を返す。
 
-    roles と出所は agents.json の roles と同じ形 (designer・reviewer.deep・reviewer.other・tester)。
+    roles と出所は agents.json の roles と同じ形 (designer・episodes.test・reviewer.deep・reviewer.other・tester)。
     不正な値はその層を飛ばして次の層の値を使い、warn に使った値と出所を書く。
+    template は {部分の名前: {runner, model, effort}} (振り分けテンプレートの中段から取った既定)。どの層も
+    その部分の runner も model も決めていなければ、既定の代わりにそれを使い、出所を template にする
+    (層の model とテンプレートの runner が混ざらないように、片方でも層が決めていれば使わない)。
     """
     warns = []
-    roles = {'designer': None, 'reviewer': {}, 'tester': None}
-    sources = {'designer': None, 'reviewer': {}, 'tester': None}
+    roles, sources = _empty_roles(), _empty_roles()
     for name in ROLE_PARTS:
         default = _default_part(name)
         parts = [(source, _layer_part(given, name, source, warns)) for source, given in layers]
+        given_keys = {key for _, part in parts if part for key in part}
+        from_template = (template or {}).get(name) if not given_keys & {'runner', 'model'} else None
         value, origin = {}, {}
         for key, fallback in default.items():
             bad = []
             value[key], origin[key] = fallback, 'default'
+            if from_template and key in from_template:
+                value[key], origin[key] = from_template[key], 'template'
             for source, part in parts:
                 if part is None or key not in part:
                     continue
@@ -784,8 +808,57 @@ def _roles_in(path: Path):
     return data.get('roles') if isinstance(data, dict) else None
 
 
+def _routing_table(paths=None):
+    """振り分けテンプレート: <dir>/routing.json → home の routing.json → 同梱の routing.default.json。
+
+    select_model.py と同じ探し方。読めない・形の違うファイルは飛ばす (select_model.py の誤りは route で出る)。
+    """
+    import select_model
+    candidates = ([paths.base / 'routing.json'] if paths is not None else []) +         [common.resolve_home(None) / 'routing.json', select_model.DEFAULT_ROUTING]
+    for path in candidates:
+        table = common.load_json(path) if Path(path).is_file() else None
+        if isinstance(table, dict) and select_model.routing_error(table) is None:
+            return table
+    return None
+
+
+def _usable_step(name: str, step, today) -> bool:
+    """役割の部分に置ける、今使える手順か (実行先がその部分に置け、until を過ぎず、agent 以外は使える)。"""
+    if not isinstance(step, dict) or step.get('runner') not in runner_cli.runners_for(name):
+        return False
+    if not _valid_str(step.get('model')):
+        return False
+    until = step.get('until')
+    if until:
+        try:
+            if today > datetime.date.fromisoformat(until):
+                return False
+        except (TypeError, ValueError):
+            return False
+    return step['runner'] == 'agent' or runner_cli.unusable_reason(step['runner']) is None
+
+
+def template_parts(paths=None) -> dict:
+    """TEMPLATE_PARTS の既定を、振り分けテンプレートの中段の手順の先頭 (その部分に置けて使えるもの) から取る。
+
+    中段の最後は必ず agent なので、ふつうは何か取れる。テンプレートが読めなければ空 (DEFAULT_ROLES を使う)。
+    """
+    table = _routing_table(paths)
+    steps = ((table or {}).get('tiers') or {}).get(TEMPLATE_TIER) or []
+    today = datetime.date.today()
+    out = {}
+    for name in TEMPLATE_PARTS:
+        step = next((s for s in steps if _usable_step(name, s, today)), None)
+        if step is not None:
+            out[name] = {'runner': step['runner'], 'model': step['model'], 'effort': step.get('effort')}
+    return out
+
+
 def load_roles(paths=None, run=None):
-    """run の --role、repo の docs/pbi/roles.json、home の agents.json の roles を重ねる。(roles, 出所, warn の行)。"""
+    """run の --role、repo の docs/pbi/roles.json、home の agents.json の roles を重ねる。(roles, 出所, warn の行)。
+
+    episodes.test と reviewer.other は、層が決めていなければ振り分けテンプレートの中段から取る (出所 template)。
+    """
     repo = _roles_in(paths.base / 'roles.json') if paths is not None else None
     layers = [('run', (run or {}).get('roles')), ('repo', repo),
               ('home', _roles_in(common.resolve_home(None) / 'agents.json'))]
@@ -797,7 +870,7 @@ def load_roles(paths=None, run=None):
         elif given is not None and not isinstance(given, dict):
             warns.append(f'warn roles ({source}): not an object; skipped')
     layers = [(source, given if isinstance(given, dict) else None) for source, given in layers]
-    roles, sources, more = resolve_roles(layers)
+    roles, sources, more = resolve_roles(layers, template_parts(paths))
     return roles, sources, warns + more
 
 
@@ -837,15 +910,30 @@ def check_role_runners(roles: dict) -> list:
     return warns
 
 
-def designer_runner(roles: dict) -> str:
-    return roles['designer'].get('runner', 'agent')
+def lead_part(episode, escalated=None) -> str:
+    """その出番を受け持つ設計者の部分: 自分の担当を持つ出番 (LEAD_EPISODES) は episodes.<出番>、
+    担当が設計者に渡した (escalated) 出番とほかの出番は designer。"""
+    return f'episodes.{episode}' if episode in LEAD_EPISODES and not escalated else 'designer'
+
+
+def designer_of(roles: dict, part: str = 'designer') -> dict:
+    head, _, stage = part.partition('.')
+    return roles[head][stage] if stage else roles[head]
+
+
+def designer_runner(roles: dict, part: str = 'designer') -> str:
+    return designer_of(roles, part).get('runner', 'agent')
+
+
+DESIGNER_PARTS = ('designer', *(f'episodes.{episode}' for episode in LEAD_EPISODES))
 
 
 def check_agent_roles_without_agent_tool(roles: dict) -> None:
-    """codex の設計者は agent の役割を claude -p で起こす。claude が使えなければ Refused。"""
-    if designer_runner(roles) != 'codex':
+    """codex の設計者 (出番の担当を含む) は agent の役割を claude -p で起こす。claude が使えなければ Refused。"""
+    if all(designer_runner(roles, part) != 'codex' for part in DESIGNER_PARTS):
         return
-    left = [name for name, part in role_parts(roles) if name != 'designer' and part.get('runner', 'agent') == 'agent']
+    left = [name for name, part in role_parts(roles)
+            if name not in DESIGNER_PARTS and part.get('runner', 'agent') == 'agent']
     if not left:
         return
     reason = runner_cli.unusable_reason('claude')
@@ -891,11 +979,15 @@ def roles_record(roles: dict, sources: dict) -> dict:
 
 def roles_from_record(record) -> dict | None:
     """running.roles から roles の形に戻す。形が違う・値が不正なら None (呼び出し側が load_roles で取り直す)。"""
+    if not isinstance(record, dict):
+        return None
     try:
-        roles = {'designer': None, 'reviewer': {}, 'tester': None}
+        roles = _empty_roles()
         for name in ROLE_PARTS:
-            # runner の無い記録 (runner のキーができる前の run.json) は既定 (agent) で埋める
-            part = {key: record[name][key]['value'] if key in record[name] else default
+            # runner の無い記録 (runner のキーができる前の run.json) は既定 (agent) で埋める。
+            # 部分ごと無い記録 (episodes.test ができる前の run.json) は既定で埋める
+            kept = record.get(name, {})
+            part = {key: kept[key]['value'] if key in kept else default
                     for key, default in _default_part(name).items()}
             if not all(_valid_role_value(key, value, name) for key, value in part.items()):
                 return None
@@ -1375,15 +1467,24 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
     else:
         ctx_probe = f"python {quoted(SKILL / 'agent_stats.py')} --ctx --agent \"ATELIER.{run_short}.{seq} \""
     reviewer = roles['reviewer']
+    escalated = pending.get('escalated')
+    part = lead_part(episode, escalated)
+    designer = designer_of(roles, part)
+    codex = designer.get('runner', 'agent') == 'codex'
     values = {
         'work_root': Path.cwd().resolve().as_posix(), 'skill': SKILL.as_posix(), 'episode': episode, 'seq': seq,
         'wave': pending.get('wave'), 'pbis': ','.join(pending.get('pbis') or []),
         'goal': paths.goal.as_posix(), 'workflow': run.get('workflow'),
         'reviewer': (f"deep={model_label(reviewer['deep'])} other={model_label(reviewer['other'])}"
-                     ' (switch to the other when it equals the built model)'),
+                     ' (deep for a deep PBI and other otherwise; a deep review switches to other when deep equals'
+                     ' the built model)'),
         'tester': model_label(roles['tester']),
-        'agent_tool': 'no' if designer_runner(roles) == 'codex' else 'yes',
-        'text_rule': runner_cli.CODEX_TEXT_RULE if designer_runner(roles) == 'codex' else None,
+        'agent_tool': 'no' if codex else 'yes',
+        'text_rule': runner_cli.CODEX_TEXT_RULE if codex else None,
+        'lead': (f'{episode} on {model_label(designer)} (you run the {episode} stage in place of the designer; '
+                 'when you cannot decide, end with next {"episode": "' + episode + '", "needs_designer": "<why>"})')
+                if part != 'designer' else None,
+        'escalated': escalated,
         'continue_from': pending.get('continue_from'), 'answer': pending.get('answer'),
         'conductor_answer': pending.get('conductor_answer'), 'sent_by': pending.get('sent_by'),
         'result': result.as_posix(), 'alive': alive.as_posix(), 'ctx_probe': ctx_probe,
@@ -1391,9 +1492,14 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
     installed = agents_installed()
     fallback = not installed and launcher != 'headless'
     text = render(values)
+    if episode in SCRIPT_EPISODES:
+        # スクリプトの出番は設計者を起こさない。依頼文の場所には、何を流すかの 1 行を残す
+        fallback = False
+        text = (f'Script episode: {episode} (seq {seq}). conductor.py run runs {E2E_SCRIPT.as_posix()} with no model;'
+                f' it writes {result.as_posix()}.\n')
     if fallback:
         text = f'Read {(SKILL / "agents" / AGENT_FILE).as_posix()} and follow it as your instructions.\n' + text
-    if not installed:
+    if not installed and episode not in SCRIPT_EPISODES:
         warns = [*warns, 'warn agents: atelier-designer not installed; using fallback']
     prompt.parent.mkdir(parents=True, exist_ok=True)
     prompt.write_text(text, encoding='utf-8', newline='\n')
@@ -1403,6 +1509,7 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
         'launched_at': iso_now(), 'launcher': launcher, 'session_id': session_id,
         'continue_from': pending.get('continue_from'), 'answer': pending.get('answer'),
         'conductor_answer': pending.get('conductor_answer'), 'sent_by': pending.get('sent_by'),
+        'escalated': escalated, 'designer_part': None if episode in SCRIPT_EPISODES else part,
         'prompt': prompt.as_posix(), 'result': result.as_posix(), 'alive': alive.as_posix(),
         'roles': roles_record(roles, sources),
     }
@@ -1410,7 +1517,10 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
     run['state'] = 'running'
     # seq は run.json にまだ書いていない (save は呼び出し側) ので、明示して渡す
     _emit(paths, 'episode.started', lambda: _episode_started_data(run, installed), seq=seq)
-    model = roles['designer']['model']
+    if episode in SCRIPT_EPISODES:
+        return ['state: running', *warns, f'episode: {episode} seq {seq}', f'launch: script {E2E_SCRIPT.name}',
+                f'result: {result.as_posix()}', 'then: ' + command('wait', '--timeout', '300')]
+    model = designer['model']
     return ['state: running', *warns, f'episode: {episode} seq {seq}', roles_line(roles, sources),
             f'launch: {launcher} subagent_type={"general-purpose" if fallback else "atelier-designer"} '
             f'model={model} description="{description}"',
@@ -1443,9 +1553,14 @@ def relaunch(paths: Paths, run: dict):
     history_add(run, running, 'relaunched', None)
     run['pending'] = {'episode': running.get('episode'), 'wave': running.get('wave'), 'pbis': running.get('pbis'),
                       'continue_from': running.get('continue_from'), 'answer': running.get('answer'),
-                      'conductor_answer': running.get('conductor_answer'), 'sent_by': running.get('sent_by')}
+                      'conductor_answer': running.get('conductor_answer'), 'sent_by': running.get('sent_by'),
+                      'escalated': running.get('escalated')}
     _emit_episode_ended(paths, run, running, before)
     run['running'] = None
+    if running.get('episode') in SCRIPT_EPISODES:
+        # スクリプトの出番は Agent ツールで起こせない。run (detach) が起こし直す
+        run['state'] = 'ready'
+        return headless_lines(run, warns, f"{running.get('episode')} runs as a script"), EXIT_OK
     if run.get('launch') == 'headless':
         run['state'] = 'ready'
         return headless_lines(run, warns), EXIT_OK
@@ -1462,7 +1577,7 @@ def relaunch_question(run: dict, launcher) -> bool:
         return False
     run['pending'] = {'episode': q.get('episode'), 'wave': q.get('wave'), 'pbis': q.get('pbis'),
                       'continue_from': q.get('state'), 'answer': None,
-                      'sent_by': q.get('sent_by')}
+                      'sent_by': q.get('sent_by'), 'escalated': q.get('escalated')}
     run['question'] = None
     run['failures'] = None
     if run.get('handoff'):
@@ -1505,8 +1620,13 @@ def cmd_next(args, paths: Paths) -> int:
             if run.get('launch') == 'headless':
                 emit(headless_lines(run))
                 return EXIT_OK
+            pending = run.get('pending') or {}
+            if pending.get('episode') in SCRIPT_EPISODES:
+                # モデルを使わない出番: run (detach) がスクリプトを流す
+                emit(headless_lines(run, (), f"{pending['episode']} runs as a script"))
+                return EXIT_OK
             roles, sources, role_warns = load_roles(paths, run)
-            runner = designer_runner(roles)
+            runner = designer_runner(roles, lead_part(pending.get('episode'), pending.get('escalated')))
             if runner != 'agent':
                 # Agent ツールで起こせない実行先の設計者は、run が起こす
                 emit(headless_lines(run, [*role_warns, roles_line(roles, sources)], f'designer runner {runner}'))
@@ -1596,7 +1716,7 @@ def conductor_question(paths: Paths, run: dict, running: dict, kind: str, what: 
     run['question'] = {'kind': kind, 'path': path.as_posix(), 'summary': what, 'check': None,
                        'state': last_handoff_state(run, running), 'seq': running.get('seq'),
                        'episode': running.get('episode'), 'wave': running.get('wave'), 'pbis': running.get('pbis'),
-                       'relaunch': relaunch, 'sent_by': running.get('sent_by'),
+                       'relaunch': relaunch, 'sent_by': running.get('sent_by'), 'escalated': running.get('escalated'),
                        'asked_at': iso_now(), 'topic': topic, 'conductor': True}
     run['state'] = 'question'
     run['running'] = None
@@ -1622,7 +1742,8 @@ def fail(paths: Paths, run: dict, running: dict, reason: str, status: str, summa
     run['running'] = None
     run['pending'] = {'episode': running.get('episode'), 'wave': running.get('wave'), 'pbis': running.get('pbis'),
                       'continue_from': None, 'answer': running.get('answer'),
-                      'conductor_answer': running.get('conductor_answer'), 'sent_by': running.get('sent_by')}
+                      'conductor_answer': running.get('conductor_answer'), 'sent_by': running.get('sent_by'),
+                      'escalated': running.get('escalated')}
     save(paths, run)
     _emit_episode_ended(paths, run, running, before)
     return EXIT_FAIL, ['state: retry', episode_line(running), f'error: {fold(reason, 300)}',
@@ -1922,7 +2043,8 @@ def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -
         run['question'] = {'kind': q['kind'], 'path': q['path'], 'summary': q['summary'], 'check': q.get('check'),
                            'state': data.get('state'), 'seq': running['seq'], 'episode': episode,
                            'wave': running.get('wave'), 'pbis': running.get('pbis'), 'topic': topic,
-                           'asked_at': iso_now(), 'sent_by': running.get('sent_by')}
+                           'asked_at': iso_now(), 'sent_by': running.get('sent_by'),
+                           'escalated': running.get('escalated')}
         run['state'] = 'question'
         run['running'] = None
         save(paths, run)
@@ -1941,7 +2063,8 @@ def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -
                 '(runs.jsonl and STATUS.md did not change).')
         run['pending'] = {'episode': episode, 'wave': running.get('wave'), 'pbis': running.get('pbis'),
                           'continue_from': state_path, 'answer': None,
-                          'conductor_answer': None, 'sent_by': running.get('sent_by')}
+                          'conductor_answer': None, 'sent_by': running.get('sent_by'),
+                          'escalated': running.get('escalated')}
     elif episode == 'finish':
         report = Path(data['report'])
         if not report.is_file():
@@ -1970,6 +2093,21 @@ def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -
             return fail(paths, run, running,
                         f"build sent by {running.get('sent_by')} -> {target} is not allowed "
                         f"(end with next {running.get('sent_by')})", 'invalid', summary)
+        needs = nxt.get('needs_designer')
+        escalated = None
+        if episode in LEAD_EPISODES and target == episode:
+            # 担当を持つ出番から同じ出番へは、担当が設計者に渡す (needs_designer) か、設計者が担当に戻すときだけ
+            if running.get('escalated'):
+                if needs:
+                    return fail(paths, run, running, f'{episode} was already passed to the designer; decide it '
+                                '(needs_designer is for the lead)', 'invalid', summary)
+            elif not needs:
+                return fail(paths, run, running, f'{episode} -> {episode} needs needs_designer with the reason',
+                            'invalid', summary)
+            else:
+                escalated = needs
+        elif needs:
+            return fail(paths, run, running, f'needs_designer goes with next {episode}', 'invalid', summary)
         wave = nxt.get('wave')
         if wave is None:
             wave = running.get('wave')  # 無い・null は今の波を受け継ぐ
@@ -1984,7 +2122,8 @@ def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -
         # 差し戻し (pbis 付きの build) は、送った出番を残して依頼文と done の照合に使う
         sent_by = episode if target == 'build' and nxt.get('pbis') and episode in ('test', 'review') else None
         run['pending'] = {'episode': target, 'wave': wave, 'pbis': nxt.get('pbis') or None,
-                          'continue_from': None, 'answer': None, 'conductor_answer': None, 'sent_by': sent_by}
+                          'continue_from': None, 'answer': None, 'conductor_answer': None, 'sent_by': sent_by,
+                          'escalated': escalated}
     run['state'] = 'ready'
     run['running'] = None
     save(paths, run)
@@ -2267,7 +2406,8 @@ def cmd_answer(args, paths: Paths) -> int:
         run['pending'] = {'episode': episode, 'wave': q.get('wave'), 'pbis': q.get('pbis'),
                           'continue_from': continue_from,
                           'answer': None if conductor_answer else answer.as_posix(),
-                          'conductor_answer': conductor_answer, 'sent_by': q.get('sent_by')}
+                          'conductor_answer': conductor_answer, 'sent_by': q.get('sent_by'),
+                          'escalated': None if args.revise else q.get('escalated')}
         run.setdefault('answers', []).append({'seq': q['seq'], 'kind': kind, 'path': answer.as_posix(),
                                               'revise': bool(args.revise), 'at': iso_now()})
         run['question'] = None
@@ -2745,17 +2885,20 @@ def launch_designer(paths: Paths, run: dict, running: dict, warns: list) -> tupl
     out_json = paths.episode_file(seq, episode, '.json')
     err_path = paths.episode_file(seq, episode, '.err')
     # next が running に残した値で起こす (next と run の間に roles.json が変わっても、出した行と同じ値)
+    if episode in SCRIPT_EPISODES:
+        return launch_script(paths, run, running, warns, out_json, err_path)
     roles = roles_from_record(running.get('roles'))
     if roles is None:
         roles, _, role_warns = load_roles(paths, run)
         warns[:] = merge_warnings(warns, role_warns)
-    runner = designer_runner(roles)
+    part = running.get('designer_part') or 'designer'
+    runner = designer_runner(roles, part)
     launcher, problem = designer_command(runner)
     if problem:
         code, lines = fail(paths, run, running, problem, 'launch-failed')
         return None, code, with_warnings(lines, warns)
     try:
-        argv = designer_argv(launcher, running, roles['designer'], paths.episode_file(seq, episode, '.last.md'))
+        argv = designer_argv(launcher, running, designer_of(roles, part), paths.episode_file(seq, episode, '.last.md'))
         task = run_input(running.get('prompt') or '', definition=runner == 'codex')
     except OSError as error:
         code, lines = fail(paths, run, running, f'cannot read the prompt or the agent definition: {error}',
@@ -2769,6 +2912,38 @@ def launch_designer(paths: Paths, run: dict, running: dict, warns: list) -> tupl
         code, lines = fail(paths, run, running, f'cannot start the designer: {error}', 'launch-failed')
         return None, code, with_warnings(lines, warns)
     child.task = task
+    child.err_path = err_path
+    record_pid(run['running'], 'child_pid', child.pid)
+    save(paths, run)
+    return child, EXIT_OK, []
+
+
+def script_argv(paths: Paths, running: dict) -> list:
+    """スクリプトの出番の引数。ATELIER_E2E_CMD (JSON の文字列の配列) があれば、その後ろに同じ引数を付ける。"""
+    head = [sys.executable, str(E2E_SCRIPT)]
+    given = os.environ.get('ATELIER_E2E_CMD')
+    if given:
+        try:
+            words = json.loads(given)
+        except ValueError:
+            words = None
+        if isinstance(words, list) and words and all(isinstance(word, str) and word.strip() for word in words):
+            head = list(words)
+    return [*head, '--dir', str(paths.base), '--result', str(running.get('result')),
+            '--seq', str(int(running.get('seq') or 0))]
+
+
+def launch_script(paths: Paths, run: dict, running: dict, warns: list, out_json, err_path) -> tuple:
+    """スクリプトの出番 (e2e) を起こす。標準入力に渡すものは無い。(child, 終了コード, 出す行) を返す。"""
+    try:
+        with open(out_json, 'wb') as out, open(err_path, 'wb') as err:
+            child = subprocess.Popen(script_argv(paths, running), stdin=subprocess.PIPE, stdout=out, stderr=err,
+                                     cwd=str(Path.cwd()), creationflags=NO_WINDOW)
+    except OSError as error:
+        code, lines = fail(paths, run, running, f"cannot start the {running.get('episode')} script: {error}",
+                           'launch-failed')
+        return None, code, with_warnings(lines, warns)
+    child.task = b''
     child.err_path = err_path
     record_pid(run['running'], 'child_pid', child.pid)
     save(paths, run)
@@ -2810,8 +2985,13 @@ def settle_episode(paths: Paths, run: dict, code: int, out_json) -> tuple:
     active.pop('child_pid', None)
     active.pop('child_pid_started', None)
     roles = roles_from_record(active.get('roles'))
-    codex = roles is not None and designer_runner(roles) == 'codex'
-    if codex:
+    script = active.get('episode') in SCRIPT_EPISODES
+    codex = not script and roles is not None and designer_runner(roles, active.get('designer_part') or 'designer') == 'codex'
+    if script:
+        events, data = {}, None
+        problem = None if code == 0 else (f"{active.get('episode')} script exited {code} "
+                                          f"(see {paths.episode_file(active.get('seq'), active.get('episode'), '.err').as_posix()})")
+    elif codex:
         events = runner_cli.codex_events(out_json)
         problem = codex_problem(code, events)
     else:
@@ -2821,7 +3001,7 @@ def settle_episode(paths: Paths, run: dict, code: int, out_json) -> tuple:
         done_code, lines = fail(paths, run, active, problem, 'launch-failed')
     else:
         done_code, lines = process_done(paths, run)
-    if attach_tokens(run, active, events) if codex else attach_cost(run, active, data):
+    if not script and (attach_tokens(run, active, events) if codex else attach_cost(run, active, data)):
         save(paths, run)
     stopping = done_code != EXIT_OK or not lines or not str(lines[0]).startswith('state: ready')
     if stopping and run.get('runner_pid') == os.getpid():

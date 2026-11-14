@@ -12,6 +12,8 @@
     "scripts/verify_*.mts",
     "e2e/cypress/e2e/**"
   ],
+  "test_command": "pnpm vitest run {file}",
+  "test_typecheck": "pnpm tsc --noEmit -p tsconfig.test.json",
   "principle": "principle-test-behavior-not-implementation",
   "implement_tier": "haiku",
   "server": {
@@ -24,5 +26,11 @@
     "per_spec": 900,
     "retries": 2,
     "idle": 600
+  },
+  "e2e": {
+    "base": "origin/main",
+    "specs": "e2e/cypress/e2e/**/*.cy.ts",
+    "symbols": true,
+    "full": false
   }
 }

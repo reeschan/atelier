@@ -22,6 +22,11 @@ bash と Node:
   その版のディレクトリを子の PATH の先頭に置く。見つからなければ warn を出して今の PATH で流す。
   ログの先頭には `bash: <パス>` と `node: <node -v>` の行を書く。
 
+整形と lint (appendix/plan.md、`## Format and lint first`):
+  <dir>/checks.json ({"format": "<コマンドの頭>", "lint": "<コマンドの頭>"}) があれば、PBI の検証コマンドに
+  それぞれをコマンドの頭として実行するコマンド (&&・;・| で区切った頭。echo の引数などは数えない) が要る。無ければ流さずに `refused: <PBI> has no <format|lint> command (checks.json)` で
+  終了コード 2 (作業者が検証のたびに整形と lint を流し、レビューの前に済ませるため)。--list-deferred は断らない。
+
 テストを最後にまとめる選択肢 (appendix/tests-at-end.md):
   <dir>/tests-at-end.json の "deferred" のどれかを含むコマンドを、あとに回すコマンドとして扱う。
   要素は文字列か {"match", "when": "wave"|"end", "timeout": 秒, "server": {"start", "url"}} (when の既定は wave)。
@@ -35,6 +40,10 @@ bash と Node:
   --related a.cy.ts,b.cy.ts  "investigate" の {specs} をカンマでつないだ spec に置き換えて流す。
                    上限は spec の数 × limits.per_spec 秒。当たれば `blocked: limit` を出して終了コード 3。
                    spec が空か、investigate に {specs} が無ければ `refused: ...` で終了コード 2
+  --related ... --each  spec を 1 本ずつ流す (サーバーは最初に 1 回だけ用意する)。1 本の上限は limits.per_spec 秒、
+                   落ちた spec は limits.retries 回まで流し直す。<名前>.json の results は spec ごとの 1 行
+                   (n・spec・command・code・tries・log)。上限に当たった spec があれば、全部を流して書いたあとに
+                   `blocked: limit` を出して終了コード 3 (e2e_run.py が spec ごとの結果を読む)
   --final          "final" を時間の上限なしで流す。出力が limits.idle 秒無ければ止め、`blocked: idle` で終了コード 3。
                    <dir>/full-run.approved.json (conductor.py answer --full-run yes) が無ければ `refused: ...` で
                    終了コード 2。あればサーバーを用意したあと、流す直前に消す (承認は 1 回の通しで使い切る)
@@ -272,10 +281,29 @@ def kill_tree(proc):
         proc.kill()
 
 
+# 流している最中のコマンド。止められたとき (SIGTERM) に木ごと止める
+RUNNING = set()
+
+
+def on_stop(signum, _frame):
+    """POSIX の SIGTERM: 流しているコマンドの木を止め、SystemExit で抜ける (serving の finally がサーバーを止める)。"""
+    for proc in list(RUNNING):
+        kill_tree(proc)
+    raise SystemExit(128 + signum)
+
+
 def stream(bash, cmd, env, timeout, idle):
     """cmd を流して (出力, 終了コード) を返す。上限なら終了コードは "timeout"、無出力なら "idle"。"""
     proc = subprocess.Popen([bash, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, env=env, creationflags=NO_WINDOW, **NEW_GROUP)
+    RUNNING.add(proc)
+    try:
+        return _stream(proc, timeout, idle)
+    finally:
+        RUNNING.discard(proc)
+
+
+def _stream(proc, timeout, idle):
     chunks, last = [], [time.monotonic()]
 
     def pump():
@@ -445,6 +473,34 @@ def run_named(ctx, base, settings, name, cmd, timeout, idle, tail_n, approval=No
         raise Blocked(f"idle ({idle} 秒出力なし)")
 
 
+def run_each(ctx, base, settings, name, template, specs, limits, tail_n):
+    """spec を 1 本ずつ流し、spec ごとの結果を <名前>.json に書く。上限に当たった spec があれば最後に Blocked。"""
+    logdir = base / "verify"
+    results, limited = [], []
+    print(f"| 番号 | spec | 終了コード | 回数 | 末尾 ({tail_n} 行) | ログ |")
+    print("|---|---|---|---|---|---|")
+    with serving(ctx, settings.get("server"), logdir / f"{name}.server.log"):
+        for n, spec in enumerate(specs, start=1):
+            cmd = template.replace("{specs}", spec)
+            log = logdir / f"{name}.{n}.log"
+            tries = 0
+            while True:
+                tries += 1
+                code, tail = run_one(ctx, cmd, log, limits["per_spec"], tail_n)
+                # 落ちた spec だけ流し直す (上限に当たったものは流し直さない)
+                if code in (0, "timeout") or tries > limits["retries"]:
+                    break
+            if code == "timeout":
+                limited.append(f"{spec} ({limits['per_spec']} 秒)")
+            print(f"| {n} | {spec} | {code} | {tries} | {tail} | {log.as_posix()} |")
+            results.append({"n": n, "spec": spec, "command": cmd, "code": code, "tries": tries,
+                            "log": log.as_posix()})
+            # 1 本ごとに書く (後の spec のサーバーが落ちても、流し終えた結果は残す)
+            merge_results(logdir / f"{name}.json", name, name, results, False)
+    if limited:
+        raise Blocked(f"limit ({', '.join(limited)})")
+
+
 def prepare(base, home):
     """bash・子の環境・ログの先頭の行をそろえ、先頭の行を出す。bash が無ければ終了コード 2。"""
     bash = find_bash(home)
@@ -476,6 +532,7 @@ def parse_args():
     mode.add_argument("--list-deferred", action="store_true", help="あとに回すコマンドの番号を出して終わる")
     mode.add_argument("--related", help="investigate で流す spec をカンマでつないで渡す")
     mode.add_argument("--final", action="store_true", help="final (通し) を流す")
+    ap.add_argument("--each", action="store_true", help="--related の spec を 1 本ずつ流し、spec ごとの結果を書く")
     args = ap.parse_args()
     if args.pbi is None and not (args.related or args.final):
         ap.error("PBI 名 (--deferred では報告名) が要る")
@@ -508,12 +565,61 @@ def main_named(args, base, settings):
         print('refused: "investigate" in tests-at-end.json has no {specs}; it would ignore the specs')
         sys.exit(2)
     ctx = prepare(base, resolve_home(args.home))
+    if args.each:
+        run_each(ctx, base, settings, args.name or "related", template, specs, limits, args.tail)
+        return
     cmd = template.replace("{specs}", ",".join(specs))
     run_named(ctx, base, settings, args.name or "related", cmd, len(specs) * limits["per_spec"], None, args.tail)
 
 
 def _squash(cmd):
     return " ".join(cmd.split())
+
+
+CHECK_KEYS = ("format", "lint")
+
+
+def required_checks(base):
+    """<dir>/checks.json の format・lint のコマンドの頭 ({キー: 文字列})。無い・読めないときは空。"""
+    data = load_json(base / "checks.json", {})
+    if not isinstance(data, dict):
+        return {}
+    return {key: data[key].strip() for key in CHECK_KEYS if isinstance(data.get(key), str) and data[key].strip()}
+
+
+ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*\s+")
+
+
+def _segments(cmd):
+    """&&・||・;・| で区切った各コマンド (前の VAR=値 と ( を除き、空白をまとめる)。# から後のコメントは見ない。"""
+    out = []
+    for part in re.split(r"&&|\|\||;|\|", cmd.split("#", 1)[0]):
+        part = _squash(part).lstrip("( ")
+        while ENV_ASSIGN.match(part):
+            part = ENV_ASSIGN.sub("", part, count=1)
+        if part:
+            out.append(part)
+    return out
+
+
+def runs_command(cmd, head):
+    """cmd が head を実行するか。head の各コマンド (cd app && npx eslint なら 2 つ) が cmd の続いたコマンドと
+    同じで、最後の 1 つだけは cmd の側がその語で始まればよい (後ろにファイルが付く)。引数・引用符の中・コメントに
+    現れるだけのものは数えない。"""
+    want, have = _segments(head), _segments(cmd)
+    if not want:
+        return False
+    for i in range(len(have) - len(want) + 1):
+        window = have[i:i + len(want)]
+        last, wanted = window[-1], want[-1]
+        if window[:-1] == want[:-1] and (last == wanted or last.startswith(wanted + " ")):
+            return True
+    return False
+
+
+def missing_checks(cmds, checks):
+    """PBI の検証コマンドに無い checks のキー (コマンドの頭として実行されるものだけを数える)。"""
+    return [key for key, head in checks.items() if not any(runs_command(cmd, head) for _, cmd in cmds)]
 
 
 def runs_final(cmd, final):
@@ -536,6 +642,11 @@ def main_pbi(args, base, settings, entries):
     if args.list_deferred:
         print(",".join(str(n) for n, cmd in cmds if is_deferred(cmd, entries)))
         return
+    missing = missing_checks(cmds, required_checks(base)) if cmds else []
+    if missing:
+        print(f"refused: {args.pbi} has no {' or '.join(missing)} command (checks.json); "
+              "put the format and lint commands on its Targets first (appendix/plan.md)")
+        sys.exit(2)
     only = {int(x) for x in args.only.split(",") if x.strip()}
     # --only か --skip-deferred で絞ったか。絞った結果が空のときに「絞らない」と取り違えないため
     filtered = bool(only)
@@ -573,6 +684,8 @@ def main():
     args = parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    if os.name != "nt":
+        signal.signal(signal.SIGTERM, on_stop)
     base = Path(args.dir)
     settings = load_settings(base)
     entries = deferred_entries(settings)

@@ -12,6 +12,8 @@ Episode: {episode} (seq {seq})
 {?sent_by}Sent by: {sent_by} (the episode that sent these PBIs back: end this build with next that episode)
 Waves: docs/pbi/waves.json holds the PBIs of each wave. Write it at the end of plan, and rewrite it when hold or tier-up changes a wave.
 Goal: {goal}
+{?lead}Lead: {lead}
+{?escalated}Escalated: {escalated} (the lead of this stage passed it to you: decide it and write the decision in the state, then end with next the same episode to hand the stage back, or with the next the stage needs)
 {?workflow}Workflow: {workflow}
 Roles: reviewer {reviewer}; tester {tester} (a value ending in @<runner> runs on that runner through role_run.py; the rest on agent)
 Agent tool: {agent_tool} (no: launch every role and worker through scripts, runners.md "Without the Agent tool")

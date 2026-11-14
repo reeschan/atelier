@@ -306,6 +306,49 @@ class VerifyEnvAndModesTest(unittest.TestCase):
         self.assertLess(elapsed, 20)
         self.assertEqual(self.results('rel'), {1: 'timeout'})
 
+    def test_related_each_runs_one_spec_at_a_time_and_retries_failures(self):
+        # a は通り、b は毎回落ちる。b だけ limits.retries 回流し直す
+        self.settings(investigate='echo {specs} >> runs.txt; test {specs} = a.cy.ts', limits={'retries': 1})
+        r = self.run_script('--related', 'a.cy.ts,b.cy.ts', '--each', '--name', 'e2e')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        runs = (self.root / 'runs.txt').read_text(encoding='utf-8').split()
+        self.assertEqual(runs, ['a.cy.ts', 'b.cy.ts', 'b.cy.ts'])
+        data = json.loads((self.base / 'verify' / 'e2e.json').read_text(encoding='utf-8'))
+        rows = {row['spec']: (row['code'], row['tries']) for row in data['results']}
+        self.assertEqual(rows, {'a.cy.ts': (0, 1), 'b.cy.ts': (1, 2)})
+
+    def test_related_each_keeps_the_results_when_a_spec_hits_the_limit(self):
+        self.settings(investigate='test {specs} = a.cy.ts || sleep 30', limits={'per_spec': 1})
+        r = self.run_script('--related', 'a.cy.ts,b.cy.ts', '--each', '--name', 'e2e')
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn('blocked: limit (b.cy.ts', r.stdout)
+        self.assertEqual(self.results('e2e'), {1: 0, 2: 'timeout'})
+
+    def test_checks_json_requires_format_and_lint_commands(self):
+        (self.base / 'checks.json').write_text(json.dumps({'format': 'npx prettier --write', 'lint': 'npx eslint'}),
+                                               encoding='utf-8')
+        (self.base / 'PBI-001.md').write_text(pbi('npx prettier --write src/a.ts > fmt.txt', 'echo ok > ran.txt'),
+                                              encoding='utf-8')
+        r = self.run_script('PBI-001')
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('refused: PBI-001 has no lint command (checks.json)', r.stdout)
+        self.assertFalse((self.root / 'ran.txt').exists())
+        self.assertEqual(self.run_script('PBI-001', '--list-deferred').returncode, 0)
+        # 引数に現れるだけでは数えない
+        (self.base / 'PBI-001.md').write_text(pbi('echo npx prettier --write src/a.ts', 'echo npx eslint src/a.ts'),
+                                              encoding='utf-8')
+        r = self.run_script('PBI-001')
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('has no format or lint command', r.stdout)
+        # コマンドの頭なら、前置き (cd ... &&、VAR=値) があっても数える
+        self.assertTrue(verify.runs_command('cd web && CI=1 npx  eslint src/a.ts', 'npx eslint'))
+        self.assertFalse(verify.runs_command('npx eslintx src/a.ts', 'npx eslint'))
+        self.assertFalse(verify.runs_command('true # npx eslint', 'npx eslint'))
+        # 複数のコマンドの頭も、tests_plan.py が書く形 (<頭> <file>) で通る
+        head = 'cd app && npx eslint --fix'
+        self.assertEqual(verify.missing_checks([(1, f'{head} tests/a.test.ts')], {'lint': head}), [])
+        self.assertEqual(verify.missing_checks([(1, 'npx eslint --fix tests/a.test.ts')], {'lint': head}), ['lint'])
+
     def test_final_stops_when_output_goes_quiet(self):
         self.settings(final='echo start; sleep 30; echo never', limits={'idle': 1})
         self.approve_full_run()

@@ -52,7 +52,7 @@ With launch `agent` (headless is below):
 
 - `run --detach` starts the designer and returns at once.
 - Repeat `python <skill>/conductor.py wait --timeout 300` until it prints a state other than running, then read its lines. On `state: question`, show it with its `present:` line (`## Questions`).
-- With launch `headless`, `next` prints `launch: headless` and `then: ... run --detach`: run that line and do not launch the designer. The same happens on an `agent` run when the designer runs on codex or claude (`launch: headless (designer runner codex)`).
+- With launch `headless`, `next` prints `launch: headless` and `then: ... run --detach`: run that line and do not launch the designer. The same happens on an `agent` run when the designer runs on codex or claude (`launch: headless (designer runner codex)`), and for the e2e episode, which a script runs with no model (`launch: headless (e2e runs as a script)`).
 - Claude Code's auto mode may refuse `run --detach` when it starts codex with `-a never` and no sandbox. Then show the refusal and ask the user to allow the command or to run it themselves.
 - `--launch` is taken by `start` and `run` only. `next` does not take it.
 - A `decision` question of `no-agent-tool`: `present` prints a `then:` line that ends with `# relaunch`. Run that line (do not show it to the user), then follow the headless steps.
@@ -78,7 +78,7 @@ Never build the pipe yourself (`design_record.py markdown --draft ... | am rende
 - `approve`: save the user's reply to a file and run `python <skill>/conductor.py answer --reply <file>`.
 - `check-reply exit 4` (a reply with no fence): an approval is `answer --approve --choices ...`, a request to change the list is `answer --revise --text ...`. A revise comes back as a new design episode; that is normal.
 - Exit 3 (the reply does not match the draft) or 5 (a choice left unanswered): show it and ask the user again.
-- `full-run`: the run asks whether to run the whole E2E suite once (`appendix/tests-at-end.md`). Run `answer --full-run yes` or `answer --full-run no` by the user's answer; a yes is used up by one full run.
+- `full-run`: only a run started before the full suite moved to the approval asks it. Run `answer --full-run yes` or `answer --full-run no` by the user's answer; a yes is used up by one full run.
 - Other kinds (`rework-limit`, `destructive`, `send-approval`, `decision`): a reply pasted from the page (it has an `am-reply-meta` fence) is saved to a file and given with `answer --reply <file>`, so the reply check runs; free text in chat goes with `answer --text`. A `decision` may be a round of grill questions: show it whole and pass the user's answers on as they are.
 - The completion report is shown with `python <skill>/present.py <report> --kind report`.
 
