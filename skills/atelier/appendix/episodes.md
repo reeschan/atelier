@@ -10,7 +10,9 @@ The contract between the conductor (`conductor.py`), the designer (`designer.md`
 | Conductor (`conductor.py`, a script) | the caller | none | `docs/pbi/conductor/run.json`, the episode prompts, `answers/<seq>-<kind>.md` |
 | Designer (`agents/atelier-designer.md`) | the caller (agent) or `conductor.py run` (headless; always when `roles.designer.runner` is codex or claude); description `ATELIER.<run>.<seq> <episode>` (`<run>`: the first 8 characters of `run_id`, printed by the conductor) | `roles.designer` (opus on agent), from run, repo or home (`appendix/setup.md`, `## roles`) | the spec, the PBIs, `docs/pbi/waves.json`, records, the episode result, the `.alive` file |
 | Worker (`agents/pbi-worker.md`) | the designer; description `PBI-<n> <short text>` | the PBI's `route.json` | the change and `docs/pbi/reports/<report>.md` |
-| Reviewer (`agents/atelier-reviewer.md`) | the designer, one per report, once every worker of the wave has returned; description from `prompts/pbi-review.md` | `roles.reviewer`: `deep` (opus) when the review stage is deep, else `other` (sonnet, effort high); never the model that built it. A stage with a runner other than agent runs through `role_run.py` (`runners.md`, `## Roles on a runner`) | `docs/pbi/reviews/<report>.review.json` |
+| Lead of an episode (`agents/atelier-designer.md`, the same definition) | the caller or `conductor.py run`, for the test episode; the prompt says `Lead: test` | `roles.episodes.test`: the first usable step of the routing template's middle tier unless a layer sets it (`appendix/setup.md`, `## roles`); the designer's model when the episode was handed over (`Escalated:`) | the same files as the designer |
+| `e2e_run.py` (a script) | `conductor.py run`, for the e2e episode | none | `docs/pbi/verify/tests/e2e.test-result.json`, `docs/pbi/verify/e2e.scope.md`, the episode result |
+| Reviewer (`agents/atelier-reviewer.md`) | the designer, one per report, once every worker of the wave has returned; description from `prompts/pbi-review.md` | `roles.reviewer`: `deep` (opus) when the review stage is deep, else `other` (the routing template's middle tier, sonnet at high effort with the bundled routing). Only a deep review avoids the model that built it: it switches to `other` when `deep` is that model. A stage with a runner other than agent runs through `role_run.py` (`runners.md`, `## Roles on a runner`) | `docs/pbi/reviews/<report>.review.json` |
 | Tester (`agents/atelier-tester.md`) | the designer; description from `prompts/tester.md` | `roles.tester` (sonnet); a runner other than agent runs through `role_run.py` | `docs/pbi/verify/tests/<name>.test-result.json` |
 
 ## Launch
@@ -41,8 +43,8 @@ Write the file on the prompt's `Result:` line as your last action, schema `ateli
 - `episode`, `seq`: from the prompt.
 - `status`: `done`, `question`, `handoff` or `error`.
 - `summary`: up to 5 lines, 200 characters each. Your reply is these lines only.
-- `next`: with `done`, `{"episode": ..., "wave": n, "pbis": [...]}`; `wave` must be in `docs/pbi/waves.json`; `pbis` only for a rework build.
-- `question`: with `question`, `{"kind", "path", "summary", "check"}`. It may also carry an optional `topic` (an identifier such as `omm` or `design-approval`); the values and which question takes which are in `appendix/events.md`. Kinds: `approve`, `rework-limit`, `destructive`, `send-approval`, `decision` (a grill round is one) and `full-run` (whether to run the whole E2E suite once, `appendix/tests-at-end.md`).
+- `next`: with `done`, `{"episode": ..., "wave": n, "pbis": [...]}`; `wave` must be in `docs/pbi/waves.json`; `pbis` only for a rework build. The lead of the test episode adds `"needs_designer": "<the point>"` with next `test` to hand a point to the designer.
+- `question`: with `question`, `{"kind", "path", "summary", "check"}`. It may also carry an optional `topic` (an identifier such as `omm` or `design-approval`); the values and which question takes which are in `appendix/events.md`. Kinds: `approve`, `rework-limit`, `destructive`, `send-approval`, `decision` (a grill round is one) and `full-run` (whether to run the whole E2E suite once; only a run started before the full suite moved to the approval asks it).
 - `question.path` (every kind but `approve`): the draft is written in the form of `appendix/questions.md`. `done` runs the same check as `lint --kind` on it, and a draft with an error is not accepted (`state: retry`).
 - `report_body` (finish only, optional): the completion report's text, when you could not write `docs/pbi/REPORT.md`; the conductor writes it.
 - `state`: the path of the state tablet; required with `handoff` and with every question kind but `approve`.
@@ -56,8 +58,9 @@ Write the file on the prompt's `Result:` line as your last action, schema `ateli
 | Episode | `next` it may name |
 |---|---|
 | design | build (wave 1) |
-| build | build, test, review, finish |
-| test | build, review |
+| build | build, e2e, test, review, finish |
+| e2e | test (written by `e2e_run.py`) |
+| test | build, review, test (only with `needs_designer` from the lead, or from the designer to hand the stage back) |
 | review | build (with `pbis`), finish |
 | finish | none (closes the run) |
 
@@ -106,7 +109,7 @@ When one is missing, `done` exits 2 with the one line `error: missing <what>` an
 
 ## Test result
 
-`docs/pbi/verify/tests/<name>.test-result.json`, schema `atelier.test-result/1`: `kind` (`wave`, `survey`, `final` or `full`), `commands` (command and exit code), `failing` (test, file, pbi, `cause` `intended`, `regression` or `unknown`, why), `recommendation` (`pass`, `rework` or `needs-designer`). The tester's `cause` is a proposal.
+`docs/pbi/verify/tests/<name>.test-result.json`, schema `atelier.test-result/1`: `kind` (`wave`, `investigate`, `survey`, `e2e`, `final` or `full`), `commands` (command and exit code), `failing` (test, file, pbi, `cause` `intended`, `regression` or `unknown`, why), `recommendation` (`pass`, `rework` or `needs-designer`). The tester's `cause` is a proposal.
 
 ## Bundle
 
@@ -125,7 +128,7 @@ A row reads `<report>  verify ok|fail <n,..>  unchanged <state>  review <recomme
 - A row without `open`: record pass from the table alone.
 - An `open` row: open its review JSON. Pass or fail of verify comes from `docs/pbi/verify/<report>.json` (the `verify` column), never from the review.
 - Then decide pass, rework, tier up or hold, and record once with `record_run.py` (`appendix/verify.md`, `appendix/rework.md`).
-- A test result: you decide each `cause`. `intended` goes to the test stage; `regression` sends its PBI back to build.
+- A test result: you decide each `cause`. `intended` goes to the test stage; `regression` sends its PBI back to build; `unknown` goes to the tester's kind `investigate`, and you decide from its proposal.
 
 ## Kiln
 

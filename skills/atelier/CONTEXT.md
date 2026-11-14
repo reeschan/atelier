@@ -16,17 +16,25 @@ _Avoid_: dispatcher, scheduler, loop
 The designer Atelier owns, launched fresh for every episode; inline, the caller's own session. It designs, splits the work into PBIs, routes and accepts them. It does not build.
 _Avoid_: parent agent, オーケストレーター (only as a transliteration)
 
+**lead (担当)**:
+The model that runs one episode in the designer's place: the test episode's lead (`episodes.test`, the routing template's middle tier by default). It follows `designer.md` like the designer and hands a point it cannot decide to the designer with `needs_designer`.
+_Avoid_: sub-designer, test designer
+
 **worker (実装担当)**:
 A subagent or external CLI that builds one PBI from the PBI and its refs alone, following `worker.md`.
 _Avoid_: child agent, ワーカー
 
 **reviewer (レビュー担当)**:
-The subagent that runs the verify commands, reads the diff and writes one review JSON per report. Never the model that built what it reviews.
+The subagent that runs the verify commands, reads the diff and writes one review JSON per report. A deep review is never on the model that built what it reviews; a normal review runs on the middle tier with a fresh context, whoever built it.
 _Avoid_: checker, QA
 
 **tester (テスト担当)**:
-The subagent that runs the tests at the end of a wave and writes a test result. It proposes the cause of each failure; the designer decides.
+The subagent that runs the tests at the end of a wave, looks into a failure whose cause is unknown (kind `investigate`) and writes a test result. It proposes the cause of each failure; the designer or the lead decides.
 _Avoid_: test runner, QA
+
+**e2e episode (E2E の出番)**:
+The episode after the last wave in which `e2e_run.py`, a script with no model, runs the E2E specs in scope (the PBIs' related specs, the specs that read a changed symbol, and the full suite when the approval said yes) and hands the test-result to the test episode. It never asks.
+_Avoid_: E2E stage, E2E tester
 
 **runner (実行先)**:
 What runs a worker or a role: `agent` (Claude: a Claude Code subagent, or `claude -p` for a headless designer), opencode, codex, agy, dsh, claude, or mcp. A role's runner is its `runner` key (`agent` unless set); the designer takes `agent`, codex or claude only, and mcp runs workers only.

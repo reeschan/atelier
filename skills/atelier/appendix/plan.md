@@ -11,6 +11,7 @@ Keep each PBI small: about 3 changed files at most. Write one file per PBI, `doc
 
 - Model: <from the prepare.py table>
 - Depends on: <PBIs that must be done first, or none>
+- Related specs: <the E2E specs that exercise this change, comma-separated, or none (tests at the end)>
 
 ## Goal
 <why this is needed and where it fits, in 2 or 3 sentences>
@@ -38,7 +39,15 @@ Keep each PBI small: about 3 changed files at most. Write one file per PBI, `doc
 - One verify command per line, as `<n>. \`<command>\``. `verify.py` reads exactly this form; put explanations and expected values in the acceptance criteria.
 - List only the refs this PBI needs. A worker never looks for refs that are not listed.
 - When the lint survey ran (`appendix/lint.md`), add its `jevlint:` lines to the Notes of each PBI whose Targets name a file with a long function or a confirmed weak point: one or two lines, as limits to keep. Never paste the survey itself. A function of 100 lines or more is a sign to split by role when the PBI touches it, not a reason to add a PBI.
-- With tests at the end on (the default), keep test files out of the Targets and write `Tests for the end:` lines instead (`appendix/tests-at-end.md`, `## Plan`).
+- With tests at the end on (the default), keep test files out of the Targets and write `Tests for the end:` lines instead, and a `Breaks by design:` line for each existing test the change breaks on purpose (`appendix/tests-at-end.md`, `## Plan`).
+
+## Format and lint first
+
+The format and the lint run in every worker's verify, so a review never sees a formatting or lint finding.
+
+- At Start, find the project's formatter in write mode and its linter in fix mode (package scripts, the config files, `AGENTS.md` and `CLAUDE.md`). Write their heads to `docs/pbi/checks.json`: `{"format": "pnpm prettier --write", "lint": "pnpm eslint --fix"}`. Leave out a key the project has no command for, and write no file when it has neither.
+- Make them verify commands 1 and 2 of every PBI, on its Targets (for example `pnpm prettier --write src/a.ts src/b.ts` and `pnpm eslint --fix src/a.ts src/b.ts`). The acceptance criterion is that both exit 0.
+- `verify.py` refuses (exit 2) a PBI whose verify commands lack a head that `checks.json` names. `tests_plan.py` puts them in every test PBI itself.
 
 ## Writing verify commands
 
