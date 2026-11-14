@@ -35,6 +35,10 @@ bash と Node:
   --related a.cy.ts,b.cy.ts  "investigate" の {specs} をカンマでつないだ spec に置き換えて流す。
                    上限は spec の数 × limits.per_spec 秒。当たれば `blocked: limit` を出して終了コード 3。
                    spec が空か、investigate に {specs} が無ければ `refused: ...` で終了コード 2
+  --related ... --each  spec を 1 本ずつ流す (サーバーは最初に 1 回だけ用意する)。1 本の上限は limits.per_spec 秒、
+                   落ちた spec は limits.retries 回まで流し直す。<名前>.json の results は spec ごとの 1 行
+                   (n・spec・command・code・tries・log)。上限に当たった spec があれば、全部を流して書いたあとに
+                   `blocked: limit` を出して終了コード 3 (e2e_run.py が spec ごとの結果を読む)
   --final          "final" を時間の上限なしで流す。出力が limits.idle 秒無ければ止め、`blocked: idle` で終了コード 3。
                    <dir>/full-run.approved.json (conductor.py answer --full-run yes) が無ければ `refused: ...` で
                    終了コード 2。あればサーバーを用意したあと、流す直前に消す (承認は 1 回の通しで使い切る)
@@ -445,6 +449,34 @@ def run_named(ctx, base, settings, name, cmd, timeout, idle, tail_n, approval=No
         raise Blocked(f"idle ({idle} 秒出力なし)")
 
 
+def run_each(ctx, base, settings, name, template, specs, limits, tail_n):
+    """spec を 1 本ずつ流し、spec ごとの結果を <名前>.json に書く。上限に当たった spec があれば最後に Blocked。"""
+    logdir = base / "verify"
+    results, limited = [], []
+    print(f"| 番号 | spec | 終了コード | 回数 | 末尾 ({tail_n} 行) | ログ |")
+    print("|---|---|---|---|---|---|")
+    with serving(ctx, settings.get("server"), logdir / f"{name}.server.log"):
+        for n, spec in enumerate(specs, start=1):
+            cmd = template.replace("{specs}", spec)
+            log = logdir / f"{name}.{n}.log"
+            tries = 0
+            while True:
+                tries += 1
+                code, tail = run_one(ctx, cmd, log, limits["per_spec"], tail_n)
+                # 落ちた spec だけ流し直す (上限に当たったものは流し直さない)
+                if code in (0, "timeout") or tries > limits["retries"]:
+                    break
+            if code == "timeout":
+                limited.append(f"{spec} ({limits['per_spec']} 秒)")
+            print(f"| {n} | {spec} | {code} | {tries} | {tail} | {log.as_posix()} |")
+            results.append({"n": n, "spec": spec, "command": cmd, "code": code, "tries": tries,
+                            "log": log.as_posix()})
+            # 1 本ごとに書く (後の spec のサーバーが落ちても、流し終えた結果は残す)
+            merge_results(logdir / f"{name}.json", name, name, results, False)
+    if limited:
+        raise Blocked(f"limit ({', '.join(limited)})")
+
+
 def prepare(base, home):
     """bash・子の環境・ログの先頭の行をそろえ、先頭の行を出す。bash が無ければ終了コード 2。"""
     bash = find_bash(home)
@@ -476,6 +508,7 @@ def parse_args():
     mode.add_argument("--list-deferred", action="store_true", help="あとに回すコマンドの番号を出して終わる")
     mode.add_argument("--related", help="investigate で流す spec をカンマでつないで渡す")
     mode.add_argument("--final", action="store_true", help="final (通し) を流す")
+    ap.add_argument("--each", action="store_true", help="--related の spec を 1 本ずつ流し、spec ごとの結果を書く")
     args = ap.parse_args()
     if args.pbi is None and not (args.related or args.final):
         ap.error("PBI 名 (--deferred では報告名) が要る")
@@ -508,6 +541,9 @@ def main_named(args, base, settings):
         print('refused: "investigate" in tests-at-end.json has no {specs}; it would ignore the specs')
         sys.exit(2)
     ctx = prepare(base, resolve_home(args.home))
+    if args.each:
+        run_each(ctx, base, settings, args.name or "related", template, specs, limits, args.tail)
+        return
     cmd = template.replace("{specs}", ",".join(specs))
     run_named(ctx, base, settings, args.name or "related", cmd, len(specs) * limits["per_spec"], None, args.tail)
 

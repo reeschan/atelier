@@ -306,6 +306,24 @@ class VerifyEnvAndModesTest(unittest.TestCase):
         self.assertLess(elapsed, 20)
         self.assertEqual(self.results('rel'), {1: 'timeout'})
 
+    def test_related_each_runs_one_spec_at_a_time_and_retries_failures(self):
+        # a は通り、b は毎回落ちる。b だけ limits.retries 回流し直す
+        self.settings(investigate='echo {specs} >> runs.txt; test {specs} = a.cy.ts', limits={'retries': 1})
+        r = self.run_script('--related', 'a.cy.ts,b.cy.ts', '--each', '--name', 'e2e')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        runs = (self.root / 'runs.txt').read_text(encoding='utf-8').split()
+        self.assertEqual(runs, ['a.cy.ts', 'b.cy.ts', 'b.cy.ts'])
+        data = json.loads((self.base / 'verify' / 'e2e.json').read_text(encoding='utf-8'))
+        rows = {row['spec']: (row['code'], row['tries']) for row in data['results']}
+        self.assertEqual(rows, {'a.cy.ts': (0, 1), 'b.cy.ts': (1, 2)})
+
+    def test_related_each_keeps_the_results_when_a_spec_hits_the_limit(self):
+        self.settings(investigate='test {specs} = a.cy.ts || sleep 30', limits={'per_spec': 1})
+        r = self.run_script('--related', 'a.cy.ts,b.cy.ts', '--each', '--name', 'e2e')
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn('blocked: limit (b.cy.ts', r.stdout)
+        self.assertEqual(self.results('e2e'), {1: 0, 2: 'timeout'})
+
     def test_final_stops_when_output_goes_quiet(self):
         self.settings(final='echo start; sleep 30; echo never', limits={'idle': 1})
         self.approve_full_run()
