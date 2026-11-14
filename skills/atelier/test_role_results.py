@@ -622,5 +622,55 @@ class BundleTest(unittest.TestCase):
                 self.assertIn('review pass', self.row(out))
 
 
+
+class ClassifyTest(unittest.TestCase):
+    """classify: PBI の Notes の Breaks by design: に合う落ちたテストを intended に振る。"""
+
+    def setUp(self):
+        self.base = make_temp_dir()
+        self.addCleanup(shutil.rmtree, self.base, True)
+        (self.base / 'PBI-001.md').write_text(
+            '# PBI-001: rename\n\n## Notes\n- Breaks by design: e2e/cart.cy.ts — the button is renamed\n'
+            'Breaks by design: tests/price.test.ts::rounds up — rounding moved\n', encoding='utf-8')
+        (self.base / 'PBI-001.rework-1.md').write_text('Breaks by design: e2e/other.cy.ts\n', encoding='utf-8')
+        self.result = self.base / 'verify' / 'tests' / 'e2e.test-result.json'
+        self.result.parent.mkdir(parents=True)
+
+    def write_result(self, failing):
+        self.result.write_text(json.dumps({'schema': 'atelier.test-result/1', 'kind': 'e2e', 'commands': [],
+                                           'failing': failing, 'recommendation': 'needs-designer'}),
+                               encoding='utf-8')
+
+    def row(self, test, file, cause='unknown'):
+        return {'test': test, 'file': file, 'pbi': 'none', 'cause': cause, 'why': 'exit 1'}
+
+    def test_marked_failures_become_intended_and_the_rest_stay(self):
+        self.write_result([self.row('cypress/e2e/cart.cy.ts', 'cypress/e2e/cart.cy.ts'),
+                           self.row('tests/price.test.ts::rounds up to 10', 'tests/price.test.ts', 'regression'),
+                           self.row('tests/price.test.ts::keeps cents', 'tests/price.test.ts'),
+                           self.row('e2e/other.cy.ts', 'e2e/other.cy.ts')])
+        code, out = run('classify', str(self.result), '--dir', str(self.base))
+        self.assertEqual(code, 0, out)
+        self.assertIn('intended tests/price.test.ts::rounds up to 10 (PBI-001)', out)
+        self.assertIn('classify: 2 intended, 2 left', out)
+        rows = json.loads(self.result.read_text(encoding='utf-8'))['failing']
+        self.assertEqual([(r['cause'], r['pbi']) for r in rows],
+                         [('intended', 'PBI-001'), ('intended', 'PBI-001'), ('unknown', 'none'), ('unknown', 'none')])
+        self.assertIn('rounding moved', rows[1]['why'])
+        # 印の e2e/cart.cy.ts はパスの末尾で合う。::keeps cents は印の名前を含まず、手直しの報告の印は読まない
+        code, out = run('check', str(self.result))
+        self.assertEqual(code, 0, out)
+
+    def test_path_suffix_matches(self):
+        self.write_result([self.row('cart', 'e2e/cart.cy.ts'), self.row('x', 'checkout/e2e/cart.cy.ts.bak')])
+        code, out = run('classify', str(self.result), '--dir', str(self.base))
+        self.assertIn('classify: 1 intended, 1 left', out)
+
+    def test_a_broken_result_is_refused(self):
+        self.result.write_text('{}', encoding='utf-8')
+        code, out = run('classify', str(self.result), '--dir', str(self.base))
+        self.assertEqual(code, 2, out)
+
+
 if __name__ == '__main__':
     unittest.main()
