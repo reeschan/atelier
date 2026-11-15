@@ -515,6 +515,131 @@ class AgentFilterTest(unittest.TestCase):
                     self.assertNotIn('opus の段を上書き', r['template']['note'])
 
 
+class SavedSkipTest(unittest.TestCase):
+    """runners.skip.json (今の run で飛ばす実行先・モデル) が --all と単独の route から外れること。"""
+
+    def setUp(self):
+        self.dir_cm = temp_dir()
+        self.d = self.dir_cm.__enter__()
+        self.addCleanup(self.dir_cm.__exit__, None, None, None)
+        self.routing = os.path.join(self.d, 'routing.json')
+        with open(self.routing, 'w', encoding='utf-8') as f:
+            json.dump(multi_runner_routing(until='2099-01-01'), f)
+        os.makedirs(os.path.join(self.d, 'jev'), exist_ok=True)
+        self.facts = os.path.join(self.d, 'PBI-001.facts.json')
+        with open(self.facts, 'w', encoding='utf-8') as f:
+            json.dump(SMALL, f)
+        self.brief = os.path.join(self.d, 'jev', 'PBI-001.brief.json')
+        with open(self.brief, 'w', encoding='utf-8') as f:
+            json.dump({'answers': ALL_ZERO}, f)
+
+    def set_skip(self, run_id, skip_run_id, **entry):
+        os.makedirs(os.path.join(self.d, 'conductor'), exist_ok=True)
+        with open(os.path.join(self.d, 'conductor', 'run.json'), 'w', encoding='utf-8') as f:
+            json.dump({'run_id': run_id}, f)
+        row = {'runner': None, 'model': None, 'cause': 'limit', 'fallback': 'sonnet',
+               'at': '2026-01-01T00:00:00', **entry}
+        with open(os.path.join(self.d, 'runners.skip.json'), 'w', encoding='utf-8') as f:
+            json.dump({'schema': 'atelier.runners-skip/1', 'run_id': skip_run_id, 'entries': [row]}, f)
+
+    def run_all(self, *extra, env=None, script=SCRIPT):
+        return subprocess.run([sys.executable, script, '--all', self.d, '--routing', self.routing, '--today',
+                               BEFORE, '--now', NOW, *extra], capture_output=True, text=True, encoding='utf-8',
+                              errors='replace', env=env or env_with_agents(self.d))
+
+    def run_single(self, *extra):
+        return subprocess.run([sys.executable, SCRIPT, self.facts, self.brief, '--dir', self.d, '--routing',
+                               self.routing, '--today', BEFORE, '--now', NOW, *extra], capture_output=True,
+                              text=True, encoding='utf-8', errors='replace', env=env_with_agents(self.d))
+
+    def all_route(self):
+        with open(os.path.join(self.d, 'PBI-001.route.json'), encoding='utf-8') as f:
+            return json.load(f)
+
+    def used(self, route, key='runner'):
+        return {step[key] for step in route['route']}
+
+    def dropped(self, route, key, name):
+        return [row for row in route['dropped'] if row.get(key) == name]
+
+    def assert_dropped_with_reason(self, route, key, name):
+        rows = self.dropped(route, key, name)
+        self.assertTrue(rows, f'{name} が dropped に無い: {route["dropped"]}')
+        for row in rows:
+            self.assertTrue(row.get('reason'), row)
+
+    def test_C1(self):
+        self.set_skip('run-1', 'run-1', runner='codex')
+        out = self.run_all()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        route = self.all_route()
+        self.assertNotIn('codex', self.used(route))
+        self.assert_dropped_with_reason(route, 'runner', 'codex')
+
+    def test_C2(self):
+        self.set_skip('run-2', 'run-1', runner='codex')
+        out = self.run_all()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn('codex', self.used(self.all_route()))
+
+    def test_C3(self):
+        self.set_skip('run-1', 'run-1', runner='codex')
+        out = self.run_single()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        route = json.loads(out.stdout)
+        self.assertNotIn('codex', self.used(route))
+        self.assert_dropped_with_reason(route, 'runner', 'codex')
+
+    def test_C4(self):
+        self.set_skip('run-2', 'run-1', runner='codex')
+        out = self.run_single()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn('codex', self.used(json.loads(out.stdout)))
+
+    def test_C5(self):
+        self.set_skip('run-1', 'run-1', model='gpt-6-astra')
+        out = self.run_all()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        route = self.all_route()
+        self.assertNotIn('gpt-6-astra', self.used(route, 'model'))
+        self.assert_dropped_with_reason(route, 'model', 'gpt-6-astra')
+        out = self.run_single()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        single = json.loads(out.stdout)
+        self.assertNotIn('gpt-6-astra', self.used(single, 'model'))
+        self.assert_dropped_with_reason(single, 'model', 'gpt-6-astra')
+        self.set_skip('run-2', 'run-1', model='gpt-6-astra')
+        self.assertIn('gpt-6-astra', self.used(json.loads(self.run_single().stdout), 'model'))
+        self.assertEqual(self.run_all().returncode, 0)
+        self.assertIn('gpt-6-astra', self.used(self.all_route(), 'model'))
+
+    def test_C6(self):
+        self.set_skip('run-1', 'run-1', runner='codex')
+        out = self.run_all('--skip', 'agy')
+        self.assertEqual(out.returncode, 0, out.stderr)
+        route = self.all_route()
+        self.assertFalse(self.used(route) & {'agy', 'codex'}, route['route'])
+        self.assertIn('opencode', self.used(route))
+
+    def test_C7(self):
+        self.set_skip('run-1', 'run-1', runner='invalid')
+        out = self.run_all()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn('codex', self.used(self.all_route()))
+
+    def test_C8(self):
+        self.set_skip('run-1', 'run-1', runner='codex')
+        copy = os.path.join(self.d, 'copy')
+        os.makedirs(copy)
+        for name in ('select_model.py', 'templates.py', 'common.py', 'agents.py', 'routing.default.json'):
+            shutil.copy(os.path.join(HERE, name), os.path.join(copy, name))
+        self.assertFalse(os.path.exists(os.path.join(copy, 'runner_skip.py')))
+        out = self.run_all(script=os.path.join(copy, 'select_model.py'))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        # runner_skip.py が無ければ保存した除外は読まれず、skip ファイルが無いときと同じ route になる
+        self.assertIn('codex', self.used(self.all_route()))
+
+
 class AllOnlyTest(unittest.TestCase):
     """--all の --only と --tier。指定した PBI の route.json だけを書き直す。"""
 
