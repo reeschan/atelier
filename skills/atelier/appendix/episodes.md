@@ -17,7 +17,7 @@ The contract between the conductor (`conductor.py`), the designer (`designer.md`
 
 ## No Agent tool
 
-- A codex designer has no Agent tool (its prompt says `Agent tool: no`): it launches every role and worker through the scripts of `runners.md` (`## Without the Agent tool`). Its token counts go to the episode's `history` entry (`tokens`), with no cost, and its context probe prints `context=unknown` (`episode/_kiln.md`).
+- A codex designer has no Agent tool (its prompt says `Agent tool: no`): it launches every role and worker through the scripts of `runners.md` (`## Without the Agent tool`). Its sandbox is `danger-full-access` unless `roles.designer.permission_mode` names another codex sandbox; `workspace-write` blocks the network and writes outside the repository (the run's records in home, each runner's own home; reading is not limited), and a codex started inside it cannot start commands, so its workers fail there. The workers and roles it launches on codex still run in their own sandbox (`runners.md`, `## codex`). Its token counts go to the episode's `history` entry (`tokens`), with no cost, and its context probe prints `context=unknown` (`episode/_kiln.md`).
 - When you need the Agent tool and do not have it, end the episode with status `error` and reason `no-agent-tool`. The conductor turns it into a question (kind `decision`) that offers `run --launch headless --detach`.
 
 ## Depth
