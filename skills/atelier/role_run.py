@@ -7,7 +7,9 @@
   先頭に「agents/atelier-<役割>.md を読んで従う」の行が無ければ足して書き直す (外部の実行先には定義を読む仕組みが無い)。
 - 名前はレビューなら <報告名>.review、テストなら test-<結果の名前>。
 - 実行先ごとの起動:
-    codex:    codex -a never exec --json -s <--sandbox、既定 danger-full-access> (shared-memory の承認は自動) を標準入力の依頼で。
+    codex:    codex -a never exec --json -s <サンドボックス> (shared-memory の承認は自動) を標準入力の依頼で。サンドボックスは
+              --sandbox、無ければ home の agents.json の runners.codex.sandbox、無ければ workspace-write
+              (runner_cli.codex_worker_sandbox。Windows では MXC を選ぶ -c も付く)。
               ログは <名前>.jsonl・.err・.last.md (-o)
     claude:   claude_run.py <名前> --folder roles (claude -p。MCP なし)。ログは <名前>.json・.err・.run.json
     dsh:      dsh_run.py <名前> --folder roles。ログは <名前>.jsonl・.err・.final.md・.run.json
@@ -35,11 +37,9 @@ RUNNERS = tuple(r for r in runner_cli.ROLE_RUNNERS if r != 'agent')
 NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
 MODEL = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/:\[\]-]{0,127}$')
 EFFORT = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$')
-# 役割はソースを変えず結果の JSON だけを書くが、verify のコマンド (pnpm・ユーザーの Node) を動かすので
-# サンドボックスでは塞がれる (workspace-write は fnm・uv の下の実行ファイルとネットワークを通さない)。
-# 既定は開けておき、verify が中で動くリポジトリでは --sandbox で絞れる
-CODEX_SANDBOX = runner_cli.CODEX_DEFAULT_SANDBOX
-ROLE_SANDBOXES = tuple(s for s in runner_cli.CODEX_SANDBOXES if s != 'read-only')
+# 役割はソースを変えず結果の JSON (リポジトリの中) だけを書く。verify のコマンドは作業者と同じくサンドボックスの中で
+# 動かす (runner_cli.CODEX_DEFAULT_SANDBOX)。開けるのは --sandbox か agents.json で明示したときだけ
+ROLE_SANDBOXES = runner_cli.CODEX_WORKER_SANDBOXES
 
 
 def now() -> str:
@@ -79,6 +79,17 @@ def run_script(script: str, args) -> int:
     if args.effort:
         argv += ['--effort', args.effort]
     return subprocess.run(argv, creationflags=NO_WINDOW, check=False).returncode
+
+
+def codex_sandbox(args) -> str:
+    """--sandbox があればそれ、無ければ agents.json の runners.codex.sandbox か既定。読めない値は既定に戻して知らせる。"""
+    if args.sandbox:
+        return args.sandbox
+    sandbox, source = runner_cli.codex_worker_sandbox()
+    if source == 'agents.json invalid':
+        print(f'role_run: warn agents.json runners.codex.sandbox は {", ".join(ROLE_SANDBOXES)} のどれか。'
+              f'{sandbox} を使う', file=sys.stderr)
+    return sandbox
 
 
 def run_codex(args, base: Path, text: str) -> int:
@@ -121,8 +132,9 @@ def main() -> None:
     ap.add_argument('--model', required=True)
     ap.add_argument('--effort', default=None)
     # read-only は除く: 役割は結果の JSON を書くので、書けないサンドボックスでは終わらない
-    ap.add_argument('--sandbox', default=CODEX_SANDBOX, choices=ROLE_SANDBOXES,
-                    help='codex のサンドボックス (既定 danger-full-access)。ほかの実行先では使わない')
+    ap.add_argument('--sandbox', default=None, choices=ROLE_SANDBOXES,
+                    help='codex のサンドボックス (既定は agents.json の runners.codex.sandbox、無ければ workspace-write)。'
+                         'ほかの実行先では使わない')
     ap.add_argument('--pbi-dir', default='docs/pbi')
     args = ap.parse_args()
 
@@ -150,6 +162,7 @@ def main() -> None:
     elif args.runner == 'dsh':
         code = run_script('dsh_run.py', args)
     elif args.runner == 'codex':
+        args.sandbox = codex_sandbox(args)
         code = run_codex(args, base, text)
     elif args.runner == 'opencode':
         code = run_opencode(args, base, prompt)
@@ -159,6 +172,8 @@ def main() -> None:
         # claude_run.py・dsh_run.py は自分で .run.json を書く
         run = {'start': start, 'end': now(), 'exit': code, 'role': args.role, 'runner': args.runner,
                'model': args.model, 'effort': args.effort}
+        if args.runner == 'codex':
+            run['sandbox'] = args.sandbox
         (base / f'{args.name}.run.json').write_text(json.dumps(run, ensure_ascii=False) + '\n', encoding='utf-8')
     print(f'role_run: exit={code} role={args.role} runner={args.runner} model={args.model} effort={args.effort} '
           f'logs={base.as_posix()}/{args.name}.*')

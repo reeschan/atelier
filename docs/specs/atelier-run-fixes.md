@@ -223,6 +223,7 @@ Case-C の run では、各部が正しく動かず、設計者・tester・呼�
   - finish の result に `report_body` を持てるようにする。ファイルが無ければ conductor がその本文から書く。
   - `done` は、REPORT.md も `report_body` も無い finish を拒む。
 - **codex の worker**: `runners.md` の worker の起動を `danger-full-access` にし、役割の既定にそろえる。絞りたいときの選択肢として `workspace-write` を書く。
+  - 2026-11-15 に置き換えた: 作業者と役割は `workspace-write` が既定になった（`docs/specs/codex-sandboxed-workers.md`）。
 
 ### A: 承認の見せ方と名前
 

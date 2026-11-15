@@ -99,11 +99,16 @@ PATH="<OC_DIR>:$PATH" OPENCODE_CONFIG="<skill>/opencode.config.json" opencode ru
 
 ```bash
 mkdir -p docs/pbi/codex
-codex -a never exec -m <model> -c model_reasoning_effort='"<effort>"' -s danger-full-access -o docs/pbi/codex/<report>.last.md - < docs/pbi/codex/<report>.prompt.md > docs/pbi/codex/<report>.log 2>&1
+codex -a never exec -m <model> -c model_reasoning_effort='"<effort>"' <sandbox flags> -o docs/pbi/codex/<report>.last.md - < docs/pbi/codex/<report>.prompt.md > docs/pbi/codex/<report>.log 2>&1
 ```
 
 - `-o` writes the last message (the 5 lines of `worker.md`) to `.last.md`.
-- `-s danger-full-access` is the same sandbox as the roles (`runner_cli.codex_args`): `workspace-write` blocks the user's toolchain (fnm's Node, pnpm, uv's Python, Biome), so the worker cannot run its own verify commands. Use `-s workspace-write` only when the user asks to narrow it, and say in the PBI's Notes that the reviewer runs the verify commands.
+- `<sandbox flags>` are the ones on the `codex sandbox:` line that `prepare.py` prints after its table, copied word for word (the same as the roles, `runner_cli.codex_sandbox_args`). With no such line (you ran `select_model.py` without `prepare.py`), use the defaults:
+  - everywhere: `-s workspace-write -c sandbox_workspace_write.network_access=false -c 'sandbox_workspace_write.writable_roots=[]'`
+  - on Windows, add: `-c 'windows.sandbox="elevated"' -c features.prefer_mxc=true`
+- The two `sandbox_workspace_write` values hold for this run whatever the user's `~/.codex/config.toml` says: a `network_access = true` or a `writable_roots` list there would otherwise still apply under `-s workspace-write`. The worker can then write only inside the work root and the system temp folder, and has no network. Reading is not limited.
+- `-s danger-full-access` (no sandbox) only when that line says so: the user set `runners.codex.sandbox` to `danger-full-access` in home's `agents.json` (`appendix/setup.md`). Never widen the sandbox on your own, and never get round a refused launch by changing its form; show the refusal to the user.
+- What the sandbox blocks: writes outside the work root (except the system temp folder), and the network. Adding a dependency (`pnpm add`, `pnpm install` of a package not yet downloaded) fails, so the worker writes it under Open and you install it yourself, then rework or run the verify commands. On Windows, Python started through the WindowsApps alias or managed by uv does not start inside the sandbox; when only verify commands fail, run them yourself (`## Common rules`). `git status` and `git diff` work in a worktree.
 - Use the route's effort, never above `high` (no xhigh or max).
 - Put this line in the prompt, before `How to work and report:`, so that Japanese and other non-ASCII text survives on Windows:
 
@@ -116,9 +121,10 @@ codex -a never exec -m <model> -c model_reasoning_effort='"<effort>"' -s danger-
 | exit code other than 0 with a usage-limit, authentication or connection error | |
 | `.last.md` empty | |
 
-**Known issues** (checked 2026-10 with codex-cli 0.153).
+**Known issues** (checked 2026-10 with codex-cli 0.153; the sandbox 2026-11 with codex-cli 0.165 on Windows 11).
 
 - Only the token total is reported (`tokens used` in the log), so the breakdown is null and the session stats leave Codex out.
+- `features.prefer_mxc=true` picks the MXC sandbox, where pnpm, Biome and `node --test` run and the network is blocked. `windows.sandbox="elevated"` is what codex falls back to without MXC, whatever the user's `config.toml` says: `unelevated` would leave the network open even with `network_access=false`, and lets `node --test` start no child (`spawn EPERM`). `elevated` blocks the network but runs as another Windows user that cannot read `%LOCALAPPDATA%\pnpm` (pnpm is not found), so verify commands may fail there; run them yourself. A PC without MXC is not tested (codex may also stop when `elevated` was never set up; treat that as an unusable runner).
 
 ## agy (Antigravity)
 
@@ -139,7 +145,7 @@ agy -p "Read docs/pbi/agy/<report>.prompt.md and follow it." --model <model> --m
 | output mentions a usage limit, quota, rate limit, `RESOURCE_EXHAUSTED` or authentication | |
 | `.last.md` missing or empty | |
 
-**Permissions.** `<skill>/agy.settings.json` is applied to this run only (`--settings`, never saved) on top of `~/.gemini/antigravity-cli/settings.json`. It allows every command (`command(*)`) and denies, anywhere in a command line, `git` commit, push, reset, rebase, checkout, switch, restore, stash, clean, merge, cherry-pick, tag and worktree, `rm -rf` and `Remove-Item -Recurse`. Commands run outside the terminal sandbox, as a codex worker does with `danger-full-access`. A denied command comes back to the model as an error and the run goes on. The deny rules match the command text; they guard against mistakes, not against a worker that sets out to get round them.
+**Permissions.** `<skill>/agy.settings.json` is applied to this run only (`--settings`, never saved) on top of `~/.gemini/antigravity-cli/settings.json`. It allows every command (`command(*)`) and denies, anywhere in a command line, `git` commit, push, reset, rebase, checkout, switch, restore, stash, clean, merge, cherry-pick, tag and worktree, `rm -rf` and `Remove-Item -Recurse`. Commands run outside the terminal sandbox (a codex worker runs inside one, `## codex`). A denied command comes back to the model as an error and the run goes on. The deny rules match the command text; they guard against mistakes, not against a worker that sets out to get round them.
 
 **Known issues** (checked 2026-11-13 with agy 1.5.7).
 
@@ -242,10 +248,10 @@ A reviewer or tester whose role value ends in `@<runner>` (the `Roles:` line of 
    python <skill>/role_run.py <name> --role reviewer|tester --runner <runner> --model <model> [--effort <effort>]
    ```
 
-4. `role_run.py` puts the line "Read `<skill>/agents/atelier-<role>.md` and follow it" first in the prompt file, launches the runner (codex: `-a never exec -s danger-full-access`, shared-memory approval automatic; claude: `claude_run.py --folder roles`; dsh: `dsh_run.py --folder roles`; opencode and agy as in their sections) and writes its logs to `docs/pbi/roles/<name>.*`. Its exit code is the child's.
+4. `role_run.py` puts the line "Read `<skill>/agents/atelier-<role>.md` and follow it" first in the prompt file, launches the runner (codex: `-a never exec` with the sandbox flags of `## codex`, shared-memory approval automatic; claude: `claude_run.py --folder roles`; dsh: `dsh_run.py --folder roles`; opencode and agy as in their sections) and writes its logs to `docs/pbi/roles/<name>.*`. Its exit code is the child's.
 5. The result is the review JSON or test result at its usual path, checked by `role_results.py` as always. A missing result, or a sign from the runner's "Unusable when" table, is an unusable runner (`## Common rules`); retry once, then ask (kind `decision`).
 
-- On codex the role runs with no sandbox and no approvals by default, because the verify commands need the network and the user's toolchain (fnm's Node, pnpm, uv's Python), which `workspace-write` blocks. The role reads the diff and the repository, so text in them can steer it. When the verify commands run inside the sandbox, pass `--sandbox workspace-write`. `read-only` is refused: the role must write its result file.
+- On codex the role runs in the same sandbox as a codex worker (`## codex`): it writes its result file inside the repository and runs the verify commands there, with no network and no write outside the repository and the system temp folder. `role_run.py` takes the sandbox from `--sandbox`, then from `runners.codex.sandbox` in home's `agents.json`, then `workspace-write`; pass `--sandbox danger-full-access` only when the user asks for it. `read-only` is refused: the role must write its result file. The role reads the diff and the repository, so text in them can steer it; the sandbox keeps what it can touch to the repository.
 - A runner without a Skill tool cannot call the review skill of the final review. Replace the Skill line of `prompts/final-review.md` with "Read `<path of the skill's SKILL.md>` and follow it. If it needs subagents, write BLOCKED." A `BLOCKED` result goes to the next row (`appendix/review.md`).
 - When both reviewer stages equal the model that built the attempt, use the default pair instead (opus for deep, sonnet at high effort otherwise) on `agent`, and say so in the stage record.
 
