@@ -77,6 +77,12 @@ def write_pbi(d, name, facts, brief, quality):
     write_text(os.path.join(d, f'{name}.brief.md'), '目的: ダミー\n')
 
 
+# 作業者の codex の既定のサンドボックスの引数 (prepare の行に bash に貼れる形で出る)
+WORKSPACE_FLAGS = ("-s workspace-write -c sandbox_workspace_write.network_access=false "
+                   "-c 'sandbox_workspace_write.writable_roots=[]'"
+                   + (" -c 'windows.sandbox=\"elevated\"' -c features.prefer_mxc=true" if sys.platform == 'win32' else ''))
+
+
 def rows(out):
     return [line for line in out.stdout.splitlines() if line.startswith('| PBI-')]
 
@@ -312,6 +318,37 @@ class PrepareTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(self.route('PBI-001'), pinned)
         self.assertEqual(cells(rows(out)[0])[2], 'codex gpt-6.1-terra')
+
+    def codex_sandbox_line(self, agents=None):
+        self.use_home(app=None, agents=agents)
+        self.add_pbi('PBI-001')
+        self.assertEqual(self.run_prepare('--now', NOW).returncode, 0)
+        steps = [{'runner': 'codex', 'model': 'gpt-6.1-terra', 'effort': None}]
+        write_json(os.path.join(self.base, 'PBI-001.route.json'),
+                   {**self.route('PBI-001'), 'route': steps, 'override': {'route': steps, 'why': 'goal'}})
+        out = self.run_prepare('--now', NOW)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return [line for line in out.stdout.splitlines() if line.startswith('codex sandbox:')]
+
+    def test_codex_route_prints_the_sandbox_flags(self):
+        """route に codex があれば、表のあとに作業者のサンドボックスの引数を bash に貼れる形で出す (既定は workspace-write)。"""
+        self.assertEqual(self.codex_sandbox_line(), [f'codex sandbox: {WORKSPACE_FLAGS} (default)'])
+
+    def test_codex_sandbox_opens_only_from_agents_json(self):
+        """agents.json の runners.codex.sandbox が danger-full-access なら開け、読めない値は閉じたままにする。"""
+        line = self.codex_sandbox_line({'runners': {'codex': {'enabled': True, 'sandbox': 'danger-full-access'}}})
+        self.assertEqual(line, ['codex sandbox: -s danger-full-access (agents.json)'])
+
+    def test_codex_sandbox_invalid_value_stays_closed(self):
+        line = self.codex_sandbox_line({'runners': {'codex': {'enabled': True, 'sandbox': 'off'}}})
+        self.assertEqual(line, [f'codex sandbox: {WORKSPACE_FLAGS} (agents.json invalid)'])
+
+    def test_no_codex_route_prints_no_sandbox_line(self):
+        self.use_home(app=None)
+        self.add_pbi('PBI-001')
+        out = self.run_prepare('--now', NOW)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn('codex sandbox:', out.stdout)
 
     def test_prepare_passes_the_pbis_it_prepares_with_only(self):
         self.use_home(app=None)
