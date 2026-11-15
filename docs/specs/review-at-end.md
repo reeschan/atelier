@@ -41,7 +41,10 @@ PBI ごとの見直し (reviewer の起動・束ね・見直しのための差�
 - 裏取り済みの指摘は、担当が 1 件ずつ開き直さない。裏取りまでするスキル (`review-flow`・`lens-review`・pstack の `interrogate`) の結果は、そのまま直しの一覧に書く。裏取りをしない見直し (built-in の `code-review` など) は、今までどおり担当が 1 件ずつ確かめる。
 - 最後の見直しの指摘は、critical・major も含めて `decision: ask` にし、推奨 (`recommend`) を付ける。critical と major は `fix`、minor は今の基準 (`appendix/review.md`, `## Minor findings`) の `fix`・`skip`。修正の段の担当が、作業者を起こす前に 1 回だけ 1 ページで聞く (今の minor の問いと同じ仕組み。`appendix/fix.md`, `## Steps`)。持ち主は「推奨どおり」の 1 行で答えられる。直すのは答えが `fix` の項目だけ。
 - 試験の PBI の作業者は、Self-check に case ごとの行を書く (下の 2.)。モデルの呼び出しは増やさない。
-- 直しの PBI も PBI ごとの見直しをしない。直しの項目は repro のコマンド (`check`) を持つので、機械で確かめる。repro の無い項目 (文書の規則など) の直しの差分 (`fix_plan.py diff`) は、完了の報告に載せる。
+- 直しの PBI も PBI ごとの見直しをしない。直しの項目は repro のコマンド (`check`) を持つので、機械で確かめる。repro の無い項目 (文書の規則など) は機械の確かめが無いので、次の 2 つで補う。
+  - 直しの作業者は、その項目の受け入れ条件 (`F<n> (<file>:<line>): <what> — fixed as: <fix>`) の結果を Self-check に 1 行で書く。
+  - 修正の段の担当は、その PBI を pass と記録する前に、repro の無い項目の直しの差分 (`fix_plan.py diff`) を自分で読み、`fix` の文のとおりに直っているかを確かめる (reviewer は起動しない)。確かめた差分は、完了の報告にも載せる。
+  repro のある項目の扱いは変えない。
 
 ### 1. PBI の流れ (`episode/one-pbi.md`・`appendix/episodes.md`・`appendix/verify.md`・`appendix/rework.md`・`appendix/fix.md`・`runners.md`)
 
@@ -56,7 +59,7 @@ PBI ごとの見直し (reviewer の起動・束ね・見直しのための差�
 ### 2. 試験の PBI (`worker.md`・`appendix/tests-at-end.md`・`tests_plan.py`)
 
 - 試験の PBI の作業者は、報告の `## Self-check` に case ごとの行を書く。形は `<case id>: pass|fail — <その動きを消すと落ちる assert の位置と内容>`。assert が動きを消しても通ってしまう case (空振り) は、その行を書く時点で作業者が気づける。`?` の case は今までどおり PBI に入れない。
-- `tests_plan.py` に `summary` を足す: `python <skill>/tests_plan.py summary docs/pbi`。試験の PBI の `Cases:` と、報告の Self-check の case の行と、`docs/pbi/verify/<report>.json` の実行結果から、1 つの表 `docs/pbi/notes/test-summary.md` を書く。列は `file`・`case id`・`behaviour`・`assert (作業者の行)`・`result`。作業者が行を書かなかった case は `assert` が `missing` になり、`summary` が `exception: <file>: <case id>: missing` と出す (終了コード 4)。担当は例外のある PBI を作業者に戻す。
+- `tests_plan.py` に `summary` を足す: `python <skill>/tests_plan.py summary docs/pbi`。試験の PBI の `Cases:` と、報告の Self-check の case の行から、1 つの表 `docs/pbi/notes/test-summary.md` を書く。列は `file`・`case id`・`behaviour`・`assert (作業者の行)`。実行結果の列は持たない: `docs/pbi/verify/<report>.json` が持つのは検証コマンドごとの終了コードだけで、1 つの試験ファイルの case は 1 つの `test_command` を共有するので、case ごとの結果は取れない。`summary` を流すのは、すべての試験の PBI の検証が通ったあと (`## Test stage` の 4. の終わり) なので、表に載る行はすべて通った試験である。検証が通っていない PBI があるときは、`summary` は表を書かず `exception: <PBI>: verify not passed` と出す (終了コード 4)。作業者が行を書かなかった case は `assert` が `missing` になり、`summary` が `exception: <file>: <case id>: missing` と出す (終了コード 4)。担当は例外のある PBI を作業者に戻す。
 - `appendix/tests-at-end.md` の `## Verify, per PBI`: 試験の PBI にも reviewer を起動しないことを 1 行足す。`## Test stage` の 5. **Close** の前に、`tests_plan.py summary` を実行し、表を `docs/pbi/notes/test-summary.md` に書く手順を足す。stage record `tests` に、例外の数を足す。
 - 落ちた試験の PBI の差し戻しの規則 (`appendix/rework.md`) は変えない: 落ちた case id・assert・出力だけを渡す。
 
@@ -70,7 +73,11 @@ PBI ごとの見直し (reviewer の起動・束ね・見直しのための差�
 ### 4. 修正の段の最初の問い (`appendix/fix.md`・`appendix/questions.md`)
 
 - 修正の段の担当は、作業者を起こす前に、`decision: ask` の項目すべてを kind `decision` の 1 ページで聞く。1 項目ごとに、ファイル・行・何が悪いか・直し方・推奨 (`recommend`) を載せ、選択肢は `fix`・`skip` (ADR との食い違いは `code`・`adr`)。ページの先頭に、推奨のまま答える方法 (「推奨どおり」) を 1 行で書く。
-- 答えが `fix` の項目だけを `decision: fix` にして `fix_plan.py plan` へ進む。`skip` の項目は完了の報告の見送りに載せる (今の minor と同じ)。全部 `skip` なら、修正の段を流さず `e2e` か `finish` へ進む。
+- 答えを一覧の `answer` に書き、`decision` を次のように決める (今の `appendix/fix.md`, `## Steps` の 1. と同じ。どの項目も `ask` のまま残さない。`fix_plan.py` は `ask` が残る間、何も書かないため)。
+  - `fix` の答え: `decision: fix`。
+  - `skip` の答え: `decision: skip`。完了の報告の見送りに載せる (今の minor と同じ)。
+  - ADR との食い違いの `code` と `adr` の答え: どちらも `decision: fix`。項目の `fix` を、選ばれた直し方 (コードの直し、または前の記録を置き換える新しい記録。後者では項目の `file` が新しい記録) に書き換える。ADR との食い違いは `skip` を選べない。
+- `decision: fix` の項目があれば `fix_plan.py plan` へ進む。すべて `skip` なら、修正の段を流さず `e2e` か `finish` へ進む。
 
 ### 状態の図
 
@@ -96,7 +103,7 @@ stateDiagram-v2
 
 ## Testing Decisions
 
-- `tests_plan.py summary`: 試験の PBI と報告と検証の結果の JSON を一時フォルダに作り、表の列、`missing` の例外 (終了コード 4)、`?` の case を持つ PBI、検証が落ちた case の `result` を見る。前例は `test_tests_plan.py`。
+- `tests_plan.py summary`: 試験の PBI と報告と検証の結果の JSON を一時フォルダに作り、表の列、`missing` の例外 (終了コード 4)、`?` の case を持つ PBI、検証が通っていない PBI で表を書かず例外を出すことを見る。前例は `test_tests_plan.py`。
 - 文書の変更: `test_references.py` をそのまま通す (消した手順が他の文書から参照されていないこと)。`bundle` を呼ぶ文書が残っていないことを grep で確かめる。
 - 最後の見直しの指摘の `decision: ask` 化は、`fix_plan.py` が `ask` のまま来た一覧を `exception:` にする既存の動きと、修正の段の最初の問いの手順で担保する。`design_record.py lint --kind decision` を、critical・major を含むページで通す試験を足す。前例は `test_design_record.py`。
 - 実装で確かめること: `review-flow` を `adapters.review` に指定したとき、reviewer (深さ 2) の子の起動 (`appendix/review.md`, `## Run a review skill` の 2.) の制約に当たらないか。当たるなら、`lens-review` と同じ扱い (子を持たずに動く形) にする。
