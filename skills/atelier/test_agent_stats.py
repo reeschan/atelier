@@ -424,6 +424,29 @@ class RunRolesCliTest(unittest.TestCase):
                          {"caller": 1, "designer": 1, "worker": 2, "reviewer": 4, "tester": 1, "other": 1})
         self.assertAlmostEqual(roles["tester"]["usd"], self.per_request, places=9)
 
+    def test_out_run_lists_the_work_start_context_per_episode(self):
+        """roles.json の episodes に、出番ごとの作業開始の文脈 (kiln の start の行、無ければ最初のリクエスト) を書く。"""
+        pbi = self.dir / "pbi"
+        (pbi / "conductor").mkdir(parents=True)
+        (pbi / ".kiln").mkdir()
+        run_path = pbi / "conductor" / "run.json"
+        shutil.copy(EXAMPLES / "run.json", run_path)
+        out = self.dir / "out"
+        r = self.run_roles(EXAMPLES / "projects", run_path, out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # 見本の設計者 (seq 1) の最初のリクエストは input 10 + cache_read 100
+        self.assertEqual(self.roles(out)["episodes"],
+                         [{"seq": 1, "episode": "design", "start_context": 110, "start_source": "first_request"}])
+        self.assertIn("| 1 | design | 110 | first_request |", r.stdout)
+        run_id = example_run()["run_id"]
+        write_jsonl(pbi / ".kiln" / "compact-events.jsonl", [
+            {"role": "designer", "boundary": "phase", "seq": 1, "tokens_before": 90000, "atelier_run_id": run_id},
+            {"role": "designer", "boundary": "start", "seq": 1, "tokens_before": 64000, "atelier_run_id": run_id}])
+        r = self.run_roles(EXAMPLES / "projects", run_path, out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.roles(out)["episodes"],
+                         [{"seq": 1, "episode": "design", "start_context": 64000, "start_source": "kiln"}])
+
     def test_out_run_ignores_another_runs_subagents(self):
         """同じセッションに別の run の設計者とその子、前の run の呼び出し側のリクエストがあっても数えない。"""
         stats = self.dir / "stats"
@@ -645,6 +668,26 @@ class EpisodeCostTest(unittest.TestCase):
         self.assertIsNone(worker["usd"])
         self.assertEqual((worker["requests"], worker["input"], worker["output"]), (2, 40, 60))
         self.assertIsInstance(data["roles"]["designer"]["usd"], float)
+
+    def test_episode_start_prefers_the_kiln_start_line(self):
+        """作業開始の文脈: その seq の boundary start の kiln の行、無ければ設計者の最初のリクエストの文脈。"""
+        sid = "66666666-6666-4666-8666-666666666666"
+        main = self.session(sid, [row("m1", "2026-11-10T00:00:00Z", inp=10, read=50000),
+                                  row("m2", "2026-11-10T00:00:05Z", inp=10, read=90000)])
+        self.agent(main, "d2", f"ATELIER.{self.RUN_ID[:8]}.2 plan",
+                   [row("d2", "2026-11-10T00:01:00Z", inp=5, read=40000, w5=100)])
+        run = self.make_run([{"seq": 1, "session_id": sid}, {"seq": 2}])
+        self.assertEqual(agent_stats.episode_start(run, 1), {"context": 50010, "source": "first_request"})
+        self.assertEqual(agent_stats.episode_start(run, 2), {"context": 40105, "source": "first_request"})
+        kiln = [
+            {"role": "designer", "boundary": "start", "seq": 1, "tokens_before": 70000, "atelier_run_id": "other-run"},
+            {"role": "designer", "boundary": "start", "seq": 1, "tokens_before": None, "atelier_run_id": self.RUN_ID},
+            {"role": "implementer", "boundary": "start", "seq": 1, "tokens_before": 1, "atelier_run_id": self.RUN_ID},
+            {"role": "designer", "boundary": "start", "seq": 2, "tokens_before": 61000, "atelier_run_id": self.RUN_ID},
+        ]
+        self.assertEqual(agent_stats.episode_start(run, 1, kiln), {"context": 50010, "source": "first_request"})
+        self.assertEqual(agent_stats.episode_start(run, 2, kiln), {"context": 61000, "source": "kiln"})
+        self.assertEqual(agent_stats.episode_start(run, 3, kiln), {"context": None, "source": "unmeasured"})
 
     def test_prices_default_to_the_shared_table(self):
         """prices を省くと --cost と同じ単価表 (同梱 + home) で換算する。"""

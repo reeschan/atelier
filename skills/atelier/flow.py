@@ -1,6 +1,7 @@
 """開発フローのテンプレート (workflows/) を解決して検証し、工程ごとの計画を表で返す (docs/specs/atelier-workflow.md)。
 
-  python flow.py <pbi-dir> [--workflow NAME] [--home DIR] [--decide]
+  python flow.py <pbi-dir> [--workflow NAME] [--home DIR] [--decide | --skill-tool-episodes]
+  python flow.py <pbi-dir> --skill NAME
 
 テンプレートの解決順は、--workflow を省くと <pbi-dir>/workflow.json → <home>/workflows/jev-routed.json →
 同梱の workflows/jev-routed.json。--workflow NAME を渡すと <home>/workflows/NAME.json → 同梱の workflows/NAME.json
@@ -20,7 +21,7 @@ model-check は関所と同じく成り立つ部品をすべて動かし、後�
 after: route の関所だけにあること、where が runner の部品が memory full でないこと、calls_back が真の部品を
 使っていないこと、オプションの工程の stage・after・部品 (その工程を担うもの、1 つの工程は 1 回だけ、PICK_FIRST の工程は
 最後の候補が後ろ盾)、
-fix.max_rework が 0〜5 の整数、build.external_memory が none か refs-only。
+fix.max_rework が 0〜5 の整数、build.external_memory が none か refs-only、部品の needs_skill_tool (任意) が真偽値。
 候補の where の上書き (main・subagent-readonly・subagent。runner の部品は変えられない) と models
 (部品が起こすサブエージェントのモデル。`opus xhigh` の形で 1〜10 個、where が main の候補だけ。サブエージェントは
 サブエージェントを起こせないため)。
@@ -29,10 +30,23 @@ fix.max_rework が 0〜5 の整数、build.external_memory が none か refs-onl
 doc は、その部品を動かす手順が書いてあるスキルの中のファイル (設計者はそこを読んで動かす)。
 where はテンプレートの上書きがあればそれ。models はカンマ区切り、無ければ `-`。
 関所の行の stage は `gate after <工程>`、オプションの工程の行は `<工程> after <工程>`。status は builtin・script ok・cli missing <名前>・env missing <名前>・
-plugin ok <SKILL.md の場所>・plugin missing <名前> (read-skill の部品。プラグインの置き場 PBI_PLUGINS_DIR、
-無ければ ~/.claude/plugins の下で、<プラグイン名>/ か <プラグイン名>/<版>/ の直下に invoke.path があるかを見る)・
-check skill list (Skill ツールで呼ぶスキルはスクリプトからは見えないので、設計者が自分のスキル一覧で確かめる)。
-表の前に `workflow <名前> (<読んだファイル>)` の 1 行を出す。
+plugin ok <SKILL.md の場所>・plugin missing <名前> (read-skill の部品)・skill ok <SKILL.md の場所>・skill builtin・
+skill missing (kind skill の部品)。表の前に `workflow <名前> (<読んだファイル>)` の 1 行を出す。
+
+スキルとプラグインの置き場:
+- プラグインの置き場は PBI_PLUGINS_DIR、無ければ <CLAUDE_CONFIG_DIR か ~/.claude>/plugins。その installed_plugins.json の
+  installPath (入っている版の置き場) だけを見る。scope が user のものと、projectPath が作業ルートかその上にあるものを使い、
+  marketplaces の写しは使わない。installed_plugins.json が無いときは、置き場の下 (marketplaces を除く) の
+  <プラグイン名>/ か <プラグイン名>/<版>/ を探す。
+- <プラグイン>:<スキル> は、その置き場の skills/ の下 (分類のフォルダを挟んでもよい) の <スキル>/SKILL.md。
+- <スキル> は、作業ルートの .claude/skills/<スキル>/SKILL.md、次に自分のスキルの置き場 (PBI_SKILLS_DIR、無ければ
+  <CLAUDE_CONFIG_DIR か ~/.claude>/skills) の <スキル>/SKILL.md。どちらにも無く BUILTIN_SKILLS にあれば skill builtin。
+- 作業ルートは <pbi-dir> とその上のうち、最初に .git を持つフォルダ。
+
+--skill NAME は、スキル 1 つの状態 (skill ok <場所>・skill builtin・skill missing) だけを 1 行で出す。テンプレートは読まない。
+
+--skill-tool-episodes は、`workflow` の行のあと `skill-tool-episodes <出番,…>` (無ければ `-`) の 1 行を出す。
+Skill ツールを持つ設計者で起こす出番の一覧 (skill_tool_episodes)。
 
 --decide は、振り分けのあと (<pbi-dir>/PBI-*.route.json が揃ってから) に使う。PBI ごとに決まる when を
 route.json から判定し、表 (place / component / pbi / decision / reason) を出す。対象は after: route の関所の部品
@@ -109,6 +123,20 @@ HEADER = 'stage\tcomponent\tinvoke\twhere\tmemory\twhen\tstatus\tdoc\tmodels'
 DECIDE_HEADER = 'place\tcomponent\tpbi\tdecision\treason'
 # プラグインの置き場の下を探す深さ (~/.claude/plugins/cache/<marketplace>/<plugin>/<版> まで届く)
 PLUGIN_SEARCH_DEPTH = 5
+# installed_plugins.json が無いときに探さない置き場の下のフォルダ。marketplaces は入れる前の写しで、入っている版ではない
+NOT_INSTALLED_DIRS = ('marketplaces',)
+# Claude Code に組み込みで、SKILL.md の無いまま Skill ツールで呼べるスキル
+BUILTIN_SKILLS = ('code-review', 'security-review', 'simplify', 'init', 'claude-api', 'update-config',
+                  'keybindings-help', 'fewer-permission-prompts', 'loop', 'schedule')
+# 使える kind skill の状態の頭
+SKILL_USABLE = ('skill ok ', 'skill builtin')
+# 工程 (オプションの工程と関所は after の工程) から、その行を動かす出番。build と verify は、作業者と見直しを起こす
+# 出番 (build・test の PBI・fix の PBI) のすべてで動く
+STAGE_EPISODES = {
+    'understand': ('design',), 'design': ('design',), 'plan': ('design',), 'route': ('design',),
+    'build': ('build', 'test', 'fix'), 'verify': ('build', 'test', 'fix'),
+    'review': ('review',), 'fix': ('fix',), 'finish': ('finish',),
+}
 
 
 def load_components(base=COMPONENTS, home: Path | None = None) -> tuple[dict, list[str]]:
@@ -185,6 +213,8 @@ def component_error(data: dict, stem: str) -> str | None:
     for key in ('interactive', 'calls_back'):
         if not isinstance(data.get(key), bool):
             return f'{key} must be true or false'
+    if not isinstance(data.get('needs_skill_tool', False), bool):
+        return 'needs_skill_tool must be true or false'
     return None
 
 
@@ -341,42 +371,127 @@ def check_item(item, role: str, place: str, components: dict, errors: list, afte
     return component
 
 
+def claude_dir(env) -> Path:
+    """Claude Code の設定の置き場。CLAUDE_CONFIG_DIR、無ければ ~/.claude。"""
+    return Path(env['CLAUDE_CONFIG_DIR']) if env.get('CLAUDE_CONFIG_DIR') else Path.home() / '.claude'
+
+
 def plugins_root(env) -> Path:
-    """プラグインの置き場。PBI_PLUGINS_DIR、無ければ ~/.claude/plugins。"""
-    return Path(env['PBI_PLUGINS_DIR']) if env.get('PBI_PLUGINS_DIR') else Path.home() / '.claude' / 'plugins'
+    """プラグインの置き場。PBI_PLUGINS_DIR、無ければ <CLAUDE_CONFIG_DIR か ~/.claude>/plugins。"""
+    return Path(env['PBI_PLUGINS_DIR']) if env.get('PBI_PLUGINS_DIR') else claude_dir(env) / 'plugins'
 
 
-def find_plugin_file(plugin: str, rel: str, root: Path) -> Path | None:
-    """root の下の <plugin>/<rel> か <plugin>/<版>/<rel> のうち、いちばん新しいもの。無ければ None。"""
-    found = []
+def skills_root(env) -> Path:
+    """自分のスキルの置き場。PBI_SKILLS_DIR、無ければ <CLAUDE_CONFIG_DIR か ~/.claude>/skills。"""
+    return Path(env['PBI_SKILLS_DIR']) if env.get('PBI_SKILLS_DIR') else claude_dir(env) / 'skills'
+
+
+def work_root_of(path) -> Path | None:
+    """path とその上のうち、最初に .git を持つフォルダ (作業ルート)。無ければ None。"""
+    here = Path(path).resolve()
+    for candidate in (here, *here.parents):
+        if (candidate / '.git').exists():
+            return candidate
+    return None
+
+
+def is_under(path: Path, top: Path) -> bool:
+    """path が top かその下にあるか。"""
+    try:
+        Path(path).resolve().relative_to(Path(top).resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def installed_dirs(plugin: str, root: Path, work_root: Path | None = None) -> list[Path] | None:
+    """root/installed_plugins.json にある plugin の installPath (新しく入れたものから)。ファイルが無ければ None。
+
+    scope が user のものと、projectPath が作業ルートかその上にあるもの (作業ルートが分からなければ user だけ) を使う。
+    """
+    data = common.load_json(Path(root) / 'installed_plugins.json')
+    if not isinstance(data, dict):
+        return None
+    entries = []
+    for key, rows in (data.get('plugins') or {}).items():
+        if key.split('@')[0] != plugin or not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get('installPath'), str):
+                continue
+            project = row.get('projectPath')
+            if row.get('scope') == 'user' or (isinstance(project, str) and work_root is not None
+                                              and is_under(work_root, Path(project))):
+                entries.append(row)
+    entries.sort(key=lambda row: str(row.get('lastUpdated') or row.get('installedAt') or ''), reverse=True)
+    return [Path(row['installPath']) for row in entries if Path(row['installPath']).is_dir()]
+
+
+def scanned_dirs(plugin: str, root: Path) -> list[Path]:
+    """installed_plugins.json の無い置き場の下で、<plugin>/ と <plugin>/<版>/ のフォルダ (marketplaces を除く)。"""
     root = Path(root)
     if not root.is_dir():
-        return None
+        return []
+    found = []
     for current, dirs, _files in os.walk(root):
-        depth = len(Path(current).relative_to(root).parts)
+        here = Path(current)
+        depth = len(here.relative_to(root).parts)
+        if depth == 0:
+            dirs[:] = [d for d in dirs if d not in NOT_INSTALLED_DIRS]
         if depth >= PLUGIN_SEARCH_DEPTH:
             dirs[:] = []
-        if Path(current).name != plugin:
-            continue
-        here = Path(current)
-        found += [c for c in [here / rel, *(d / rel for d in here.iterdir() if d.is_dir())] if c.is_file()]
-    return max(found, key=lambda c: c.stat().st_mtime) if found else None
+        if here.name == plugin:
+            found += [here, *(d for d in here.iterdir() if d.is_dir())]
+    return found
 
 
-def find_skill_file(name: str, skills_dir: Path, env) -> Path | None:
-    """スキルの SKILL.md。<プラグイン>:<スキル> はプラグインの置き場、ほかは skills_dir/<名前>/SKILL.md。無ければ None。
+def plugin_dirs(plugin: str, root: Path, work_root: Path | None = None) -> list[Path]:
+    """plugin の入っている版の置き場の候補。installed_plugins.json があればその installPath だけ。"""
+    installed = installed_dirs(plugin, root, work_root)
+    return scanned_dirs(plugin, root) if installed is None else installed
 
-    スクリプトから見える置き場だけを見る。Claude Code のスキルの一覧にあるかは、設計者が一覧で確かめる。
+
+def newest(paths: list) -> Path | None:
+    return max(paths, key=lambda c: c.stat().st_mtime) if paths else None
+
+
+def find_plugin_file(plugin: str, rel: str, root: Path, work_root: Path | None = None) -> Path | None:
+    """plugin の入っている版の置き場の <rel> のうち、いちばん新しいもの。無ければ None。"""
+    return newest([d / rel for d in plugin_dirs(plugin, root, work_root) if (d / rel).is_file()])
+
+
+def find_plugin_skill_file(plugin: str, skill: str, root: Path, work_root: Path | None = None) -> Path | None:
+    """plugin の入っている版の skills/ の下 (分類のフォルダを挟んでもよい) の <skill>/SKILL.md。無ければ None。"""
+    found = []
+    for directory in plugin_dirs(plugin, root, work_root):
+        if (directory / 'skills').is_dir():
+            found += [p for p in (directory / 'skills').rglob('SKILL.md') if p.parent.name == skill]
+    return newest(found)
+
+
+def find_skill_file(name: str, skills_dir: Path, env, work_root: Path | None = None) -> Path | None:
+    """スキルの SKILL.md。無ければ None。
+
+    <プラグイン>:<スキル> はプラグインの入っている版の置き場から。ほかは作業ルートの .claude/skills/<名前>/SKILL.md、
+    次に skills_dir/<名前>/SKILL.md。
     """
     if ':' in name:
         plugin, _, skill = name.partition(':')
-        return find_plugin_file(plugin, f'skills/{skill}/SKILL.md', plugins_root(env))
-    candidate = Path(skills_dir) / name / 'SKILL.md'
-    return candidate if candidate.is_file() else None
+        return find_plugin_skill_file(plugin, skill, plugins_root(env), work_root)
+    candidates = ([Path(work_root) / '.claude' / 'skills'] if work_root is not None else []) + [Path(skills_dir)]
+    return next((c / name / 'SKILL.md' for c in candidates if (c / name / 'SKILL.md').is_file()), None)
 
 
-def status(component: dict, agents, env) -> str:
-    """部品が使えるかの見込み。Skill ツールで呼ぶスキルはスクリプトから見えないので check skill list。"""
+def skill_status(name: str, env, work_root: Path | None = None) -> str:
+    """kind skill のスキルの状態: skill ok <SKILL.md の場所>、skill builtin、skill missing。"""
+    found = find_skill_file(name, skills_root(env), env, work_root)
+    if found is not None:
+        return f'skill ok {found}'
+    return 'skill builtin' if name in BUILTIN_SKILLS else 'skill missing'
+
+
+def status(component: dict, agents, env, work_root: Path | None = None) -> str:
+    """部品が使えるかの見込み。"""
     kind = component['invoke']['kind']
     if kind == 'builtin':
         return 'builtin'
@@ -389,11 +504,69 @@ def status(component: dict, agents, env) -> str:
             return f'env missing {name}'
     if kind == 'read-skill':
         plugin = component['invoke']['plugin']
-        found = find_plugin_file(plugin, component['invoke']['path'], plugins_root(env))
+        found = find_plugin_file(plugin, component['invoke']['path'], plugins_root(env), work_root)
         return f'plugin ok {found}' if found else f'plugin missing {plugin}'
-    if requires.get('skills') or requires.get('plugins') or kind == 'skill':
-        return 'check skill list'
+    for name in requires.get('plugins', []):
+        if not plugin_dirs(name, plugins_root(env), work_root):
+            return f'plugin missing {name}'
+    for name in requires.get('skills', []):
+        if not skill_status(name, env, work_root).startswith(SKILL_USABLE):
+            return 'skill missing'
+    if kind == 'skill':
+        return skill_status(component['invoke']['name'], env, work_root)
     return 'script ok'
+
+
+def needs_skill_tool(component: dict, where: str, state: str) -> bool:
+    """その行を動かす設計者に Skill ツールが要るか。
+
+    設計者が動かす (where が main) 使える kind skill の行で、部品が needs_skill_tool を持つもの。組み込みのスキルは
+    読む SKILL.md が無いので、needs_skill_tool が無くても Skill ツールで呼ぶ。
+    """
+    if where != 'main' or component['invoke']['kind'] != 'skill' or not state.startswith(SKILL_USABLE):
+        return False
+    return component.get('needs_skill_tool') is True or state == 'skill builtin'
+
+
+def anchor_stage(place: str) -> str:
+    """表の場所 (工程、`<オプションの工程> after <工程>`、`gate after <工程>`) の工程。"""
+    return place.rsplit(' after ', 1)[1] if ' after ' in place else place
+
+
+def skill_tool_episodes(base, workflow=None, env=None, home=None) -> set:
+    """その run のテンプレートで、Skill ツールを持つ設計者で起こす出番の名前の集合。
+
+    使える行 (status が skill ok か skill builtin) のうち where が main で needs_skill_tool の部品 (needs_skill_tool) を
+    持つ出番。行の出番は、その行の工程 (オプションの工程と関所は after の工程) から STAGE_EPISODES で決める。
+    home の agents.json の adapters.design が使えるスキルの名前なら、design の出番も足す。
+    テンプレートの解決は CLI と同じ (workflow はテンプレートの名前、home を省くと common.resolve_home)。
+    テンプレートが見つからない・読めない・検証に通らないときは ValueError。
+    """
+    env = os.environ if env is None else env
+    base = Path(base)
+    home = common.resolve_home(None) if home is None else Path(home)
+    path, candidates = find_workflow(base, workflow, home)
+    if path is None:
+        raise ValueError('workflow not found: ' + ', '.join(common.shown(c) for c in candidates))
+    data = common.load_json(path)
+    if data is None:
+        raise ValueError(f'{common.shown(path)}: not readable JSON')
+    components, errors = load_components(home=home)
+    errors += workflow_errors(data, components)
+    if errors:
+        raise ValueError('; '.join(errors))
+    agents = common.load_json(home / 'agents.json')
+    work_root = work_root_of(base)
+    rows = plan_rows(data, components, agents if isinstance(agents, dict) else None, env, work_root)
+    episodes = set()
+    for place, cid, _kind, where, _memory, _when, state, _doc, _models in rows:
+        if needs_skill_tool(components[cid], where, state):
+            episodes.update(STAGE_EPISODES[anchor_stage(place)])
+    # adapters.design のスキルは、テンプレートの design の部品の代わりに設計者が動かす (appendix/adapters.md)
+    design = agents_module.load_adapters(home)[0]['design']
+    if design not in ('auto', 'off') and skill_status(design, env, work_root).startswith(SKILL_USABLE):
+        episodes.update(STAGE_EPISODES['design'])
+    return episodes
 
 
 def route_error(route) -> str | None:
@@ -452,7 +625,7 @@ def decide_rows(workflow: dict, components: dict, routes: dict, adapters=None) -
     return rows
 
 
-def plan_rows(workflow: dict, components: dict, agents, env) -> list[tuple]:
+def plan_rows(workflow: dict, components: dict, agents, env, work_root: Path | None = None) -> list[tuple]:
     """工程・オプションの工程・関所の順に、表の行を返す。オプションの工程と関所は after の工程の直後に置く。"""
     rows = []
     gates = workflow.get('gates', [])
@@ -462,7 +635,7 @@ def plan_rows(workflow: dict, components: dict, agents, env) -> list[tuple]:
         cid, when = entry(item)
         component = components[cid]
         rows.append((place, cid, component['invoke']['kind'], entry_where(item, component), component['memory'],
-                     when or component['when'], status(component, agents, env), component['doc'],
+                     when or component['when'], status(component, agents, env, work_root), component['doc'],
                      ','.join(entry_models(item)) or '-'))
 
     for stage in STAGES:
@@ -484,7 +657,11 @@ def main(argv=None) -> int:
     ap.add_argument('pbi_dir', help='作業の docs/pbi (workflow.json を探す場所)')
     ap.add_argument('--workflow', help='テンプレートの名前 (home か同梱の workflows/<名前>.json)')
     ap.add_argument('--home', help='workflows/・components/・agents.json を置く home (common.resolve_home)')
-    ap.add_argument('--decide', action='store_true', help='route.json から PBI ごとの when を判定して表で出す')
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument('--decide', action='store_true', help='route.json から PBI ごとの when を判定して表で出す')
+    mode.add_argument('--skill-tool-episodes', action='store_true',
+                      help='Skill ツールを持つ設計者で起こす出番を 1 行で出す')
+    mode.add_argument('--skill', metavar='NAME', help='スキル 1 つの状態 (skill ok <場所>・skill builtin・skill missing) を出す')
     args = ap.parse_args(argv)
     common.utf8_stdout()
 
@@ -492,6 +669,9 @@ def main(argv=None) -> int:
     if not base.is_dir():
         print(f'{args.pbi_dir}: not a directory', file=sys.stderr)
         return 2
+    if args.skill:
+        print(skill_status(args.skill, os.environ, work_root_of(base)))
+        return 0
     home = common.resolve_home(args.home)
     path, candidates = find_workflow(base, args.workflow, home)
     if path is None:
@@ -526,10 +706,15 @@ def main(argv=None) -> int:
         for cells in decide_rows(workflow, components, routes, common.load_json(base / 'adapters.json')):
             print('\t'.join(cells))
         return 0
+    if args.skill_tool_episodes:
+        episodes = skill_tool_episodes(base, args.workflow, os.environ, home)
+        print(f'skill-tool-episodes {",".join(sorted(episodes)) or "-"}')
+        return 0
     print(HEADER)
     # runners が無くても tools (jevlint など道具の場所) は読む
     agents = common.load_json(home / 'agents.json')
-    for cells in plan_rows(workflow, components, agents if isinstance(agents, dict) else None, os.environ):
+    for cells in plan_rows(workflow, components, agents if isinstance(agents, dict) else None, os.environ,
+                           work_root_of(base)):
         print('\t'.join(cells))
     return 0
 
