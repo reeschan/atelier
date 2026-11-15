@@ -1,6 +1,6 @@
 '''指示文の中の相対パスの参照が実在することと、本文の大きさの上限を確かめる (S4)。
 
-対象はスキルのディレクトリ直下の *.md と appendix/*.md と agents/*.md と prompts/*.md。
+対象はスキルのディレクトリ直下の *.md と appendix/*.md と episode/*.md と agents/*.md と prompts/*.md。
 その中のバッククォートで囲んだ語のうち、スキルの中のファイルを指す相対パス
 (拡張子 .md .py .json .mjs .html) を取り出し、スキルのディレクトリからの
 相対として解決できることを確かめる。切れた参照があれば、指示文のファイル名・
@@ -15,19 +15,21 @@
 '''
 import json
 import re
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
 # 対象の指示文 (スキルのディレクトリからの相対パターン)
-DOC_PATTERNS = ('*.md', 'appendix/*.md', 'agents/*.md', 'prompts/*.md')
+DOC_PATTERNS = ('*.md', 'appendix/*.md', 'episode/*.md', 'agents/*.md', 'prompts/*.md')
 
 # 実在を確かめる拡張子
 SUFFIXES = ('.md', '.py', '.json', '.mjs', '.html')
 
 # ファイル名だけの参照を探すディレクトリ (スキルのディレクトリからの相対。'' は直下)
-SEARCH_DIRS = ('', 'appendix', 'prompts', 'studio', 'jev', 'rtk', 'examples')
+SEARCH_DIRS = ('', 'appendix', 'episode', 'prompts', 'studio', 'jev', 'rtk', 'examples')
 
 # 取り除く前置き (この順に試す)
 PREFIXES = ('<skill>/', '<このディレクトリ>/', '<スキル>/')
@@ -187,6 +189,56 @@ def format_reference(ref):
     return f'{name}:{lineno}: {path}'
 
 
+# 見出しを名指す書き方。`x.md` (`## 見出し`)・`x.md`, `## 見出し`・`x.md`, "見出し"・`x.md#見出し`
+HEADING_IN_PARENS = re.compile(r'`([\w./-]+\.md)`[^`\n]{0,40}?\(`(#{2,3} [^`]+)`\)')
+HEADING_AFTER_COMMA = re.compile(r'`([\w./-]+\.md)`, `(#{2,3} [^`]+)`')
+HEADING_QUOTED = re.compile(r'`([\w./-]+\.md)`, "([^"]+)"')
+HEADING_HASH = re.compile(r'`([\w./-]+\.md)#([^`]+)`')
+HEADING_LINE = re.compile(r'^(#{1,6}) (.+?)\s*$')
+
+
+def named_headings(line):
+    '''1 行から (ファイル, 見出し) を返す。見出しは `## 名前` の形、`x.md#名前` の形は `#名前`。'''
+    found = HEADING_IN_PARENS.findall(line) + HEADING_AFTER_COMMA.findall(line)
+    found += [(path, f'## {name}') for path, name in HEADING_QUOTED.findall(line)]
+    found += [(path, f'#{name}') for path, name in HEADING_HASH.findall(line)]
+    return found
+
+
+def heading_target(path):
+    '''見出しを探すファイル。ディレクトリつきはそのパス、名前だけは SEARCH_DIRS から探す。無ければ None。'''
+    if '/' in path:
+        target = HERE / path
+        return target if target.is_file() else None
+    for directory in SEARCH_DIRS:
+        target = (HERE / directory if directory else HERE) / path
+        if target.is_file():
+            return target
+    return None
+
+
+def has_heading(target, heading):
+    '''ファイルにその見出しがあるかを返す。``` の囲みの中の行は見出しに数えない。
+
+    `## 名前` の形は階層まで同じ見出し、`#名前` の形はどの階層でも同じ名前の見出しを探す。
+    '''
+    any_level = re.match(r'#[^# ]', heading) is not None
+    fenced = False
+    for line in target.read_text(encoding='utf-8').splitlines():
+        if line.lstrip().startswith('```'):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if any_level:
+            match = HEADING_LINE.match(line)
+            if match and match.group(2) == heading[1:]:
+                return True
+        elif line.rstrip() == heading:
+            return True
+    return False
+
+
 SKILL = HERE / 'SKILL.md'
 COMPONENTS = HERE / 'components'
 
@@ -225,6 +277,8 @@ class ReferencesTest(unittest.TestCase):
         self.assertIn('appendix/episodes.md', names)
         self.assertIn('prompts/tester.md', names)
         self.assertIn('prompts/designer-episode.md', names)
+        self.assertIn('episode/build.md', names)
+        self.assertIn('episode/_kiln.md', names)
         self.assertTrue(
             any(re.fullmatch(r'agents/atelier-[\w-]+\.md', name) for name in names),
             'agents/atelier-*.md が 1 つも対象に入っていない',
@@ -284,18 +338,36 @@ class ReferencesTest(unittest.TestCase):
         self.assertLess(len(text.encode('utf-8')) / BYTES_PER_TOKEN, SKILL_MAX_TOKENS)
 
     def test_headings_named_in_backticks_exist(self):
-        '''`appendix/x.md` (`## 見出し`) と `appendix/x.md`, "見出し" の形で指す見出しが、その指示文にあること。'''
-        backticked = re.compile(r'`([\w./-]+\.md)`[^`\n]{0,40}?\(`(## [^`]+)`\)')
-        quoted = re.compile(r'`([\w./-]+\.md)`, "([^"]+)"')
+        '''`x.md` (`## 見出し`)・`x.md`, `## 見出し`・`x.md`, "見出し"・`x.md#見出し` の形で指す見出しが、その指示文にあること。'''
         missing = []
         for document in documents():
             for lineno, line in enumerate(document.read_text(encoding='utf-8').splitlines(), 1):
-                found = backticked.findall(line) + [(path, f'## {name}') for path, name in quoted.findall(line)]
-                for path, heading in found:
-                    target = HERE / path
-                    if target.is_file() and heading not in target.read_text(encoding='utf-8').splitlines():
+                for path, heading in named_headings(line):
+                    target = heading_target(path)
+                    if target is not None and not has_heading(target, heading):
                         missing.append(f'{document.relative_to(HERE).as_posix()}:{lineno}: {path} {heading}')
         self.assertEqual([], missing, '\n'.join(missing))
+
+    def test_heading_forms_are_read(self):
+        '''4 つの書き方から (ファイル, 見出し) を取り出すこと。'''
+        line = ('(`appendix/a.md`, `## One`) `appendix/b.md` (`## Two`) `appendix/c.md`, "Three" '
+                '`episode/d.md#Four five`')
+        self.assertEqual(
+            {('appendix/a.md', '## One'), ('appendix/b.md', '## Two'), ('appendix/c.md', '## Three'),
+             ('episode/d.md', '#Four five')},
+            set(named_headings(line)),
+        )
+
+    def test_hash_form_matches_any_level_outside_fences(self):
+        '''`x.md#見出し` はどの階層の見出しにも当たり、``` の囲みの中の行には当たらないこと。'''
+        folder = Path(tempfile.mkdtemp(prefix='refs-'))
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        target = folder / 'x.md'
+        target.write_text('# X\n\n### Deep one\n\n```text\n## Fenced\n```\n', encoding='utf-8')
+        self.assertTrue(has_heading(target, '#Deep one'))
+        self.assertFalse(has_heading(target, '#Fenced'))
+        self.assertTrue(has_heading(target, '### Deep one'))
+        self.assertFalse(has_heading(target, '## Deep one'))
 
 
 if __name__ == '__main__':

@@ -230,7 +230,7 @@ python <skill>/jev_mcp.py --http --port 7830 --root <absolute repository path>  
 
 **Unusable when.** `.last.md` never comes, or the status is `NEEDS_CONTEXT` or `BLOCKED`: treat it as unusable (`## Common rules`) or rework, as with any runner. Remove a `.claim.json` left behind only after confirming the client has stopped.
 
-## Roles on a runner (role_run.py)
+## Roles on a runner
 
 A reviewer or tester whose role value ends in `@<runner>` (the `Roles:` line of your prompt, `appendix/setup.md` `## roles`) runs on that runner, not as an Agent tool subagent. The same rules as for external workers hold: one launch per review or test, files at fixed paths, no memory.
 
