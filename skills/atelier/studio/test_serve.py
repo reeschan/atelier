@@ -499,7 +499,7 @@ class ServeTest(unittest.TestCase):
         components = self.get_state()['flow']['components']
         self.assertEqual(components['review.mine']['source'], 'home')
         workflow = self.bundled_workflow()
-        workflow['stages']['review'] = [{'id': 'review.mine', 'when': 'deep'}, 'review.builtin']
+        workflow['stages']['review'] = [{'id': 'review.mine', 'when': 'adapter-gate'}, 'review.builtin']
         code, body = self.request('PUT', '/api/workflows/jev-routed', workflow)
         self.assertEqual(code, 200, body)
         # 同梱の id を使う home の部品は誤りとして返り、その間は保存も断る
