@@ -475,5 +475,139 @@ class PureFunctionsWriteNothingTest(Base):
                          {'enabled': True, 'models': ['m1'], 'billing': 'flat'})
 
 
+DEF_FILES = ('atelier-designer.md', 'atelier-designer-skills.md', 'atelier-reviewer.md', 'atelier-tester.md',
+             'pbi-worker.md')
+
+
+def frontmatter(path):
+    """定義のファイルの frontmatter (キー → 値) と本文。"""
+    text = Path(path).read_text(encoding='utf-8').replace('\r\n', '\n')
+    head, _, body = text[len('---\n'):].partition('\n---\n')
+    meta = {}
+    for line in head.split('\n'):
+        key, sep, value = line.partition(':')
+        if sep:
+            meta[key.strip()] = value.strip()
+    return meta, body
+
+
+def sha256(path):
+    import hashlib
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+class DefinitionsTest(Base):
+    """defs --install: 写す先・.git/info/exclude・agents.json の記録。"""
+
+    def setUp(self):
+        super().setUp()
+        self.claude = self.root / 'claude'
+        self.work = self.root / 'work'
+        (self.work / '.git' / 'info').mkdir(parents=True)
+
+    def defs(self, *args, session=None):
+        env = self.env()
+        env['CLAUDE_CONFIG_DIR'] = str(self.claude)
+        env.pop('CLAUDE_CODE_SESSION_ID', None)
+        if session is not None:
+            env['CLAUDE_CODE_SESSION_ID'] = session
+        return subprocess.run([sys.executable, str(SCRIPT), 'defs', *args, '--home', str(self.home)],
+                              cwd=str(self.work), env=env, capture_output=True, text=True,
+                              encoding='utf-8', errors='replace')
+
+    def test_bundled_definitions_carry_the_defs_version(self):
+        setup_agents = load_module()
+        self.assertEqual(tuple(setup_agents.DEF_FILES), DEF_FILES)
+        for name in DEF_FILES:
+            meta, _ = frontmatter(HERE / 'agents' / name)
+            self.assertEqual(meta.get('atelier-defs'), str(setup_agents.DEFS_VERSION), name)
+
+    def test_the_two_designer_definitions_differ_only_in_name_description_and_skill(self):
+        plain, plain_body = frontmatter(HERE / 'agents' / 'atelier-designer.md')
+        skills, skills_body = frontmatter(HERE / 'agents' / 'atelier-designer-skills.md')
+        self.assertEqual(plain_body, skills_body)
+        self.assertEqual((plain['name'], skills['name']), ('atelier-designer', 'atelier-designer-skills'))
+        self.assertNotEqual(plain['description'], skills['description'])
+        plain_tools = [tool.strip() for tool in plain['tools'].split(',')]
+        skills_tools = [tool.strip() for tool in skills['tools'].split(',')]
+        self.assertNotIn('Skill', plain_tools)
+        self.assertEqual([tool for tool in skills_tools if tool != 'Skill'], plain_tools)
+        self.assertIn('Skill', skills_tools)
+        for key in set(plain) - {'name', 'description', 'tools'}:
+            self.assertEqual(plain[key], skills.get(key), key)
+
+    def test_install_home_copies_every_definition_and_records_hashes_and_session(self):
+        self.seed_agents({'agent': {'enabled': True}})
+        proc = self.defs('--install', 'home', session='caller-1')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        target = self.claude / 'agents'
+        self.assertIn(f'defs home: {target.as_posix()}', proc.stdout)
+        for name in DEF_FILES:
+            self.assertEqual((target / name).read_bytes(), (HERE / 'agents' / name).read_bytes(), name)
+        table = self.read_agents()
+        self.assertEqual(table['runners'], {'agent': {'enabled': True}})  # 前の記録は残す
+        record = table['agent_defs']
+        self.assertEqual(record['place'], 'home')
+        self.assertEqual(record['session'], 'caller-1')
+        self.assertEqual(record['hashes'], {name: sha256(target / name) for name in DEF_FILES})
+        self.assertFalse((self.work / '.claude').exists())
+
+    def test_install_keeps_an_earlier_copy_beside_it(self):
+        """前からある別の中身の定義は .atelier-old として隣に残し、同梱の版を写す。"""
+        target = self.claude / 'agents'
+        target.mkdir(parents=True)
+        old = '---\nname: atelier-designer\n---\nold copy\n'
+        (target / 'atelier-designer.md').write_text(old, encoding='utf-8')
+        proc = self.defs('--install', 'home')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual((target / 'atelier-designer.md.atelier-old').read_text(encoding='utf-8'), old)
+        self.assertEqual((target / 'atelier-designer.md').read_bytes(),
+                         (HERE / 'agents' / 'atelier-designer.md').read_bytes())
+        self.assertFalse((target / 'atelier-tester.md.atelier-old').exists())
+
+    def test_a_copy_without_the_version_counts_as_missing(self):
+        """atelier-defs の無い古い写しは、足りない定義として数える。"""
+        target = self.claude / 'agents'
+        target.mkdir(parents=True)
+        for name in DEF_FILES:
+            shutil.copyfile(HERE / 'agents' / name, target / name)
+        (target / 'atelier-designer.md').write_text('---\nname: atelier-designer\ntools: Agent, Skill\n---\nold\n',
+                                                    encoding='utf-8')
+        sys.path.insert(0, str(HERE))
+        import setup_agents
+        env = {**os.environ, 'CLAUDE_CONFIG_DIR': str(self.claude)}
+        self.assertEqual(setup_agents.missing_definitions(env, self.work), ['atelier-designer.md'])
+
+    def test_install_work_copies_to_the_work_root_and_excludes_it_once(self):
+        exclude = self.work / '.git' / 'info' / 'exclude'
+        exclude.write_text('# git ls-files --others --exclude-from=.git/info/exclude\n', encoding='utf-8')
+        for _ in range(2):
+            proc = self.defs('--install', 'work')
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+        target = self.work / '.claude' / 'agents'
+        self.assertEqual(sorted(p.name for p in target.iterdir()), sorted(DEF_FILES))
+        lines = exclude.read_text(encoding='utf-8').splitlines()
+        self.assertEqual(lines.count('.claude/agents/'), 1, lines)
+        self.assertTrue(lines[0].startswith('#'))  # もとの行は残す
+        record = self.read_agents()['agent_defs']
+        self.assertEqual((record['place'], record['session']), ('work', ''))
+        self.assertEqual(Path(record['work_root']).resolve(), self.work.resolve())
+        self.assertFalse((self.claude / 'agents').exists())
+
+    def test_install_none_copies_nothing_and_records_the_answer(self):
+        proc = self.defs('--install', 'none', session='caller-2')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn('defs none', proc.stdout)
+        self.assertFalse((self.claude / 'agents').exists())
+        self.assertFalse((self.work / '.claude').exists())
+        record = self.read_agents()['agent_defs']
+        self.assertEqual((record['place'], record['hashes']), ('none', {}))
+
+    def test_unknown_place_is_exit_code_2_and_writes_nothing(self):
+        proc = self.defs('--install', 'elsewhere')
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        self.assertFalse((self.home / 'agents.json').exists())
+
+
 if __name__ == '__main__':
     unittest.main()

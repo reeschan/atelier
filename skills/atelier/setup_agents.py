@@ -5,15 +5,23 @@
   python setup_agents.py models [--runner R ...] [--home DIR]
   python setup_agents.py add-model --runner R --id ID [--effort E ...] [--home DIR]
   python setup_agents.py select --runner R --models ID,ID [--home DIR]   (--models "" は何も選ばない)
+  python setup_agents.py defs --install home|work|none [--work-root DIR] [--home DIR]
 
-home の agents.json に利用者が決めたこと (使う実行先・CLI の場所と版・選んだモデル) を、
+home の agents.json に利用者が決めたこと (使う実行先・CLI の場所と版・選んだモデル・エージェントの定義の置き場) を、
 models/<runner>.json に取得した一覧の控えを書く。取得の失敗は実行先ごとに閉じ込め、
 取れなかった実行先は add-model で手入力できる状態にする。
-関数は編集画面のサーバー (studio/serve.py) からも import する。
+defs は同梱の agents/*.md を <CLAUDE_CONFIG_DIR か ~/.claude>/agents (home) か作業ルートの .claude/agents (work) に写し、
+agents.json の agent_defs に置き場・写した中身のハッシュ・写したセッションの ID を残す (none は写さずに答えだけ残す)。
+関数は編集画面のサーバー (studio/serve.py) と conductor.py からも import する。
 """
 import argparse
 import datetime
+import hashlib
 import json
+import os
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,6 +34,23 @@ MODELS_DIR = 'models'
 
 # set_runner で models のキーを消すための番兵 (None は「触らない」)
 REMOVE = object()
+
+# 同梱のエージェントの定義の版。どれかの定義 (frontmatter か本文) を変えたら 1 上げる。
+# 写した定義のこの値が小さければ、conductor.py start が写し直す (test_setup_agents.py が各定義の atelier-defs と照らす)
+DEFS_VERSION = 1
+DEFS_KEY = 'atelier-defs'
+DEF_FILES = ('atelier-designer.md', 'atelier-designer-skills.md', 'atelier-reviewer.md', 'atelier-tester.md',
+             'pbi-worker.md')
+DEFS_SOURCE = Path(__file__).resolve().parent / 'agents'
+DEFS_PLACES = ('home', 'work', 'none')
+DEFS_RECORD = 'agent_defs'
+# 作業ルートに写した定義をコミットに混ぜないための .git/info/exclude の行
+EXCLUDE_LINE = '.claude/agents/'
+# 呼び手のセッションの ID (定義を写したセッションでは、その定義がまだ読み込まれていない)
+SESSION_ENV = 'CLAUDE_CODE_SESSION_ID'
+# 利用者が手を入れた定義の隣に置く、同梱の新しい版の名前の後ろ
+NEW_SUFFIX = '.atelier-new'
+FRONTMATTER = re.compile(r'^---\n(.*?)\n---\n?(.*)$', re.S)
 
 
 def detect(env=None, home=None) -> dict:
@@ -208,6 +233,215 @@ def load_models(home, runner) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+# ---- エージェントの定義 ----
+
+def read_definition(path) -> tuple[dict, str]:
+    """定義のファイルの frontmatter (キー → 値の文字列) と本文。frontmatter が無ければ ({}, 全文)。"""
+    text = Path(path).read_text(encoding='utf-8').replace('\r\n', '\n')
+    match = FRONTMATTER.match(text)
+    if match is None:
+        return {}, text
+    meta = {}
+    for line in match.group(1).split('\n'):
+        key, sep, value = line.partition(':')
+        if sep and key.strip():
+            meta[key.strip()] = value.strip()
+    return meta, match.group(2)
+
+
+def definition_version(path) -> int:
+    """定義の frontmatter の atelier-defs。無い・読めない・整数でないときは 0 (どの同梱の版より古い)。"""
+    try:
+        value = read_definition(path)[0].get(DEFS_KEY, '')
+    except (OSError, UnicodeDecodeError):
+        return 0
+    return int(value) if value.isdigit() else 0
+
+
+def claude_home(env=None) -> Path:
+    """Claude Code の設定の置き場 (CLAUDE_CONFIG_DIR、無ければ ~/.claude)。"""
+    env = os.environ if env is None else env
+    given = env.get('CLAUDE_CONFIG_DIR')
+    return Path(given).expanduser() if given else Path.home() / '.claude'
+
+
+def defs_dir(place, env=None, work_root=None) -> Path:
+    """定義を置くフォルダ。home は <claude_home>/agents、work は <作業ルート>/.claude/agents。"""
+    if place == 'home':
+        return claude_home(env) / 'agents'
+    if place == 'work':
+        return Path(work_root or Path.cwd()) / '.claude' / 'agents'
+    raise ValueError(f'no folder for place {place}.')
+
+
+def find_definition(file, env=None, work_root=None) -> Path | None:
+    """定義のファイルの場所。Claude Code と同じく作業ルートの .claude/agents を home の agents より先に見る。"""
+    for place in ('work', 'home'):
+        path = defs_dir(place, env, work_root) / file
+        if path.is_file():
+            return path
+    return None
+
+
+def missing_definitions(env=None, work_root=None) -> list:
+    """同梱の定義のうち、どちらの置き場にも無いか、atelier-defs が DEFS_VERSION より小さいファイルの名前。
+
+    atelier-defs の無い古い写し (例えば前の版の手順で手で写したもの) は道具や本文が古いので、無いものとして数える。
+    """
+    missing = []
+    for file in DEF_FILES:
+        path = find_definition(file, env, work_root)
+        if path is None or definition_version(path) < DEFS_VERSION:
+            missing.append(file)
+    return missing
+
+
+def file_sha256(path) -> str | None:
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _load_table(home) -> dict | None:
+    """agents.json の中身 (runners の無い、定義の記録だけの agents.json も読む)。読めなければ None。"""
+    data = common.load_json(Path(home) / AGENTS_FILE)
+    return data if isinstance(data, dict) else None
+
+
+def defs_record(home, work_root=None) -> dict | None:
+    """この作業ルートに当てはまる agent_defs の記録。work の記録は、写した作業ルートでだけ当てはまる。"""
+    table = _load_table(home)
+    record = table.get(DEFS_RECORD) if isinstance(table, dict) else None
+    if not isinstance(record, dict) or record.get('place') not in DEFS_PLACES:
+        return None
+    if record['place'] == 'work':
+        root = Path(work_root or Path.cwd()).resolve()
+        if not record.get('work_root') or Path(record['work_root']).resolve() != root:
+            return None
+    return record
+
+
+def copied_this_session(home, env=None) -> bool:
+    """agent_defs の記録が、今の呼び手のセッション (CLAUDE_CODE_SESSION_ID) で写した定義か。ID が無ければ False。"""
+    env = os.environ if env is None else env
+    table = _load_table(home)
+    record = table.get(DEFS_RECORD) if isinstance(table, dict) else None
+    session = env.get(SESSION_ENV) or ''
+    return bool(session) and isinstance(record, dict) and record.get('session') == session
+
+
+def exclude_file(work_root) -> Path | None:
+    """作業ルートの git の info/exclude。worktree でも本体の .git の側を返す。git でなければ None。"""
+    root = Path(work_root)
+    try:
+        done = subprocess.run(['git', '-C', str(root), 'rev-parse', '--git-path', 'info/exclude'],
+                              capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
+                              creationflags=model_fetch.NO_WINDOW)
+        if done.returncode == 0 and done.stdout.strip():
+            path = Path(done.stdout.strip())
+            return path if path.is_absolute() else root / path
+    except (OSError, subprocess.SubprocessError):
+        pass
+    git = root / '.git'
+    return git / 'info' / 'exclude' if git.is_dir() else None
+
+
+def add_exclude(work_root) -> Path | None:
+    """info/exclude に .claude/agents/ の行を 1 度だけ足す。足した (か元からあった) ファイルを返す。git でなければ None。"""
+    path = exclude_file(work_root)
+    if path is None:
+        return None
+    try:
+        text = path.read_text(encoding='utf-8')
+    except FileNotFoundError:
+        text = ''
+    if EXCLUDE_LINE in text.splitlines():
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'a', encoding='utf-8', newline='\n') as stream:
+        stream.write(('' if not text or text.endswith('\n') else '\n') + EXCLUDE_LINE + '\n')
+    return path
+
+
+def install_definitions(home, place, env=None, work_root=None, now=None) -> dict:
+    """同梱の定義を place に写し、agents.json の agent_defs に記録する。書いた記録を返す。
+
+    記録: place・dir (写したフォルダ)・hashes (ファイル名 → 写した中身の sha256)・session (呼び手の
+    CLAUDE_CODE_SESSION_ID、無ければ空)・work の作業ルート・時刻。none は何も写さず、hashes は空。
+    """
+    if place not in DEFS_PLACES:
+        raise ValueError(f'unknown place: {place}. Valid places: {", ".join(DEFS_PLACES)}.')
+    env = os.environ if env is None else env
+    home = Path(home)
+    root = Path(work_root or Path.cwd()).resolve()
+    record = {'place': place, 'dir': None, 'hashes': {}, 'session': env.get(SESSION_ENV) or '',
+              'at': _stamp(now)}
+    if place != 'none':
+        target = defs_dir(place, env, root)
+        target.mkdir(parents=True, exist_ok=True)
+        for file in DEF_FILES:
+            if (target / file).is_file() and file_sha256(target / file) != file_sha256(DEFS_SOURCE / file):
+                # 写す前の中身 (利用者の手直しや前の版) を消さずに隣へ残す
+                shutil.copyfile(target / file, target / f'{file}.atelier-old')
+            shutil.copyfile(DEFS_SOURCE / file, target / file)
+            record['hashes'][file] = file_sha256(target / file)
+        record['dir'] = target.as_posix()
+    if place == 'work':
+        record['work_root'] = root.as_posix()
+        add_exclude(root)
+    table = _load_table(home)
+    if not isinstance(table, dict):
+        table = {}
+    table[DEFS_RECORD] = record
+    common.write_json(home / AGENTS_FILE, table)
+    return record
+
+
+def refresh_definitions(home, env=None, work_root=None) -> list:
+    """写した定義を同梱の新しい版に揃え、呼び手に出す warn の行を返す。
+
+    写したときのハッシュと今の中身が同じで atelier-defs が DEFS_VERSION より小さい定義と、置き場から消えた定義は
+    写し直す (このセッションではまだ読み込まれないので、記録の session を今のセッションにする)。
+    ハッシュが違う (利用者が手を入れた) 古い定義は上書きせず、隣に <file>.atelier-new として同梱の版を置く。
+    """
+    env = os.environ if env is None else env
+    home = Path(home)
+    record = defs_record(home, work_root)
+    if record is None or record.get('place') == 'none' or not record.get('dir'):
+        return []
+    target = Path(record['dir'])
+    hashes = record.get('hashes') if isinstance(record.get('hashes'), dict) else {}
+    updated, kept = [], []
+    for file in DEF_FILES:
+        path = target / file
+        if path.is_file() and definition_version(path) >= DEFS_VERSION:
+            continue
+        if path.is_file() and file_sha256(path) != hashes.get(file):
+            fresh = target / (file + NEW_SUFFIX)
+            if file_sha256(fresh) != file_sha256(DEFS_SOURCE / file):
+                shutil.copyfile(DEFS_SOURCE / file, fresh)
+            kept.append(fresh.as_posix())
+            continue
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(DEFS_SOURCE / file, path)
+        hashes[file] = file_sha256(path)
+        updated.append(file)
+    lines = []
+    if updated:
+        record['hashes'] = hashes
+        record['session'] = env.get(SESSION_ENV) or ''
+        record['at'] = _stamp(None)
+        table = _load_table(home)
+        table = table if isinstance(table, dict) else {}
+        table[DEFS_RECORD] = record
+        common.write_json(home / AGENTS_FILE, table)
+        lines.append(f'warn agents: updated {", ".join(updated)} (next session)')
+    if kept:
+        lines.append(f'warn agents: kept your edited definitions; the bundled ones are at {", ".join(kept)}')
+    return lines
+
+
 def _refresh_one(home, runner, table, env, stamp) -> dict:
     """1 つの実行先の取り直し。失敗してもファイルと戻り値を整えて返す。"""
     try:
@@ -365,6 +599,17 @@ def _cmd_select(args) -> None:
     print(f'{args.runner}  selected  {len(config.get("models") or [])} models')
 
 
+def _cmd_defs(args) -> None:
+    record = install_definitions(common.resolve_home(args.home), args.install, work_root=args.work_root,
+                                 now=_now(args.now))
+    if record['place'] == 'none':
+        print('defs none: nothing copied; the designer runs as a headless claude')
+        return
+    print(f'defs {record["place"]}: {record["dir"]} ({len(record["hashes"])} files)')
+    if record['place'] == 'work' and exclude_file(record['work_root']) is None:
+        print(f'warn defs: {record["work_root"]} is not a git work tree; {EXCLUDE_LINE} is not excluded')
+
+
 class Parser(argparse.ArgumentParser):
     """不正な引数は終了コード 2 と標準エラーの 1 行で止める。"""
 
@@ -402,6 +647,12 @@ def build_parser() -> argparse.ArgumentParser:
     select_cmd.add_argument('--runner', required=True, choices=common.RUNNERS)
     select_cmd.add_argument('--models', required=True, metavar='ID,ID', help='model ids, comma-separated ("" selects none)')
     select_cmd.set_defaults(handler=_cmd_select)
+
+    defs_cmd = sub.add_parser('defs', parents=[shared], help='copy the agent definitions and record where')
+    defs_cmd.add_argument('--install', required=True, choices=DEFS_PLACES,
+                          help='home: ~/.claude/agents, work: the work root .claude/agents, none: copy nothing')
+    defs_cmd.add_argument('--work-root', metavar='DIR', help='work root (default: the current directory)')
+    defs_cmd.set_defaults(handler=_cmd_defs)
     return parser
 
 
@@ -410,7 +661,7 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
         args.handler(args)
-    except ValueError as error:
+    except (ValueError, OSError) as error:
         sys.stderr.write(f'error: {error}\n')
         return 2
     return 0

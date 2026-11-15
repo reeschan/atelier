@@ -22,9 +22,10 @@ You are the caller: the session the user talks to. Atelier's designer does the w
    - `--launch agent` (the default) when you are a Claude Code main session.
    - `--launch headless` when you are already inside a subagent: one level of the Agent tool is gone.
    - Not Claude Code (Codex, Grok, or any caller reading AGENTS.md): always `start --launch headless`, then `run --detach` and repeated `wait --timeout 300` as below; the `claude` CLI is required.
-4. Exit 2 on `start` means an unfinished run: continue it (`resume`). Run `--force` only when the user says to.
+4. Exit 2 on `start` with an `ask agents:` line: the agent definitions have no place yet. Ask the user once with AskUserQuestion, with the three choices the line explains (put the `ask harness-log:` line in the same question when it is there), run `python <skill>/setup_agents.py defs --install home|work|none` with the answer, and run `start` again.
+5. Any other exit 2 on `start` means an unfinished run: continue it (`resume`). Run `--force` only when the user says to.
    - An `ask harness-log:` line: ask the user once where run events go, run the `init` it names (`appendix/events.md`, `## First run`), and go on.
-5. Go to the loop.
+6. Go to the loop.
 
 ## The loop
 
@@ -34,11 +35,12 @@ With launch `agent` (headless is below):
 2. On `state: running` with a `launch:` line, launch the designer with the Agent tool:
    - `subagent_type` and `model` from the `launch:` line, and the `description="ATELIER.<run>.<seq> <episode>"` as it is;
    - the prompt is `Read <the prompt: path> and follow it.`
-   - On a `warn agents:` line, launch with `general-purpose`: the prompt file already starts with the definition to read.
+   - `general-purpose` on the `launch:` line comes with a `warn agents:` line: the prompt file already starts with the definition to read.
+   - The Agent tool answers `Agent type not found`: run `next --relaunch --agent-type-missing`; the conductor switches to headless or the fallback.
 3. When the Agent tool runs in the background, call `done` only after the completion notice.
 4. Run `python <skill>/conductor.py done`. Call it even when the designer's reply was empty: the result is in the file.
 5. Show the user the lines it printed, one or two lines.
-6. Exit 10: a question is waiting, go to Questions. Exit 12: the episode failed, run the `then:` line it prints and launch again. Exit 2 with `error: missing <what>` (the designer left out a required part): go on with step 1 (`next` launches the designer again; the conductor counts the tries). Any other exit 2: the state or the command is wrong, show the `error:` line and stop.
+6. Exit 10: a question is waiting, go to Questions. Exit 12: the episode failed, run the `then:` line it prints and launch again. Exit 2 with `error: missing <what>` or `error: state tablet (...)` (the designer left out a required part): go on with step 1 (`next` launches the designer again; the conductor counts the tries). Any other exit 2: the state or the command is wrong, show the `error:` line and stop.
 7. Back to 1.
 
 ## Running
@@ -51,8 +53,9 @@ With launch `agent` (headless is below):
 ## headless
 
 - `run --detach` starts the designer and returns at once.
-- Repeat `python <skill>/conductor.py wait --timeout 300` until it prints a state other than running, then read its lines. On `state: question`, show it with its `present:` line (`## Questions`).
-- With launch `headless`, `next` prints `launch: headless` and `then: ... run --detach`: run that line and do not launch the designer. The same happens on an `agent` run when the designer runs on codex or claude (`launch: headless (designer runner codex)`), and for the e2e episode, which a script runs with no model (`launch: headless (e2e runs as a script)`).
+- Run `python <skill>/conductor.py wait --timeout 300` with `run_in_background` and go on at its completion notice. Run it again while it prints running; otherwise read its lines. On `state: question`, show it with its `present:` line (`## Questions`).
+- With launch `headless`, `next` prints `launch: headless` and `then: ... run --detach`: run that line and do not launch the designer. The same happens on an `agent` run when the designer runs on codex or claude (`launch: headless (designer runner codex)`), when your session has not loaded the designer's definition (`launch: headless (no agent definition)`), and for the e2e episode, which a script runs with no model (`launch: headless (e2e runs as a script)`).
+- When the user asks to stop the run, run `python <skill>/conductor.py abort`.
 - Claude Code's auto mode may refuse `run --detach` when it starts codex with `-a never` and no sandbox. Then show the refusal and ask the user to allow the command or to run it themselves.
 - `--launch` is taken by `start` and `run` only. `next` does not take it.
 - A `decision` question of `no-agent-tool`: `present` prints a `then:` line that ends with `# relaunch`. Run that line (do not show it to the user), then follow the headless steps.
@@ -98,12 +101,12 @@ Any command (`next`, `done`, `run`, `wait`, `status`) may print `warn` lines. Sh
 ## Resume
 
 - `resume` is `python <skill>/conductor.py status` and then `next`. The state is on disk; `/clear` is not needed.
-- `status` printing `inline: v5 run` means a v5 run: continue with `designer.md` and `appendix/handoff.md`.
+- `status` printing `inline: v5 run` means a v5 run: continue with `designer.md` (`## Inline`) and `appendix/handoff.md`.
 - A session started without a folder: find the work root as `appendix/handoff.md` says under Resume, step 1.
 
 ## Fallback inline
 
-No nested Agent tool and no `claude` on the machine: follow `designer.md` yourself. You then ask the user directly where the designer would end with a question, and use `appendix/handoff.md` for `/clear` and resume.
+No nested Agent tool and no `claude` on the machine: follow `designer.md` (`## Inline`) yourself. You then ask the user directly where the designer would end with a question, and use `appendix/handoff.md` for `/clear` and resume.
 
 ## Arguments
 

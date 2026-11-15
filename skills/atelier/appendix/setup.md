@@ -15,19 +15,25 @@ When home has no `agents.json`, the caller does this section before `conductor.p
 2. Ask one multiple-choice question with AskUserQuestion. Put the external runners that `detect` found — opencode, codex, agy, dsh — in the list. `agent` is always used, so it stays out of the list. When no external runner was found, skip the question and continue with `agent` only.
 3. Run `python <skill>/setup_agents.py record --use <chosen runners, comma-separated>`. `record` keeps the existing model choices and billing settings.
 4. Follow `## models`.
-5. Offer the agent definitions. `agents/` has `agents/pbi-worker.md`, `agents/atelier-designer.md`, `agents/atelier-reviewer.md` and `agents/atelier-tester.md`. Ask once, and copy them to `~/.claude/agents/` only when the user allows it (the work root's `.claude/agents/` works too; the conductor checks it and `CLAUDE_CONFIG_DIR` in place of `~/.claude`):
-
-   ```bash
-   mkdir -p ~/.claude/agents && cp <skill>/agents/*.md ~/.claude/agents/
-   ```
-
-   When the user does not allow it, leave the folder as it is. The skill runs without the definitions: `next` prints `warn agents: atelier-designer not installed; using fallback`, an agent launch uses `subagent_type: general-purpose` and puts `Read <skill>/agents/<role>.md and follow it as your instructions.` first in the prompt, and headless builds `--agents` from the same file (`appendix/episodes.md`).
+5. Follow `## Agent definitions`.
 
    The skill needs depth 3: caller 0, designer 1, worker, reviewer or tester 2, the children of a skill they call 3. Set `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=3` before Claude Code starts. An agent at depth 3 has no Agent tool, so a skill child that would need its own child uses the built-in fallback (`appendix/review.md`, `appendix/tests-at-end.md`).
 6. Follow `## templates`.
 7. Follow `## Optional integrations`. After that, say in one line that the recommended set can be installed with `setup --recommended`. Do not ask now; only name it.
 
 Use `--home DIR` on these commands when the user keeps the settings outside the default home (`## home`).
+
+## Agent definitions
+
+Atelier bundles five definitions: `agents/atelier-designer.md` (the usual designer, with no Skill tool), `agents/atelier-designer-skills.md` (the same designer with the Skill tool, for an episode that runs a skill through it), `agents/atelier-reviewer.md`, `agents/atelier-tester.md` and `agents/pbi-worker.md`. Ask once with AskUserQuestion where they go, then run `python <skill>/setup_agents.py defs --install <answer>` in the work root:
+
+- `home`: copies them to `~/.claude/agents/` (`CLAUDE_CONFIG_DIR` in place of `~/.claude`), for every repository.
+- `work`: copies them to the work root's `.claude/agents/` and adds `.claude/agents/` to `.git/info/exclude`, so they stay out of commits. The answer holds for that work root only.
+- `none`: copies nothing. The designer runs as a headless claude: the hooks run for each designer, and the caller's screen does not show what the designer does.
+
+`defs` records the answer in home's `agents.json` (`agent_defs`: the place, the hash of each copied file and the caller's session from `CLAUDE_CODE_SESSION_ID`). `conductor.py start` asks (its `ask agents:` line) only when a definition is missing and nothing is recorded. How `next` launches the designer from these files is in `appendix/conductor.md`, `## Definitions`.
+
+Each definition carries `atelier-defs` in its frontmatter, the version of the bundled set. When the bundled version is newer, `start` copies it over a copied file that nobody edited (the hash still matches) and prints `warn agents: updated <files> (next session)`. An edited file stays as it is; the bundled one goes beside it as `<file>.atelier-new`, with a `warn agents:` line.
 
 ## models
 
