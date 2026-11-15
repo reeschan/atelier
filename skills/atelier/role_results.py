@@ -71,7 +71,7 @@ EPISODE_STATUS = ('done', 'question', 'handoff', 'error')
 QUESTION_KINDS = ('approve', 'rework-limit', 'destructive', 'send-approval', 'decision', 'full-run')
 # 出番の結果の question の任意の topic (docs/specs/harness-metrics.md の question.asked と同じ値)
 QUESTION_TOPICS = ('runner-unavailable', 'omm', 'recheck', 'unknown', 'approve-ask',
-                   'design-approval', 'headless', 'other')
+                   'design-approval', 'headless', 'grill-round', 'other')
 SUMMARY_MAX_LINES = 5
 SUMMARY_MAX_CHARS = 200
 PBI_NAME = re.compile(r'^PBI-\d+$')

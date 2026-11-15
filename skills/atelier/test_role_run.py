@@ -271,6 +271,44 @@ class RoleRunTest(unittest.TestCase):
         self.assertIn('codex not found', r.stderr)
 
 
+    def write_skip_state(self, run_id, skip_run_id, entry):
+        pbi = self.repo / 'docs' / 'pbi'
+        (pbi / 'conductor').mkdir(exist_ok=True)
+        (pbi / 'conductor' / 'run.json').write_text(json.dumps({'run_id': run_id}), encoding='utf-8')
+        (pbi / 'runners.skip.json').write_text(json.dumps(
+            {'schema': 'atelier.runners-skip/1', 'run_id': skip_run_id,
+             'entries': [{'runner': None, 'model': None, 'cause': 'limit', 'fallback': 'x',
+                          'at': '2026-01-01T00:00:00', **entry}]}), encoding='utf-8')
+
+    def run_skip_case(self):
+        return self.run_cli('PBI-001.review', '--role', 'reviewer', '--model', 'gpt-6.1-terra',
+                            '--runner', 'codex', '--pbi-dir', 'docs/pbi')
+
+    def test_C1(self):
+        self.prompt()
+        self.write_skip_state('r1', 'r1', {'model': 'gpt-6.1-terra', 'fallback': 'sonnet'})
+        r = self.run_skip_case()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('is skipped for the rest of this run', r.stderr)
+        self.assertIn('fallback sonnet', r.stderr)
+        self.assertFalse(self.log.exists(), 'codex は呼ばれない')
+
+    def test_C2(self):
+        self.prompt()
+        self.write_skip_state('r1', 'r1', {'runner': 'codex', 'fallback': 'claude'})
+        r = self.run_skip_case()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('is skipped for the rest of this run', r.stderr)
+        self.assertIn('fallback claude', r.stderr)
+        self.assertFalse(self.log.exists(), 'codex は呼ばれない')
+
+    def test_C3(self):
+        self.prompt()
+        self.write_skip_state('r1', 'r0', {'runner': 'codex', 'fallback': 'claude'})
+        r = self.run_skip_case()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(self.calls()), 1)
+
     def test_codex_home_with_only_a_config_is_allowed(self):
         """auth.json が無くても config.toml があれば断らない (サインインは keyring にも置ける)。"""
         self.prompt()

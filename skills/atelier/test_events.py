@@ -277,6 +277,23 @@ class EventsTest(unittest.TestCase):
         self.assertTrue(events.emit(self.dir, 'question.asked', SAMPLES['question.asked'], once='k3'))
         self.assertEqual(len(self.rows()), 1)
 
+    def test_C1(self):
+        """run.started は lane を落とさない。"""
+        data = {'workflow': 'light', 'launch': 'main', 'lane': 'light'}
+        self.assertTrue(events.emit(self.dir, 'run.started', data, run_id='r1', seq=0))
+        row = self.rows()[0]
+        self.assertEqual(row['data'], data)
+        self.assertNotIn('dropped', row)
+
+    def test_C2(self):
+        """run.ended は escalated・files・lines・負の context_delta・findings を落とさない。"""
+        data = {'result': 'escalated', 'files': 3, 'lines': 40, 'context_delta': -500,
+                'findings': {'critical': 0, 'major': 1, 'minor': 2}}
+        self.assertTrue(events.emit(self.dir, 'run.ended', data, run_id='r1', seq=0))
+        row = self.rows()[0]
+        self.assertEqual(row['data'], data)
+        self.assertNotIn('dropped', row)
+
     def test_every_sample_passes_the_allowlist(self):
         for type_, data in SAMPLES.items():
             with self.subTest(type=type_):

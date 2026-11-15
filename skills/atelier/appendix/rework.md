@@ -40,4 +40,4 @@ Stop a PBI (not a fix PBI: `## Fix PBIs`) when it still fails after the last all
 
 - PBIs of the same wave that do not depend on it keep running; PBIs that depend on it are held.
 - End the episode with a question (kind `rework-limit`) once every running attempt in the same wave has returned and been reconciled; do not end the episode with an attempt still running. Lay it out as the `rework-limit` row of `appendix/questions.md` (`## What goes in each kind`). A stale case (a target file changed after the design) is the same kind, `rework-limit`, laid out as the stale row of that table (each of its columns differs from the plain row, not only the summary).
-- Raising the tier: `python <skill>/prepare.py docs/pbi --only PBI-<n> --tier <tier>` rewrites its `route.json` from the routing in force at that time; start from the head of the new route.
+- Raising the tier: `python <skill>/prepare.py docs/pbi --only PBI-<n> --tier <tier>` rewrites its `route.json` from the routing in force at that time; start from the head of the new route. `select_model.py` still reads `docs/pbi/runners.skip.json`, so the skip applies to the new route.

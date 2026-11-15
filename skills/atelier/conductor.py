@@ -145,7 +145,7 @@ FENCE_OPEN = '```am-reply-meta'
 EPISODE_TYPES = ('design', 'build', 'e2e', 'test', 'review', 'fix', 'finish')
 ROLE_SOURCES = ('run', 'repo', 'home', 'template', 'default')
 QUESTION_TOPICS = ('runner-unavailable', 'omm', 'recheck', 'unknown', 'approve-ask',
-                   'design-approval', 'headless', 'other')
+                   'design-approval', 'headless', 'grill-round', 'other')
 QUESTION_CHOICES = tuple('abcdefghijklmnopqrstuvwxyz') + ('yes', 'no', 'revise')
 END_REASONS = {'missing': 'result-missing', 'invalid': 'result-invalid', 'error': 'episode-error',
                'launch-failed': 'launch-failed', 'aborted': 'other'}
@@ -1429,7 +1429,8 @@ def cmd_start(args, paths: Paths) -> int:
         paths.goal.parent.mkdir(parents=True, exist_ok=True)
         paths.goal.write_text(goal if goal.endswith('\n') else goal + '\n', encoding='utf-8', newline='\n')
         # 前の run の grill の木と通しの「はい」は、この run の答えではない
-        for stale in (paths.base / 'notes' / 'grill.json', full_run_token(paths)):
+        for stale in (paths.base / 'notes' / 'grill.json', full_run_token(paths),
+                      paths.base / 'runners.skip.json'):
             stale.unlink(missing_ok=True)
         run = {
             'schema': SCHEMA, 'run_id': str(uuid.uuid4()), 'created_at': iso_now(),
@@ -2175,7 +2176,7 @@ def question_draft_errors(data: dict) -> str:
         text = Path(path).read_bytes().decode('utf-8-sig', errors='replace')
     except (OSError, TypeError, ValueError):
         return f'question draft has errors: {path}: not readable'
-    errors, _ = design_record.lint_text(text, kind)
+    errors, _ = design_record.lint_text(text, kind, question.get('topic'))
     if not errors:
         return ''
     shown = '; '.join(f'L{number} {what}' for number, what, _ in errors[:DRAFT_ERRORS_SHOWN])
@@ -2208,6 +2209,28 @@ def grill_open(paths: Paths, run: dict, data: dict) -> str:
     def from_owner(item: dict, key: str) -> bool:
         return isinstance(item.get(key), str) and Path(item[key]).as_posix() in answered
 
+    skipped = tree.get('skipped')
+    if isinstance(skipped, dict) and not (isinstance(skipped.get('reason'), str) and skipped['reason'].strip()):
+        return f'grill skipped without a reason: {path.as_posix()}'
+    if not isinstance(skipped, dict):
+        rounds = [rnd for rnd in tree.get('rounds') or [] if isinstance(rnd, dict)]
+        questions = [item for rnd in rounds for item in rnd.get('questions') or [] if isinstance(item, dict)]
+        by_id = {item.get('id'): item for item in questions if isinstance(item.get('id'), str)}
+        for rnd in rounds:
+            children = {}
+            for item in rnd.get('questions') or []:
+                if not isinstance(item, dict) or not isinstance(item.get('parent'), str):
+                    continue
+                parent_id = item['parent']
+                parent = by_id.get(parent_id, {})
+                if parent.get('parent'):
+                    return f"grill child of a child: {item.get('id')} (one level only)"
+                children[parent_id] = children.get(parent_id, 0) + 1
+                if children[parent_id] > 4:
+                    return f"grill round {rnd.get('n')} has more than 4 children of {parent_id}"
+                if parent.get('took_recommended') is False:
+                    return f"grill child {item.get('id')} stays after its parent took another answer (move it to dropped)"
+
     open_ids = [str(item.get('id')) for rnd in tree.get('rounds') or [] if isinstance(rnd, dict)
                 for item in rnd.get('questions') or [] if isinstance(item, dict)
                 and not (isinstance(item.get('answer'), str) and item['answer'].strip()
@@ -2216,6 +2239,8 @@ def grill_open(paths: Paths, run: dict, data: dict) -> str:
         return f"grill has unanswered questions: {', '.join(open_ids[:8])} (ask them as a decision question first)"
     if tree.get('frontier'):
         return 'grill frontier is not empty: ask the next round before approve'
+    if isinstance(skipped, dict):
+        return ''
     if tree.get('aligned') is not True or not from_owner(tree, 'aligned_in'):
         return 'grill is not aligned: ask the owner whether the understanding is shared before approve'
     return ''

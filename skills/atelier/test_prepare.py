@@ -279,6 +279,32 @@ class PrepareTest(unittest.TestCase):
         self.assertEqual(self.route('PBI-001')['tier'], 'haiku')
         self.assertEqual([cells(r)[1] for r in rows(out) if cells(r)[0] == 'PBI-002'], ['sonnet'])
 
+    def test_C1(self):
+        """段を上げ直すとき、今の run で飛ばすと保存した実行先は route に入れない。"""
+        codex = os.path.join(self.dir, 'bin', 'codex')
+        write_text(codex, '')
+        template = {'name': 'codex-first', 'description': 'codex を先頭に',
+                    'tiers': {t: [{'runner': 'codex', 'model': 'gpt-6.1-terra', 'effort': None},
+                                  {'runner': 'agent', 'model': t, 'effort': None}]
+                              for t in ('haiku', 'sonnet', 'opus')}}
+        app = {**application(until=None), 'template': 'codex-first'}
+        self.use_home({'codex-first': template}, app, {'runners': {'codex': {'path': codex}}})
+        self.add_pbi('PBI-001')
+        first = self.run_prepare('--now', NOW)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn('codex', [step['runner'] for step in self.route('PBI-001')['route']])
+        write_json(os.path.join(self.base, 'conductor', 'run.json'), {'run_id': 'run-1'})
+        write_json(os.path.join(self.base, 'runners.skip.json'), {
+            'schema': 'atelier.runners-skip/1', 'run_id': 'run-1',
+            'entries': [{'runner': 'codex', 'model': None, 'cause': 'broken', 'fallback': 'claude',
+                         'at': '2026-01-01T00:00:00'}]})
+        out = self.run_prepare('--now', NOW, '--only', 'PBI-001', '--tier', 'sonnet')
+        self.assertEqual(out.returncode, 0, out.stderr)
+        route = self.route('PBI-001')
+        self.assertEqual(route['tier'], 'sonnet')
+        self.assertNotIn('codex', [step['runner'] for step in route['route']])
+        self.assertTrue(route['route'], route)
+
     def test_tier_up_keeps_existing_jev_answers(self):
         self.use_home(app=None)
         self.add_pbi('PBI-001')
