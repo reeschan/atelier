@@ -220,6 +220,10 @@ _Avoid_: leading with 窯 as the source term, context window (that is the model 
 The short file written before a cool-down (`docs/pbi/CONTEXT_STATE.md`), or the `## State` section a worker writes when it stops at its peak: objective, facts, changes, verification, dead ends, remaining plan.
 _Avoid_: summary, memo
 
+**work-start context (作業開始の文脈)**:
+The designer's context once it has read its Read first file, logged by `kiln_log.py --boundary start`: what launching and the reading before the work cost. It is kept to tune the Kiln lines; the lines themselves do not move with it.
+_Avoid_: baseline alone, startup cost (say which)
+
 **designer chamber / implementer chamber (設計者室・実装者室)**:
 The Kiln budgets for the orchestrator and for one worker attempt. The implementer chamber prefers a fresh worker per attempt (`worker.md`).
 _Avoid_: parent/child context
@@ -328,7 +332,7 @@ Labelling the root cause of a lineage (`triage.labeled`): task, harness, agent, 
 _Avoid_: diagnosis, postmortem
 
 **config fingerprint (構成の指紋, config_fp)**:
-The first 12 characters of the sha256 of what defines a condition: skill version, the hashes of `worker.md` and `designer.md`, the resolved roles, the workflow name and the default routing. Every event of that condition carries it in the envelope.
+The first 12 characters of the sha256 of what defines a condition: skill version, the hashes of `worker.md` and of the designer's instructions (`designer.md`, `read_first.json`, `agents/`, `appendix/`, `episode/`), the resolved roles, the workflow name and the default routing. Every event of that condition carries it in the envelope.
 _Avoid_: hash alone, version
 
 **unit (試行の単位, unit_id)**:

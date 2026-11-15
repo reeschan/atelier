@@ -3,7 +3,7 @@ lang: ja
 template: sheet
 cols: 2
 title: 承認と問いの見せ方をそろえる run の承認
-subtitle: 見本の原稿 (designer.md の Approve)。題材は present-with-am の run
+subtitle: 見本の原稿 (episode/approve.md の Approve)。題材は present-with-am の run
 ---
 ## 結論 {span=2}
 ```callout info この run で変わること

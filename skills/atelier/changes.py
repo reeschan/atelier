@@ -87,11 +87,12 @@ def _file_version(path: Path):
 
 
 def _designer_version() -> str:
-    """designer.md・agents/*.md・appendix/*.md を名前順に連結した sha12 (門の決め)。"""
+    """designer.md・read_first.json と agents/*.md・appendix/*.md・episode/*.md を名前順に連結した sha12 (門の決め)。"""
     data = _read_bytes(HERE / 'designer.md')
     if data is None:
         return 'none'
-    for folder in (HERE / 'agents', HERE / 'appendix'):
+    data += _read_bytes(HERE / 'read_first.json') or b''
+    for folder in (HERE / 'agents', HERE / 'appendix', HERE / 'episode'):
         try:
             files = sorted(folder.glob('*.md'), key=lambda p: p.name)
         except OSError:

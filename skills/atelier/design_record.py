@@ -324,7 +324,7 @@ def compare(meta: dict, record: dict, draft: str | None) -> list[str]:
     return problems
 
 
-# 承認の原稿の点検 (designer.md、`## Approve`)。節は決まった名前で決まった順。日本語と英語のどちらの名前でも受ける
+# 承認の原稿の点検 (episode/approve.md、`## Approve`)。節は決まった名前で決まった順。日本語と英語のどちらの名前でも受ける
 APPROVAL_SECTIONS = [('結論', 'Summary'), ('今の流れ', 'Before'), ('この run のあとの流れ', 'After'),
                      ('決めること', 'Decisions'), ('PBI', 'PBIs'), ('影響範囲', 'Impact'),
                      ('作る人と見直し', 'Who builds')]
