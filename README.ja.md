@@ -433,7 +433,7 @@ Jev の API キーは次のどちらかに置きます (クライアントはこ
 ### Antigravity を使うとき
 
 - ヘッドレス (`agy -p`) は、許可リストに合わないコマンドを自動で拒否します。コマンドの行は全体で照合されるので、`pnpm` や `git status` を許しても、`rg`・`Get-Content`・`;` でつないだ行・パイプで止まります。
-- そこでスキルは、作業者と役割を起動するたびに、同梱の `skills/atelier/agy.settings.json` を `--settings` で渡します (その回だけ。`~/.gemini/antigravity-cli/settings.json` は変えません)。中身は、どのコマンドも許す `command(*)` と、行のどこにあっても止める拒否 (git の commit・push・reset・rebase・checkout・switch・restore・stash・clean・merge・cherry-pick・tag・worktree、`rm -rf`、`Remove-Item -Recurse`) です。コマンドはサンドボックスの外で動き、Codex の作業者の `danger-full-access` と同じくらいの権限になります。拒否は文字列の照合なので、誤操作よけであって、安全の境界ではありません (agy 1.5.7 で確認)。
+- そこでスキルは、作業者と役割を起動するたびに、同梱の `skills/atelier/agy.settings.json` を `--settings` で渡します (その回だけ。`~/.gemini/antigravity-cli/settings.json` は変えません)。中身は、どのコマンドも許す `command(*)` と、行のどこにあっても止める拒否 (git の commit・push・reset・rebase・checkout・switch・restore・stash・clean・merge・cherry-pick・tag・worktree、`rm -rf`、`Remove-Item -Recurse`) です。コマンドはサンドボックスの外で、ユーザー自身の権限で動きます (Codex の作業者は、これと違い `workspace-write` のサンドボックスの中で動きます)。拒否は文字列の照合なので、誤操作よけであって、安全の境界ではありません (agy 1.5.7 で確認)。
 - `agy` は許可の無いコマンドを**拒否しても、終了コード 0 で返します**。拒否は結果の JSON の `denied_actions` と標準エラーにしか出ません。スキルは毎回 `denied_actions` を確かめ、それでも拒否が出たら、そのセッションの残りでは `agy` を外します。拒否のルールに当たったコマンドは、モデルにエラーで返るだけで `denied_actions` にはならず、作業は続きます。
 
 ## 使い方

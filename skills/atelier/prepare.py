@@ -26,6 +26,9 @@
   --tier のときは指定だけ。指定が無ければ全部)。route.json に override (goal で指定した route) があれば select_model.py がそのまま残す
 - --tier は --only と一緒のときだけ受け付け、select_model.py に --only と一緒に渡す (tier up で route.json を書き直す)
 - --home・--now はテンプレートの home (templates.resolve_home) と今の時刻 (templates.parse_time)。select_model.py にもそのまま渡す
+- 表の PBI の route に codex の手順があれば、表のあとに 1 行「codex sandbox: <引数> (<出所>)」を出す。
+  設計者は codex の作業者をその引数で起こす (runners.md の codex)。引数と出所は runner_cli.codex_worker_sandbox
+  (home の agents.json の runners.codex.sandbox、無ければ workspace-write) と codex_sandbox_args から
 """
 
 import argparse
@@ -34,6 +37,7 @@ import shutil
 import subprocess
 import sys
 import common
+import runner_cli
 import templates
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -58,6 +62,16 @@ def call_jev(config, gate, text_file, out_file):
     except json.JSONDecodeError:
         return None
     return None if r.returncode != 0 or "error" in data else data
+
+
+def codex_line(base: Path, pbis, home) -> str | None:
+    """route に codex の手順がある PBI があれば、codex の作業者に渡すサンドボックスの引数の 1 行。無ければ None。"""
+    for p in pbis:
+        steps = (load(base / f"{p}.route.json") or {}).get("route") or []
+        if any(isinstance(step, dict) and step.get("runner") == "codex" for step in steps):
+            sandbox, source = runner_cli.codex_worker_sandbox(home)
+            return f"codex sandbox: {' '.join(runner_cli.codex_sandbox_args(sandbox))} ({source})"
+    return None
 
 
 def load(path):
@@ -333,6 +347,9 @@ def main():
         old = previous.get(p)
         if old is None or decision_key(old) != decision_key(entry):
             lines.append(entry)
+    sandbox_line = codex_line(base, pbis, home)
+    if sandbox_line:
+        print(sandbox_line)
     if lines:
         with open(base / "jev-log.jsonl", "a", encoding="utf-8") as f:
             for ln in lines:
