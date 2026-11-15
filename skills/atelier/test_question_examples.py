@@ -33,13 +33,16 @@ class QuestionExamplesTest(unittest.TestCase):
             'PYTHONIOENCODING': 'utf-8',
         }
 
-    def lint(self, name, kind):
-        result = subprocess.run([sys.executable, SCRIPT, 'lint', '--draft', os.path.join(EXAMPLES, name),
-                                 '--kind', kind], capture_output=True, env=self.env)
+    def lint(self, name, kind, topic=None):
+        command = [sys.executable, SCRIPT, 'lint', '--draft', os.path.join(EXAMPLES, name),
+                   '--kind', kind]
+        if topic is not None:
+            command.extend(['--topic', topic])
+        result = subprocess.run(command, capture_output=True, env=self.env)
         return result.returncode, result.stderr.decode('utf-8', errors='replace')
 
-    def assert_clean(self, name, kind):
-        code, stderr = self.lint(name, kind)
+    def assert_clean(self, name, kind, topic=None):
+        code, stderr = self.lint(name, kind, topic)
         self.assertEqual(code, 0, stderr)
         self.assertNotIn('✗', stderr)
         self.assertEqual([row for row in stderr.splitlines() if row.startswith('! L')], [], stderr)
@@ -49,6 +52,9 @@ class QuestionExamplesTest(unittest.TestCase):
 
     def test_grill_example_is_clean(self):
         self.assert_clean('question-grill.md', 'decision')
+
+    def test_C1(self):
+        self.assert_clean('question-grill.md', 'decision', 'grill-round')
 
 
 if __name__ == '__main__':

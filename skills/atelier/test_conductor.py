@@ -2336,15 +2336,17 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual((rc, out.splitlines()[0]), (0, 'state: finished'), out)
         self.assertNotIn('done memory', out)
 
-    def test_start_and_abort_drop_the_last_runs_grill_and_full_run_yes(self):
+    def test_C9_start_and_abort_drop_the_last_runs_grill_and_full_run_yes(self):
         """新しい run は前の run の grill の木と通しの「はい」を持ち越さず、abort も「はい」を消す。"""
         grill = os.path.join(self.tmp, 'docs', 'pbi', 'notes', 'grill.json')
         token = os.path.join(self.tmp, 'docs', 'pbi', 'full-run.approved.json')
         self.write_json('docs/pbi/notes/grill.json', {'schema': 'atelier.grill/1'})
         self.write_json('docs/pbi/full-run.approved.json', {'seq': 1})
+        self.write_json('docs/pbi/runners.skip.json', {'schema': 'atelier.runners-skip/1', 'run_id': 'old', 'entries': []})
         self.con('start', '--goal', 'fresh')
         self.assertFalse(os.path.exists(grill))
         self.assertFalse(os.path.exists(token))
+        self.assertFalse(os.path.exists(self.path('docs/pbi/runners.skip.json')))
         self.write_json('docs/pbi/full-run.approved.json', {'seq': 1})
         rc, out = self.con('abort', '--reason', 'stop')
         self.assertEqual(rc, 0, out)
@@ -2393,6 +2395,98 @@ class ConductorTest(unittest.TestCase):
 
     def answer_line_from(self, out):
         return next(line.split(': ', 1)[1] for line in out.splitlines() if line.startswith('answer: '))
+
+    def grill_case(self, questions=None, **fields):
+        self.con('start', '--goal', 'grill case')
+        rc, out = self.con('next')
+        self.write(STATE, TABLET)
+        self.write('docs/pbi/notes/grill-1.md', question_draft())
+        self.result(out, status='question', state=STATE,
+                    question={'kind': 'decision', 'path': 'docs/pbi/notes/grill-1.md', 'summary': 'round 1'})
+        self.con('done')
+        self.show_question()
+        rc, out = self.con('answer', '--text', 'yes; aligned')
+        answer = self.answer_line_from(out)
+        for question in questions or []:
+            if question.pop('_answered', False):
+                question['answered_in'] = answer
+        grill = {'schema': 'atelier.grill/1', 'aligned': True, 'aligned_in': answer, 'frontier': [],
+                 'rounds': [{'n': 1, 'questions': questions or []}]}
+        grill.update(fields)
+        self.write_json('docs/pbi/notes/grill.json', grill)
+        rc, out = self.con('next')
+        return self.approve_result(out)
+
+    def grill_question(self, ident, parent=None, **fields):
+        question = {'id': ident, 'question': 'split?', 'recommended': 'yes', 'answer': 'yes', '_answered': True}
+        if parent is not None:
+            question['parent'] = parent
+        question.update(fields)
+        return question
+
+    def test_C1(self):
+        rc, out = self.grill_case([self.grill_question('Q1')])
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+        self.assertNotIn('grill ', out)
+
+    def test_C2(self):
+        child = {'id': 'c', 'question': 'split?', 'recommended': 'yes', 'answer': 'yes', 'parent': 'p'}
+        rc, out = self.grill_case([self.grill_question('p')], dropped=[child])
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+
+    def test_C3(self):
+        rc, out = self.grill_case([self.grill_question('p', took_recommended=False), self.grill_question('c', 'p')])
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('grill child c stays after its parent took another answer (move it to dropped)', out)
+
+    def test_C4(self):
+        rc, out = self.grill_case([self.grill_question('p'), self.grill_question('c', 'p'), self.grill_question('g', 'c')])
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('grill child of a child: g (one level only)', out)
+
+    def test_C5(self):
+        rc, out = self.grill_case([self.grill_question('p')] + [self.grill_question(f'c{i}', 'p') for i in range(1, 6)])
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('grill round 1 has more than 4 children of p', out)
+
+    def test_C6(self):
+        rc, out = self.grill_case([self.grill_question('p')] + [self.grill_question(f'c{i}', 'p') for i in range(1, 5)])
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+
+    def test_C7(self):
+        rc, out = self.grill_case(skipped={'reason': 'direction decided'}, rounds=[], aligned=False, aligned_in=None)
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+
+    def test_C8(self):
+        rc, out = self.grill_case(skipped={'reason': ''}, rounds=[], aligned=False, aligned_in=None)
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('grill skipped without a reason', out)
+
+    def topic_draft(self, topic, text):
+        self.con('start', '--goal', 'topic draft')
+        rc, out = self.con('next')
+        self.write(STATE, TABLET)
+        self.write('docs/pbi/notes/q.md', text)
+        self.result(out, status='question', state=STATE,
+                    question={'kind': 'decision', 'topic': topic, 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
+        return self.con('done')
+
+    def test_C10(self):
+        draft = question_draft(extra='\n```ask\nAligned with this?\n* Yes | proceed\n- No | revise\n```\n')
+        rc, out = self.topic_draft('grill-round', draft)
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('question draft has errors', out)
+        self.assertIn('alignment ask has a recommended option', out)
+
+    def test_C11(self):
+        with open(os.path.join(HERE, 'examples', 'question-grill.md'), encoding='utf-8') as example:
+            rc, out = self.topic_draft('grill-round', example.read())
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+
+    def test_C12(self):
+        draft = question_draft(extra='\n```ask\nAligned with this?\n* Yes | proceed\n- No | revise\n```\n')
+        rc, out = self.topic_draft('other', draft)
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
 
     QUESTION_LINE_GONE = ('confirm:', 'yes:', 'no:', 'then:', 'approve:', 'revise:', 'relaunch:')
 
