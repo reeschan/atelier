@@ -8,7 +8,7 @@ Read this when the finish stage picks `finish.builtin`: every PBI has passed or 
 2. Collect the session's stats per role (read only; nothing changes). After a handoff, also collect the earlier session with `--session <ID>`.
 
    ```bash
-   python <skill>/agent_stats.py --out docs/pbi/stats --run docs/pbi/conductor/run.json | head -n 40
+   python <skill>/agent_stats.py --out docs/pbi/stats --run docs/pbi/conductor/run.json
    ```
 
    - The command writes `docs/pbi/stats/roles.json` and prints a table per role (caller, designer, worker, reviewer, tester): requests, tokens and cost. A second table lists each episode's work-start context: the Kiln line with `--boundary start` for that seq, else the designer's first request. Put that table in the completion report as it is.

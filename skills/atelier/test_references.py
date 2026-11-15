@@ -239,6 +239,24 @@ def has_heading(target, heading):
     return False
 
 
+def missing_headings(name, lines):
+    '''見出しを名指す参照のうち、ファイルか見出しが無いものを `<指示文>:<行>: <ファイル> <見出し>` で返す。
+
+    ファイルが無いものは見出しの代わりに (no such file) を付ける。スキルの外を指すファイル (normalize と
+    is_checked で外すもの) は確かめない。
+    '''
+    missing = []
+    for lineno, line in enumerate(lines, 1):
+        for path, heading in named_headings(line):
+            target = heading_target(path)
+            if target is None:
+                if normalize(path) is not None and is_checked(path):
+                    missing.append(f'{name}:{lineno}: {path} (no such file)')
+            elif not has_heading(target, heading):
+                missing.append(f'{name}:{lineno}: {path} {heading}')
+    return missing
+
+
 SKILL = HERE / 'SKILL.md'
 COMPONENTS = HERE / 'components'
 
@@ -341,12 +359,28 @@ class ReferencesTest(unittest.TestCase):
         '''`x.md` (`## 見出し`)・`x.md`, `## 見出し`・`x.md`, "見出し"・`x.md#見出し` の形で指す見出しが、その指示文にあること。'''
         missing = []
         for document in documents():
-            for lineno, line in enumerate(document.read_text(encoding='utf-8').splitlines(), 1):
-                for path, heading in named_headings(line):
-                    target = heading_target(path)
-                    if target is not None and not has_heading(target, heading):
-                        missing.append(f'{document.relative_to(HERE).as_posix()}:{lineno}: {path} {heading}')
+            name = document.relative_to(HERE).as_posix()
+            missing += missing_headings(name, document.read_text(encoding='utf-8').splitlines())
         self.assertEqual([], missing, '\n'.join(missing))
+
+    def test_heading_reference_to_a_missing_file_fails(self):
+        '''`x.md#見出し` などで指すファイルそのものが無ければ失敗にし、スキルの外のファイルは確かめないこと。'''
+        lines = ['See `episode/missing.md#Measure`.', 'And `appendix/gone.md` (`## Steps`).',
+                 'Outside: `docs/specs/x.md#Goal`.']
+        self.assertEqual(['x.md:1: episode/missing.md (no such file)', 'x.md:2: appendix/gone.md (no such file)'],
+                         missing_headings('x.md', lines))
+
+    def test_docs_keep_the_wait_and_stage_steps(self):
+        '''wait は stale: で relaunch に進み、e2e は最後の波のあとに置かず、--run の統計は切らないこと。'''
+        skill = SKILL.read_text(encoding='utf-8')
+        self.assertIn('on `stale:`, run its `relaunch:` line', skill)
+        design = (HERE / 'episode' / 'design.md').read_text(encoding='utf-8')
+        self.assertNotIn('the `e2e` episode (a script) and then the test stage', design)
+        self.assertIn('runs once at the very end, after review and fix', design)
+        finish = (HERE / 'appendix' / 'finish.md').read_text(encoding='utf-8')
+        run_lines = [line for line in finish.splitlines() if 'agent_stats.py' in line and '--run' in line]
+        self.assertTrue(run_lines)
+        self.assertFalse([line for line in run_lines if '| head' in line], run_lines)
 
     def test_heading_forms_are_read(self):
         '''4 つの書き方から (ファイル, 見出し) を取り出すこと。'''

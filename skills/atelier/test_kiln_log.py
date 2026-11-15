@@ -237,6 +237,16 @@ class KilnLogTest(unittest.TestCase):
                  '## Dead ends\n## Remaining plan\n')
         self.assertEqual(self.tablet(short).returncode, 0)
 
+    def test_tablet_check_closes_a_fence_only_with_the_same_mark_of_enough_length(self):
+        """4 つの ` の囲みの中の ``` や ~~~ では閉じず、中の ## を見出しに数えない。"""
+        inner = '````markdown\n```text\n## Notes\n```\n~~~~\n## Draft\n````\n'
+        result = self.tablet(TABLET.replace('## Dead ends\n', inner + '## Dead ends\n'))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # 閉じたあとの ## は見出しに数える
+        after = self.tablet(TABLET.replace('## Dead ends\n', inner + '## Notes\n## Dead ends\n'))
+        self.assertEqual(after.returncode, 1)
+        self.assertIn('problem: unexpected ## Notes', after.stdout.splitlines())
+
     def test_tablet_check_reports_problems(self):
         missing = self.tablet(TABLET.replace('## Dead ends\n- none\n\n', ''))
         self.assertEqual(missing.returncode, 1)

@@ -539,6 +539,22 @@ class SkillStatusTest(unittest.TestCase):
         self.install('s', 'elsewhere', scope='project', project=os.path.join(self.dir, 'another-repo'))
         self.assertEqual(self.skill_line('s:elsewhere'), 'skill missing')
 
+    def test_skill_row_checks_its_requires_first(self):
+        """呼ぶスキルがあっても、requires のスキルやプラグインが無ければ使えない状態を返す。"""
+        mine = self.skill_file(self.skills, 'my-skill')
+        component = skill_component('review.my-skill', 'review', 'my-skill')
+        work = flow.work_root_of(self.base)
+        self.assertEqual(flow.status(component, None, self.env, work), f'skill ok {mine}')
+        needs_skill = dict(component, requires={'skills': ['my-skill', 'no-such-skill']})
+        self.assertEqual(flow.status(needs_skill, None, self.env, work), 'skill missing')
+        needs_plugin = dict(component, requires={'skills': ['my-skill'], 'plugins': ['no-such-plugin']})
+        self.assertEqual(flow.status(needs_plugin, None, self.env, work), 'plugin missing no-such-plugin')
+        self.install('p', 'grilling')
+        satisfied = dict(component, requires={'skills': ['my-skill', 'p:grilling'], 'plugins': ['p']})
+        self.assertEqual(flow.status(satisfied, None, self.env, work), f'skill ok {mine}')
+        builtin = dict(skill_component('review.security-review', 'review', 'security-review'), requires={})
+        self.assertEqual(flow.status(builtin, None, self.env, work), 'skill builtin')
+
     def test_table_rows_carry_the_skill_status(self):
         result = self.run_flow('--home', self.home)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

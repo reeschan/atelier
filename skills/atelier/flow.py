@@ -506,14 +506,14 @@ def status(component: dict, agents, env, work_root: Path | None = None) -> str:
         plugin = component['invoke']['plugin']
         found = find_plugin_file(plugin, component['invoke']['path'], plugins_root(env), work_root)
         return f'plugin ok {found}' if found else f'plugin missing {plugin}'
-    if kind == 'skill':
-        return skill_status(component['invoke']['name'], env, work_root)
     for name in requires.get('plugins', []):
         if not plugin_dirs(name, plugins_root(env), work_root):
             return f'plugin missing {name}'
     for name in requires.get('skills', []):
         if not skill_status(name, env, work_root).startswith(SKILL_USABLE):
             return 'skill missing'
+    if kind == 'skill':
+        return skill_status(component['invoke']['name'], env, work_root)
     return 'script ok'
 
 

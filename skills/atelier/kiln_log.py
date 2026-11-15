@@ -60,6 +60,8 @@ TABLET_HEADINGS = ('Objective', 'Facts', 'Changes', 'Verification', 'Dead ends',
 TABLET_MAX_CHARS = 6000
 # 見出しの名前の前の番号 (`1.`・`2)`・`3`)
 HEADING_NUMBER = re.compile(r'^\d+[.)]?\s*')
+# コードの囲みの行 (``` か ~~~ が 3 つ以上)。開いた囲みと同じ文字で、同じか長い囲みだけが閉じる
+FENCE = re.compile(r'^\s*(`{3,}|~{3,})(.*)$')
 # 文脈を測れなかったときの終了コード (agent_stats.py --ctx の context=unknown と同じ)
 CTX_UNKNOWN = 3
 # agent_stats.py --ctx を待つ上限 (秒)。会話記録を読むだけなので、止まったときに区切りを止めない
@@ -84,12 +86,17 @@ def tablet_problems(path, max_chars: int = TABLET_MAX_CHARS) -> list[str]:
         text = Path(path).read_text(encoding='utf-8')
     except (OSError, UnicodeDecodeError):
         return ['missing file']
-    seen, unexpected, fenced = {}, [], False
+    seen, unexpected, fence = {}, [], None
     for line in text.splitlines():
-        if line.lstrip().startswith(('```', '~~~')):
-            fenced = not fenced
+        match = FENCE.match(line)
+        if match:
+            run = match.group(1)
+            if fence is None:
+                fence = (run[0], len(run))
+            elif run[0] == fence[0] and len(run) >= fence[1] and not match.group(2).strip():
+                fence = None
             continue
-        if fenced or not line.startswith('## '):
+        if fence is not None or not line.startswith('## '):
             continue
         name = HEADING_NUMBER.sub('', line[3:].strip()).rstrip(':').strip()
         known = next((h for h in TABLET_HEADINGS if h.lower() == name.lower()), None)

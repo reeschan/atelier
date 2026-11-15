@@ -594,6 +594,27 @@ class DefinitionsTest(Base):
         self.assertEqual(Path(record['work_root']).resolve(), self.work.resolve())
         self.assertFalse((self.claude / 'agents').exists())
 
+    def test_install_home_warns_about_older_work_definitions_read_first(self):
+        """作業ルートに古い定義 (atelier-defs が小さい) があれば、home に写したあと warn defs: でその名前を出す。"""
+        work_agents = self.work / '.claude' / 'agents'
+        work_agents.mkdir(parents=True)
+        (work_agents / 'atelier-designer.md').write_text(
+            '---\nname: atelier-designer\natelier-defs: 0\n---\nold\n', encoding='utf-8')
+        shutil.copyfile(HERE / 'agents' / 'atelier-tester.md', work_agents / 'atelier-tester.md')  # 新しい版
+        proc = self.defs('--install', 'home')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        warns = [line for line in proc.stdout.splitlines() if line.startswith('warn defs:')]
+        self.assertEqual(len(warns), 1, proc.stdout)
+        self.assertIn('/.claude/agents has older definitions', warns[0])
+        self.assertIn('(atelier-designer.md)', warns[0])
+        self.assertNotIn('atelier-tester.md', warns[0])
+
+        # 古い定義が無ければ warn は出さない
+        (work_agents / 'atelier-designer.md').unlink()
+        proc = self.defs('--install', 'home')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn('warn defs:', proc.stdout)
+
     def test_install_none_copies_nothing_and_records_the_answer(self):
         proc = self.defs('--install', 'none', session='caller-2')
         self.assertEqual(proc.returncode, 0, proc.stderr)

@@ -619,7 +619,8 @@ def use_example(example: dict, rows: list[dict], home: Path, name: str, replace:
     for row in rows:
         path = home / 'components' / f'{row["component"]["id"]}.json'
         if row['registered'] != 'registered':
-            written[path] = None
+            # needs_skill_tool だけ違う登録を上書きするときは、落ちたら元の中身に戻す
+            written[path] = path.read_bytes() if path.is_file() else None
             common.write_json(path, row['component'])
     common.write_json(wf_path, workflow)
     errors = check(home, workflow)

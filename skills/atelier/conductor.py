@@ -1492,11 +1492,15 @@ def designer_definition(paths: Paths, run: dict, episode) -> tuple:
 def definition_reason(run: dict, name: str):
     """定義 name が呼び手のセッションに読み込まれていなければ、その理由 (launch: headless の括弧に出す)。読み込まれていれば None。
 
-    読み込まれているのは、定義のファイルがあり、agents.json の記録が今の呼び手のセッションで写したものでなく、
-    この run でそのセッションの Agent tool が定義を見つけられなかった (agent_type_missing) こともないとき。
+    読み込まれているのは、定義のファイルがあって先に読まれる方が同梱の版より古くなく、agents.json の記録が
+    今の呼び手のセッションで写したものでなく、この run でそのセッションの Agent tool が定義を見つけられなかった
+    (agent_type_missing) こともないとき。
     """
     if setup_agents.find_definition(f'{name}.md', os.environ, Path.cwd()) is None:
         return 'no agent definition'
+    if setup_agents.current_definition(f'{name}.md', os.environ, Path.cwd()) is None:
+        # 作業ルートの古い定義が home の新しい定義より先に読まれる
+        return 'older agent definition'
     if setup_agents.copied_this_session(common.resolve_home(None), os.environ):
         return 'definition installed this session'
     missing = run.get('agent_type_missing')
@@ -1688,6 +1692,13 @@ def relaunch(paths: Paths, run: dict, agent_type_missing: bool = False):
     if run.get('launch') == 'headless':
         run['state'] = 'ready'
         return headless_lines(run, warns), EXIT_OK
+    roles, sources, role_warns = load_roles(paths, run)
+    runner = designer_runner(roles, lead_part(running.get('episode'), running.get('escalated')))
+    if runner != 'agent':
+        # Agent ツールで起こせない実行先の設計者は、cmd_next と同じく run が起こし直す
+        run['state'] = 'ready'
+        return headless_lines(run, [*warns, *role_warns, roles_line(roles, sources)],
+                              f'designer runner {runner}'), EXIT_OK
     name, def_warns = designer_definition(paths, run, running.get('episode'))
     mode, reason, mode_warns = agent_launch_mode(run, name)
     if mode == 'headless':
@@ -1706,7 +1717,8 @@ def relaunch_question(run: dict, launcher) -> bool:
         return False
     run['pending'] = {'episode': q.get('episode'), 'wave': q.get('wave'), 'pbis': q.get('pbis'),
                       'continue_from': q.get('state'), 'answer': None,
-                      'sent_by': q.get('sent_by'), 'escalated': q.get('escalated')}
+                      'sent_by': q.get('sent_by'), 'escalated': q.get('escalated'),
+                      'fix_tablet': q.get('fix_tablet') if q.get('state') else None}
     run['question'] = None
     run['failures'] = None
     if run.get('handoff'):
@@ -1973,6 +1985,10 @@ def _process_done(paths: Paths, run: dict) -> tuple:
     if bad:
         state, reasons = bad
         code, lines = fail(paths, run, running, f'state tablet ({reasons})', 'invalid', summary)
+        if code == EXIT_ASK and isinstance(run.get('question'), dict):
+            # launch-failure の問いになっても、答えのあとの出番がその板から続けてまず板を直すよう、問いに残す
+            run['question'].update(state=state, fix_tablet=reasons)
+            save(paths, run)
         if code != EXIT_FAIL:
             return code, lines
         # 板に書いた作業を失わないよう、同じ出番をその板から起こし、まず板を直させる
@@ -2590,7 +2606,8 @@ def cmd_answer(args, paths: Paths) -> int:
                           'continue_from': continue_from,
                           'answer': None if conductor_answer else answer.as_posix(),
                           'conductor_answer': conductor_answer, 'sent_by': q.get('sent_by'),
-                          'escalated': None if args.revise else q.get('escalated')}
+                          'escalated': None if args.revise else q.get('escalated'),
+                          'fix_tablet': q.get('fix_tablet') if continue_from else None}
         topic = q.get('topic') if q.get('topic') != _question_topic(kind) else None  # 結果が付けた topic だけ
         run.setdefault('answers', []).append({'seq': q['seq'], 'kind': kind, 'topic': topic, 'path': answer.as_posix(),
                                               'revise': bool(args.revise), 'at': iso_now()})
@@ -2787,8 +2804,9 @@ def agent_definition_json(name: str = AGENT_ROLE) -> dict:
 
 
 def designer_argv(launcher: list, running: dict, designer: dict, last_path=None) -> list:
-    """claude -p の引数。--agent は running の定義の名前。その定義のファイルが置き場に無ければ、同梱の定義を
-    --agents で --agent の前に足す (新しく起こす claude は、置き場にある定義をそのとき読み込む)。
+    """claude -p の引数。--agent は running の定義の名前。その定義のファイルが置き場に無いか、先に読まれる方が
+    同梱の版より古ければ、同梱の定義を --agents で --agent の前に足す
+    (新しく起こす claude は、置き場にある定義をそのとき読み込む)。
 
     codex の設計者は codex exec の引数 (runner_cli.codex_args)。サンドボックスは permission_mode から取る。
     """
@@ -2798,7 +2816,7 @@ def designer_argv(launcher: list, running: dict, designer: dict, last_path=None)
                                                   last_path)]
     name = running.get('definition') or AGENT_ROLE
     argv = [*launcher, '-p', '--output-format', 'json']
-    if setup_agents.find_definition(f'{name}.md', os.environ, Path.cwd()) is None:
+    if setup_agents.current_definition(f'{name}.md', os.environ, Path.cwd()) is None:
         argv += ['--agents', json.dumps(agent_definition_json(name))]
     argv += ['--agent', name, '--model', designer['model']]
     if designer.get('effort'):
@@ -3072,15 +3090,15 @@ def launch_designer(paths: Paths, run: dict, running: dict, warns: list) -> tupl
     runner = designer_runner(roles, part)
     launcher, problem = designer_command(runner)
     if problem:
-        code, lines = fail(paths, run, running, problem, 'launch-failed')
+        code, lines = launch_failed(paths, run, running, runner, problem)
         return None, code, with_warnings(lines, warns)
     try:
         argv = designer_argv(launcher, running, designer_of(roles, part), paths.episode_file(seq, episode, '.last.md'))
         definition = AGENTS_DIR / f"{running.get('definition') or AGENT_ROLE}.md"
         task = run_input(running.get('prompt') or '', definition=definition if runner == 'codex' else None)
     except OSError as error:
-        code, lines = fail(paths, run, running, f'cannot read the prompt or the agent definition: {error}',
-                           'launch-failed')
+        code, lines = launch_failed(paths, run, running, runner,
+                                    f'cannot read the prompt or the agent definition: {error}')
         return None, code, with_warnings(lines, warns)
     env = claude_run.build_env()
     # フックが Atelier の出番を見分けられるように (<run_id の先頭 8 文字>.<seq>)
@@ -3090,13 +3108,26 @@ def launch_designer(paths: Paths, run: dict, running: dict, warns: list) -> tupl
             child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=out, stderr=err,
                                      env=env, cwd=str(Path.cwd()), creationflags=NO_WINDOW)
     except OSError as error:
-        code, lines = fail(paths, run, running, f'cannot start the designer: {error}', 'launch-failed')
+        code, lines = launch_failed(paths, run, running, runner, f'cannot start the designer: {error}')
         return None, code, with_warnings(lines, warns)
     child.task = task
     child.err_path = err_path
     record_pid(run['running'], 'child_pid', child.pid)
     save(paths, run)
     return child, EXIT_OK, []
+
+
+def launch_failed(paths: Paths, run: dict, running: dict, runner: str, reason: str) -> tuple:
+    """子のプロセスが始まる前の起動の失敗。claude -p の設計者 (codex 以外) なら、終わった子の失敗と同じく
+    headless_failures に数えてから fail する。(終了コード, 出す行) を返す。"""
+    if runner != 'codex':
+        count_headless(run, True)
+    return fail(paths, run, running, reason, 'launch-failed')
+
+
+def count_headless(run: dict, failed: bool) -> None:
+    """続けて失敗した headless の起動の数 (agent_launch_mode が FAIL_LIMIT で代わりの起動に戻す)。成功で 0 に戻す。"""
+    run['headless_failures'] = int(run.get('headless_failures') or 0) + 1 if failed else 0
 
 
 def script_argv(paths: Paths, run: dict, running: dict) -> list:
@@ -3190,8 +3221,7 @@ def settle_episode(paths: Paths, run: dict, code: int, out_json) -> tuple:
     else:
         data = output_json(out_json)
         problem = launch_problem(code, data, out_json)
-        # 続けて失敗した headless の起動の数 (agent_launch_mode が FAIL_LIMIT で代わりの起動に戻す)
-        run['headless_failures'] = int(run.get('headless_failures') or 0) + 1 if problem else 0
+        count_headless(run, bool(problem))
     if problem:
         done_code, lines = fail(paths, run, active, problem, 'launch-failed')
     else:

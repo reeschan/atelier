@@ -28,6 +28,7 @@ Use `--home DIR` on these commands when the user keeps the settings outside the 
 Atelier bundles five definitions: `agents/atelier-designer.md` (the usual designer, with no Skill tool), `agents/atelier-designer-skills.md` (the same designer with the Skill tool, for an episode that runs a skill through it), `agents/atelier-reviewer.md`, `agents/atelier-tester.md` and `agents/pbi-worker.md`. Ask once with AskUserQuestion where they go, then run `python <skill>/setup_agents.py defs --install <answer>` in the work root:
 
 - `home`: copies them to `~/.claude/agents/` (`CLAUDE_CONFIG_DIR` in place of `~/.claude`), for every repository.
+  Claude Code reads the work root's `.claude/agents/` first. When a definition there has an older `atelier-defs` than the bundled set, `defs` prints `warn defs: <dir> has older definitions (<files>) ...`; pass it to the user, who updates or removes them. Until then `next` does not count the definition as loaded and the designer gets the bundled one (`appendix/conductor.md`, `## Definitions`).
 - `work`: copies them to the work root's `.claude/agents/` and adds `.claude/agents/` to `.git/info/exclude`, so they stay out of commits. The answer holds for that work root only.
 - `none`: copies nothing. The designer runs as a headless claude: the hooks run for each designer, and the caller's screen does not show what the designer does.
 

@@ -458,6 +458,25 @@ class AdapterGateTest(unittest.TestCase):
         rows = self.table(self.gate('--root', root))
         self.assertRow(rows, 'review-skill', 'off', 'off', OFF_REASON)
 
+    def test_review_skill_finds_lens_review_installed_for_this_project_only(self):
+        """installed_plugins.json の scope project で、projectPath がこのリポジトリのものも見つける。"""
+        root = os.path.join(self.dir, 'repo')
+        os.makedirs(root)
+        self.add_pbi(1)
+        self.write_numstat(1)
+        install = os.path.join(self.plugins, 'cache', 'm', 'lens-review', '2.0.0')
+        write_text(os.path.join(install, 'skills', 'lens-review', 'SKILL.md'), 'x')
+        other = os.path.join(self.dir, 'other-repo')
+        write_json(os.path.join(self.plugins, 'installed_plugins.json'), {'plugins': {'lens-review@m': [
+            {'scope': 'project', 'projectPath': other, 'installPath': install}]}})
+        rows = self.table(self.gate('--root', root))
+        self.assertEqual(rows['review-skill'][1], 'template')
+        write_json(os.path.join(self.plugins, 'installed_plugins.json'), {'plugins': {'lens-review@m': [
+            {'scope': 'project', 'projectPath': root, 'installPath': install}]}})
+        rows = self.table(self.gate('--root', root))
+        self.assertEqual(rows['review-skill'][:2], ['auto', 'lens-review:lens-review'])
+        self.assertIn('2.0.0', rows['review-skill'][2])
+
     def test_review_skill_prefers_the_general_review_over_a_security_or_content_one(self):
         """forgers-inc と同じ並び: 名前の順で先に来る review-agent-content-security より review-changes を選ぶ。"""
         root = os.path.join(self.dir, 'repo')
