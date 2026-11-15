@@ -283,6 +283,25 @@ def find_definition(file, env=None, work_root=None) -> Path | None:
     return None
 
 
+def current_definition(file, env=None, work_root=None) -> Path | None:
+    """Claude Code が先に読む定義 (find_definition) が同梱の版 (DEFS_VERSION) 以上なら、その場所。古いか無ければ None。
+
+    作業ルートの古い定義は home の新しい定義より先に読まれるので、読み込まれている定義として扱わない。
+    """
+    path = find_definition(file, env, work_root)
+    return path if path is not None and definition_version(path) >= DEFS_VERSION else None
+
+
+def shadowing_definitions(env=None, work_root=None) -> list:
+    """作業ルートの .claude/agents にある、atelier-defs が DEFS_VERSION より小さい同梱の定義のファイルの名前。
+
+    Claude Code は作業ルートの定義を home より先に読むので、home に新しい版を写してもこれらが使われる。
+    """
+    folder = defs_dir('work', env, work_root)
+    return [file for file in DEF_FILES
+            if (folder / file).is_file() and definition_version(folder / file) < DEFS_VERSION]
+
+
 def missing_definitions(env=None, work_root=None) -> list:
     """同梱の定義のうち、どちらの置き場にも無いか、atelier-defs が DEFS_VERSION より小さいファイルの名前。
 
@@ -606,6 +625,11 @@ def _cmd_defs(args) -> None:
         print('defs none: nothing copied; the designer runs as a headless claude')
         return
     print(f'defs {record["place"]}: {record["dir"]} ({len(record["hashes"])} files)')
+    shadowed = shadowing_definitions(work_root=args.work_root) if record['place'] == 'home' else []
+    if shadowed:
+        folder = defs_dir('work', work_root=args.work_root).as_posix()
+        print(f'warn defs: {folder} has older definitions ({", ".join(shadowed)}) that Claude Code reads before '
+              'the home ones; update or remove them (until then the designer is launched with the bundled ones)')
     if record['place'] == 'work' and exclude_file(record['work_root']) is None:
         print(f'warn defs: {record["work_root"]} is not a git work tree; {EXCLUDE_LINE} is not excluded')
 

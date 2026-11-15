@@ -282,7 +282,7 @@ def review_skill_row(setting, root, env=None) -> tuple:
     if skill is not None:
         return setting, f'repo:{skill.parent.name}', f'found {skill.relative_to(root).as_posix()}{rules_note}'
     none_here = f"no review skill in {' or '.join(REVIEW_SKILL_DIRS)}"
-    found = flow.find_skill_file(LENS_REVIEW, Path(), env or os.environ)
+    found = flow.find_skill_file(LENS_REVIEW, Path(), env or os.environ, root)
     if found is not None:
         return setting, LENS_REVIEW, f'{none_here}; {LENS_REVIEW} at {found.as_posix()}{rules_note}'
     return setting, 'template', f'{none_here}; {LENS_REVIEW} not installed{rules_note}'

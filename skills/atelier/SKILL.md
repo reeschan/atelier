@@ -53,7 +53,7 @@ With launch `agent` (headless is below):
 ## headless
 
 - `run --detach` starts the designer and returns at once.
-- Run `python <skill>/conductor.py wait --timeout 300` with `run_in_background` and go on at its completion notice. Run it again while it prints running; otherwise read its lines. On `state: question`, show it with its `present:` line (`## Questions`).
+- Run `python <skill>/conductor.py wait --timeout 300` with `run_in_background` and go on at its completion notice. Run it again while it prints running with no `stale:` line; on `stale:`, run its `relaunch:` line; otherwise read its lines. On `state: question`, show it with its `present:` line (`## Questions`).
 - With launch `headless`, `next` prints `launch: headless` and `then: ... run --detach`: run that line and do not launch the designer. The same happens on an `agent` run when the designer runs on codex or claude (`launch: headless (designer runner codex)`), when your session has not loaded the designer's definition (`launch: headless (no agent definition)`), and for the e2e episode, which a script runs with no model (`launch: headless (e2e runs as a script)`).
 - When the user asks to stop the run, run `python <skill>/conductor.py abort`.
 - Claude Code's auto mode may refuse `run --detach` when it starts a codex designer, which runs with `-a never` and no sandbox (`appendix/setup.md`, `## roles`). Then show the refusal and ask the user to allow the command or to run it themselves. Codex workers and roles run in a sandbox (`runners.md`, `## codex`).

@@ -442,6 +442,25 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(os.listdir(os.path.join(self.home, 'components')), [])
         self.assertFalse(os.path.exists(os.path.join(self.home, 'workflows', 'recommended.json')))
 
+    def test_example_use_restores_an_upgraded_component_on_a_workflow_error(self):
+        """needs_skill_tool の無い登録を上書きしたあとに検査が落ちたら、消さずに元の中身へ戻す。"""
+        self.assertEqual(self.run_cli('example', 'use', 'recommended')[0], 0)
+        path = os.path.join(self.home, 'components', 'review.lens-review.json')
+        old = self.load('components', 'review.lens-review.json')
+        del old['needs_skill_tool']
+        write(path, json.dumps(old))
+        with open(path, 'rb') as f:
+            before = f.read()
+        bad = component.load_example('recommended')[0]
+        bad['workflow']['stages']['review'] = ['review.pstack-interrogate']
+        bad_path = os.path.join(self.dir, 'bad.json')
+        write(bad_path, json.dumps(bad))
+        code, out, err = self.run_cli('example', 'use', bad_path, '--replace')
+        self.assertEqual(code, 2, out + err)
+        self.assertIn('the last component must be builtin', out)
+        with open(path, 'rb') as f:
+            self.assertEqual(f.read(), before)
+
     def test_example_shape_errors(self):
         path = os.path.join(self.dir, 'shape.json')
         write(path, json.dumps({'name': 'x', 'workflow': {}, 'skills': [{'skill': 'a:b', 'stage': 'gate'}]}))

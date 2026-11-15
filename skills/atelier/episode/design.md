@@ -33,7 +33,7 @@ Go through the stages in this order. Take the design decision (`appendix/design.
 | fix | fix the whole fix list at once (fix PBIs in one wave), then the failing E2E specs only | the fix PBIs, `docs/pbi/fix/round-<r>.json` |
 | finish | promote refs, collect stats, write the completion report | the report |
 
-Build, verify and fix repeat per PBI until each PBI passes or stops. With tests at the end on, the `e2e` episode (a script) and then the test stage of `appendix/tests-at-end.md` run after the last wave; lint-recheck (`after verify`) runs after that, before review. The running part of the Whole check of `appendix/review.md` is the tester's kind `final`; you reconcile its result. Review runs once, after all PBIs; a confirmed finding (from review, or from the security stage when it runs) sends its PBI back to fix. The rework limit is the template's `fix.max_rework`.
+Build, verify and fix repeat per PBI until each PBI passes or stops. With tests at the end on, the test stage of `appendix/tests-at-end.md` runs after the last wave; lint-recheck (`after verify`) runs after that, before review. The `e2e` episode (a script) runs once at the very end, after review and fix (`appendix/tests-at-end.md`, `## E2E`). The running part of the Whole check of `appendix/review.md` is the tester's kind `final`; you reconcile its result. Review runs once, after all PBIs; a confirmed finding (from review, or from the security stage when it runs) sends its PBI back to fix. The rework limit is the template's `fix.max_rework`.
 
 ## Working memory
 

@@ -999,6 +999,46 @@ class ConductorTest(unittest.TestCase):
         self.assertIn('warn agents', out)
         self.assertIn('subagent_type=general-purpose', self.line(out, 'launch'))
 
+    def test_launches_that_fail_before_the_child_starts_count_toward_the_fallback(self):
+        """設計者のコマンドを起こせない (Popen の誤り) 失敗も headless の失敗に数え、2 回続けば general-purpose に戻す。"""
+        self.remove_defs()
+        self.install_defs('none')
+        self.con('start', '--goal', 'cannot start')
+        broken = {'ATELIER_DESIGNER_CMD': json.dumps([os.path.join(self.tmp, 'no-such-designer.exe')])}
+        rc, out = self.con('run', env=broken)
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('cannot start the designer', out)
+        rc, out = self.con('run', env=broken)
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+        self.assertIn('launch-failure', out)
+        self.assertEqual(self.read_json(RUN)['headless_failures'], 2)
+        self.show_question()
+        rc, out = self.con('answer', '--text', 'try again')
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('next')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: running'), out)
+        self.assertIn('subagent_type=general-purpose', self.line(out, 'launch'))
+
+    def test_an_older_work_definition_is_not_taken_as_loaded(self):
+        """作業ルートの古い定義が home の新しい定義より先に読まれるあいだは、headless で同梱の定義を --agents で渡す。"""
+        self.write('.claude/agents/atelier-designer.md', '---\nname: atelier-designer\natelier-defs: 0\n---\nold\n')
+        rc, out = self.setup_cli('defs', '--install', 'home')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('warn defs:', out)
+        self.assertIn('(atelier-designer.md)', out)
+        rc, out = self.con('start', '--goal', 'older work definition')
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('next')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertIn('launch: headless (older agent definition)', out)
+        self.assertNotIn('subagent_type=', out)
+        rc, out = self.con('run')
+        self.assertEqual(rc, 10, out)
+        args = self.log_rows()[0]['args']
+        self.assertEqual(args[args.index('--agent') + 1], 'atelier-designer')
+        self.assertLess(args.index('--agents'), args.index('--agent'))
+        self.assertTrue(json.loads(args[args.index('--agents') + 1])['atelier-designer']['prompt'])
+
     def test_agent_type_not_found_relaunch_switches_to_headless(self):
         """呼び手が --agent-type-missing を付けて --relaunch したら、headless に替える。"""
         self.con('start', '--goal', 'type not found')
@@ -1104,6 +1144,15 @@ class ConductorTest(unittest.TestCase):
         rc, done = self.con('done')
         self.assertEqual((rc, done.splitlines()[0]), (10, 'state: question'), done)
         self.assertIn('launch-failure', done)
+        # 問いに答えたあとの出番も、外れた板から続けてまず板を直す
+        self.show_question()
+        rc, out = self.con('answer', '--text', 'try again')
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('next')
+        self.assertEqual(self.line(out, 'episode'), 'build seq 4', out)
+        request = self.request(out)
+        self.assertIn(f'Continue from: {STATE}', request)
+        self.assertIn('Fix the tablet first:', request)
 
     def test_question_tablet_is_checked_unless_kiln_is_off(self):
         """問い (approve 以外) の板も検査する。kiln.json が enabled false なら検査しない。"""
@@ -1817,6 +1866,20 @@ class ConductorTest(unittest.TestCase):
         self.assertIn('designer gpt-6.1-terra/high@codex (run)', self.line(out, 'roles'))
         self.assertIn('run --detach', self.line(out, 'then'))
         self.assertEqual(self.read_json(RUN)['state'], 'ready')
+
+    def test_relaunch_of_a_codex_designer_points_to_run_again(self):
+        """launch agent の run でも、codex の設計者の --relaunch は Agent tool の起動を出さず run --detach を案内する。"""
+        rc, out = self.codex_start()
+        self.assertEqual(rc, 0, out)
+        self.headless_running(self.dead_pid())
+        rc, out = self.con('next', '--relaunch')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertIn('launch: headless (designer runner codex)', out)
+        self.assertNotIn('subagent_type=', out)
+        self.assertIn('run --detach', self.line(out, 'then'))
+        run = self.read_json(RUN)
+        self.assertEqual((run['state'], run['launch']), ('ready', 'agent'))
+        self.assertIn('relaunched', [row['status'] for row in run['history']])
 
     def test_codex_designer_runs_on_codex_exec_and_keeps_tokens(self):
         """run は codex exec で設計者を起こし (定義を読む行を先頭に)、JSONL の使用量と thread を history に残す。"""
