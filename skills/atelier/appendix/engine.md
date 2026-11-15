@@ -110,6 +110,7 @@ stage lint-survey after understand: lint-survey.jevlint run (model, 41 files, $0
 stage design: design.builtin run (clearly complex)
 stage lint-recheck after verify: lint-recheck.jevlint run (ast-only) worse 4, rework 1
 stage review: review.code-review run (diff 412 lines > 300) findings 0,2,1
+stage fix: fix.list run (round 1, 3 items, 2 workers) fixed 3, left 0, skipped 0
 
 | PBI | Model | State | Rework | Tier up | Continue | Note |
 |---|---|---|---|---|---|---|
@@ -131,6 +132,6 @@ stage <stage|gate after stage>: <component> <run|skip|fallback|off> (<reason>) [
 
 - `skip`: its `when` did not hold. `fallback`: it was not usable or failed, and the next row ran. `off`: turned off in agents.json.
 - Add `findings` only for a review or security component.
-- A final review that runs again writes a new line, with `#1` or `#2` after `run` (`appendix/review.md`, `## Findings`). The earlier line stays.
+- The final review runs once: one `stage review` line, with no `#1` or `#2` (`appendix/review.md`, `## Findings`). The fix stage writes one line per round: `stage fix: fix.list run (round <r>, <n> items, <k> workers) fixed <a>, left <b>, skipped <s>` (`appendix/fix.md`). Finish copies one line per E2E round from `docs/pbi/verify/e2e.rounds.json`: `stage e2e: run #<k> (<n> specs, <f> failing, full suite <result>) next <fix|finish>`.
 - Whether Jev can be reached is a check from this run, the same way a tool's presence is the fresh `tools_check.py` row and not the `Tools missing` line above. The `jev` row without `--probe` only says whether the key can be read; it does not call Jev. Connectivity is `tools_check.py --probe`, or a `prepare.py` line from calls made in that run: `Jev: ok n/n (<model>)` or `Jev: unavailable (<code>)`. `Jev: not-checked (cached ...)` means those gate files were reused. STATUS.md, HANDOFF.md, `docs/handoff` and memory are not evidence. On resume, ask again with `prepare.py --only <PBI ids>` and no `--tier`, and append a gate line; the earlier line stays. Example: `gate.jev run #2 (local Jev ok n/n)`.
 - The approval list and the completion report copy these lines as they are.

@@ -66,7 +66,7 @@ TEST_KINDS = ('wave', 'survey', 'investigate', 'e2e', 'final', 'full')
 TEST_CAUSES = ('intended', 'regression', 'unknown')
 TEST_RECOMMEND = ('pass', 'rework', 'needs-designer')
 
-EPISODES = ('design', 'build', 'e2e', 'test', 'review', 'finish')
+EPISODES = ('design', 'build', 'e2e', 'test', 'review', 'fix', 'finish')
 EPISODE_STATUS = ('done', 'question', 'handoff', 'error')
 QUESTION_KINDS = ('approve', 'rework-limit', 'destructive', 'send-approval', 'decision', 'full-run')
 # 出番の結果の question の任意の topic (docs/specs/harness-metrics.md の question.asked と同じ値)

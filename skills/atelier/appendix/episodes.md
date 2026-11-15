@@ -10,8 +10,8 @@ The contract between the conductor (`conductor.py`), the designer (`designer.md`
 | Conductor (`conductor.py`, a script) | the caller | none | `docs/pbi/conductor/run.json`, the episode prompts, `answers/<seq>-<kind>.md` |
 | Designer (`agents/atelier-designer.md`) | the caller (agent) or `conductor.py run` (headless; always when `roles.designer.runner` is codex or claude); description `ATELIER.<run>.<seq> <episode>` (`<run>`: the first 8 characters of `run_id`, printed by the conductor) | `roles.designer` (opus on agent), from run, repo or home (`appendix/setup.md`, `## roles`) | the spec, the PBIs, `docs/pbi/waves.json`, records, the episode result, the `.alive` file |
 | Worker (`agents/pbi-worker.md`) | the designer; description `PBI-<n> <short text>` | the PBI's `route.json` | the change and `docs/pbi/reports/<report>.md` |
-| Lead of an episode (`agents/atelier-designer.md`, the same definition) | the caller or `conductor.py run`, for the test episode; the prompt says `Lead: test` | `roles.episodes.test`: the first usable step of the routing template's middle tier unless a layer sets it (`appendix/setup.md`, `## roles`); the designer's model when the episode was handed over (`Escalated:`) | the same files as the designer |
-| `e2e_run.py` (a script) | `conductor.py run`, for the e2e episode | none | `docs/pbi/verify/tests/e2e.test-result.json`, `docs/pbi/verify/e2e.scope.md`, the episode result |
+| Lead of an episode (`agents/atelier-designer.md`, the same definition) | the caller or `conductor.py run`, for the test and fix episodes; the prompt says `Lead: test` or `Lead: fix` | `roles.episodes.test` and `roles.episodes.fix`: the first usable step of the routing template's middle tier unless a layer sets it (`appendix/setup.md`, `## roles`); the designer's model when the episode was handed over (`Escalated:`) | the same files as the designer |
+| `e2e_run.py` (a script) | `conductor.py run`, for the e2e episode | none | `docs/pbi/verify/tests/e2e.test-result.json`, `docs/pbi/verify/e2e.scope.md`, `docs/pbi/verify/e2e.rounds.json`, the episode result |
 | Reviewer (`agents/atelier-reviewer.md`) | the designer, one per report, once every worker of the wave has returned; description from `prompts/pbi-review.md` | `roles.reviewer`: `deep` (opus) when the review stage is deep, else `other` (the routing template's middle tier, sonnet at high effort with the bundled routing). Only a deep review avoids the model that built it: it switches to `other` when `deep` is that model. A stage with a runner other than agent runs through `role_run.py` (`runners.md`, `## Roles on a runner`) | `docs/pbi/reviews/<report>.review.json` |
 | Tester (`agents/atelier-tester.md`) | the designer; description from `prompts/tester.md` | `roles.tester` (sonnet); a runner other than agent runs through `role_run.py` | `docs/pbi/verify/tests/<name>.test-result.json` |
 
@@ -58,15 +58,16 @@ Write the file on the prompt's `Result:` line as your last action, schema `ateli
 | Episode | `next` it may name |
 |---|---|
 | design | build (wave 1) |
-| build | build, e2e, test, review, finish |
-| e2e | test (written by `e2e_run.py`) |
+| build | build, test, review, finish (e2e only in a run started before E2E moved to the end) |
 | test | build, review, test (only with `needs_designer` from the lead, or from the designer to hand the stage back) |
-| review | build (with `pbis`), finish |
+| review | fix, e2e, finish (never build: the final review sends nothing back) |
+| fix | e2e, finish, fix (only with `needs_designer` from the lead, or from the designer to hand the stage back) |
+| e2e | fix, finish (written by `e2e_run.py`; test with `--before-review`) |
 | finish | none (closes the run) |
 
 A missing or broken result, or a `next` not in this table, counts as a failure: the conductor relaunches the same episode without `Continue from:` (`designer.md`, `### Re-entry`), and asks after two in a row.
 
-A `PBIs:` build carries a `Sent by:` line naming the episode that sent those PBIs back (`test` or `review`); its next must be that episode, and the conductor refuses anything else.
+A `PBIs:` build carries a `Sent by:` line naming the episode that sent those PBIs back (`test`, or `review` in a run started before the final review stopped sending back); its next must be that episode, and the conductor refuses anything else.
 
 ## Questions
 

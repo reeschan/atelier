@@ -77,7 +77,7 @@ The `ui-retouch` rows (`ui-design.unslop`, heydamir/unslop) audit screens that a
 - **plan** (after `model-check`): the PBI that owns a rule gets an acceptance criterion for it, and each broken rule's path becomes a test that replays it step by step against the real code. The PBI links the chart in its Notes.
 - **review**: the reviewer compares the built screens with the mockups when the PBI links them.
 - **review** (after a `ui-retouch` row): render the changed screens again and check each audit line in scope is gone and no new sign from the skill's list appeared. A line still there sends its PBI back like a review finding.
-- **fix** (after `security`): a confirmed finding in a file a PBI changed sends that PBI back like a review finding (it counts toward the rework limit). A confirmed finding outside the PBIs' files, and every lead that needs validation, goes to the completion report under findings; do not fix them in this run.
+- **fix** (after `security`): a confirmed finding goes into the fix list like a final review finding (`appendix/review.md`, `## Findings`), whatever file it is in, and the fix stage fixes it with the rest (`appendix/fix.md`). Every lead that needs validation goes to the completion report under findings; do not fix it in this run.
 - **Approve**: show the model-check chart (`chart.mmd` as a `mermaid` block) and its rules with the PBI list, so a reader who does not read code can check the behavior.
 - **finish**: the completion report lists the artifacts under the changes, with paths.
 

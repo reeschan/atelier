@@ -95,7 +95,7 @@
         "review.code-review",
         "review.builtin"
       ],
-      "fix": ["fix.rework"],
+      "fix": ["fix.list"],
       "finish": ["finish.builtin"]
     },
     "gates": [

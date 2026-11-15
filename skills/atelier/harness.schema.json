@@ -22,7 +22,7 @@
     },
     "episode.started": {
       "fields": {
-        "episode": {"type": "enum", "values": ["design", "build", "e2e", "test", "review", "finish"]},
+        "episode": {"type": "enum", "values": ["design", "build", "e2e", "test", "review", "fix", "finish"]},
         "wave": {"type": "int"},
         "launcher": {"type": "enum", "values": ["agent", "headless"]},
         "designer": {"type": "enum", "values": ["installed", "fallback"]},
@@ -35,17 +35,17 @@
     },
     "episode.ended": {
       "fields": {
-        "episode": {"type": "enum", "values": ["design", "build", "e2e", "test", "review", "finish"]},
+        "episode": {"type": "enum", "values": ["design", "build", "e2e", "test", "review", "fix", "finish"]},
         "status": {"type": "enum", "values": ["done", "question", "handoff", "error", "invalid", "missing", "launch-failed", "relaunched", "aborted", "other"]},
         "reason": {"type": "enum", "values": ["no-agent-tool", "result-missing", "result-invalid", "episode-error", "launch-failed", "timeout", "interrupted", "other"]},
         "seconds": {"type": "number"},
         "failures": {"type": "int"},
-        "next_episode": {"type": "enum", "values": ["design", "build", "e2e", "test", "review", "finish"]}
+        "next_episode": {"type": "enum", "values": ["design", "build", "e2e", "test", "review", "fix", "finish"]}
       }
     },
     "episode.cost": {
       "fields": {
-        "episode": {"type": "enum", "values": ["design", "build", "e2e", "test", "review", "finish"]},
+        "episode": {"type": "enum", "values": ["design", "build", "e2e", "test", "review", "fix", "finish"]},
         "method": {"type": "enum", "values": ["transcript", "headless", "unmeasured"]},
         "roles": {"type": "map", "keys": {"type": "id"}, "values": {"type": "object", "fields": {
           "requests": {"type": "int"},
