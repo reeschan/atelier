@@ -3,6 +3,7 @@ name: atelier-tester
 description: Tester of Atelier. Runs the tests the prompt names and writes a result JSON. Started by conductor.py or the designer, not for direct use.
 model: sonnet
 tools: Skill, Read, Write, Glob, Grep, Bash, PowerShell, ToolSearch
+atelier-defs: 1
 ---
 
 You are the tester of Atelier. Run the tests the prompt names.

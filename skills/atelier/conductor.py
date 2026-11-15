@@ -11,6 +11,7 @@
   python <このディレクトリ>/conductor.py abort [--reason T] [--dir docs/pbi]
 
 置き場所: <dir>/conductor/ の run.json (schema atelier.run/1)・goal.md・lock・episodes/<seq>-<出番>.prompt.md・
+episodes/<seq>-read.md (設計者が最初に読むファイル。read_first.json の表から組む)・
 <run_id の先頭 8 文字>-<seq>-<出番>.result.json (run_id の無い run.json は <seq>-<出番>.result.json)・.alive・answers/<seq>-<種類>.md。
 波の中身は <dir>/waves.json。
 状態: none・ready・running・question・retry・finished・aborted。出力の 1 行目はいつも `state: <状態>`、全部で 8 行以内。
@@ -26,9 +27,16 @@ headless の設計者か runner が動いている間の done (state: running �
 立て直し: next --relaunch は止まった running の子を止めて新しい seq で起こし直す。launch が headless の run の next は
 起動の指示を出さず run --detach を案内する。no-agent-tool の問いのあとに run --launch headless が呼ばれたら、問いを閉じて
 その出番を headless で起こす。start --force は前の run の子を止めてから run.json を退ける。失敗 (結果なし・壊れ・表に無い next・error) は retry にして数え、同じ出番で 2 回続けば
-launch-failure の問い、handoff は進み (runs.jsonl の行数と STATUS.md のハッシュ) が 3 回続けて無ければ handoff-loop の問い、
-error の no-agent-tool は数えずに decision の問い (どれも <dir>/conductor/episodes/<seq>-<種類>.question.md に説明を書く)。
-エージェント定義が無ければ warn を出し general-purpose で起動する。
+launch-failure の問い、handoff は進み (runs.jsonl の行数と、STATUS.md と stages.md を合わせたハッシュ) が 3 回続けて
+無ければ handoff-loop の問い、error の no-agent-tool は数えずに decision の問い (どれも
+<dir>/conductor/episodes/<seq>-<種類>.question.md に説明を書く)。handoff と問い (approve 以外) の状態の板が
+kiln_log.tablet_problems に外れれば、板を Continue from に残して同じ出番を起こし直す (2 回続けば launch-failure)。
+
+エージェントの定義: start は定義が足りず agents.json に agent_defs の記録も無ければ、run を作らずに ask agents: の行を出して
+2 で止まる (呼び手が setup_agents.py defs --install で答えを残す)。写した定義が同梱より古ければ写し直す。
+next の起動のしかたは、定義が読み込まれていれば Agent tool、そうでなく claude の CLI があれば headless (--agents で同梱の
+定義を渡す)、どちらも無いか headless が 2 回続けて失敗したら general-purpose に定義を読ませる。出番に Skill ツールを要る
+行があれば (flow.skill_tool_episodes) atelier-designer-skills、無ければ atelier-designer の定義で起こす。
 子の pid (child_pid・runner_pid) は record_pid で起動の時刻 (<key>_started) と一緒に残す。止める前に時刻を比べ、合わない・
 読めない pid は自分の子でない (使い回し) として止めず、run.json から消して warn を出す。時刻の記録が無い古い run.json は、
 launched_at より前に起きたプロセスだけ止める。
@@ -53,9 +61,13 @@ import common
 import agents as agents_module
 import claude_run
 import design_record
+import flow
+import kiln_log
 import present
+import read_first
 import role_results
 import runner_cli
+import setup_agents
 
 try:
     import events
@@ -88,9 +100,9 @@ WAIT_LOCK_WAIT = 5.0  # wait が、running でなくなったあとにロック�
 WAIT_DEFAULT = 300.0  # wait --timeout の既定 (秒)
 LOOP_LIMIT = 3  # 進みの無い handoff がこの回数続いたら handoff-loop の問い
 FAIL_LIMIT = 2  # 同じ出番の失敗がこの回数続いたら launch-failure の問い
-AGENT_FILE = 'atelier-designer.md'
-AGENT_ROLE = AGENT_FILE[:-3]
-AGENT_DEFINITION = Path(__file__).resolve().parent / 'agents' / AGENT_FILE
+AGENT_ROLE = 'atelier-designer'  # ふだんの設計者の定義 (Skill ツールなし)
+SKILLS_ROLE = 'atelier-designer-skills'  # Skill ツールを要る行を main で動かす出番の設計者の定義
+AGENTS_DIR = Path(__file__).resolve().parent / 'agents'
 STATES = ('none', 'ready', 'running', 'question', 'retry', 'finished', 'aborted')
 # run.json が在るのに読めず、この処理で一度も状態を読めていないときに 1 行目に出す状態。
 # none は「無い」と誤らせ、finished・aborted は start を誘うので、起こし直し待ちの retry にする
@@ -1371,6 +1383,13 @@ def cmd_start(args, paths: Paths) -> int:
     resolved, _, _ = load_roles(paths, {'roles': given_roles})
     warns = check_role_runners(resolved)
     check_agent_roles_without_agent_tool(resolved)
+    defs_warns, ask = agent_defs_lines()
+    if ask:
+        # 定義の置き場は run を始める前に決める。送り手の設定も要るなら、呼び手が 1 回で聞けるように並べて出す
+        setup = events.sender_setup_line(paths.base) if events is not None else None
+        emit([f'state: {error_state(paths, Refused(ask))}', ask, *([setup] if setup else [])])
+        return EXIT_USAGE
+    warns = warns + defs_warns
     carried = {}  # 前の run の止められなかった pid (新しい run の stuck_pids に引き継ぐ)
     with Lock(paths):
         try:
@@ -1431,20 +1450,106 @@ def cmd_start(args, paths: Paths) -> int:
     return EXIT_OK
 
 
+def agent_defs_lines() -> tuple:
+    """start の定義の確かめ。(warn の行, ask agents: の行か None) を返す。
+
+    写した定義を同梱の新しい版に揃えてから (setup_agents.refresh_definitions)、同梱の定義のどれかが
+    どちらの置き場にも無く、この作業ルートに当てはまる agent_defs の記録も無ければ、ask agents: の行を返す。
+    """
+    home = common.resolve_home(None)
+    work_root = Path.cwd()
+    try:
+        warns = setup_agents.refresh_definitions(home, os.environ, work_root)
+    except OSError as error:
+        warns = [f'warn agents: the copied definitions were not updated ({error})']
+    missing = setup_agents.missing_definitions(os.environ, work_root)
+    if not missing or setup_agents.defs_record(home, work_root) is not None:
+        return warns, None
+    return warns, (
+        f"ask agents: Atelier's agent definitions are missing ({', '.join(missing)}); ask the user once where they go, "
+        f"run python {quoted(SKILL / 'setup_agents.py')} defs --install home|work|none, then run start again. "
+        'home: copy them to ~/.claude/agents/ for every repository. '
+        "work: copy them to this work root's .claude/agents/, kept out of commits by .git/info/exclude. "
+        'none: copy nothing; the designer runs as a headless claude, the hooks run for each designer, '
+        "and the caller's screen does not show what the designer does (appendix/setup.md, ## Agent definitions)")
+
+
 # ---- next ----
 
-def agents_installed() -> bool:
-    """設計者の定義が在るか。<CLAUDE_CONFIG_DIR か ~/.claude>/agents と作業ルートの .claude/agents のどちらか。"""
-    home = Path(os.environ.get('CLAUDE_CONFIG_DIR') or (Path.home() / '.claude'))
-    return any(path.is_file() for path in (home / 'agents' / AGENT_FILE, Path.cwd() / '.claude' / 'agents' / AGENT_FILE))
+def designer_definition(paths: Paths, run: dict, episode) -> tuple:
+    """出番の設計者を起こす定義の名前と warn の行。
+
+    その出番に Skill ツールを要る行があれば (flow.skill_tool_episodes) SKILLS_ROLE、無ければ AGENT_ROLE。
+    テンプレートが読めず判定できないときは、使えるはずのスキルを落とさないよう SKILLS_ROLE にして warn を出す。
+    """
+    try:
+        episodes = flow.skill_tool_episodes(paths.base, run.get('workflow'))
+    except Exception as error:  # 判定の誤りで出番を止めない
+        return SKILLS_ROLE, [f'warn agents: the skill rows are unknown ({fold(error, 120)}); using {SKILLS_ROLE}']
+    return (SKILLS_ROLE if episode in episodes else AGENT_ROLE), []
 
 
-def launch(paths: Paths, run: dict, launcher=None) -> list:
-    """ready・retry の run の次の出番の依頼文を書き、running にする。出す行を返す。
+def definition_reason(run: dict, name: str):
+    """定義 name が呼び手のセッションに読み込まれていなければ、その理由 (launch: headless の括弧に出す)。読み込まれていれば None。
 
-    定義が無ければ warn を足し、agent では general-purpose で起こして依頼文の先頭に定義を読ませる行を付ける
-    (headless の後ろ盾は run が --agents で足す)。launcher を渡すと、run.json の launch によらずその起動のしかたで
-    依頼文と running を書く (run は常に headless として自分で起こす)。
+    読み込まれているのは、定義のファイルがあり、agents.json の記録が今の呼び手のセッションで写したものでなく、
+    この run でそのセッションの Agent tool が定義を見つけられなかった (agent_type_missing) こともないとき。
+    """
+    if setup_agents.find_definition(f'{name}.md', os.environ, Path.cwd()) is None:
+        return 'no agent definition'
+    if setup_agents.copied_this_session(common.resolve_home(None), os.environ):
+        return 'definition installed this session'
+    missing = run.get('agent_type_missing')
+    if isinstance(missing, dict) and missing.get('session') == (os.environ.get(setup_agents.SESSION_ENV) or ''):
+        return 'agent type not found'
+    return None
+
+
+def agent_launch_mode(run: dict, name: str) -> tuple:
+    """launch が agent の run で、設計者をどう起こすか。(起こし方, headless の理由, warn の行) を返す。
+
+    起こし方は、定義が読み込まれていれば agent (Agent tool)、そうでなく claude の CLI があれば headless、
+    CLI が無いか、headless の設計者が FAIL_LIMIT 回続けて失敗していれば fallback (general-purpose に定義を読ませる)。
+    """
+    reason = definition_reason(run, name)
+    if reason is None:
+        return 'agent', None, []
+    failures = int(run.get('headless_failures') or 0)
+    if failures >= FAIL_LIMIT:
+        return 'fallback', None, [f'warn agents: {name} is not loaded ({reason}) and headless failed {failures} times '
+                                  'in a row; using general-purpose']
+    _, problem = designer_command('agent')
+    if problem:
+        return 'fallback', None, [f'warn agents: {name} is not loaded ({reason}) and {problem}; using general-purpose']
+    return 'headless', reason, []
+
+
+def answer_kind(run: dict, answer) -> tuple:
+    """Answer: のファイルの問いの種類と topic。answer が書いた answers の行から取り、無ければファイルの名前から種類だけ。"""
+    if not answer:
+        return None, None
+    for row in reversed(run.get('answers') or []):
+        if isinstance(row, dict) and row.get('path') == answer:
+            return row.get('kind'), row.get('topic')
+    match = re.match(r'^\d+-(.+)\.md$', Path(str(answer)).name)
+    return (match.group(1) if match else None), None
+
+
+def ctx_probe_line(paths: Paths, launcher: str, run_short: str, seq: int, session_id: str) -> str:
+    """依頼文の Context probe: の行。kiln_log.py の記録のコマンドで、設計者は --boundary と --phase を埋める。"""
+    probe = (f'--probe-session {session_id}' if launcher == 'headless'
+             else f'--probe-agent "ATELIER.{run_short}.{seq} "')
+    return (f"python {quoted(SKILL / 'kiln_log.py')} {quoted(paths.base)} --role designer --seq {seq} {probe} "
+            '--boundary <start|phase|wave> --phase <stage>')
+
+
+def launch(paths: Paths, run: dict, launcher=None, fallback=False, definition=None, warns=()) -> list:
+    """ready・retry の run の次の出番の依頼文と最初に読むファイルを書き、running にする。出す行を返す。
+
+    definition は設計者を起こす定義の名前 (省くと designer_definition で決める)。fallback が真なら、agent では
+    general-purpose で起こして依頼文の先頭に定義を読ませる行を付ける (headless は designer_argv が --agents で渡す)。
+    launcher を渡すと、run.json の launch によらずその起動のしかたで依頼文と running を書く
+    (run は常に headless として自分で起こす)。warns は出す行に足す warn。
     """
     pending = run.get('pending') or {}
     episode = pending.get('episode') or 'design'
@@ -1465,13 +1570,14 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
             if stale.name == 'REPORT.md':
                 # 消せない古い報告は finish で通ってしまうので、起こす前に止める
                 raise Refused(f'cannot remove the old completion report {stale.as_posix()}: {error}')
-    roles, sources, warns = load_roles(paths, run)
+    roles, sources, role_warns = load_roles(paths, run)
+    warns = [*role_warns, *warns]
+    if definition is None and episode not in SCRIPT_EPISODES:
+        definition, more = designer_definition(paths, run, episode)
+        warns += more
     session_id = str(uuid.uuid4())
     description = f'ATELIER.{run_short}.{seq} {episode}'
-    if launcher == 'headless':
-        ctx_probe = f"python {quoted(SKILL / 'agent_stats.py')} --ctx --session {session_id}"
-    else:
-        ctx_probe = f"python {quoted(SKILL / 'agent_stats.py')} --ctx --agent \"ATELIER.{run_short}.{seq} \""
+    ctx_probe = ctx_probe_line(paths, launcher, run_short, seq, session_id)
     reviewer = roles['reviewer']
     escalated = pending.get('escalated')
     part = lead_part(episode, escalated)
@@ -1494,19 +1600,26 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
         'continue_from': pending.get('continue_from'), 'answer': pending.get('answer'),
         'conductor_answer': pending.get('conductor_answer'), 'sent_by': pending.get('sent_by'),
         'result': result.as_posix(), 'alive': alive.as_posix(), 'ctx_probe': ctx_probe,
+        'fix_tablet': pending.get('fix_tablet'),
     }
-    installed = agents_installed()
-    fallback = not installed and launcher != 'headless'
-    text = render(values)
+    fallback = bool(fallback) and launcher != 'headless'
     if episode in SCRIPT_EPISODES:
         # スクリプトの出番は設計者を起こさない。依頼文の場所には、何を流すかの 1 行を残す
         fallback = False
         text = (f'Script episode: {episode} (seq {seq}). conductor.py run runs {E2E_SCRIPT.as_posix()} with no model;'
                 f' it writes {result.as_posix()}.\n')
+    else:
+        kind, topic = answer_kind(run, pending.get('answer'))
+        entry = read_first.entry_of(bool(pending.get('continue_from')), kind, topic, bool(escalated), values['lead'])
+        read_path = paths.episode_file(seq, 'read', '.md')
+        try:
+            read_first.build(episode, entry, read_path)
+        except (ValueError, OSError) as error:
+            raise Refused(f'cannot put the read-first file together for {episode} ({entry}): {error}')
+        values['read_first'] = read_path.as_posix()
+        text = render(values)
     if fallback:
-        text = f'Read {(SKILL / "agents" / AGENT_FILE).as_posix()} and follow it as your instructions.\n' + text
-    if not installed and episode not in SCRIPT_EPISODES:
-        warns = [*warns, 'warn agents: atelier-designer not installed; using fallback']
+        text = f'Read {(AGENTS_DIR / f"{definition}.md").as_posix()} and follow it as your instructions.\n' + text
     prompt.parent.mkdir(parents=True, exist_ok=True)
     prompt.write_text(text, encoding='utf-8', newline='\n')
     run['seq'] = seq
@@ -1516,19 +1629,20 @@ def launch(paths: Paths, run: dict, launcher=None) -> list:
         'continue_from': pending.get('continue_from'), 'answer': pending.get('answer'),
         'conductor_answer': pending.get('conductor_answer'), 'sent_by': pending.get('sent_by'),
         'escalated': escalated, 'designer_part': None if episode in SCRIPT_EPISODES else part,
+        'definition': definition, 'fallback': fallback, 'fix_tablet': pending.get('fix_tablet'),
         'prompt': prompt.as_posix(), 'result': result.as_posix(), 'alive': alive.as_posix(),
         'roles': roles_record(roles, sources),
     }
     run['pending'] = None
     run['state'] = 'running'
     # seq は run.json にまだ書いていない (save は呼び出し側) ので、明示して渡す
-    _emit(paths, 'episode.started', lambda: _episode_started_data(run, installed), seq=seq)
+    _emit(paths, 'episode.started', lambda: _episode_started_data(run, not fallback), seq=seq)
     if episode in SCRIPT_EPISODES:
         return ['state: running', *warns, f'episode: {episode} seq {seq}', f'launch: script {E2E_SCRIPT.name}',
                 f'result: {result.as_posix()}', 'then: ' + command('wait', '--timeout', '300')]
     model = designer['model']
     return ['state: running', *warns, f'episode: {episode} seq {seq}', roles_line(roles, sources),
-            f'launch: {launcher} subagent_type={"general-purpose" if fallback else "atelier-designer"} '
+            f'launch: {launcher} subagent_type={"general-purpose" if fallback else definition} '
             f'model={model} description="{description}"',
             f'prompt: {prompt.as_posix()}', f'result: {result.as_posix()}', 'then: ' + command('done')]
 
@@ -1546,21 +1660,25 @@ def headless_lines(run: dict, warns=(), why=None) -> list:
     return [f"state: {run.get('state')}", *warns, launch_line, 'then: ' + command('run', '--detach')]
 
 
-def relaunch(paths: Paths, run: dict):
+def relaunch(paths: Paths, run: dict, agent_type_missing: bool = False):
     """running の子を止め、同じ出番・波・Continue from・Answer で新しい seq と session を起こす。(出す行, 終了コード) を返す。
 
     headless の run で自分の子を止められなければ running のまま error (終了コード 2): 生きた runner の隣で run --detach を起こさせない。
     """
     running = run.get('running') or {}
     before = len(run.get('history') or [])
+    if agent_type_missing and running.get('launcher') == 'agent' and running.get('definition'):
+        # 呼び手の Agent tool が定義を見つけられなかった: このセッションの残りの起動は定義に頼らない
+        run['agent_type_missing'] = {'session': os.environ.get(setup_agents.SESSION_ENV) or '', 'at': iso_now()}
+    headless = run.get('launch') == 'headless' or running.get('launcher') == 'headless'
     warns, stuck = stop_children(run)
-    if stuck and run.get('launch') == 'headless':
+    if stuck and headless:
         return [f"state: {run.get('state')}", *warns, 'error: the running child could not be stopped; not relaunched'], EXIT_USAGE
     history_add(run, running, 'relaunched', None)
     run['pending'] = {'episode': running.get('episode'), 'wave': running.get('wave'), 'pbis': running.get('pbis'),
                       'continue_from': running.get('continue_from'), 'answer': running.get('answer'),
                       'conductor_answer': running.get('conductor_answer'), 'sent_by': running.get('sent_by'),
-                      'escalated': running.get('escalated')}
+                      'escalated': running.get('escalated'), 'fix_tablet': running.get('fix_tablet')}
     _emit_episode_ended(paths, run, running, before)
     run['running'] = None
     if running.get('episode') in SCRIPT_EPISODES:
@@ -1570,7 +1688,12 @@ def relaunch(paths: Paths, run: dict):
     if run.get('launch') == 'headless':
         run['state'] = 'ready'
         return headless_lines(run, warns), EXIT_OK
-    lines = launch(paths, run)
+    name, def_warns = designer_definition(paths, run, running.get('episode'))
+    mode, reason, mode_warns = agent_launch_mode(run, name)
+    if mode == 'headless':
+        run['state'] = 'ready'
+        return headless_lines(run, [*warns, *def_warns], reason), EXIT_OK
+    lines = launch(paths, run, fallback=mode == 'fallback', definition=name, warns=[*def_warns, *mode_warns])
     lines[1:1] = warns
     return lines, EXIT_OK
 
@@ -1616,7 +1739,7 @@ def cmd_next(args, paths: Paths) -> int:
                 return EXIT_OK
             before = len(run.get('history') or [])
             running_seq = _int_or_none((run.get('running') or {}).get('seq'))
-            lines, code = relaunch(paths, run)
+            lines, code = relaunch(paths, run, agent_type_missing=args.agent_type_missing)
             save(paths, run)
             # 子を止められずに error を返した道は出番が終わっていない (settle しない)
             settled = running_seq if len(run.get('history') or []) > before else None
@@ -1637,7 +1760,13 @@ def cmd_next(args, paths: Paths) -> int:
                 # Agent ツールで起こせない実行先の設計者は、run が起こす
                 emit(headless_lines(run, [*role_warns, roles_line(roles, sources)], f'designer runner {runner}'))
                 return EXIT_OK
-            lines = launch(paths, run)
+            name, def_warns = designer_definition(paths, run, pending.get('episode') or 'design')
+            mode, reason, mode_warns = agent_launch_mode(run, name)
+            if mode == 'headless':
+                # 定義が読み込まれていない呼び手のセッションでは、run が --agents で定義を渡して起こす
+                emit(headless_lines(run, [*role_warns, *def_warns], reason))
+                return EXIT_OK
+            lines = launch(paths, run, fallback=mode == 'fallback', definition=name, warns=[*def_warns, *mode_warns])
             save(paths, run)
             code = EXIT_OK
     settle_after(paths, settled)
@@ -1756,18 +1885,32 @@ def fail(paths: Paths, run: dict, running: dict, reason: str, status: str, summa
                        'then: ' + command('next')]
 
 
+PROGRESS_FILES = ('STATUS.md', 'stages.md')  # handoff の進みを測る状態のファイル (段の記録は stages.md)
+
+
+def progress_sha(paths: Paths):
+    """PROGRESS_FILES を合わせた sha256。どれも無ければ None。無いファイルも、あるファイルと区別して混ぜる。"""
+    digest = hashlib.sha256()
+    found = False
+    for name in PROGRESS_FILES:
+        try:
+            data = (paths.base / name).read_bytes()
+            found = True
+            digest.update(f'{name}:{len(data)}:'.encode() + data)
+        except OSError:
+            digest.update(f'{name}:-:'.encode())
+    return digest.hexdigest() if found else None
+
+
 def handoff_count(paths: Paths, run: dict, running: dict, state_path: str) -> int:
-    """handoff の進みを測る: runs.jsonl の行の数と STATUS.md の sha256 を前の handoff と比べ、
+    """handoff の進みを測る: runs.jsonl の行の数と、STATUS.md と stages.md を合わせた sha256 を前の handoff と比べ、
     どちらも変わらなかった回数を返す (変われば 0)。記録は run.json の handoff に残す。"""
     try:
         text = (paths.base / 'runs.jsonl').read_text(encoding='utf-8', errors='replace')
         rows = len([line for line in text.splitlines() if line.strip()])
     except OSError:
         rows = 0
-    try:
-        sha = hashlib.sha256((paths.base / 'STATUS.md').read_bytes()).hexdigest()
-    except OSError:
-        sha = None
+    sha = progress_sha(paths)
     given = run.get('handoff') or {}
     same = given.get('episode') == running.get('episode') and given.get('wave') == running.get('wave')
     count = int(given.get('count') or 0) + 1 if same and given.get('rows') == rows and given.get('sha') == sha else 0
@@ -1826,6 +1969,16 @@ def _process_done(paths: Paths, run: dict) -> tuple:
         code, lines = fail(paths, run, running, f'missing {absent}', 'invalid', summary)
         # 状態の扱いは fail と同じ。launch-failure の問いになったときはその行を返し、そうでなければ exit 2 の 1 行
         return (EXIT_USAGE, [f'error: missing {absent}']) if code == EXIT_FAIL else (code, lines)
+    bad = tablet_error(paths, data)
+    if bad:
+        state, reasons = bad
+        code, lines = fail(paths, run, running, f'state tablet ({reasons})', 'invalid', summary)
+        if code != EXIT_FAIL:
+            return code, lines
+        # 板に書いた作業を失わないよう、同じ出番をその板から起こし、まず板を直させる
+        run['pending'].update(continue_from=state, fix_tablet=reasons)
+        save(paths, run)
+        return EXIT_USAGE, [f'error: state tablet ({reasons})']
     stale = stale_envelope(data) or grill_open(paths, run, data) or question_draft_errors(data)
     if stale:
         code, lines = fail(paths, run, running, stale, 'invalid', summary)
@@ -1937,6 +2090,30 @@ def missing_for_done(data: dict) -> str:
         if applies(data) and missing(data):
             return name(data)
     return ''
+
+
+def kiln_off(paths: Paths) -> bool:
+    """<dir>/kiln.json が enabled false か (Kiln を切った run は、設計者に状態の板の形を渡していない)。"""
+    data = common.load_json(paths.base / 'kiln.json')
+    return isinstance(data, dict) and data.get('enabled') is False
+
+
+def tablet_error(paths: Paths, data: dict):
+    """handoff と問い (approve 以外) の結果の state の板が形から外れていれば (板のパス, 理由)。合っていれば None。
+
+    理由は kiln_log.tablet_problems の行を '; ' でつないだもの。上限は kiln_log.tablet_max_chars (<dir>/kiln.json)。
+    handoff の板が無いときは settle_result が not found で断るので、ここでは見ない。
+    """
+    state = data.get('state')
+    question = data.get('question') if isinstance(data.get('question'), dict) else {}
+    if data.get('status') not in ('handoff', 'question') or not isinstance(state, str) or not state:
+        return None
+    if data.get('status') == 'question' and question.get('kind') == 'approve':
+        return None
+    if (data.get('status') == 'handoff' and not Path(state).is_file()) or kiln_off(paths):
+        return None
+    problems = kiln_log.tablet_problems(state, kiln_log.tablet_max_chars(paths.base))
+    return (state, '; '.join(problems)) if problems else None
 
 
 def stale_envelope(data: dict) -> str:
@@ -2066,7 +2243,7 @@ def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -
             return conductor_question(
                 paths, run, running, 'handoff-loop',
                 f"{episode} seq {running.get('seq')}: {LOOP_LIMIT} handoffs in a row without progress "
-                '(runs.jsonl and STATUS.md did not change).')
+                '(runs.jsonl, STATUS.md and stages.md did not change).')
         run['pending'] = {'episode': episode, 'wave': running.get('wave'), 'pbis': running.get('pbis'),
                           'continue_from': state_path, 'answer': None,
                           'conductor_answer': None, 'sent_by': running.get('sent_by'),
@@ -2414,7 +2591,8 @@ def cmd_answer(args, paths: Paths) -> int:
                           'answer': None if conductor_answer else answer.as_posix(),
                           'conductor_answer': conductor_answer, 'sent_by': q.get('sent_by'),
                           'escalated': None if args.revise else q.get('escalated')}
-        run.setdefault('answers', []).append({'seq': q['seq'], 'kind': kind, 'path': answer.as_posix(),
+        topic = q.get('topic') if q.get('topic') != _question_topic(kind) else None  # 結果が付けた topic だけ
+        run.setdefault('answers', []).append({'seq': q['seq'], 'kind': kind, 'topic': topic, 'path': answer.as_posix(),
                                               'revise': bool(args.revise), 'at': iso_now()})
         run['question'] = None
         run.pop('garbled', None)  # 答えに書き直しの頼みを載せたので、化けの warn は消す
@@ -2598,27 +2776,19 @@ def designer_command(runner: str = 'agent'):
         return None, f'claude not found (claude_command exits {error.code})'
 
 
-def agent_definition_json() -> dict:
-    """スキルの agents/atelier-designer.md から、--agents に渡す JSON を組む (frontmatter と本文)。"""
-    text = AGENT_DEFINITION.read_text(encoding='utf-8').replace('\r\n', '\n')
-    meta = {}
-    body = text
-    match = re.match(r'^---\n(.*?)\n---\n?(.*)$', text, re.S)
-    if match:
-        body = match.group(2)
-        for line in match.group(1).split('\n'):
-            key, sep, value = line.partition(':')
-            if sep and key.strip():
-                meta[key.strip()] = value.strip()
+def agent_definition_json(name: str = AGENT_ROLE) -> dict:
+    """スキルの agents/<name>.md から、--agents に渡す JSON を組む (frontmatter と本文)。"""
+    meta, body = setup_agents.read_definition(AGENTS_DIR / f'{name}.md')
     spec = {'description': meta.get('description', ''), 'prompt': body.strip(),
             'tools': [tool.strip() for tool in meta.get('tools', '').split(',') if tool.strip()]}
     if meta.get('model'):
         spec['model'] = meta['model']
-    return {AGENT_ROLE: spec}
+    return {name: spec}
 
 
 def designer_argv(launcher: list, running: dict, designer: dict, last_path=None) -> list:
-    """claude -p の引数。定義が home に無ければ --agents を --agent の前に足す。
+    """claude -p の引数。--agent は running の定義の名前。その定義のファイルが置き場に無ければ、同梱の定義を
+    --agents で --agent の前に足す (新しく起こす claude は、置き場にある定義をそのとき読み込む)。
 
     codex の設計者は codex exec の引数 (runner_cli.codex_args)。サンドボックスは permission_mode から取る。
     """
@@ -2626,10 +2796,11 @@ def designer_argv(launcher: list, running: dict, designer: dict, last_path=None)
         return [*launcher, *runner_cli.codex_args(designer['model'], designer.get('effort'),
                                                   runner_cli.codex_sandbox(designer.get('permission_mode')),
                                                   last_path)]
+    name = running.get('definition') or AGENT_ROLE
     argv = [*launcher, '-p', '--output-format', 'json']
-    if not agents_installed():
-        argv += ['--agents', json.dumps(agent_definition_json())]
-    argv += ['--agent', AGENT_ROLE, '--model', designer['model']]
+    if setup_agents.find_definition(f'{name}.md', os.environ, Path.cwd()) is None:
+        argv += ['--agents', json.dumps(agent_definition_json(name))]
+    argv += ['--agent', name, '--model', designer['model']]
     if designer.get('effort'):
         argv += ['--effort', designer['effort']]
     argv += ['--permission-mode', designer['permission_mode'], '--permission-prompts', 'none',
@@ -2637,15 +2808,15 @@ def designer_argv(launcher: list, running: dict, designer: dict, last_path=None)
     return argv
 
 
-def run_input(prompt_path, definition: bool = False) -> bytes:
+def run_input(prompt_path, definition=None) -> bytes:
     """標準入力に渡す文: 依頼文のパスを読む指示と、依頼文の本文。
 
-    definition が真 (--agent の無い codex) なら、先頭に設計者の定義を読む行を付ける。
+    definition (定義のファイルのパス。--agent の無い codex) があれば、先頭にその定義を読む行を付ける。
     """
     text = Path(prompt_path).read_text(encoding='utf-8', errors='replace')
     head = f'{Path(prompt_path).as_posix()} を読み、その指示どおりに作業してください。\n\n'
     if definition:
-        head = f'Read {AGENT_DEFINITION.as_posix()} and follow it as your instructions.\n' + head
+        head = f'Read {Path(definition).as_posix()} and follow it as your instructions.\n' + head
     return (head + text).encode('utf-8')
 
 
@@ -2905,15 +3076,19 @@ def launch_designer(paths: Paths, run: dict, running: dict, warns: list) -> tupl
         return None, code, with_warnings(lines, warns)
     try:
         argv = designer_argv(launcher, running, designer_of(roles, part), paths.episode_file(seq, episode, '.last.md'))
-        task = run_input(running.get('prompt') or '', definition=runner == 'codex')
+        definition = AGENTS_DIR / f"{running.get('definition') or AGENT_ROLE}.md"
+        task = run_input(running.get('prompt') or '', definition=definition if runner == 'codex' else None)
     except OSError as error:
         code, lines = fail(paths, run, running, f'cannot read the prompt or the agent definition: {error}',
                            'launch-failed')
         return None, code, with_warnings(lines, warns)
+    env = claude_run.build_env()
+    # フックが Atelier の出番を見分けられるように (<run_id の先頭 8 文字>.<seq>)
+    env['ATELIER_EPISODE'] = f"{str(run.get('run_id') or '')[:8]}.{seq}"
     try:
         with open(out_json, 'wb') as out, open(err_path, 'wb') as err:
             child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=out, stderr=err,
-                                     env=claude_run.build_env(), cwd=str(Path.cwd()), creationflags=NO_WINDOW)
+                                     env=env, cwd=str(Path.cwd()), creationflags=NO_WINDOW)
     except OSError as error:
         code, lines = fail(paths, run, running, f'cannot start the designer: {error}', 'launch-failed')
         return None, code, with_warnings(lines, warns)
@@ -3015,6 +3190,8 @@ def settle_episode(paths: Paths, run: dict, code: int, out_json) -> tuple:
     else:
         data = output_json(out_json)
         problem = launch_problem(code, data, out_json)
+        # 続けて失敗した headless の起動の数 (agent_launch_mode が FAIL_LIMIT で代わりの起動に戻す)
+        run['headless_failures'] = int(run.get('headless_failures') or 0) + 1 if problem else 0
     if problem:
         done_code, lines = fail(paths, run, active, problem, 'launch-failed')
     else:
@@ -3178,6 +3355,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument('--force', action='store_true', help='今の run.json を run.<日時>.json に退けて始める')
     p = add('next', '次の出番の依頼文を書き、起動のしかたを出す')
     p.add_argument('--relaunch', action='store_true', help='running で止まった出番を、子を止めて新しい seq で起こし直す')
+    p.add_argument('--agent-type-missing', action='store_true',
+                   help='--relaunch と一緒に: 呼び手の Agent tool が定義を見つけられなかった (このセッションでは定義に頼らない)')
     add('done', 'running の出番の結果を読み、状態を進める')
     p = add('answer', '残っている問いに答える')
     p.add_argument('--reply', help='答えのファイル')
