@@ -149,6 +149,18 @@ class HeavyCheckTest(unittest.TestCase):
         numbers = self.result()['numbers']
         self.assertEqual((numbers['modules'], numbers['new_modules']), (['src/a', 'src/b', 'src/billing'], ['src/billing']))
 
+    def test_a_module_with_only_docs_in_the_base_is_new(self):
+        self.write('src/c/README.md', '# c\n')
+        self.write('tests/c/test_c.py', code_lines(5))
+        self.rebase_here()
+        self.write('src/a/x.py', code_lines(20))
+        self.write('src/b/y.py', code_lines(20))
+        self.write('src/c/models.py', code_lines(20))
+        self.intend()
+        self.check()
+        self.assertEqual(self.result()['numbers']['new_modules'], ['src/c'])
+        self.assertEqual(self.held(), ['new-subsystem'])
+
     def test_tests_and_docs_do_not_count_as_modules(self):
         self.write('src/a/x.py', code_lines(20))
         self.write('tests/test_x.py', code_lines(20))

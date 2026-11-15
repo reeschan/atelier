@@ -77,7 +77,7 @@ MANIFESTS = ('package.json', 'pyproject.toml', 'setup.py', 'setup.cfg', 'go.mod'
              'mix.exs', 'Package.swift', '*.csproj', '*.fsproj')
 DATA_MODEL = {'dirs': ('migrations', 'migration', 'migrate', 'alembic', 'models', 'entities', 'schema', 'schemas',
                        'prisma'),
-              'names': ('*.sql', '*.prisma', 'schema.rb')}
+              'names': ('*.sql', '*.prisma', 'schema.rb', 'models.*', 'schema.*')}
 INTERFACE = {'dirs': ('api', 'apis', 'routes', 'router', 'routers', 'handlers', 'controllers', 'endpoints',
                       'webhooks', 'graphql', 'rpc', 'proto'),
              'names': ('*.proto', '*.graphql', '*.gql', 'openapi.*', 'swagger.*', 'asyncapi.*')}
@@ -247,7 +247,8 @@ def under(path: str, folder: str) -> bool:
 def numbers_of(files: list, base_files: list) -> dict:
     code = [f for f in files if is_code(f['path'])]
     modules = sorted({module_of(f['path']) for f in code})
-    base_modules = {module_of(p) for p in base_files}
+    # 文書や試験しか無かったモジュールに初めてコードを足したときも、新しいモジュールに数える
+    base_modules = {module_of(p) for p in base_files if is_code(p)}
     return {
         'files': len(files),
         'added_files': sum(1 for f in files if f['status'] == 'A'),
