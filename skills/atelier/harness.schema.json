@@ -189,7 +189,7 @@
     },
     "context.compacted": {
       "fields": {
-        "boundary": {"type": "enum", "values": ["phase", "wave", "attempt", "milestone"]},
+        "boundary": {"type": "enum", "values": ["start", "phase", "wave", "attempt", "milestone"]},
         "role": {"type": "id"},
         "phase": {"type": "id"},
         "regime": {"type": "enum", "values": ["EoCC", "SAC"]},

@@ -12,8 +12,12 @@
   python agent_stats.py --ctx                 # 今のディレクトリのセッションの、最後のリクエストの文脈の大きさを 1 行で出す
   python agent_stats.py --ctx --session <id>  # そのセッションの会話記録の文脈の大きさ (headless の設計者用。無ければ context=unknown、終了コード 3)
   python agent_stats.py --ctx --agent <説明の先頭>  # description がそれで始まる最新のサブエージェントの文脈の大きさ (無ければ context=unknown、終了コード 3)
-  python agent_stats.py --out <dir> --run <run.json>  # 設計者のセッションを集め、役割ごとの数と費用を <dir>/roles.json に書く
-  python agent_stats.py --projects <dir>      # 会話記録の根を差し替える (既定 ~/.claude/projects。どのモードでも効く)
+  python agent_stats.py --out <dir> --run <run.json>  # 設計者のセッションを集め、役割ごとの数と費用と、出番ごとの
+                                                      # 作業開始の文脈 (episodes) を <dir>/roles.json に書く
+  python agent_stats.py --projects <dir>      # 会話記録の根を差し替える (既定 <CLAUDE_CONFIG_DIR か ~/.claude>/projects。どのモードでも効く)
+
+作業開始の文脈は、その seq の kiln の記録 (<run.json の 2 つ上>/.kiln/compact-events.jsonl) の boundary start の行、
+無ければ設計者の最初のリクエストの文脈 (episode_start)。
   python agent_stats.py --cost                # 設計者・サブエージェント・advisor の費用を API 換算 (USD) で出す
   python agent_stats.py --cost --home <dir>   # 単価表 (prices.json) を置いた home を指定する
 
@@ -22,6 +26,7 @@ API 換算は参考値で、請求額ではない。
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -29,7 +34,8 @@ from pathlib import Path
 
 import common
 
-PROJECTS = Path.home() / ".claude" / "projects"
+# 会話記録の根。Claude Code は CLAUDE_CONFIG_DIR (無ければ ~/.claude) の projects/ に書く
+PROJECTS = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
 TTL_5M = 300
 TTL_1H = 3600
 # 直前のリクエストまでにキャッシュされた量に対して、読めた量がこの割合を下回ったらキャッシュの作り直しとみなす
@@ -505,6 +511,78 @@ def episode_cost(run, seq, prices=None):
     return {"method": "unmeasured", "roles": {}}
 
 
+def designer_requests(run, seq):
+    """1 つの出番の設計者のリクエスト列。headless は history の session_id のセッション、agent は
+    description が `ATELIER.<run_id の先頭 8 文字>.<seq> ` で始まるサブエージェント。見つからなければ None。"""
+    entry = next((e for e in run.get("history") or [] if isinstance(e, dict) and e.get("seq") == seq), None)
+    sid = entry.get("session_id") if entry else None
+    if isinstance(sid, str) and sid:
+        main = find_session_quiet(sid)
+        if main is not None:
+            return load_requests(main)
+    if not run.get("run_id"):
+        return None
+    designer = find_agent_jsonl(f"{run_prefix(run)}{seq} ")
+    return load_requests(designer) if designer is not None else None
+
+
+def load_kiln_rows(path):
+    """kiln の記録 (compact-events.jsonl) の行。無い・読めない行は飛ばす。"""
+    rows = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, dict):
+                    rows.append(value)
+    except OSError:
+        return []
+    return rows
+
+
+def episode_start(run, seq, kiln_rows=()):
+    """1 つの出番の作業開始の文脈。{"context": トークン数 か None, "source": kiln|first_request|unmeasured}。
+
+    kiln_rows (kiln の記録の行) のうち、設計者・boundary start・その seq・この run (atelier_run_id が run_id か null) で
+    tokens_before が数のものの最初を使う。無ければ設計者の最初のリクエストの文脈。
+    """
+    for r in kiln_rows:
+        tokens = r.get("tokens_before")
+        if (r.get("role") == "designer" and r.get("boundary") == "start" and r.get("seq") == seq
+                and r.get("atelier_run_id") in (None, run.get("run_id"))
+                and isinstance(tokens, int) and not isinstance(tokens, bool)):
+            return {"context": tokens, "source": "kiln"}
+    reqs = designer_requests(run, seq)
+    if reqs:
+        return {"context": context(reqs[0]), "source": "first_request"}
+    return {"context": None, "source": "unmeasured"}
+
+
+def run_episodes(run, kiln_rows=()):
+    """run.json の history の出番ごとの作業開始の文脈 (seq の順、同じ seq は 1 回)。"""
+    out, seen = [], set()
+    for e in run.get("history") or []:
+        seq = e.get("seq") if isinstance(e, dict) else None
+        if not isinstance(seq, int) or seq in seen:
+            continue
+        seen.add(seq)
+        start = episode_start(run, seq, kiln_rows)
+        out.append({"seq": seq, "episode": e.get("episode"), "start_context": start["context"],
+                    "start_source": start["source"]})
+    return sorted(out, key=lambda x: x["seq"])
+
+
+def episodes_table(episodes):
+    lines = ["| seq | 出番 | 作業開始の文脈 | 出どころ |", "|---:|---|---:|---|"]
+    for e in episodes:
+        size = "不明" if e["start_context"] is None else fmt(e["start_context"])
+        lines.append(f"| {e['seq']} | {e['episode']} | {size} | {e['start_source']} |")
+    return "\n".join(lines)
+
+
 def roles_table(roles):
     lines = ["| 役割 | リクエスト | トークン | 費用 (USD) |", "|---|---:|---:|---:|"]
     for r in ROLES:
@@ -720,11 +798,17 @@ def main():
             sys.exit(f"run.json を読めない: {args.run}")
         prices = common.load_prices(common.resolve_home(args.home))
         roles = role_stats(run_sessions(run), prices, run_prefix(run), run_end(run))
+        # run.json は <pbi-dir>/conductor/run.json、kiln の記録は <pbi-dir>/.kiln/compact-events.jsonl
+        kiln_rows = load_kiln_rows(Path(args.run).resolve().parent.parent / ".kiln" / "compact-events.jsonl")
+        episodes = run_episodes(run, kiln_rows)
         out = Path(args.out)
         out.mkdir(parents=True, exist_ok=True)
         (out / "roles.json").write_text(
-            json.dumps({"run_id": run.get("run_id"), "roles": roles}, ensure_ascii=False, indent=2), encoding="utf-8")
+            json.dumps({"run_id": run.get("run_id"), "roles": roles, "episodes": episodes},
+                       ensure_ascii=False, indent=2), encoding="utf-8")
         print(roles_table(roles))
+        print()
+        print(episodes_table(episodes))
         return
     if args.all:
         paths = pbi_sessions()
