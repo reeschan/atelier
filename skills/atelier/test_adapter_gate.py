@@ -458,6 +458,38 @@ class AdapterGateTest(unittest.TestCase):
         rows = self.table(self.gate('--root', root))
         self.assertRow(rows, 'review-skill', 'off', 'off', OFF_REASON)
 
+    def test_review_skill_prefers_the_general_review_over_a_security_or_content_one(self):
+        """forgers-inc と同じ並び: 名前の順で先に来る review-agent-content-security より review-changes を選ぶ。"""
+        root = os.path.join(self.dir, 'repo')
+        self.add_pbi(1)
+        self.write_numstat(1)
+        for name in ('guard-sensitive-operations', 'review-agent-content-security', 'review-changes',
+                     'run-agent-governance-evals'):
+            write_text(os.path.join(root, '.claude', 'skills', name, 'SKILL.md'), 'x')
+        rows = self.table(self.gate('--root', root))
+        self.assertRow(rows, 'review-skill', 'auto', 'repo:review-changes',
+                       'found .claude/skills/review-changes/SKILL.md')
+
+    def test_review_skill_order(self):
+        """決まった名前 (review-changes・code-review・review) → review を含み security と content を含まないもの → 残り。"""
+        root = os.path.join(self.dir, 'repo')
+        self.add_pbi(1)
+        self.write_numstat(1)
+        skills = os.path.join(root, '.claude', 'skills')
+        write_text(os.path.join(skills, 'a-security-review', 'SKILL.md'), 'x')
+        self.assertEqual(self.table(self.gate('--root', root))['review-skill'][1], 'repo:a-security-review')
+        write_text(os.path.join(skills, 'peer-review', 'SKILL.md'), 'x')
+        self.assertEqual(self.table(self.gate('--root', root))['review-skill'][1], 'repo:peer-review')
+        write_text(os.path.join(root, 'skills', 'review', 'SKILL.md'), 'x')
+        self.assertEqual(self.table(self.gate('--root', root))['review-skill'][1], 'repo:review')
+        write_text(os.path.join(skills, 'code-review', 'SKILL.md'), 'x')
+        self.assertEqual(self.table(self.gate('--root', root))['review-skill'][1], 'repo:code-review')
+        write_text(os.path.join(root, 'skills', 'review-changes', 'SKILL.md'), 'x')
+        rows = self.table(self.gate('--root', root))
+        self.assertRow(rows, 'review-skill', 'auto', 'repo:review-changes', 'found skills/review-changes/SKILL.md')
+        self.write_adapters({'review': 'my-review'})
+        self.assertEqual(self.table(self.gate('--root', root))['review-skill'][1], 'agents.json')
+
     def test_missing_pbi_dir_exits_2(self):
         result = self.gate(pbi_dir=os.path.join(self.dir, 'nowhere'))
         self.assertEqual(result.returncode, 2)

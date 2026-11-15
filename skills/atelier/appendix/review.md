@@ -21,7 +21,7 @@ The final review runs once per run, and nothing it finds goes back to build: eve
 2. The table has phase, setting, decision and reason per row. A component with `when` `adapter-gate` holds only when its phase (`review` or `security`) says `run`. The `review-skill` row picks the review (`## Pick the review`).
    - `skip`: run no review skill and record the reason.
    - `off`: the phase is turned off in agents.json. Record it.
-   - setting: `auto`, `off`, or a skill name from agents.json (`appendix/adapters.md`). A skill name replaces the template's review components for that phase when it is in the skill list.
+   - setting: `auto`, `off`, or a skill name from agents.json. A skill name replaces the template's review components for that phase when it is usable (`appendix/adapters.md`, `## Settings`).
 3. Put the `warn` lines under the table together in one question result (kind `decision`) and end the episode. Inline, pass each one to the user in one line.
 
 ## Heavy review
@@ -55,22 +55,22 @@ When the `review` row says `run` and no heavy review runs (`## Heavy review`), t
 | `lens-review:lens-review` | lens-review, when the repository has no review skill of its own |
 | `template` | the template's review rows as they are (`review.code-review`, then `review.builtin`) |
 
-Any of the first three replaces the template's review components for this run, as a skill name in agents.json does. Its reason lists the repository's review rules (`rules: <path>, ...`); put them on the reviewer's `Rules:` line together with the rules from the user's instructions and memory. When the picked skill cannot run (it is not in the skill list, it asks a question, or it changed the tree), record `fallback` and take the next row of this table.
+Any of the first three replaces the template's review components for this run, as a skill name in agents.json does. Its reason lists the repository's review rules (`rules: <path>, ...`); put them on the reviewer's `Rules:` line together with the rules from the user's instructions and memory. `adapter_gate.py` found `repo:` and `lens-review` on disk, and the reviewer holds the Skill tool, so start it without asking `flow.py` first. Take the next row of this table only when the reviewer could not run the picked skill, as `## Run a review skill` describes.
 
 ## Run a review skill
 
 1. Take a baseline: `git rev-parse HEAD` and `git status --porcelain -- . ':!docs/pbi/reviews' ':!.claude/worktrees'`. The numstat file must exist first; the pathspec leaves out the result file.
-2. Before you start it, check that STATUS.md has a stage record for every stage and optional stage `flow.py` placed before review (lint-recheck included). A missing record means the stage was skipped by mistake: run it now (its fallback when the tool cannot run) and then go on.
+2. Before you start it, check that the stage records (`docs/pbi/stages.md`; a run started before keeps them in STATUS.md, `appendix/engine.md`, `## Stage records`) have one for every stage and optional stage `flow.py` placed before review (lint-recheck included). A missing record means the stage was skipped by mistake: run it now (its fallback when the tool cannot run) and then go on.
    Start the `atelier-reviewer` subagent with `prompts/final-review.md`, filled in. When `reviewer.deep` on your `Roles:` line ends in `@<runner>`, or your prompt says `Agent tool: no`, launch it through `role_run.py` as `final.review` (`final.security`) on that runner and model instead (`runners.md`, `## Roles on a runner`). Put the lint recheck's `report` rows and the path of `docs/pbi/jevlint/recheck.md` on its `Lint recheck` line (`appendix/lint.md`). The built-in `code-review` gets the argument `medium`; the others get none. Base, head and spec go in the prompt, never in the argument.
    - Fill its `Rules:` line: put the repository's review rule files from the `review-skill` row's reason, and, when the user's instructions or memory hold review rules for this repository, write those to `docs/pbi/notes/review-rules.md` and add that path. Write `none` only when there is neither.
    - The reviewer is at depth 2, so the children it starts through a skill are at depth 3 and have no Agent tool. A skill that starts one level of children and lets them work without children of their own runs fine here (lens-review does this, and runs alone when it has no Agent tool). When a skill needs its children to start more children, record `fallback` with the reason and use the next row. With `Agent tool: no`, use only a skill that can run alone.
 3. When it returns, take the same two values again. When HEAD or the status changed, discard the result, record `fallback` with the reason, and use the next row.
-4. Read line 1 of the result file. `BLOCKED` means the skill asked a question: record `fallback` and use the next row. Otherwise go to `## Findings`.
+4. Read line 1 of the result file. `BLOCKED` means the skill asked a question, and a reply that the skill was not found means the reviewer could not load it: in both cases record `fallback` and use the next row. Otherwise go to `## Findings`.
 5. A skill named in agents.json is the user's choice; you do not check where it sends code. With `auto`, security runs only the built-in `security-review`, which stays inside Claude Code.
 
 ## Built-in review (`review.builtin`)
 
-The whole check above is the built-in review; nothing more runs. The security phase has no built-in fallback. When `security-review` is not in the skill list, record `fallback` and say in the completion report that no security review ran.
+The whole check above is the built-in review; nothing more runs. The security phase has no built-in fallback. When the `gate.security-review` row is not usable by its status in the flow table (`appendix/engine.md`, `## Picking`), or the reviewer reports `security-review` as not found, record `fallback` and say in the completion report that no security review ran.
 
 ## Skills that report without severity
 
@@ -84,7 +84,7 @@ Reconcile only once every result is in: the tester's test-result, the review ski
 
 ## Findings
 
-The final review runs once per run. Its stage record is one line, `stage review: <component> run (<reason>) findings <c>,<m>,<n>` (`appendix/engine.md`, `## Stage records`). Before you start a final review, look for that line in STATUS.md: when it is there (a resume), do not start another one; go on from its result file, and from `docs/pbi/fix/round-1.json` when that is written. A `run #1` line from a run started before this rule counts as that one review.
+The final review runs once per run. Its stage record is one line, `stage review: <component> run (<reason>) findings <c>,<m>,<n>` (`appendix/engine.md`, `## Stage records`). Before you start a final review, look for that line in the stage records (`docs/pbi/stages.md`, or STATUS.md in a run started before): when it is there (a resume), do not start another one; go on from its result file, and from `docs/pbi/fix/round-1.json` when that is written. A `run #1` line from a run started before this rule counts as that one review.
 
 1. Check each finding yourself: open the file at the line and confirm the claim. A reviewer's report is not proof.
 2. Write every confirmed finding into the fix list `docs/pbi/fix/round-1.json` (`appendix/fix.md`, `## The fix list`), one item each: the file and line, what is wrong, how to fix it, and the command that shows it fixed (the repro, when it is a command). The confirmed findings of the security review (the gate after review) go into the same list. Never send a finding back to build, whatever file it is in: a file no PBI owns (a spec, an ADR, a shared config) is fixed by the fix stage like any other, and needs no owning PBI.
