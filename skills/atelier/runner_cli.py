@@ -6,12 +6,17 @@ conductor.py (設計者) と role_run.py (レビュー担当・テスト担当) 
   home の agents.json の runners.<runner>.path、PATH の <runner> の順に探す。
 - 使えるかは、agents.json で enabled が true で、CLI が見つかること。
 - codex は `-a never exec --json -s <サンドボックス>` で起こし、shared-memory の道具の承認を `-c` で自動にする
-  (ユーザーの ~/.codex/config.toml は書き換えない)。
+  (ユーザーの ~/.codex/config.toml は書き換えない)。サンドボックスがあるときは、Windows では `-c features.prefer_mxc=true`
+  も渡す (codex_sandbox_args)。
+- サンドボックスは、作業者と役割 (レビュー担当・テスト担当) が既定で workspace-write、設計者が既定で danger-full-access。
+  作業者と役割を danger-full-access に戻すのは、home の agents.json の runners.codex.sandbox で明示したときだけ
+  (codex_worker_sandbox)。
 """
 import json
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import common
@@ -20,9 +25,22 @@ import common
 ROLE_RUNNERS = ('agent', 'opencode', 'codex', 'agy', 'dsh', 'claude')
 DESIGNER_RUNNERS = ('agent', 'codex', 'claude')
 CODEX_SANDBOXES = ('read-only', 'workspace-write', 'danger-full-access')
-# 既定のサンドボックス。workspace-write はネットワークとワークスペースの外への書き込みを塞ぐので、
-# dsh の作業者・入れ子の codex・ユーザーの道具 (fnm の Node・pnpm) が動かない
-CODEX_DEFAULT_SANDBOX = 'danger-full-access'
+# 作業者と役割の既定。作業ツリーの外への書き込みとネットワークを塞ぐ。作業者は作業ツリーの中だけを書き
+# (記録は設計者が書き、コミットもしない)、verify のコマンド (pnpm・Biome・node --test) は中で動く
+# (2026-11-15、codex-cli 0.165、Windows 11 の MXC で確かめた)。
+# ネットワークは開けない: 依存を足す pnpm add は、ネットワークを開けても store がワークスペースの外にあって
+# Windows のサンドボックスでは書けず (writable_roots に足しても通らなかった)、依存を足すのは設計者の仕事になるため
+CODEX_DEFAULT_SANDBOX = 'workspace-write'
+# 作業者と役割の runners.codex.sandbox に置ける値。read-only では作業も結果の JSON も書けない
+CODEX_WORKER_SANDBOXES = ('workspace-write', 'danger-full-access')
+# 設計者の既定。設計者は作業者と役割を起こす: 入れ子の codex はサンドボックスの中ではコマンドを起こせず
+# (プロセス作成エラー)、~/.config/atelier の記録・各 CLI の home (~/.codex・~/.claude など) への書き込みと
+# ネットワークも要るので、サンドボックスでは回らない。permission_mode でサンドボックスの名前を指定すれば、それを使う
+CODEX_DESIGNER_SANDBOX = 'danger-full-access'
+# Windows で codex が選ぶサンドボックスの実装。elevated (別の利用者 CodexSandboxOffline で動く) では
+# %LOCALAPPDATA%\pnpm を読めず pnpm が動かず、unelevated では node --test が子を起こせない (spawn EPERM)。
+# MXC なら両方動き、ネットワークも塞がる (MXC を使えない PC での動きは試していない)
+CODEX_PREFER_MXC = 'features.prefer_mxc=true'
 CODEX_MCP_APPROVAL = 'mcp_servers.shared-memory.default_tools_approval_mode="auto"'
 # codex がファイルを書くときの決まり。codex のシェルは Windows PowerShell 5.1 で、外のコマンドへ渡す文字を
 # $OutputEncoding (既定 US-ASCII) で符号化するので、日本語が ? (0x3F) になる。設計者の依頼文と role_run.py が
@@ -133,12 +151,38 @@ def codex_has_shared_memory() -> bool:
 
 
 def codex_sandbox(permission_mode) -> str:
-    return permission_mode if permission_mode in CODEX_SANDBOXES else CODEX_DEFAULT_SANDBOX
+    """設計者のサンドボックス。permission_mode がサンドボックスの名前ならその値、それ以外 (既定の auto を含む) は既定。"""
+    return permission_mode if permission_mode in CODEX_SANDBOXES else CODEX_DESIGNER_SANDBOX
 
 
-def codex_args(model: str, effort, sandbox: str, last_path) -> list:
+def codex_worker_sandbox(home=None) -> tuple:
+    """作業者と役割のサンドボックスと、その出所。(サンドボックス, 'default' | 'agents.json' | 'agents.json invalid')。
+
+    home の agents.json の runners.codex.sandbox が workspace-write か danger-full-access ならその値。
+    無ければ既定、ほかの値なら既定に戻して 'agents.json invalid' を返す (サンドボックスを開ける側には倒さない)。
+    """
+    value = runner_entry('codex', home).get('sandbox')
+    if value is None:
+        return CODEX_DEFAULT_SANDBOX, 'default'
+    if value in CODEX_WORKER_SANDBOXES:
+        return value, 'agents.json'
+    return CODEX_DEFAULT_SANDBOX, 'agents.json invalid'
+
+
+def codex_sandbox_args(sandbox: str, windows=None) -> list:
+    """サンドボックスの引数。サンドボックスがあれば、Windows では MXC を選ぶ -c を足す。"""
+    if windows is None:
+        windows = sys.platform == 'win32'
+    args = ['-s', sandbox]
+    if windows and sandbox != 'danger-full-access':
+        args += ['-c', CODEX_PREFER_MXC]
+    return args
+
+
+def codex_args(model: str, effort, sandbox: str, last_path, windows=None) -> list:
     """codex の実行ファイルのあとに付ける引数。依頼は標準入力 (末尾の `-`) で渡す。"""
-    args = ['-a', 'never', 'exec', '--skip-git-repo-check', '--json', '-m', model, '-s', sandbox]
+    args = ['-a', 'never', 'exec', '--skip-git-repo-check', '--json', '-m', model,
+            *codex_sandbox_args(sandbox, windows)]
     if codex_has_shared_memory():
         args += ['-c', CODEX_MCP_APPROVAL]
     if effort:
