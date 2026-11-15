@@ -1,7 +1,7 @@
 """入れたスキルを外部部品 (home の components/) として登録し、テンプレートに差す (docs/specs/atelier-workflow.md)。
 
   python component.py add <skill> --stage <stage|gate|ui-design|marketing|security> [--after <stage>] [--workflow NAME] [--when W] [--where W]
-                          [--memory M] [--forbid TEXT ...] [--models SPEC ... | --no-models] [--home DIR]
+                          [--memory M] [--forbid TEXT ...] [--models SPEC ... | --no-models] [--no-skill-tool] [--home DIR]
   python component.py remove <id> [--workflow NAME] [--home DIR]
   python component.py list [--home DIR]
   python component.py example list
@@ -13,8 +13,8 @@
 読んで部品の定義を home に書く。
 
 <skill> は `<plugin>:<name>` (プラグインのスキル) か `<name>` (~/.claude/skills/<name>/ の自分のスキル)。
-プラグインは PBI_PLUGINS_DIR、無ければ ~/.claude/plugins の下で <plugin>/ (か <plugin>/<版>/) の skills/ から
-<name>/SKILL.md を探す (分類のフォルダを挟んでもよい)。自分のスキルは PBI_SKILLS_DIR、無ければ ~/.claude/skills の下を見る。
+プラグインは入っている版の置き場 (flow.py の「スキルとプラグインの置き場」) の skills/ から <name>/SKILL.md を探す
+(分類のフォルダを挟んでもよい)。自分のスキルは PBI_SKILLS_DIR、無ければ <CLAUDE_CONFIG_DIR か ~/.claude>/skills の下を見る。
 SKILL.md の frontmatter が disable-model-invocation: true なら read-skill の部品 (サブエージェントに SKILL.md を
 読ませて従わせる)、そうでなければ skill の部品 (Skill ツールで呼ぶ)。ライセンスとリンクはプラグインの
 .claude-plugin/plugin.json (license・repository か homepage) から取る。
@@ -26,6 +26,10 @@ add は <home>/components/<stage>.<plugin>-<name>.json (関所は gate.…、自
 何も残さず終了コード 2 で止める。--when・--where・--models (部品が起こすサブエージェントのモデル。`opus xhigh` の形。
 where が main の候補だけ) はテンプレートの候補に書く。登録し直すとき、渡さなかった --where と --models は今の候補の値を残す
 (--no-models で消す)。remove は部品を home とテンプレートから外す。同梱の部品は消せない。
+skill の部品には needs_skill_tool: true を付ける (--no-skill-tool で付けない)。設計者が動かす (where が main の) 行で
+これがあると、その出番の設計者を Skill ツール付きで起こす (flow.skill_tool_episodes)。部品の定義はテンプレートの where の
+上書きにかかわらず同じにするため、where が main でない部品にも付ける (flow は where が main の行でだけ数える)。
+登録済みの部品と needs_skill_tool だけが違うときは、登録し直して新しい定義にする。
 
 example は、外部部品を使うテンプレートの見本 (examples/workflows/<name>.json) を扱う。見本はテンプレート (workflow) と、
 それが使うスキルの入れ方と登録のしかた (skills) だけを持ち、スキルの中身も部品の定義も持たない。
@@ -78,28 +82,19 @@ SKILL_NAME = re.compile(r'^(?:([A-Za-z0-9][A-Za-z0-9_.-]{0,63}):)?([A-Za-z0-9][A
 
 
 def skills_root(env) -> Path:
-    return Path(env['PBI_SKILLS_DIR']) if env.get('PBI_SKILLS_DIR') else Path.home() / '.claude' / 'skills'
+    return flow.skills_root(env)
 
 
 def find_plugin_skill(plugin: str, name: str, root: Path) -> tuple[Path | None, str]:
-    """root の下の <plugin>/ か <plugin>/<版>/ の skills/ から、<name>/SKILL.md をいちばん新しいものから探す。
+    """プラグインの入っている版の置き場 (flow.plugin_dirs) の skills/ から、<name>/SKILL.md をいちばん新しいものから探す。
 
     (SKILL.md の場所, プラグインの根からの相対パス)。分類のフォルダを挟む構成 (mattpocock-skills の
     skills/productivity/grilling/SKILL.md など) もあるので、skills/ の下を深さを問わず見る。無ければ (None, '')。
     """
     found = []
-    root = Path(root)
-    if not root.is_dir():
-        return None, ''
-    for current, dirs, _files in os.walk(root):
-        if len(Path(current).relative_to(root).parts) >= flow.PLUGIN_SEARCH_DEPTH:
-            dirs[:] = []
-        here = Path(current)
-        if here.name != plugin:
-            continue
-        for base in [here, *(d for d in here.iterdir() if d.is_dir())]:
-            if (base / 'skills').is_dir():
-                found += [(p, base) for p in (base / 'skills').rglob('SKILL.md') if p.parent.name == name]
+    for base in flow.plugin_dirs(plugin, Path(root), flow.work_root_of(Path.cwd())):
+        if (base / 'skills').is_dir():
+            found += [(p, base) for p in (base / 'skills').rglob('SKILL.md') if p.parent.name == name]
     if not found:
         return None, ''
     path, base = max(found, key=lambda pair: pair[0].stat().st_mtime)
@@ -178,6 +173,7 @@ def build_component(skill: str, skill_md: Path, plugin: str | None, name: str, r
     memory = args.memory or ('full' if where == 'main' else 'none')
     meta = plugin_meta(skill_md) if plugin else {}
     title = (front.get('description') or skill).split('. ')[0][:120]
+    skill_tool = {} if read_skill or getattr(args, 'no_skill_tool', False) else {'needs_skill_tool': True}
     return {
         'id': f'{role}.{component_name(plugin, name)}',
         'stages': [role],
@@ -194,10 +190,19 @@ def build_component(skill: str, skill_md: Path, plugin: str | None, name: str, r
         + (READ_SKILL_FORBID if read_skill else []) + list(args.forbid or []),
         'interactive': interactive,
         'calls_back': False,
+        **skill_tool,
         'license': meta.get('license', '') if isinstance(meta.get('license'), str) else '',
         'link': link_of(meta),
         'source': skill,
     }
+
+
+def only_flag_differs(existing, component: dict) -> bool:
+    """登録済みの部品と、needs_skill_tool の有無だけが違うか (この欄が無かった頃の登録を書き直してよいか)。"""
+    if not isinstance(existing, dict) or existing == component:
+        return False
+    strip = lambda data: {k: v for k, v in data.items() if k != 'needs_skill_tool'}
+    return strip(existing) == strip(component)
 
 
 def load_workflow(home: Path, name: str) -> tuple[Path, dict]:
@@ -358,7 +363,7 @@ def cmd_add(args, home: Path) -> int:
         return 2
     comp_path = home / 'components' / f'{component["id"]}.json'
     existing = common.load_json(comp_path)
-    if comp_path.exists() and existing != component:
+    if comp_path.exists() and existing != component and not only_flag_differs(existing, component):
         print(f'{component["id"]}: already registered with other settings ({common.shown(comp_path)}); '
               'remove it from every workflow first', file=sys.stderr)
         return 2
@@ -486,6 +491,8 @@ def example_error(data: dict) -> str | None:
                 return f'{item["skill"]}: {key} must be a string'
         if not isinstance(item.get('forbid', []), list):
             return f'{item["skill"]}: forbid must be a list'
+        if not isinstance(item.get('needs_skill_tool', True), bool):
+            return f'{item["skill"]}: needs_skill_tool must be true or false'
         install = item.get('install', {})
         if not isinstance(install, dict) or not all(isinstance(v, str) for v in install.values()):
             return f'{item["skill"]}: install takes strings (marketplace, marketplace_source, command, note)'
@@ -498,7 +505,8 @@ def flow_name_ok(name: str) -> bool:
 
 def example_args(item: dict):
     return argparse.Namespace(stage=item['stage'], after=item.get('after'), where=item.get('where'),
-                              memory=item.get('memory'), forbid=item.get('forbid', []))
+                              memory=item.get('memory'), forbid=item.get('forbid', []),
+                              no_skill_tool=item.get('needs_skill_tool') is False)
 
 
 def install_commands(item: dict) -> list[str]:
@@ -534,6 +542,7 @@ def example_rows(example: dict, home: Path) -> list[dict]:
                 path = home / 'components' / f'{row["component"]["id"]}.json'
                 existing = common.load_json(path)
                 row['registered'] = ('registered' if existing == row['component'] else
+                                     'not registered' if only_flag_differs(existing, row['component']) else
                                      'differs' if path.exists() else 'not registered')
         rows.append(row)
     return rows
@@ -646,6 +655,8 @@ def main(argv=None) -> int:
     add.add_argument('--models', nargs='+', metavar='SPEC',
                      help='部品が起こすサブエージェントのモデル ("opus xhigh" など。where が main の部品だけ)')
     add.add_argument('--no-models', action='store_true', help='テンプレートの候補の models を消す')
+    add.add_argument('--no-skill-tool', action='store_true',
+                     help='skill の部品に needs_skill_tool を付けない (設計者が SKILL.md を読んで従う)')
     remove = sub.add_parser('remove', help='外部部品を home とテンプレートから外す')
     remove.add_argument('id')
     remove.add_argument('--workflow', default=flow.DEFAULT_WORKFLOW)
