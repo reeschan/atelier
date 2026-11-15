@@ -23,7 +23,7 @@ State: docs/pbi/STATUS.md and docs/pbi/conductor/run.json (read only the parts y
 Files are the source of truth: every role hands over through files at fixed paths. A subagent's reply may be empty; when the file is there, go on.
 Alive: write the current time to {alive} when you start and at every boundary.
 {?continue_from}Continue from: {continue_from} (a state tablet: go on from its next action, never redo finished steps)
-Re-entry: in a build or test episode without a Continue from line, read docs/pbi/STATUS.md, docs/pbi/reports/, docs/pbi/reviews/ and docs/pbi/runs.jsonl and start at the first unfinished step. Never record again a run already in runs.jsonl; a PBI with a report and no review starts at its review.
+Re-entry: in a build, test or fix episode without a Continue from line, read docs/pbi/STATUS.md, docs/pbi/reports/, docs/pbi/reviews/ and docs/pbi/runs.jsonl (fix: also the newest docs/pbi/fix/round-<r>.json) and start at the first unfinished step. A review episode never runs a second final review. Never record again a run already in runs.jsonl; a PBI with a report and no review starts at its review.
 {?answer}Answer: {answer} (the user's answer to your last question: read it first)
 {?conductor_answer}Conductor answer: {conductor_answer} (the answer to a conductor question: read it first; this episode has no Continue from line)
 Result: as your last action write {result} (schema atelier.episode/1, appendix/episodes.md), then reply with its summary lines and nothing else.

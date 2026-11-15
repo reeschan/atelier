@@ -60,7 +60,7 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 | build | PBI・route | 変更と報告 `reports/PBI-<n>.md` |
 | verify | PBI の検証コマンド (担い手はレビュー担当。`verify.py` を流し、受け入れ条件と差分を確かめる) | `verify/<報告名>.json`・`reviews/<報告名>.review.json` |
 | review | diff・spec・報告 | `reviews/<名前>.md` (1 行目に件数)・`reviews/<報告名>.review.json` (`atelier.review/1`) |
-| fix | 指摘・検証結果 | `PBI-<n>.rework-<k>.md` |
+| fix | 最後の見直しの直しの一覧 `fix/round-<r>.json` (`atelier.fixes/1`)・落ちた E2E の spec | 直しの PBI と波 (`fix_plan.py`)、PBI ごとの差し戻しは `PBI-<n>.rework-<k>.md` |
 | finish | すべて | 完了報告 |
 
 - 置き場は今の `docs/pbi/` のまま (名前を変えると進行中の作業と resume が壊れる)。
@@ -133,7 +133,7 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 ### エンジン化と指示文 (PR 2)
 
 - 本文 (SKILL.md) は英語で約 110 行。止まる場面・不変条件・「事象 → 読む 1 本」の表・開始 (flow.py を動かす)・工程を順に回す規則・承認・1 PBI のチェックリスト・文脈を細く保つ規則・作業メモリの要点だけを置く。
-- 工程の手順は、部品の `doc` が指す 1 本に置く: `appendix/design.md` (理解と設計)、`appendix/plan.md` (PBI の雛形・検証コマンドの書き方・facts と brief・prepare.py と route.opus)、`runners.md` (開発)、`appendix/verify.md` (1 PBI の仕分け・検証・記録)、`appendix/review.md` (最終レビューとセキュリティ)、`appendix/rework.md`、`appendix/finish.md`。部品の選び方・when の判定・read-skill の手順・STATUS.md と工程の記録の書式は `appendix/engine.md`。
+- 工程の手順は、部品の `doc` が指す 1 本に置く: `appendix/design.md` (理解と設計)、`appendix/plan.md` (PBI の雛形・検証コマンドの書き方・facts と brief・prepare.py と route.opus)、`runners.md` (開発)、`appendix/verify.md` (1 PBI の仕分け・検証・記録)、`appendix/review.md` (最終レビューとセキュリティ)、`appendix/fix.md` (修正の段)、`appendix/rework.md`、`appendix/finish.md`。部品の選び方・when の判定・read-skill の手順・STATUS.md と工程の記録の書式は `appendix/engine.md`。
 - 既知の呼び出し先の表 (adapters.md) は components に移した。adapters.md には agents.json の `adapters` の設定と推奨セットだけが残る。verify-commands.md は plan.md に入れた。サブエージェントへの依頼文の雛形は `prompts/` に分けた。
 - 用語集はスキルの中の `CONTEXT.md` に移し、英語と日本語の対訳にした。
 - 指示文が英語になったので、スクリプトが読む書式も英語にした。進行中の作業を壊さないように、旧い日本語の書式も読む。
@@ -238,6 +238,15 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - 進行役 `conductor.py` が run の状態を `docs/pbi/conductor/run.json` に持ち、次の出番と依頼文を決める。出番は design → build (波) → test → review → finish の順につながり、依頼文と結果は `docs/pbi/conductor/episodes/<seq>-<出番>.prompt.md`・`.result.json`、問いの答えは `docs/pbi/conductor/answers/` に置く。コマンドと終了コードは [atelier-v6.md](atelier-v6.md)。
 - 止まる場所は 4 つ: 承認、差し戻しの上限 (または設計の見直し)、壊す操作の前、外への送信の前。波の境目の引き継ぎ (旧 4 番目) は止まる場所ではなくなり、出番の `handoff` になった。設計者は出番の途中で Kiln の線を越えたら状態の板を書いて `handoff` で終わり、進行役が `Continue from:` を付けて新しい設計者を起こす (ユーザーの `/clear` と resume は要らない)。
 - 検証・差分の精読・テストの実行はレビュー担当とテスト担当に移した。レビュー担当は 1 報告に 1 人で、`verify.py` を流し、受け入れ条件を 1 つずつ判定し、差分を読んで `reviews/<報告名>.review.json` (`atelier.review/1`) を書く。テスト担当は `verify/tests/<名前>.test-result.json` (`atelier.test-result/1`) を書く。設計者は波のレビューを `role_results.py bundle` の束で受け取って照合する。詳細は [atelier-v6.md](atelier-v6.md)。
+
+### 最後の見直しは 1 回、直しは修正の段で一度に (2026-11-15)
+
+- 仕様は `docs/specs/fix-stage-once.md`。持ち主の決定 (2026-11-15、P-103 の実行で、最後の見直しの指摘を wave の差し戻しにして同じループを回し、設計者の出番が 6 回動いても終わらなかったため)。
+- 最後の見直しは 1 回。確かめた指摘 (critical・major・ユーザーが直すと答えた minor) を 1 つの直しの一覧 `docs/pbi/fix/round-<r>.json` にし、新しい出番 `fix` (修正の段、部品 `fix.list`、手順は `appendix/fix.md`) が一度に直す。review は build に差し戻さない (`review -> build` を conductor が断る)。
+- 修正の段は担当 `episodes.fix` (振り分けテンプレートの中段が既定) が受け持ち、決められない点だけを `needs_designer` で設計者に渡す。minor と ADR との食い違いは、担当が作業者を起こす前に 1 回だけ聞く。
+- `fix_plan.py` が一覧から直しの PBI を書く: ファイルを共にする項目をまとめ、3 人までの作業者にファイルが重ならないように分け、1 つの波にする。PBI に属さないファイル (仕様・ADR) も Targets にできる。直す前の Targets を写し、`fix_plan.py diff` がその写しとの差分 (直しの差分だけ) を出し、PBI ごとの見直しはそれだけを読む。
+- E2E は最後の最後に 1 回 (build -> test -> review -> fix -> e2e)。落ちた spec だけを修正の段が直し、その spec だけを流し直す。流し直しは `e2e.fix_rounds` 回まで (既定 2)。回は `docs/pbi/verify/e2e.rounds.json` に run の id 付きで残す。
+- この形より前に始めた run の途中のために、`build -> e2e` と `e2e -> test` は残し、履歴に review の無い run の e2e には conductor が `--before-review` を付ける。
 
 ## Testing Decisions
 

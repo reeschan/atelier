@@ -85,12 +85,12 @@ class E2ERunTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding='utf-8', newline='\n')
 
-    def run_e2e(self, **env):
+    def run_e2e(self, *extra, **env):
         self.write('docs/pbi/tests-at-end.json', json.dumps(self.settings))
         full = dict(os.environ, PYTHONIOENCODING='utf-8', FAKE_VERIFY_LOG=str(self.log),
                     ATELIER_VERIFY_CMD=json.dumps([sys.executable, str(self.root / 'fake_verify.py')]), **env)
         proc = subprocess.run([sys.executable, str(SCRIPT), '--dir', 'docs/pbi', '--result',
-                               'docs/pbi/conductor/episodes/x-7-e2e.result.json', '--seq', '7'],
+                               'docs/pbi/conductor/episodes/x-7-e2e.result.json', '--seq', '7', *extra],
                               cwd=self.root, capture_output=True, text=True, encoding='utf-8', env=full)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         result = json.loads((self.root / 'docs/pbi/verify/tests/e2e.test-result.json').read_text(encoding='utf-8'))
@@ -114,10 +114,12 @@ class E2ERunTest(unittest.TestCase):
                                    'e2e/cart.cy.ts': ('unknown', 'PBI-001')})
         self.assertEqual(result['kind'], 'e2e')
         self.assertEqual(result['recommendation'], 'needs-designer')
-        self.assertEqual((episode['status'], episode['next'], episode['seq']), ('done', {'episode': 'test'}, 7))
-        self.assertIn('2 specs (1 related, 1 by changed symbols), 2 failing (1 intended by design)',
+        # 最後の最後の 1 回目: 落ちた spec は修正の段が直す
+        self.assertEqual((episode['status'], episode['next'], episode['seq']), ('done', {'episode': 'fix'}, 7))
+        self.assertIn('2 specs (1 related, 1 by changed symbols or files), 2 failing (1 intended by design)',
                       episode['summary'][0])
-        self.assertEqual(episode['summary'][1], 'full suite: not approved')
+        self.assertIn('round 1 of at most 3', episode['summary'][1])
+        self.assertEqual(episode['summary'][2], 'full suite: not approved')
         # 通しは承認が無ければ流さない
         self.assertFalse(any('--final' in call for call in self.calls()))
         check = subprocess.run([sys.executable, str(HERE / 'role_results.py'), 'check',
@@ -153,7 +155,7 @@ class E2ERunTest(unittest.TestCase):
         result, episode = self.run_e2e(FAKE_FULL_NO_RESULT='1')
         self.assertEqual(result['failing'][-1]['test'], 'full suite')
         self.assertEqual(result['commands'][-1]['code'], 2)
-        self.assertIn('full suite: failed', episode['summary'][1])
+        self.assertIn('full suite: failed', episode['summary'][2])
 
     def test_stopping_the_script_stops_verify_and_its_children(self):
         """conductor が e2e_run.py を止めると、verify.py とその子も止まる (止めた出番の横でテストが残らない)。"""
@@ -188,12 +190,77 @@ class E2ERunTest(unittest.TestCase):
         self.assertIn('symbols: off', scope)
         self.assertNotIn('cart.cy.ts', scope)
 
+    def rounds(self):
+        return json.loads((self.root / 'docs/pbi/verify/e2e.rounds.json').read_text(encoding='utf-8'))['rounds']
+
+    def test_reruns_only_the_failing_specs_until_the_limit(self):
+        """2 回目からは前の回に落ちた spec だけを流し、流し直しが e2e.fix_rounds に来たら finish にする。"""
+        self.settings['e2e']['fix_rounds'] = 1
+        result, episode = self.run_e2e('--run', 'r1', FAKE_FAIL='e2e/cart.cy.ts')
+        self.assertEqual(episode['next'], {'episode': 'fix'})
+        self.assertEqual([row['round'] for row in self.rounds()], [1])
+        self.log.unlink()
+        result, episode = self.run_e2e('--run', 'r1', FAKE_FAIL='e2e/cart.cy.ts')
+        self.assertEqual(self.calls()[0][:2], ['--related', 'e2e/cart.cy.ts'])
+        self.assertEqual([row['test'] for row in result['failing']], ['e2e/cart.cy.ts'])
+        self.assertEqual(episode['next'], {'episode': 'finish'})
+        self.assertIn('limit reached', episode['summary'][1])
+        self.assertIn('1 specs (the failing ones again)', episode['summary'][0])
+        self.assertEqual([(row['round'], row['next']) for row in self.rounds()], [(1, 'fix'), (2, 'finish')])
+
+    def test_rerun_adds_the_specs_the_fix_stage_named_and_ends_when_all_pass(self):
+        """通しのログから spec を読めなかったとき、修正の段が rerun に書いた spec だけを流し直す。"""
+        self.settings['e2e']['full'] = True
+        self.run_e2e('--run', 'r1', FAKE_FULL_CODE='1', FAKE_FULL_LOG='no marks here\n')
+        self.assertEqual(self.rounds()[0]['failing'][-1]['test'], 'full suite')
+        self.write('docs/pbi/fix/round-2.json', json.dumps({'schema': 'atelier.fixes/1', 'round': 2,
+                                                            'source': 'e2e', 'e2e_round': 1,
+                                                            'rerun': ['e2e/tax.cy.ts'], 'items': []}))
+        self.log.unlink()
+        result, episode = self.run_e2e('--run', 'r1')
+        calls = self.calls()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertEqual(calls[0][:2], ['--related', 'e2e/tax.cy.ts'])
+        self.assertEqual(episode['next'], {'episode': 'finish'})
+        self.assertIn('round 2: nothing failing', episode['summary'][1])
+
+    def test_full_suite_runs_again_when_no_failing_spec_could_be_read(self):
+        self.settings['e2e']['full'] = True
+        self.run_e2e('--run', 'r1', FAKE_FULL_CODE='1', FAKE_FULL_LOG='no marks here\n')
+        self.log.unlink()
+        result, episode = self.run_e2e('--run', 'r1')
+        self.assertEqual(len([call for call in self.calls() if '--final' in call]), 1)
+        self.assertFalse(any('--related' in call for call in self.calls()))
+        self.assertEqual(episode['next'], {'episode': 'finish'})
+
+    def test_rounds_of_another_run_are_not_counted(self):
+        self.settings['e2e']['fix_rounds'] = 0
+        self.write('docs/pbi/verify/e2e.rounds.json', json.dumps({'rounds': [
+            {'run': 'old', 'round': 1, 'failing': [{'test': 'e2e/login.cy.ts', 'file': 'e2e/login.cy.ts'}]}]}))
+        result, episode = self.run_e2e('--run', 'new', FAKE_FAIL='e2e/cart.cy.ts')
+        self.assertEqual(self.calls()[0][1], 'e2e/login.cy.ts,e2e/cart.cy.ts')
+        self.assertEqual(episode['next'], {'episode': 'finish'})  # fix_rounds 0: 流し直さない
+        self.assertEqual([(row['run'], row['round']) for row in self.rounds()], [('new', 1)])
+
+    def test_before_review_keeps_the_old_flow(self):
+        """履歴に review の無い run (この形より前に始めた run の途中) は回を数えず test に進む。"""
+        result, episode = self.run_e2e('--before-review', FAKE_FAIL='e2e/cart.cy.ts')
+        self.assertEqual(episode['next'], {'episode': 'test'})
+        self.assertFalse((self.root / 'docs/pbi/verify/e2e.rounds.json').exists())
+
+    def test_specs_changed_in_this_run_are_in_the_first_scope(self):
+        self.write('e2e/tax.cy.ts', "cy.contains('TAX_RATE_LABEL').should('be.visible')\n")
+        self.run_e2e()
+        scope = (self.root / 'docs/pbi/verify/e2e.scope.md').read_text(encoding='utf-8')
+        self.assertIn('| e2e/tax.cy.ts | changed in this run | none |', scope)
+
     def test_nothing_in_range_passes(self):
         self.write('docs/pbi/PBI-001.md', '# PBI-001\n\n- Related specs: none\n')
         self.settings['e2e'] = {}
         result, episode = self.run_e2e()
         self.assertEqual((result['commands'], result['failing'], result['recommendation']), ([], [], 'pass'))
         self.assertIn('e2e: 0 specs', episode['summary'][0])
+        self.assertEqual(episode['next'], {'episode': 'finish'})
 
 
 if __name__ == '__main__':

@@ -1,17 +1,24 @@
 """E2E の出番 (e2e) をモデルを使わずに流し、test-result と出番の結果を書く (appendix/tests-at-end.md、`## E2E`)。
 
-conductor.py run が、最後の build のあとの e2e の出番で起こす。設計者は起こさない。
+conductor.py run が、最後の見直しと修正の段のあとの e2e の出番で起こす。設計者は起こさない
+(docs/specs/fix-stage-once.md: E2E は最後の最後に流し、落ちたものだけを直して流し直す)。
 
-  python e2e_run.py --dir docs/pbi --result <出番の結果のパス> --seq <n>
+  python e2e_run.py --dir docs/pbi --result <出番の結果のパス> --seq <n> [--before-review]
 
-範囲 (流す spec) は次の和で、順に重ねる:
+回 (round) を <dir>/verify/e2e.rounds.json に残す。1 回目は下の範囲を流す。2 回目からは、前の回に落ちた spec と、
+修正の段の一覧 (<dir>/fix/round-<r>.json で source が e2e、e2e_round が前の回) の rerun だけを流す。前の回で通しが
+落ちて spec を 1 つも読めず (`full suite` の行)、rerun も無ければ、通しをもう 1 回流す。
+
+1 回目の範囲 (流す spec) は次の和で、順に重ねる:
   1. PBI の頭の `- Related specs: <spec>, <spec>` の行 (none は無し)。PBI-<n>.md だけを読む
   2. 変えたシンボルを読む spec: merge-base (tests-at-end.json の e2e.base、既定 origin/main、無ければ main) からの
      差分で、test_paths と docs/pbi の外のファイルの変わった行 (足した行と消した行と、それを囲む関数の行 (git の
      差分の見出し)。未追跡のファイルは全体) にある
      定義 (関数・クラス・定数・型・def) の名前を集め、e2e.specs の glob に合う spec のうち、その名前を語として含むもの。
      e2e.symbols が false なら飛ばす。e2e.specs が無ければ飛ばす。3 文字に満たない名前は使わない (どこにでも合うため)
-  3. e2e.full が true で final があれば、範囲の spec のあとに通しを 1 回 (verify.py --final。承認は承認のときに済んで
+  3. この実行で変わった spec: merge-base からの差分と未追跡のファイルのうち、e2e.specs の glob に合うもの
+     (テストの工程や修正の段が直した spec)
+  4. e2e.full が true で final があれば、範囲の spec のあとに通しを 1 回 (verify.py --final。承認は承認のときに済んで
      いるので、流す直前にこのスクリプトが full-run.approved.json を書く)。通しが落ちたら、そのログの落ちた印
      (✖・✗・fail) のある行に出てくる spec (e2e.specs の glob のパスか、その名前) ごとに 1 行にする。読めなければ
      `full suite` の 1 行に、ログを読んで落ちた spec を探すよう書く
@@ -22,8 +29,11 @@ spec は verify.py --related <spec,...> --each --name e2e で 1 本ずつ流す 
 cause は unknown)。そのあと role_results.classify で、PBI の Notes の Breaks by design: に合う行を intended にする。
 範囲の一覧と理由は <dir>/verify/e2e.scope.md に書く。
 
-出番の結果 (--result) は status done、next test。問いは出さない: 上限・サーバーで止まったときも結果に blocked を
-書いて test に進み、判断を test の担当に渡す (appendix/tests-at-end.md)。
+出番の結果 (--result) は status done。next は、落ちた spec があり、流し直した回数 (回 - 1) が tests-at-end.json の
+e2e.fix_rounds (既定 2) に満たなければ fix (修正の段が落ちたものだけを直す)。落ちたものが無いか上限に来たら finish
+(止まった blocked だけで落ちた spec が無いときも finish。完了の報告に書く)。問いは出さない。
+--before-review (conductor が、履歴に review の無い run に付ける。この形より前に始めた run の途中) では回を数えず、
+1 回目の範囲を流して next を test にする (今までの動き)。
 
 ATELIER_VERIFY_CMD (JSON の文字列の配列) があれば、verify.py の代わりにそれを起こす (テスト用)。
 
@@ -56,6 +66,10 @@ STOPPED_CODE = {'timeout': 124, 'idle': 125}
 RESULT_NAME = 'e2e'
 FULL_NAME = 'e2e-full'
 DEFAULT_BASES = ('origin/main', 'main')
+ROUNDS_NAME = 'e2e.rounds.json'
+DEFAULT_FIX_ROUNDS = 2
+FULL_ROW = 'full suite'
+FIX_ROUND_FILE = re.compile(r'^round-(\d+)\.json$')
 MIN_NAME = 3
 
 PBI_FILE = re.compile(r'^PBI-\d+\.md$')
@@ -221,7 +235,25 @@ def scope(base: Path, settings: dict) -> tuple[list[dict], list[str]]:
                     rows.append({'spec': spec, 'reason': f'reads {name} ({names[name]})',
                                  'pbi': owner_of(names[name], targets)})
             notes.append(f'symbols: {len(names)} changed names')
+    if e2e.get('specs'):
+        mb = merge_base(e2e.get('base'))
+        if mb is not None:
+            known = {row['spec'] for row in rows}
+            targets = pbi_targets(base)
+            for spec in changed_specs(mb, spec_files(e2e['specs'])):
+                if spec not in known:
+                    rows.append({'spec': spec, 'reason': 'changed in this run', 'pbi': owner_of(spec, targets)})
     return rows, notes
+
+
+def changed_specs(mb: str, specs: list[str]) -> list[str]:
+    """spec の一覧のうち、merge-base から変わったもの (未追跡のものも)。"""
+    code, out = git('diff', '--name-only', mb)
+    changed = {line.strip() for line in out.splitlines() if line.strip()} if code == 0 else set()
+    code, out = git('ls-files', '--others', '--exclude-standard')
+    if code == 0:
+        changed |= {line.strip() for line in out.splitlines() if line.strip()}
+    return [spec for spec in specs if spec in changed]
 
 
 def verify_head() -> list[str]:
@@ -393,12 +425,71 @@ def write_scope(base: Path, rows: list[dict], notes: list[str], full: str) -> Pa
     return path
 
 
-def run_e2e(base: Path) -> tuple[dict, list[str]]:
-    """範囲を決めて流し、test-result (辞書) と要約の行を返す。"""
+def load_settings(base: Path) -> tuple[dict, dict]:
     settings = common.load_json(base / 'tests-at-end.json', {})
     settings = settings if isinstance(settings, dict) else {}
     e2e = settings.get('e2e') if isinstance(settings.get('e2e'), dict) else {}
-    rows, notes = scope(base, settings)
+    return settings, e2e
+
+
+def fix_rounds(e2e: dict) -> int:
+    """落ちた spec を直して流し直す回数の上限 (e2e.fix_rounds、0 以上の整数。無い・不正なら既定)。"""
+    value = e2e.get('fix_rounds')
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return DEFAULT_FIX_ROUNDS
+
+
+def load_rounds(base: Path) -> list[dict]:
+    data = common.load_json(base / 'verify' / ROUNDS_NAME, {})
+    rounds = data.get('rounds') if isinstance(data, dict) else None
+    return [row for row in rounds or [] if isinstance(row, dict)]
+
+
+def fix_rerun(base: Path, e2e_round) -> list[str]:
+    """修正の段が e2e の回 e2e_round の落ちたものから書いた一覧の rerun (通しのログから読んだ spec)。"""
+    found = []
+    for path in sorted((base / 'fix').glob('round-*.json')):
+        if not FIX_ROUND_FILE.match(path.name):
+            continue
+        data = common.load_json(path, {})
+        if not isinstance(data, dict) or data.get('source') != 'e2e' or data.get('e2e_round') != e2e_round:
+            continue
+        for spec in data.get('rerun') or []:
+            if isinstance(spec, str) and spec.strip() and spec.strip() not in found:
+                found.append(spec.strip())
+    return found
+
+
+def rerun_scope(base: Path, last: dict) -> tuple[list[dict], list[str], bool]:
+    """2 回目からの範囲: 前の回に落ちた spec と修正の段の rerun。(行, 注記, 通しを流し直すか) を返す。"""
+    rows, seen = [], set()
+    full_failed = False
+    for row in last.get('failing') or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get('test') == FULL_ROW:
+            full_failed = True
+            continue
+        spec = row.get('file') or row.get('test')
+        if isinstance(spec, str) and spec and spec not in seen:
+            seen.add(spec)
+            rows.append({'spec': spec, 'reason': f"failed in round {last.get('round')}",
+                         'pbi': row.get('pbi') or 'none'})
+    named = fix_rerun(base, last.get('round'))
+    for spec in named:
+        if spec not in seen:
+            seen.add(spec)
+            rows.append({'spec': spec, 'reason': 'named by the fix stage (rerun)', 'pbi': 'none'})
+    return rows, [f"rerun of round {last.get('round')}: {len(rows)} specs"], full_failed and not named
+
+
+def run_e2e(base: Path, rows=None, notes=None, full_again=False) -> tuple[dict, list[str]]:
+    """範囲を決めて流し、test-result (辞書) と要約の行を返す。rows を渡すと、その範囲だけを流す (2 回目から)。"""
+    settings, e2e = load_settings(base)
+    first = rows is None
+    if first:
+        rows, notes = scope(base, settings)
     commands, failing, blocked = [], [], []
     investigate = settings.get('investigate')
     if rows and not (isinstance(investigate, str) and '{specs}' in investigate):
@@ -421,9 +512,9 @@ def run_e2e(base: Path) -> tuple[dict, list[str]]:
                 failing.append({'test': row['spec'], 'file': row['spec'], 'pbi': row['pbi'], 'cause': 'unknown',
                                 'why': f"exit {got.get('code')} after {got.get('tries', 1)} tries; {row['reason']}; "
                                        f"log {got.get('log')}"})
-    full = 'not approved'
+    full = 'not approved' if first else 'not run again'
     final = settings.get('final')
-    if e2e.get('full') is True and isinstance(final, str) and final.strip():
+    if (e2e.get('full') is True if first else full_again) and isinstance(final, str) and final.strip():
         token = base / 'full-run.approved.json'
         common.write_json(token, {'by': 'approval (e2e.full)', 'at': datetime.datetime.now().isoformat()})
         code = run_verify(base, '--final', '--name', FULL_NAME)
@@ -441,13 +532,13 @@ def run_e2e(base: Path) -> tuple[dict, list[str]]:
                 failing.append({'test': spec, 'file': spec, 'pbi': owners.get(spec, 'none'), 'cause': 'unknown',
                                 'why': f"failed in the full suite (exit {raw}); log {got.get('log')}"})
             if not specs:
-                failing.append({'test': 'full suite', 'file': final, 'pbi': 'none', 'cause': 'unknown',
+                failing.append({'test': FULL_ROW, 'file': final, 'pbi': 'none', 'cause': 'unknown',
                                 'why': f"the full suite exited {raw} and no failing spec could be read from its "
                                        f"log; read the log {got.get('log') or (base / 'verify' / f'{FULL_NAME}.run.log').as_posix()} "
                                        'for the failing specs'})
         if code == BLOCKED_EXIT:
             blocked.append('full suite: ' + (last_line(base, FULL_NAME, 'blocked:') or 'stopped'))
-    elif e2e.get('full') is True:
+    elif first and e2e.get('full') is True:
         full = 'approved, but no final command'
     data = {'schema': role_results.TEST_RESULT, 'kind': 'e2e', 'commands': commands, 'failing': failing,
             'recommendation': 'pass' if not failing and not blocked else 'needs-designer'}
@@ -456,8 +547,9 @@ def run_e2e(base: Path) -> tuple[dict, list[str]]:
     intended = role_results.classify(data, role_results.breaks_by_design(base))
     scope_path = write_scope(base, rows, notes, full)
     related = sum(1 for row in rows if row['reason'].startswith('related'))
-    summary = [f'e2e: {len(rows)} specs ({related} related, {len(rows) - related} by changed symbols), '
-               f'{len(failing)} failing ({len(intended)} intended by design)',
+    head = (f'{len(rows)} specs ({related} related, {len(rows) - related} by changed symbols or files)' if first
+            else f'{len(rows)} specs (the failing ones again)')
+    summary = [f'e2e: {head}, {len(failing)} failing ({len(intended)} intended by design)',
                f'full suite: {full}', f'scope: {scope_path.as_posix()}']
     if blocked:
         summary.append(common_fold('blocked: ' + data['blocked']))
@@ -474,18 +566,52 @@ def main(argv=None) -> int:
     ap.add_argument('--dir', default='docs/pbi')
     ap.add_argument('--result', required=True, help='出番の結果のパス (conductor の Result:)')
     ap.add_argument('--seq', type=int, required=True)
+    ap.add_argument('--run', help='run の id (conductor が渡す)。回の記録はこの run のものだけを数える')
+    ap.add_argument('--before-review', action='store_true',
+                    help='この形より前に始めた run の途中 (履歴に review が無い): 回を数えず、next を test にする')
     args = ap.parse_args(argv)
     if os.name != 'nt':
         signal.signal(signal.SIGTERM, _on_stop)
     base = Path(args.dir)
-    data, summary = run_e2e(base)
     test_result = base / 'verify' / 'tests' / f'{RESULT_NAME}.test-result.json'
+    kept = load_rounds(base)
+    # 前の run の回は数えない (同じ docs/pbi で start をやり直したとき)
+    rounds = [row for row in kept if not args.run or row.get('run') == args.run]
+    if args.before_review:
+        data, summary = run_e2e(base)
+        nxt = 'test'
+    else:
+        _, e2e = load_settings(base)
+        limit = fix_rounds(e2e)
+        number = len(rounds) + 1
+        if rounds:
+            rows, notes, full_again = rerun_scope(base, rounds[-1])
+            data, summary = run_e2e(base, rows, notes, full_again)
+        else:
+            data, summary = run_e2e(base)
+        if data['failing'] and number - 1 < limit:
+            nxt = 'fix'
+            summary.insert(1, f'round {number} of at most {limit + 1}: the fix stage fixes the failing specs, '
+                              'then only those run again')
+        elif data['failing']:
+            nxt = 'finish'
+            summary.insert(1, f'round {number} of at most {limit + 1}: limit reached; the failing specs go to the '
+                              'completion report')
+        else:
+            nxt = 'finish'
+            summary.insert(1, f'round {number}: nothing failing')
+        full = next((line[len('full suite: '):] for line in summary if line.startswith('full suite: ')), None)
+        rounds.append({'run': args.run, 'round': number, 'at': datetime.datetime.now().isoformat(timespec='seconds'),
+                       'specs': len(data['commands']), 'failing': data['failing'], 'full': full,
+                       'blocked': data.get('blocked'), 'next': nxt})
     summary.append(f'result: {test_result.as_posix()}')
     episode = {'schema': role_results.EPISODE, 'episode': 'e2e', 'seq': args.seq, 'status': 'done',
                'summary': [common_fold(line) for line in summary[:role_results.SUMMARY_MAX_LINES]],
-               'next': {'episode': 'test'}}
+               'next': {'episode': nxt}}
     try:
         common.write_json(test_result, data)
+        if not args.before_review:
+            common.write_json(base / 'verify' / ROUNDS_NAME, {'rounds': rounds})
         common.write_json(args.result, episode)
     except OSError as error:
         print(f'e2e_run: cannot write the result: {error}', file=sys.stderr)

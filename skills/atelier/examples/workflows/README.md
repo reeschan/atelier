@@ -52,8 +52,11 @@ flowchart TD
     HQ --> RV[review<br/>interrogate when you say run<br/>lens-review otherwise<br/>code-review when the diff is large]
     RV --> SC{{security-audit? the answer given at approval}}
     SC --> GS[gate: built-in security-review]
-    GS -->|confirmed finding| FX2
-    GS --> FN[finish: completion report and stats<br/>yomiyasu polishes the Japanese]
+    GS --> FL[fix list<br/>every confirmed finding, once]
+    FL --> FS[fix stage<br/>one wave, workers share no file<br/>review of the fix's diff only]
+    FS --> E2E[E2E, once at the very end]
+    E2E -->|failing specs, reruns left| FS
+    E2E --> FN[finish: completion report and stats<br/>yomiyasu polishes the Japanese]
   end
   FX2 --> WV
 ```
@@ -75,7 +78,7 @@ flowchart TD
 | model-check (after design) | `model-check.pstack-statechart` | asked every run |
 | plan | `plan.builtin`, gate `gate.jev` | always |
 | route | `route.jev`, gates `gate.pstack-blast-radius`, `gate.pstack-architect` | the gates per PBI (tight coupling, opus tier) |
-| build / verify / fix | `build.runners` / `verify.builtin` / `fix.rework` | always |
+| build / verify / fix | `build.runners` / `verify.builtin` / `fix.list` | always |
 | lint-recheck (after verify) | `lint-recheck.jevlint` → `lint-recheck.builtin` | always, once, after every PBI and the test stage |
 | review | `review.pstack-interrogate` → `review.lens-review` → `review.code-review` → `review.builtin` | interrogate only when `heavy_check.py` finds the finished diff deep (such as a new application built from scratch) and you say run on its question page (`when` `heavy-ask`; the orchestrator runs it, adversaries on opus xhigh and sonnet high); lens-review (a lens-based review in Japanese, [reeschan/claude-plugins-official](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review)) and code-review when adapter_gate.py says run |
 | security (after review) | `security.security-audit`, gate `gate.security-review` | security-audit when you said yes at approval |
