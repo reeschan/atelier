@@ -143,6 +143,7 @@
       "implementer_peak": 90000,
       "handoff_at": 250000,
       "aux_compress_at": 150000,
+      "tablet_max_chars": 6000,
       "log_path": "docs/pbi/.kiln/compact-events.jsonl"
     },
     "lint": {

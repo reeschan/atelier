@@ -2,7 +2,7 @@
 
 **Name.** The English term is **Kiln**, from Compaction (working-context cool-down / strategic compaction). The Japanese reading is **窯**. Japanese prose introduces it as Compaction 文脈の Kiln（読みは窯）, and does not lead with 窯 as the source term.
 
-Read this at Start, at every stage and wave boundary, and before writing any subagent or worker prompt. Kiln is on by default; `docs/pbi/kiln.json` with `"enabled": false` turns it off, and then only `appendix/handoff.md` applies.
+The designer's steps (measure, log, act, the state tablet and its check) are `episode/_kiln.md`, the part every Read first file ends with; read this appendix for the rest: the lines, the companion skill, the run id, an inline cool-down and the implementer chamber, and before writing any subagent or worker prompt. Kiln is on by default; `docs/pbi/kiln.json` with `"enabled": false` turns it off, and then only `appendix/handoff.md` applies.
 
 ## Concept
 
@@ -32,39 +32,14 @@ One run keeps one `run_id` on every line of `docs/pbi/.kiln/compact-events.jsonl
 
 ## Designer (the orchestrator)
 
-At every stage boundary and wave boundary, never while a worker attempt runs:
+Under the conductor, follow `episode/_kiln.md`. It holds the measuring command (its full arguments are on the request's `Context probe:` line, which the conductor writes), the one measure with `--boundary start` once the Read first file is read, the actions, the boundaries where you cool, the state tablet (its six headings, its limit `tablet_max_chars` in `docs/pbi/kiln.json` and `kiln_log.py tablet-check`), and the run's dead ends.
 
-1. Measure with the command on the request's `Context probe:` line; when the request has no such line, `python <skill>/agent_stats.py --ctx`.
-   - `context=unknown` (exit code 3) twice in a row: hand off after every 3 PBIs you reconcile.
-2. Decide and log in one step: `python <skill>/kiln_log.py docs/pbi --role designer --boundary phase|wave --phase <stage> --tokens <context> --task-id <W-n>`. It prints the action from the lines: `noop`, `aux_on`, `suggest`, `compact` or `handoff`. Pass `--action` and `--note` when you choose differently (for example, waiting for a subagent before cooling).
-3. Act:
-   - `noop`: go on.
-   - `aux_on`: turn on rtk mode (`appendix/handoff.md`, `## rtk mode`).
-   - Under the conductor, `suggest`, `compact` and `handoff` all mean: write the state tablet `docs/pbi/CONTEXT_STATE.md` (below) and end the episode with status `handoff` (`appendix/episodes.md`, `## Kiln`). Never use `/compact`.
-   - Inline, `suggest` or `compact`: write the state tablet, then run `/compact` with keep-instructions (what to keep: paths, ids, the next action), not a discard list. `suggest` may wait for the next boundary; `compact` may not.
-   - Inline, `handoff`: follow `appendix/handoff.md`, `## Hand off`, with the state tablet beside HANDOFF.md.
-4. After a `Continue from:` or an inline resume, read the task, STATUS.md and the state tablet only. Do not redo finished stages from memory of the chat.
+Inline, the same steps, with these differences:
 
-### State tablet
-
-40 to 80 lines, six headings:
-
-1. **Objective**: one line
-2. **Established facts**: paths, symbols, commands, observed values; mark guesses
-3. **Applied changes**: files touched, and whether verified
-4. **Verification**: checks, outcomes, obstacles
-5. **Dead ends**: do not repeat
-6. **Remaining plan**: ordered steps, the immediate next action, the done condition
-
-### When to cool
-
-| Boundary | Cool? |
-|---|---|
-| understand and map → plan | Yes, once the notes are on disk |
-| plan → build | Yes, once the PBIs are on disk |
-| In the middle of a worker attempt or a subagent | No |
-| After a failed approach | Yes, after writing the dead ends |
-| A wave, the test stage or the lint recheck is done | Measure, then follow the lines |
+- With no `Context probe:` line, measure with `python <skill>/agent_stats.py --ctx` and pass its number to `kiln_log.py` with `--tokens <context>`.
+- `suggest` or `compact`: write the state tablet, then run `/compact` with keep-instructions (what to keep: paths, ids, the next action), not a discard list. `suggest` may wait for the next boundary; `compact` may not.
+- `handoff`: follow `appendix/handoff.md`, `## Hand off`, with the state tablet beside HANDOFF.md.
+- After an inline resume, read the task, STATUS.md and the state tablet only. Do not redo finished stages from memory of the chat.
 
 ## Implementer (every subagent and worker)
 

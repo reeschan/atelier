@@ -15,7 +15,7 @@ Take this decision right after understand, before the optional stages placed aft
 1. **Spec given**: the run starts with a spec path (a `docs/specs/*.md` file in the request, or a handoff from a design skill that passes one). The design is done: record `stage design: built-in skip (spec given)`.
 2. **Setting**: run `python <skill>/adapter_gate.py docs/pbi` (no PBIs needed yet) and take the `design` row's setting.
    - `off`: skip without asking and record `off (turned off in agents.json)`.
-   - a skill name: in `## Design: run`, use that skill instead of the template's design components when it is in the skill list. When it is not, keep the template's order and record the fallback with its reason.
+   - a skill name: in `## Design: run`, use that skill instead of the template's design components when it is usable (`appendix/adapters.md`, `## Settings`, which also says what to record when it is not).
    - `auto`: keep the template's order.
 3. Decide from the request and a short look at the repository:
    - **Clearly complex** (run without asking): the request adds a new concept, an external interface or a data-model change, and the work likely spans 2 or more modules.
@@ -26,13 +26,13 @@ Take this decision right after understand, before the optional stages placed aft
 
 Read `docs/pbi/notes/map.md` and `docs/pbi/notes/survey.md` when they exist (`appendix/map.md`, `appendix/lint.md`): the spec names the layers each change belongs to, and the confirmed bug-hunt leads inside the range.
 
-1. Run the picked component in your session: the skill named in the setting, or the template's design skill when it is in the skill list. The bundled templates have none; the user adds one as an external component (`appendix/engine.md`, `## External components`).
+1. Run the picked component in your session, as `appendix/engine.md`, `## Skills and the Skill tool` says: the skill named in the setting, or the template's design skill when its row is usable by its status in the flow table (`appendix/engine.md`, `## Picking`). The bundled templates have none; the user adds one as an external component (`appendix/engine.md`, `## External components`).
 2. Then write `docs/specs/<slug>.md` yourself, where `<slug>` is a short lowercase name for the work. Headings, in this order: Problem Statement, Solution, User Stories, Implementation Decisions, Testing Decisions, Out of Scope, Further Notes. The design skills decide; they do not write the spec.
-3. When `design.builtin` is the one picked (no design skill in the skill list), write the decisions you made in the same file. Record `run` when the template has no design skill, or `fallback (<skill> not in the skill list)`.
+3. When `design.builtin` is the one picked (no usable design skill), write the decisions you made in the same file. Record `run` when the template has no design skill, or `fallback (<skill>: skill missing)`.
 
 ## Design: grill
 
-A run that designs (the design step `run`) always grills, with or without a design skill: the user answers every question of the design tree, and you answer none of them. When `mattpocock-skills:grilling` is in the skill list, follow its method for the questions; otherwise follow the steps here.
+A run that designs (the design step `run`) always grills, with or without a design skill: the user answers every question of the design tree, and you answer none of them. When `python <skill>/flow.py docs/pbi --skill mattpocock-skills:grilling` prints `skill ok <path>`, read that SKILL.md and follow its method for the questions; otherwise follow the steps here.
 
 1. Keep the tree in `docs/pbi/notes/grill.json` (schema `atelier.grill/1`): `rounds` (each `{"n", "questions": [{"id", "question", "recommended", "answer", "answered_in"}]}`), `frontier` (the open questions that wait on earlier answers) and `aligned` / `aligned_in`.
 2. A round is every question whose prerequisites are settled. Write it to `docs/pbi/notes/grill-<n>.md`: number each question (`Q1`, `Q2`, ...), and word it so that "yes" takes the recommendation. Facts you can look up are not questions: look them up.

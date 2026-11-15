@@ -16,6 +16,7 @@ Final review of this repository's work. Report only: do not edit, commit, push o
 - Call the Skill tool with <skill name>. For the built-in code-review, pass the argument medium; for the others, pass no argument.
 - Never pass --fix, --comment, ultra or --max-findings.
 - If the skill asks you a question, do not answer it. Stop and write BLOCKED.
+- If the Skill tool says the skill is not found, stop and write BLOCKED: not found <skill name>.
 - Lint recheck: <the path of docs/pbi/jevlint/recheck.md and its report rows, or none>. Look at those places; do not run jevlint.
 - Test results: <the path of the whole check's test-result, docs/pbi/verify/tests/final.test-result.json, or none>. The unit tests and every PBI's verify commands ran there; read it, do not run them again. E2E has not run yet: it runs once after the fixes, so do not run E2E specs.
 - This review runs once. List every finding you can confirm now, with the fix in a few words in the why: what you find is fixed all at once afterwards, and nobody reviews the whole change again.

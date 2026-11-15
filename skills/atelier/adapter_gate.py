@@ -25,8 +25,9 @@ html と読む)。resolve_confirm が、<skills-dir>/answer-me-with-any/scripts/
 review-skill は最後のレビューに使うスキル (appendix/review.md、`## Pick the review`)。強い順に:
   1. agents.json の review がスキル名なら decision `agents.json` (利用者が決めたもの)
   2. --root (既定はカレント) の .claude/skills/*/SKILL.md と skills/*/SKILL.md のうち、フォルダの名前に review を
-     含む最初のもの (名前の順) を decision `repo:<名前>`
-  3. lens-review (lens-review:lens-review) がプラグインの置き場 (PBI_PLUGINS_DIR、無ければ ~/.claude/plugins) に
+     含むものを decision `repo:<名前>`。選ぶ順は、決まった名前 (repo-review・code-review・review の順) →
+     名前に security も content も含まないもの → 残り。同じ順のものは .claude/skills が先、その中は名前の順
+  3. lens-review (lens-review:lens-review) がプラグインの入っている版の置き場 (flow.find_skill_file) に
      あれば decision `lens-review:lens-review`
   4. どれも無ければ decision `template` (テンプレートの review の並び: code-review、組み込み)
 規約のファイル (REVIEW.md・docs/review*.md・.github/review*.md) があれば reason に `rules: <パス>, ...` を足す
@@ -238,6 +239,34 @@ REVIEW_SKILL_DIRS = ('.claude/skills', 'skills')
 REVIEW_RULES = ('REVIEW.md', 'docs/review*.md', '.github/review*.md')
 REVIEW_SETTINGS = ('auto', 'off')
 LENS_REVIEW = 'lens-review:lens-review'
+# 名前でそのまま選ぶリポジトリのレビューのスキル (この順に強い)
+REVIEW_SKILL_NAMES = ('repo-review', 'code-review', 'review')
+# 名前に含むと、変更全体を見るレビューでなく一つの観点だけを見るスキルとみなす語
+NARROW_REVIEW_WORDS = ('security', 'content')
+
+
+def review_skill_rank(name: str) -> tuple | None:
+    """リポジトリのスキルの名前の、最後のレビューに選ぶ順 (小さいほど先)。review を含まなければ None。
+
+    決まった名前 (REVIEW_SKILL_NAMES の順) → review を含み NARROW_REVIEW_WORDS を含まないもの → 残りの review を含むもの。
+    """
+    lower = name.lower()
+    if lower in REVIEW_SKILL_NAMES:
+        return 0, REVIEW_SKILL_NAMES.index(lower)
+    if 'review' not in lower:
+        return None
+    return (2, 0) if any(word in lower for word in NARROW_REVIEW_WORDS) else (1, 0)
+
+
+def repo_review_skill(root: Path) -> Path | None:
+    """root の REVIEW_SKILL_DIRS の */SKILL.md のうち、review_skill_rank の順で最初のもの (同じ順なら置き場と名前の順)。"""
+    ranked = []
+    for order, folder in enumerate(REVIEW_SKILL_DIRS):
+        for skill in sorted((root / folder).glob('*/SKILL.md')):
+            rank = review_skill_rank(skill.parent.name)
+            if rank is not None:
+                ranked.append((rank, order, skill.parent.name, skill))
+    return min(ranked)[3] if ranked else None
 
 
 def review_skill_row(setting, root, env=None) -> tuple:
@@ -249,12 +278,11 @@ def review_skill_row(setting, root, env=None) -> tuple:
         return setting, 'off', OFF_REASON
     if setting not in REVIEW_SETTINGS:
         return setting, 'agents.json', f'agents.json names {setting}; it wins over the repository{rules_note}'
-    for folder in REVIEW_SKILL_DIRS:
-        for skill in sorted((root / folder).glob('*/SKILL.md')):
-            if 'review' in skill.parent.name.lower():
-                return setting, f'repo:{skill.parent.name}', f'found {skill.relative_to(root).as_posix()}{rules_note}'
+    skill = repo_review_skill(root)
+    if skill is not None:
+        return setting, f'repo:{skill.parent.name}', f'found {skill.relative_to(root).as_posix()}{rules_note}'
     none_here = f"no review skill in {' or '.join(REVIEW_SKILL_DIRS)}"
-    found = flow.find_skill_file(LENS_REVIEW, Path(), env or os.environ)
+    found = flow.find_skill_file(LENS_REVIEW, Path(), env or os.environ, root)
     if found is not None:
         return setting, LENS_REVIEW, f'{none_here}; {LENS_REVIEW} at {found.as_posix()}{rules_note}'
     return setting, 'template', f'{none_here}; {LENS_REVIEW} not installed{rules_note}'

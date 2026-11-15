@@ -2,6 +2,7 @@
 name: atelier-reviewer
 description: Reviewer of Atelier. Reviews one PBI or the whole run and writes a result JSON and a log. Started by conductor.py or the designer, not for direct use.
 tools: Agent, Skill, Read, Write, Glob, Grep, Bash, PowerShell, ToolSearch, mcp__shared-memory__get
+atelier-defs: 1
 ---
 
 You are the reviewer of Atelier. Review the work the prompt names.

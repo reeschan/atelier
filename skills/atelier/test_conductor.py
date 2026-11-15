@@ -6,6 +6,7 @@ home は一時ディレクトリにし (HOME・USERPROFILE・CLAUDE_CONFIG_DIR�
 起動しない。headless の `run` は偽の設計者 (ATELIER_DESIGNER_CMD) だけで回す。
 """
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -29,10 +30,15 @@ DESIGN_RECORD = os.path.join(HERE, 'design_record.py')
 STATE = 'docs/pbi/CONTEXT_STATE.md'
 RUN = 'docs/pbi/conductor/run.json'
 LOCK = 'docs/pbi/conductor/lock'
+# kiln_log.py tablet-check を通る状態の板 (6 つの見出し)
+TABLET = ('# state\n\n## Objective\nGo on.\n\n## Facts\nNone.\n\n## Changes\nNone.\n\n'
+          '## Verification\nNone.\n\n## Dead ends\nNone.\n\n## Remaining plan\nRead the answer.\n')
+DEF_FILES = ('atelier-designer.md', 'atelier-designer-skills.md', 'atelier-reviewer.md', 'atelier-tester.md',
+             'pbi-worker.md')
 
 # 偽の設計者 (docs/pbi/tools/fake_designer.py と同じ動き)。一時ディレクトリに書き出し、ATELIER_DESIGNER_CMD で差す。
 # 標準入力の依頼文から Episode・Result・Answer を読み、出番の結果を書いて claude -p の JSON に似た 1 行を出す。
-# FAKE_DESIGNER_LOG に引数と API キーが見えたかを追記し、FAKE_DESIGNER_SLEEP 秒待ち、FAKE_IS_ERROR=1 で
+# FAKE_DESIGNER_LOG に引数と API キーが見えたかと ATELIER_EPISODE を追記し、FAKE_DESIGNER_SLEEP 秒待ち、FAKE_IS_ERROR=1 で
 # 結果のファイルを書いたまま is_error: true を返す。
 FAKE_DESIGNER = r'''"""テスト用の偽の設計者。"""
 import json
@@ -45,6 +51,7 @@ from pathlib import Path
 prompt = sys.stdin.read()
 with open(os.environ['FAKE_DESIGNER_LOG'], 'a', encoding='utf-8') as log:
     log.write(json.dumps({'args': sys.argv[1:], 'api_key_seen': 'ANTHROPIC_API_KEY' in os.environ,
+                          'episode_env': os.environ.get('ATELIER_EPISODE'),
                           'head': prompt.splitlines()[0] if prompt else ''}) + '\n')
 time.sleep(float(os.environ.get('FAKE_DESIGNER_SLEEP') or 0))
 episode, seq = re.search(r'^Episode: (\w+) \(seq (\d+)\)', prompt, re.M).groups()
@@ -54,7 +61,9 @@ data = {'schema': 'atelier.episode/1', 'episode': episode, 'seq': int(seq),
 if episode == 'design' and not re.search(r'^Answer: ', prompt, re.M):
     state = Path('docs/pbi/CONTEXT_STATE.md')
     state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_text('# state\nImmediate next action: read the answer\n', encoding='utf-8')
+    state.write_text('# state\n\n## Objective\nGo on.\n\n## Facts\nNone.\n\n## Changes\nNone.\n\n'
+                     '## Verification\nNone.\n\n## Dead ends\nNone.\n\n## Remaining plan\nRead the answer.\n',
+                     encoding='utf-8')
     draft = Path('docs/pbi/notes/q.md')
     draft.parent.mkdir(parents=True, exist_ok=True)
     draft.write_text(Path(os.environ['FAKE_QUESTION_DRAFT']).read_text(encoding='utf-8'), encoding='utf-8')
@@ -130,9 +139,9 @@ class ConductorTest(unittest.TestCase):
         self.user = os.path.join(self.tmp, 'user')
         agents = os.path.join(self.user, '.claude', 'agents')
         os.makedirs(agents)
-        for role in ('designer', 'reviewer', 'tester'):
-            self.write_abs(os.path.join(agents, f'atelier-{role}.md'), f'---\nname: atelier-{role}\n---\ntest\n')
-        self.fake = os.path.join(self.tmp, 'fake_designer.py')
+        for name in DEF_FILES:
+            self.write_abs(os.path.join(agents, name), f'---\nname: {name[:-3]}\natelier-defs: 99\n---\ntest\n')
+        self.fake =os.path.join(self.tmp, 'fake_designer.py')
         self.write_abs(self.fake, FAKE_DESIGNER)
         self.log = os.path.join(self.tmp, 'fake.log')
         self.good = os.path.join(self.tmp, 'good-question.md')
@@ -153,7 +162,8 @@ class ConductorTest(unittest.TestCase):
                        '[mcp_servers.shared-memory]\nurl = "http://127.0.0.1:7820/mcp"\n')
         self.env['CODEX_HOME'] = self.codex_home
         self.env.pop('OPENAI_API_KEY', None)
-        for name in ('FAKE_DESIGNER_SLEEP', 'FAKE_IS_ERROR', 'HARNESS_LOG_PATH', 'ATELIER_EVENTS_QUIET'):
+        for name in ('FAKE_DESIGNER_SLEEP', 'FAKE_IS_ERROR', 'HARNESS_LOG_PATH', 'ATELIER_EVENTS_QUIET',
+                     'CLAUDE_CODE_SESSION_ID', 'ATELIER_EPISODE'):
             self.env.pop(name, None)
 
     # ---- helpers ----
@@ -462,7 +472,7 @@ class ConductorTest(unittest.TestCase):
         """handoff は同じ出番を Continue from 付きで起こし、進みがあれば数えない。"""
         self.write('docs/pbi/STATUS.md', '# status\n')
         self.write('docs/pbi/runs.jsonl', '')
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         out = self.to_build()
         self.assertEqual(self.line(out, 'episode'), 'build seq 2', out)
 
@@ -490,7 +500,7 @@ class ConductorTest(unittest.TestCase):
         """進みの無い handoff が 3 回続くと handoff-loop の問いになる。"""
         self.write('docs/pbi/STATUS.md', '# status\n')
         self.write('docs/pbi/runs.jsonl', '')
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         out = self.to_build()
         # 進みありの handoff を 1 回置いて、進みを測る基準を作る
         self.append('docs/pbi/runs.jsonl', json.dumps({'report': 'PBI-001', 'attempt': 1}) + '\n')
@@ -532,7 +542,7 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(self.line(out, 'episode'), 'design seq 2', out)
         self.assertNotIn('Continue from:', self.request(out))
 
-        self.write(STATE, '# state\nImmediate next action: ask\n')
+        self.write(STATE, TABLET)
         self.write('docs/pbi/notes/q.md', question_draft())
         self.result(out, status='question', state=STATE,
                     question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'run the design?'})
@@ -575,7 +585,7 @@ class ConductorTest(unittest.TestCase):
 
         # 失敗 1 回のあとの question を読む done も 0 に戻す (戻さなければ 1 が残る)
         rc, out = self.con('next')
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         self.write('docs/pbi/notes/q.md', question_draft())
         self.result(out, status='question', state=STATE,
                     question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
@@ -608,7 +618,7 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
 
         # 同じ出番・波で失敗 1 回のあとの handoff も 0 に戻す
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         rc, out = self.con('next')
         self.result(out, status='handoff', state=STATE)
         rc, out = self.con('done')
@@ -642,7 +652,7 @@ class ConductorTest(unittest.TestCase):
         self.assertIn('build -> design is not allowed', out)
 
         # handoff は進みを数え直すので、波の拒否をもう一度試す前に数が戻る
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         rc, out = self.con('next')
         self.result(out, status='handoff', state=STATE)
         rc, out = self.con('done')
@@ -846,7 +856,7 @@ class ConductorTest(unittest.TestCase):
         self.assertIn('Wave: 1 (its PBIs are in docs/pbi/waves.json)', build)
         self.assertNotIn('PBIs:', build)
 
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         self.result(out, status='handoff', state=STATE)
         self.con('done')
         rc, out = self.con('next')
@@ -854,35 +864,361 @@ class ConductorTest(unittest.TestCase):
         self.assertIn(f'Continue from: {STATE}', request)
         self.assertNotIn('Answer:', request)
 
-    def test_headless_without_agent_definition(self):
-        """定義が無いときは先頭に Read の行 (agent) か --agents (headless) で後ろ盾し、API キーは渡さない。"""
+    # ---- 定義を通した起動 ----
+
+    def remove_defs(self):
+        """一時のユーザーディレクトリの .claude/agents から定義を消す。"""
         agents = os.path.join(self.user, '.claude', 'agents')
         for name in os.listdir(agents):
             os.remove(os.path.join(agents, name))
 
-        self.con('start', '--goal', 'no definitions', '--launch', 'headless')
+    def setup_cli(self, *args, env=None):
+        """setup_agents.py を作業ルート (一時ディレクトリ) で 1 回呼ぶ。(終了コード, 出力)。"""
+        full = dict(self.env)
+        full.update(env or {})
+        p = subprocess.run([sys.executable, os.path.join(HERE, 'setup_agents.py'), *args], cwd=self.tmp,
+                           capture_output=True, text=True, encoding='utf-8', errors='replace', env=full, timeout=60)
+        return p.returncode, p.stdout + p.stderr
+
+    def install_defs(self, place, session=None):
+        rc, out = self.setup_cli('defs', '--install', place,
+                                 env={'CLAUDE_CODE_SESSION_ID': session} if session else None)
+        self.assertEqual(rc, 0, out)
+
+    def log_rows(self):
+        return [json.loads(line) for line in self.read(self.log).splitlines()]
+
+    @staticmethod
+    def no_cli():
+        """claude の CLI が見つからない環境 (偽の設計者も PATH の claude も使わない)。"""
+        return {'ATELIER_DESIGNER_CMD': '', 'PBI_CLAUDE_BIN': '', 'PATH': os.path.dirname(sys.executable)}
+
+    def test_start_asks_once_where_the_definitions_go(self):
+        """定義が足りず記録も無ければ、start は run を作らず ask agents: と ask harness-log: を 1 回で出す。"""
+        self.remove_defs()
+        rc, out = self.con('start', '--goal', 'no definitions')
+        self.assertEqual((rc, out.splitlines()[0]), (2, 'state: none'), out)
+        ask = self.line(out, 'ask agents')
+        self.assertIn('setup_agents.py defs --install home|work|none', ask)
+        for word in ('~/.claude/agents/', '.git/info/exclude', 'headless claude', 'hooks', 'screen'):
+            self.assertIn(word, ask)
+        self.assertTrue(self.line(out, 'ask harness-log'), out)
+        self.assertFalse(os.path.exists(self.path(RUN)))
+
+        self.install_defs('none')
+        rc, out = self.con('start', '--goal', 'no definitions')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertNotIn('ask agents', out)
+
+    def test_definitions_found_without_a_record_launch_through_the_agent_tool(self):
+        """記録が無くても前から定義があれば、読み込まれている定義として Agent tool で起こす。"""
+        rc, out = self.con('start', '--goal', 'defs found')
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('next')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: running'), out)
+        self.assertIn('launch: agent subagent_type=atelier-designer model=', out)
+        self.assertNotIn('warn agents', out)
+
+    def test_definitions_installed_this_session_run_headless_until_the_next_session(self):
+        """写したばかりのセッションでは headless に回し、別のセッションからは Agent tool で起こす。"""
+        self.remove_defs()
+        self.install_defs('home', session='caller-1')
+        for name in DEF_FILES:
+            with open(os.path.join(HERE, 'agents', name), encoding='utf-8') as f:
+                self.assertEqual(self.read(os.path.join(self.user, '.claude', 'agents', name)), f.read())
+        same = {'CLAUDE_CODE_SESSION_ID': 'caller-1'}
+        rc, out = self.con('start', '--goal', 'just installed', env=same)
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('next', env=same)
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertIn('launch: headless (definition installed this session)', out)
+        self.assertIn('run --detach', self.line(out, 'then'))
+        self.assertEqual(self.read_json(RUN)['state'], 'ready')
+
+        rc, out = self.con('next', env={'CLAUDE_CODE_SESSION_ID': 'caller-2'})
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: running'), out)
+        self.assertIn('subagent_type=atelier-designer model=', self.line(out, 'launch'))
+
+    def test_no_definition_runs_headless_with_the_bundled_definition(self):
+        """定義を入れない家では headless に回し、--agents で同梱の定義 (Skill なし) と ATELIER_EPISODE を渡す。"""
+        self.remove_defs()
+        self.install_defs('none')
+        rc, out = self.con('start', '--goal', 'no definitions')
+        run8 = self.read_json(RUN)['run_id'][:8]
+        rc, out = self.con('next')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertIn('launch: headless (no agent definition)', out)
+        self.assertIn('run --detach', self.line(out, 'then'))
+
         rc, out = self.con('run', env={'ANTHROPIC_API_KEY': 'must-not-leak'})
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
-        self.assertIn('warn agents', out)
-        rows = [json.loads(line) for line in self.read(self.log).splitlines()]
-        args = rows[0]['args'] if rows else []
-        self.assertIn('-p', args)
-        self.assertIn('--output-format', args)
-        self.assertIn('--session-id', args)
-        self.assertIn('atelier-designer', args)
+        rows = self.log_rows()
+        args = rows[0]['args']
+        for flag in ('-p', '--output-format', '--session-id'):
+            self.assertIn(flag, args)
+        self.assertEqual(args[args.index('--agent') + 1], 'atelier-designer')
         self.assertLess(args.index('--agents'), args.index('--agent'))
-        fallback = json.loads(args[args.index('--agents') + 1])
-        self.assertTrue(fallback['atelier-designer']['prompt'])
+        definition = json.loads(args[args.index('--agents') + 1])['atelier-designer']
+        self.assertTrue(definition['prompt'])
+        self.assertNotIn('Skill', definition['tools'])
+        self.assertEqual(rows[0]['episode_env'], f'{run8}.1')
         self.assertFalse(any(row['api_key_seen'] for row in rows))
 
-        # agent では general-purpose で起こし、依頼文の先頭に定義を読ませる行を付ける
-        self.con('start', '--goal', 'fallback', '--force')
-        rc, out = self.con('next')
+    def test_without_the_claude_cli_the_designer_falls_back_to_general_purpose(self):
+        """定義が読み込まれず claude の CLI も無ければ、general-purpose で起こし、定義を読む行を先頭に付ける。"""
+        self.remove_defs()
+        self.install_defs('none')
+        self.con('start', '--goal', 'fallback')
+        rc, out = self.con('next', env=self.no_cli())
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: running'), out)
         self.assertIn('warn agents', out)
-        self.assertIn('general-purpose', self.line(out, 'launch'))
+        self.assertIn('subagent_type=general-purpose', self.line(out, 'launch'))
         lines = self.request(out).splitlines()
         self.assertTrue(lines[0].startswith('Read '), lines[:1])
         self.assertIn('agents/atelier-designer.md', lines[0])
+
+    def test_two_failed_headless_launches_fall_back_to_general_purpose(self):
+        """headless の設計者が 2 回続けて is_error で終われば、次の起動は general-purpose に戻す。"""
+        self.remove_defs()
+        self.install_defs('none')
+        self.con('start', '--goal', 'headless fails')
+        rc, out = self.con('next')
+        self.assertIn('launch: headless (no agent definition)', out)
+        rc, out = self.con('run', env={'FAKE_IS_ERROR': '1'})
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        rc, out = self.con('next')
+        self.assertIn('launch: headless (no agent definition)', out)
+        rc, out = self.con('run', env={'FAKE_IS_ERROR': '1'})
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+        self.assertIn('launch-failure', out)
+        self.show_question()
+        rc, out = self.con('answer', '--text', 'try again')
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('next')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: running'), out)
+        self.assertIn('warn agents', out)
+        self.assertIn('subagent_type=general-purpose', self.line(out, 'launch'))
+
+    def test_launches_that_fail_before_the_child_starts_count_toward_the_fallback(self):
+        """設計者のコマンドを起こせない (Popen の誤り) 失敗も headless の失敗に数え、2 回続けば general-purpose に戻す。"""
+        self.remove_defs()
+        self.install_defs('none')
+        self.con('start', '--goal', 'cannot start')
+        broken = {'ATELIER_DESIGNER_CMD': json.dumps([os.path.join(self.tmp, 'no-such-designer.exe')])}
+        rc, out = self.con('run', env=broken)
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('cannot start the designer', out)
+        rc, out = self.con('run', env=broken)
+        self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
+        self.assertIn('launch-failure', out)
+        self.assertEqual(self.read_json(RUN)['headless_failures'], 2)
+        self.show_question()
+        rc, out = self.con('answer', '--text', 'try again')
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('next')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: running'), out)
+        self.assertIn('subagent_type=general-purpose', self.line(out, 'launch'))
+
+    def test_an_older_work_definition_is_not_taken_as_loaded(self):
+        """作業ルートの古い定義が home の新しい定義より先に読まれるあいだは、headless で同梱の定義を --agents で渡す。"""
+        self.write('.claude/agents/atelier-designer.md', '---\nname: atelier-designer\natelier-defs: 0\n---\nold\n')
+        rc, out = self.setup_cli('defs', '--install', 'home')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('warn defs:', out)
+        self.assertIn('(atelier-designer.md)', out)
+        rc, out = self.con('start', '--goal', 'older work definition')
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('next')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertIn('launch: headless (older agent definition)', out)
+        self.assertNotIn('subagent_type=', out)
+        rc, out = self.con('run')
+        self.assertEqual(rc, 10, out)
+        args = self.log_rows()[0]['args']
+        self.assertEqual(args[args.index('--agent') + 1], 'atelier-designer')
+        self.assertLess(args.index('--agents'), args.index('--agent'))
+        self.assertTrue(json.loads(args[args.index('--agents') + 1])['atelier-designer']['prompt'])
+
+    def test_agent_type_not_found_relaunch_switches_to_headless(self):
+        """呼び手が --agent-type-missing を付けて --relaunch したら、headless に替える。"""
+        self.con('start', '--goal', 'type not found')
+        rc, out = self.con('next')
+        self.assertIn('subagent_type=atelier-designer model=', self.line(out, 'launch'))
+        rc, out = self.con('next', '--relaunch', '--agent-type-missing')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertIn('launch: headless (agent type not found)', out)
+        self.assertIn('run --detach', self.line(out, 'then'))
+        # 同じ run の次の起動も headless (このセッションでは定義が読み込まれていない)
+        rc, out = self.con('next')
+        self.assertIn('launch: headless (agent type not found)', out)
+
+    def test_plain_relaunch_keeps_the_agent_definition(self):
+        """旗の無い --relaunch (止まった設計者の起こし直し) では、定義での起動のまま。"""
+        self.con('start', '--goal', 'plain relaunch')
+        self.con('next')
+        rc, out = self.con('next', '--relaunch')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('agent type not found', out)
+        self.assertIn('subagent_type=atelier-designer model=', self.line(out, 'launch'))
+
+    def test_skill_tool_episode_launches_the_skills_definition(self):
+        """その出番に Skill ツールを要る行があれば atelier-designer-skills、無ければ atelier-designer で起こす。"""
+        rc, out = self.con('start', '--goal', 'plain design')
+        rc, out = self.con('next')
+        self.assertIn('subagent_type=atelier-designer model=', self.line(out, 'launch'))
+
+        # adapters.design の組み込みのスキルは、設計者が design の出番で Skill ツールで動かす
+        self.write_json(os.path.join(self.home, 'agents.json'), {'adapters': {'design': 'code-review'}})
+        self.con('start', '--goal', 'skill design', '--force')
+        rc, out = self.con('next')
+        self.assertIn('subagent_type=atelier-designer-skills model=', self.line(out, 'launch'))
+
+        # headless では --agent で同じ名前を選び、定義が無ければ Skill 付きの定義を --agents で渡す
+        self.remove_defs()
+        self.install_defs('none')
+        self.con('start', '--goal', 'skill design headless', '--force', '--launch', 'headless')
+        rc, out = self.con('run')
+        self.assertEqual(rc, 10, out)
+        args = self.log_rows()[-1]['args']
+        self.assertEqual(args[args.index('--agent') + 1], 'atelier-designer-skills')
+        definition = json.loads(args[args.index('--agents') + 1])['atelier-designer-skills']
+        self.assertIn('Skill', definition['tools'])
+
+    def test_prompt_names_the_read_first_file_and_the_full_kiln_command(self):
+        """依頼文の Read first: は <seq>-read.md を指し、そこに表の節と Kiln・問いの原稿が入る。Context probe は kiln_log.py。"""
+        self.con('start', '--goal', 'read first')
+        run8 = self.read_json(RUN)['run_id'][:8]
+        rc, out = self.con('next')
+        request = self.request(out)
+        self.assertNotIn('designer.md first', request)
+        read = self.line(request, 'Read first').split()[0]
+        self.assertEqual(read, 'docs/pbi/conductor/episodes/1-read.md')
+        text = self.read(read)
+        self.assertTrue(text.startswith('# Read first: design (first)'), text[:80])
+        for part in ('<!-- from designer.md -->', '<!-- from episode/design.md -->', '<!-- from episode/_kiln.md -->',
+                     '<!-- from episode/_question.md -->', '## State tablet', '## The six sections'):
+            self.assertIn(part, text)
+        probe = self.line(request, 'Context probe')
+        self.assertIn('kiln_log.py', probe)
+        self.assertIn('docs/pbi --role designer --seq 1', probe)
+        self.assertIn(f'--probe-agent "ATELIER.{run8}.1 "', probe)
+        self.assertIn('--boundary', probe)
+        self.assertIn('--phase', probe)
+
+        # 問いの答えから続ける出番は、その種類の入口で組む
+        self.write(STATE, TABLET)
+        self.write('docs/pbi/notes/q.md', question_draft())
+        self.result(out, status='question', state=STATE,
+                    question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
+        rc, done = self.con('done')
+        self.assertEqual(rc, 10, done)
+        self.show_question()
+        self.con('answer', '--text', 'go on')
+        rc, out = self.con('next')
+        read = self.line(self.request(out), 'Read first').split()[0]
+        self.assertEqual(read, 'docs/pbi/conductor/episodes/2-read.md')
+        self.assertTrue(self.read(read).startswith('# Read first: design (answer:decision)'))
+
+        # headless の設計者は自分のセッションの ID で測る
+        self.con('start', '--goal', 'headless probe', '--force', '--launch', 'headless')
+        self.con('run')
+        prompt = self.read('docs/pbi/conductor/episodes/1-design.prompt.md')
+        self.assertIn('--probe-session ', self.line(prompt, 'Context probe'))
+
+    def test_done_refuses_a_bad_state_tablet_and_relaunches_from_it(self):
+        """形の外れた状態の板は error: state tablet で断り、板を Continue from に残して直させる。2 回続けば launch-failure。"""
+        out = self.to_build()
+        self.write(STATE, '# state\n\n## Objective\nGo on.\n')
+        self.result(out, status='handoff', state=STATE)
+        rc, done = self.con('done')
+        self.assertEqual(rc, 2, done)
+        self.assertEqual(len(done.splitlines()), 1, done)
+        self.assertTrue(done.startswith('error: state tablet (missing ## Facts'), done)
+        rc, out = self.con('next')
+        self.assertEqual(self.line(out, 'episode'), 'build seq 3', out)
+        request = self.request(out)
+        self.assertIn(f'Continue from: {STATE}', request)
+        self.assertIn('Fix the tablet first:', request)
+
+        self.result(out, status='handoff', state=STATE)
+        rc, done = self.con('done')
+        self.assertEqual((rc, done.splitlines()[0]), (10, 'state: question'), done)
+        self.assertIn('launch-failure', done)
+        # 問いに答えたあとの出番も、外れた板から続けてまず板を直す
+        self.show_question()
+        rc, out = self.con('answer', '--text', 'try again')
+        self.assertEqual(rc, 0, out)
+        rc, out = self.con('next')
+        self.assertEqual(self.line(out, 'episode'), 'build seq 4', out)
+        request = self.request(out)
+        self.assertIn(f'Continue from: {STATE}', request)
+        self.assertIn('Fix the tablet first:', request)
+
+    def test_question_tablet_is_checked_unless_kiln_is_off(self):
+        """問い (approve 以外) の板も検査する。kiln.json が enabled false なら検査しない。"""
+        self.con('start', '--goal', 'tablet on question')
+        rc, out = self.con('next')
+        self.write(STATE, '# state\n')
+        self.write('docs/pbi/notes/q.md', question_draft())
+        self.result(out, status='question', state=STATE,
+                    question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
+        rc, done = self.con('done')
+        self.assertEqual(rc, 2, done)
+        self.assertIn('error: state tablet (', done)
+
+        self.write_json('docs/pbi/kiln.json', {'enabled': False})
+        rc, out = self.con('next')
+        self.result(out, status='question', state=STATE,
+                    question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
+        rc, done = self.con('done')
+        self.assertEqual((rc, done.splitlines()[0]), (10, 'state: question'), done)
+
+    def test_handoff_progress_counts_stages_md(self):
+        """stages.md だけが変わった handoff も進みとして数える (handoff-loop にしない)。"""
+        self.write('docs/pbi/STATUS.md', '# status\n')
+        self.write('docs/pbi/runs.jsonl', '')
+        self.write(STATE, TABLET)
+        out = self.to_build()
+        for n in range(conductor.LOOP_LIMIT + 1):
+            self.write('docs/pbi/stages.md', f'# stages\nstage {n}\n')
+            self.result(out, status='handoff', state=STATE)
+            rc, done = self.con('done')
+            self.assertEqual((rc, done.splitlines()[0]), (0, 'state: ready'), done)
+            rc, out = self.con('next')
+        self.assertEqual(self.read_json(RUN)['handoff']['count'], 0)
+
+    def test_start_updates_copied_definitions_and_keeps_edited_ones(self):
+        """写した定義が同梱より古く手を入れていなければ写し直し、手を入れた定義は .atelier-new を隣に置く。"""
+        self.remove_defs()
+        self.install_defs('home', session='caller-1')
+        agents = os.path.join(self.user, '.claude', 'agents')
+        bundled = {}
+        for name in ('atelier-designer.md', 'atelier-reviewer.md'):
+            with open(os.path.join(HERE, 'agents', name), encoding='utf-8') as f:
+                bundled[name] = f.read()
+        older = {name: re.sub(r'(?m)^atelier-defs: \d+$', 'atelier-defs: 0', text) for name, text in bundled.items()}
+        self.assertNotEqual(older['atelier-designer.md'], bundled['atelier-designer.md'])
+        table = self.read_json(os.path.join(self.home, 'agents.json'))
+        for name, text in older.items():
+            # 古い版を写した記録 (ハッシュは古い版のもの)。reviewer だけは写したあとに手を入れる
+            self.write_abs(os.path.join(agents, name), text)
+            with open(os.path.join(agents, name), 'rb') as f:
+                table['agent_defs']['hashes'][name] = hashlib.sha256(f.read()).hexdigest()
+        self.write_json(os.path.join(self.home, 'agents.json'), table)
+        self.write_abs(os.path.join(agents, 'atelier-reviewer.md'), older['atelier-reviewer.md'] + 'my rule\n')
+
+        rc, out = self.con('start', '--goal', 'update', env={'CLAUDE_CODE_SESSION_ID': 'caller-2'})
+        self.assertEqual(rc, 0, out)
+        self.assertIn('warn agents: updated atelier-designer.md (next session)', out)
+        self.assertEqual(self.read(os.path.join(agents, 'atelier-designer.md')), bundled['atelier-designer.md'])
+        self.assertIn('atelier-reviewer.md.atelier-new', out)
+        self.assertEqual(self.read(os.path.join(agents, 'atelier-reviewer.md')),
+                         older['atelier-reviewer.md'] + 'my rule\n')
+        self.assertEqual(self.read(os.path.join(agents, 'atelier-reviewer.md.atelier-new')),
+                         bundled['atelier-reviewer.md'])
+        # 写し直したセッションでは、新しい定義はまだ読み込まれていない
+        rc, out = self.con('next', env={'CLAUDE_CODE_SESSION_ID': 'caller-2'})
+        self.assertIn('launch: headless (definition installed this session)', out)
 
     def test_run_detach_and_wait(self):
         """run --detach は running ですぐ返り、wait は running でなくなるまで待つ。"""
@@ -1120,7 +1456,7 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.con('done')
         self.assertEqual(rc, 0, out)
         rc, out = self.con('next')  # build seq 4
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         self.result(out, status='handoff', state=STATE)
         rc, out = self.con('done')
         self.assertEqual(rc, 0, out)
@@ -1531,6 +1867,20 @@ class ConductorTest(unittest.TestCase):
         self.assertIn('run --detach', self.line(out, 'then'))
         self.assertEqual(self.read_json(RUN)['state'], 'ready')
 
+    def test_relaunch_of_a_codex_designer_points_to_run_again(self):
+        """launch agent の run でも、codex の設計者の --relaunch は Agent tool の起動を出さず run --detach を案内する。"""
+        rc, out = self.codex_start()
+        self.assertEqual(rc, 0, out)
+        self.headless_running(self.dead_pid())
+        rc, out = self.con('next', '--relaunch')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertIn('launch: headless (designer runner codex)', out)
+        self.assertNotIn('subagent_type=', out)
+        self.assertIn('run --detach', self.line(out, 'then'))
+        run = self.read_json(RUN)
+        self.assertEqual((run['state'], run['launch']), ('ready', 'agent'))
+        self.assertIn('relaunched', [row['status'] for row in run['history']])
+
     def test_codex_designer_runs_on_codex_exec_and_keeps_tokens(self):
         """run は codex exec で設計者を起こし (定義を読む行を先頭に)、JSONL の使用量と thread を history に残す。"""
         rc, out = self.codex_start('--role', 'designer.effort=high')
@@ -1637,7 +1987,7 @@ class ConductorTest(unittest.TestCase):
         """問いのファイルや要約に ? が 3 つ以上続けば warn garbled を出す。化けていなければ出さない。"""
         self.con('start', '--goal', 'garbled')
         rc, out = self.con('next')
-        self.write(STATE, '# state\nImmediate next action: ask\n')
+        self.write(STATE, TABLET)
         self.write('docs/pbi/notes/q.md', question_draft(summary='????????????'))
         self.result(out, status='question', state=STATE, summary=['design: ??????'],
                     question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': '???????'})
@@ -1762,7 +2112,7 @@ class ConductorTest(unittest.TestCase):
         """新しい run の running の出番の結果を kind の問いとして書き、原稿 text を置いて done を呼ぶ (text が None なら原稿は無い)。"""
         self.con('start', '--goal', f'draft {kind}', '--force')
         rc, out = self.con('next')
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         if text is not None:
             self.write('docs/pbi/notes/q.md', text)
         elif os.path.exists(self.path('docs/pbi/notes/q.md')):
@@ -1820,7 +2170,7 @@ class ConductorTest(unittest.TestCase):
         self.con('start', '--goal', 'two refusals')
         for _ in range(2):
             rc, out = self.con('next')
-            self.write(STATE, '# state\n')
+            self.write(STATE, TABLET)
             self.write('docs/pbi/notes/q.md', question_draft(extra='\n## PBI\ntext\n'))
             self.result(out, status='question', state=STATE,
                         question={'kind': 'decision', 'path': 'docs/pbi/notes/q.md', 'summary': 'go?'})
@@ -1855,7 +2205,7 @@ class ConductorTest(unittest.TestCase):
         self.assertEqual(design_record.lint_text(text, 'decision')[0], [])
         self.con('start', '--goal', 'bad bytes', '--force')
         rc, out = self.con('next')
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         self.write('docs/pbi/notes/q.md', text)
         with open(self.path('docs/pbi/notes/q.md'), 'ab') as f:
             f.write(b'\n\xff\xfe broken bytes\n')
@@ -2021,7 +2371,7 @@ class ConductorTest(unittest.TestCase):
         # 持ち主の答え (conductor answer が書いたファイル) を経ると通る
         self.con('start', '--goal', 'grill', '--force')
         rc, out = self.con('next')
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         self.write('docs/pbi/notes/grill-1.md', question_draft())
         self.result(out, status='question', state=STATE,
                     question={'kind': 'decision', 'path': 'docs/pbi/notes/grill-1.md', 'summary': 'round 1'})
@@ -2068,7 +2418,7 @@ class ConductorTest(unittest.TestCase):
                 for gone in self.QUESTION_LINE_GONE:
                     self.assertFalse(any(l.startswith(gone) for l in text.splitlines()), f'{gone} in {text}')
 
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         self.write('docs/pbi/notes/q.md', question_draft())
         self.write('docs/pbi/notes/full-run.md', question_draft())
         self.con('start', '--goal', 'question lines')
@@ -2115,7 +2465,7 @@ class ConductorTest(unittest.TestCase):
         # handoff-loop
         self.write('docs/pbi/STATUS.md', '# status\n')
         self.write('docs/pbi/runs.jsonl', '')
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         out = self.to_build()
         for _ in range(4):
             self.result(out, status='handoff', state=STATE)
@@ -2143,7 +2493,7 @@ class ConductorTest(unittest.TestCase):
 
     def decision_question(self, goal='shown row'):
         """待っている decision の問い (state 付き) を作る。"""
-        self.write(STATE, '# state\n')
+        self.write(STATE, TABLET)
         self.write('docs/pbi/notes/q.md', question_draft())
         self.con('start', '--goal', goal, '--force')
         rc, out = self.con('next')
@@ -2197,7 +2547,7 @@ class ConductorTest(unittest.TestCase):
         for answer, exists in (('yes', True), ('no', False)):
             self.con('start', '--goal', f'full run {answer}', '--force')
             rc, out = self.con('next')
-            self.write(STATE, '# state\n')
+            self.write(STATE, TABLET)
             self.write('docs/pbi/notes/full-run.md', question_draft())
             self.result(out, status='question', state=STATE,
                         question={'kind': 'full-run', 'path': 'docs/pbi/notes/full-run.md', 'summary': 'run all E2E?'})

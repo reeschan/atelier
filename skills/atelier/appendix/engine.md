@@ -1,6 +1,6 @@
 # Appendix: the workflow engine
 
-Read this when you pick a component, cannot decide a `when`, run a `read-skill` component, or write STATUS.md. Templates live in `workflows/`, components in `components/` and `<home>/components/` (`## External components`); the contract is `docs/specs/atelier-workflow.md` in the repository.
+Read this when you pick a component, cannot decide a `when`, run a skill or `read-skill` component, or write STATUS.md or a stage record. Templates live in `workflows/`, components in `components/` and `<home>/components/` (`## External components`); the contract is `docs/specs/atelier-workflow.md` in the repository.
 
 ## The flow table
 
@@ -10,11 +10,11 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 |---|---|
 | stage | the stage, `<optional stage> after <stage>`, or `gate after <stage>` |
 | component | the component id (`components/<id>.json`, or `<home>/components/<id>.json`) |
-| invoke | `skill` (Skill tool), `read-skill` (read a plugin's SKILL.md and follow it), `script` (a bundled Python script), `builtin` (a procedure in this skill) |
+| invoke | `skill` (a skill: through the Skill tool, or by reading its SKILL.md, `## Skills and the Skill tool`), `read-skill` (read a plugin's SKILL.md and follow it), `script` (a bundled Python script), `builtin` (a procedure in this skill) |
 | where | `main` (your session), `subagent-readonly`, `subagent`, `runner` (a worker on its route); the template entry's `where` when it has one |
 | memory | how much shared memory the component may use: `full`, `refs-only`, `none` |
 | when | the condition under which it runs (below) |
-| status | `builtin`, `script ok`, `cli missing <name>`, `env missing <name>`, `plugin ok <SKILL.md path>`, `plugin missing <name>`, or `check skill list` |
+| status | `builtin`, `script ok`, `cli missing <name>`, `env missing <name>`, `plugin ok <SKILL.md path>`, `plugin missing <name>`, `skill ok <SKILL.md path>`, `skill builtin` or `skill missing` |
 | doc | the file in this skill that holds the procedure; read it when the component is picked |
 | models | the models of the subagents the component starts, from the template entry (`opus xhigh,sonnet high`), or `-` for the skill's own choice |
 
@@ -26,7 +26,8 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
    - `builtin` and `script ok`: always.
    - `plugin ok`: always; run it as in `## read-skill components`.
    - `cli missing`, `env missing` and `plugin missing`: never.
-   - `check skill list`: the skill's name is in the skill list in your context. Do not scan the disk for skills.
+   - `skill ok` and `skill builtin`: always; run it as in `## Skills and the Skill tool`.
+   - `skill missing`: never.
    - `adapters` in agents.json can turn a design, review or security stage off, or name a skill for it (`appendix/adapters.md`).
 4. Never use a skill that the model cannot invoke through the Skill tool; those run as `read-skill`.
 5. A component's `then` lists components to run right after it, when each one is usable and its own `when` holds.
@@ -93,9 +94,18 @@ A `read-skill` component points at a skill that the model cannot invoke (all pst
 3. Output: a note in `docs/pbi/notes/` (`<slug>.<name>.md`, or `PBI-<n>.<name>.md` per PBI), the result file its `forbid` names, or, for an optional stage, its artifact folder (`appendix/optional.md`). Name the output in the prompt; it is "the output file named in the prompt" of the read-skill forbid, and a scratch folder outside the repository that the skill asks for is not a repository file. The subagent returns at most 5 lines and the path.
 4. Link per-PBI notes from that PBI's Notes section, so its worker reads them. Workers never run plugin skills themselves.
 
+## Skills and the Skill tool
+
+Your usual definition (`agents/atelier-designer.md`) has no Skill tool, so the list of installed skills is not in your context. Whether a kind `skill` row is usable comes from the status `flow.py` printed: `skill ok <SKILL.md path>` (found on disk; a plugin's from its installed version) and `skill builtin` (built into Claude Code, such as `code-review`) are usable, `skill missing` is not. Do not scan the disk for skills.
+
+- A component with `needs_skill_tool: true` calls the Skill tool inside, relies on `$ARGUMENTS`, or is a built-in skill in `main`. When an episode runs such a row in `main`, the conductor launches it on `atelier-designer-skills`, the same instructions with the Skill tool, and you invoke the skill with the Skill tool. `component.py add` sets it on every kind `skill` component (`--no-skill-tool` leaves it out); `flow.py` counts it only on rows in `main`. When the Skill tool says such a skill is not found, take the next row and record `fallback (<name>: not found)`.
+- A kind `skill` row in `main` without `needs_skill_tool`: read the SKILL.md at the path of its status and follow it, as steps 2 to 4 of `## read-skill components` say.
+- A `skill builtin` row has no SKILL.md to read. Without the Skill tool, take the next row and record `fallback (no Skill tool)`.
+- A row in a subagent (`subagent`, `subagent-readonly`): the reviewer and the tester have the Skill tool and call the skill. The next row (in the end the fallback) runs only when one returns `BLOCKED` or says the skill is not found.
+
 ## STATUS.md
 
-Write it at the start and keep it current with Edit. Read states and counts only from this file.
+Write it at the start and keep it current with Edit. Read states and counts only from this file. It holds the head lines and the PBI table; the stage records go to `docs/pbi/stages.md` (`## Stage records`).
 
 ```markdown
 Skill version: <version and published commit>
@@ -105,12 +115,6 @@ Skipped runners: <--skip value and reason / none>
 Tests at end: on (deferred: pnpm run test:unit, test_paths: e2e/**)
 Kiln: on (designer 120000/180000, implementer 60000/90000, handoff 250000)
 Tools missing: <none / tools_check.py rows that are not ok, and the fallback used>
-stage map after understand: map.builtin run (cache hit <folder>)
-stage lint-survey after understand: lint-survey.jevlint run (model, 41 files, $0.02) leads 3, confirmed 1
-stage design: design.builtin run (clearly complex)
-stage lint-recheck after verify: lint-recheck.jevlint run (ast-only) worse 4, rework 1
-stage review: review.code-review run (diff 412 lines > 300) findings 0,2,1
-stage fix: fix.list run (round 1, 3 items, 2 workers) fixed 3, left 0, skipped 0
 
 | PBI | Model | State | Rework | Tier up | Continue | Note |
 |---|---|---|---|---|---|---|
@@ -124,11 +128,25 @@ stage fix: fix.list run (round 1, 3 items, 2 workers) fixed 3, left 0, skipped 0
 
 ## Stage records
 
-Write one line per stage and gate row that ran or was passed over for a reason, in STATUS.md and in HANDOFF.md:
+Write one line per stage and gate row that ran or was passed over for a reason, appended to `docs/pbi/stages.md` (inline, in HANDOFF.md too):
 
 ```
 stage <stage|gate after stage>: <component> <run|skip|fallback|off> (<reason>) [findings <critical>,<major>,<minor>]
 ```
+
+For example:
+
+```
+stage map after understand: map.builtin run (cache hit <folder>)
+stage lint-survey after understand: lint-survey.jevlint run (model, 41 files, $0.02) leads 3, confirmed 1
+stage design: design.builtin run (clearly complex)
+stage lint-recheck after verify: lint-recheck.jevlint run (ast-only) worse 4, rework 1
+stage review: review.code-review run (diff 412 lines > 300) findings 0,2,1
+stage fix: fix.list run (round 1, 3 items, 2 workers) fixed 3, left 0, skipped 0
+```
+
+- A run whose STATUS.md already holds stage lines and that has no `docs/pbi/stages.md` (a run started before stage records moved out of STATUS.md) keeps them there: read the stage records from STATUS.md, and write the new ones to `docs/pbi/stages.md`.
+- What the whole run tried and dropped goes to `docs/pbi/dead-ends.md`, not here (`episode/_kiln.md`, `## Run dead ends`).
 
 - `skip`: its `when` did not hold. `fallback`: it was not usable or failed, and the next row ran. `off`: turned off in agents.json.
 - Add `findings` only for a review or security component.

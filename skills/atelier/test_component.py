@@ -256,6 +256,41 @@ class ComponentCliTest(unittest.TestCase):
         self.assertIn('already registered with other settings', err)
         self.assertFalse(os.path.exists(os.path.join(self.home, 'workflows', 'high-model.json')))
 
+    def test_skill_components_need_the_skill_tool_by_default(self):
+        self.assertEqual(self.run_cli('add', 'mattpocock-skills:grilling', '--stage', 'design')[0], 0)
+        self.assertIs(self.load('components', 'design.mattpocock-skills-grilling.json')['needs_skill_tool'], True)
+        # where が main でない部品にも付ける (テンプレートの where の上書きで main になっても定義を変えない)
+        self.assertEqual(self.run_cli('add', 'my-review', '--stage', 'review')[0], 0)
+        self.assertIs(self.load('components', 'review.my-review.json')['needs_skill_tool'], True)
+        self.assertEqual(self.run_cli('add', 'pstack:how', '--stage', 'understand')[0], 0)
+        self.assertNotIn('needs_skill_tool', self.load('components', 'understand.pstack-how.json'))
+        code, out, err = self.run_cli('add', 'design-studio', '--stage', 'ui-design', '--no-skill-tool')
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn('needs_skill_tool', self.load('components', 'ui-design.design-studio.json'))
+
+    def test_a_registration_without_the_flag_is_upgraded(self):
+        self.assertEqual(self.run_cli('add', 'my-review', '--stage', 'review')[0], 0)
+        path = os.path.join(self.home, 'components', 'review.my-review.json')
+        old = self.load('components', 'review.my-review.json')
+        del old['needs_skill_tool']
+        write(path, json.dumps(old))
+        code, out, err = self.run_cli('add', 'my-review', '--stage', 'review', '--workflow', 'high-model')
+        self.assertEqual(code, 0, out + err)
+        self.assertIs(self.load('components', 'review.my-review.json')['needs_skill_tool'], True)
+
+    def test_example_use_upgrades_components_registered_without_the_flag(self):
+        self.assertEqual(self.run_cli('example', 'use', 'recommended')[0], 0)
+        path = os.path.join(self.home, 'components', 'review.lens-review.json')
+        old = self.load('components', 'review.lens-review.json')
+        del old['needs_skill_tool']
+        write(path, json.dumps(old))
+        code, out, err = self.run_cli('example', 'check', 'recommended')
+        self.assertEqual(code, 0, out + err)
+        self.assertIn('lens-review:lens-review\treview\tinstalled\tnot registered', out)
+        code, out, err = self.run_cli('example', 'use', 'recommended', '--replace')
+        self.assertEqual(code, 0, out + err)
+        self.assertIs(self.load('components', 'review.lens-review.json')['needs_skill_tool'], True)
+
     def test_unreadable_home_workflow_is_not_replaced(self):
         path = os.path.join(self.home, 'workflows', 'jev-routed.json')
         write(path, '{broken')
@@ -406,6 +441,25 @@ class ComponentCliTest(unittest.TestCase):
         self.assertIn('the last component must be builtin', out)
         self.assertEqual(os.listdir(os.path.join(self.home, 'components')), [])
         self.assertFalse(os.path.exists(os.path.join(self.home, 'workflows', 'recommended.json')))
+
+    def test_example_use_restores_an_upgraded_component_on_a_workflow_error(self):
+        """needs_skill_tool の無い登録を上書きしたあとに検査が落ちたら、消さずに元の中身へ戻す。"""
+        self.assertEqual(self.run_cli('example', 'use', 'recommended')[0], 0)
+        path = os.path.join(self.home, 'components', 'review.lens-review.json')
+        old = self.load('components', 'review.lens-review.json')
+        del old['needs_skill_tool']
+        write(path, json.dumps(old))
+        with open(path, 'rb') as f:
+            before = f.read()
+        bad = component.load_example('recommended')[0]
+        bad['workflow']['stages']['review'] = ['review.pstack-interrogate']
+        bad_path = os.path.join(self.dir, 'bad.json')
+        write(bad_path, json.dumps(bad))
+        code, out, err = self.run_cli('example', 'use', bad_path, '--replace')
+        self.assertEqual(code, 2, out + err)
+        self.assertIn('the last component must be builtin', out)
+        with open(path, 'rb') as f:
+            self.assertEqual(f.read(), before)
 
     def test_example_shape_errors(self):
         path = os.path.join(self.dir, 'shape.json')

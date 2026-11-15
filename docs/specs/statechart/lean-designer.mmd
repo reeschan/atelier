@@ -1,0 +1,41 @@
+stateDiagram-v2
+    state Whole {
+        state Lane {
+            [*] --> Entry
+            Entry --> LightBuild: 小さな作業と判定した
+            Entry --> Running: 大きな作業と判定した
+            LightBuild --> LightReview: 検査とテストが通った [差分が条件の内]
+            %% when Within
+            LightBuild --> Running: 条件を超えた [差分が条件の外]
+            %% when Over
+            LightReview --> LightBuild: 直す指摘がある
+            LightReview --> Done: 報告を書いた
+            Running --> Waiting: 問いを出した [状態の板がある]
+            %% when Written
+            Waiting --> Running: 新しい設計者が状態の板と答えから始めた [答え待ちのとき]
+            %% when Written
+            Running --> Handoff: 文脈が soft を超えた [状態の板がある]
+            %% when Written
+            Handoff --> Running: 新しい設計者が状態の板から続ける [引き継ぎのとき]
+            %% when Written
+            Running --> Done: 仕上げが終わった
+        }
+        --
+        state Tablet {
+            [*] --> NotWritten
+            NotWritten --> Written: 状態の板を書いた
+            Written --> NotWritten: 新しい設計者が状態の板と答えから始めた [答え待ちのとき]
+            %% when Waiting
+            Written --> NotWritten: 新しい設計者が状態の板から続ける [引き継ぎのとき]
+            %% when Handoff
+        }
+        --
+        state Diff {
+            [*] --> Within
+            Within --> Over: 作っているうちに差分が増えた [作っているとき]
+            %% when LightBuild, Running
+        }
+    }
+    %% never AskWithoutTablet: Waiting & NotWritten -- 状態の板を書かずに問いを出す
+    %% never HandoffWithoutTablet: Handoff & NotWritten -- 状態の板を書かずに引き継ぐ
+    %% never ReviewOverLimit: LightReview & Over -- 軽い道の差分が条件を超えたまま見直しに進む

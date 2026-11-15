@@ -455,6 +455,167 @@ class FlowCliTest(unittest.TestCase):
         self.assertEqual((status['lint-survey.jevlint'], status['lint-recheck.jevlint']), ('script ok', 'script ok'))
 
 
+def skill_component(cid, stage, name, where='main', needs=True):
+    """kind skill の home の部品の定義。"""
+    return {'id': cid, 'stages': [stage], 'title': {'ja': cid, 'en': cid}, 'invoke': {'kind': 'skill', 'name': name},
+            'doc': 'appendix/design.md', 'where': where, 'memory': 'full' if where == 'main' else 'none',
+            'when': 'always', 'cost': 'mid', 'requires': {'skills': [name]}, 'forbid': [], 'interactive': False,
+            'calls_back': False, 'needs_skill_tool': needs}
+
+
+class SkillStatusTest(unittest.TestCase):
+    """kind skill の状態 (skill ok・skill builtin・skill missing) と、Skill ツールを持つ設計者で起こす出番。
+
+    作業ルート (.git のあるフォルダ)・自分のスキル・プラグイン・CLAUDE_CONFIG_DIR・home はすべて一時フォルダにする。
+    """
+
+    def setUp(self):
+        self.dir = os.path.join(tempfile.gettempdir(), f'pbi-flow-skill-{uuid.uuid4().hex}')
+        os.mkdir(self.dir)
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.work = os.path.join(self.dir, 'work')
+        os.makedirs(os.path.join(self.work, '.git'))
+        self.base = os.path.join(self.work, 'docs', 'pbi')
+        os.makedirs(self.base)
+        self.home = os.path.join(self.dir, 'home')
+        os.makedirs(self.home)
+        self.skills = os.path.join(self.dir, 'skills')
+        self.plugins = os.path.join(self.dir, 'plugins')
+        self.installed = {'version': 2, 'plugins': {}}
+        self.env = dict(os.environ, PBI_PLUGINS_DIR=self.plugins, PBI_SKILLS_DIR=self.skills,
+                        CLAUDE_CONFIG_DIR=os.path.join(self.dir, 'claude'), ATELIER_HOME=self.home)
+        self.write_installed()
+
+    def write_installed(self):
+        write_json(os.path.join(self.plugins, 'installed_plugins.json'), self.installed)
+
+    def skill_file(self, root, name):
+        path = os.path.join(root, name, 'SKILL.md')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(f'---\nname: {name}\ndescription: {name}\n---\n')
+        return path
+
+    def install(self, plugin, skill, group='', scope='user', project=None):
+        """cache/m/<plugin>/1.0.0 にスキルを置き、installed_plugins.json に載せる。SKILL.md のパスを返す。"""
+        root = os.path.join(self.plugins, 'cache', 'm', plugin, '1.0.0')
+        path = self.skill_file(os.path.join(root, 'skills', group), skill)
+        row = {'scope': scope, 'installPath': root, 'version': '1.0.0', 'lastUpdated': '2026-11-01T00:00:00Z'}
+        if project:
+            row['projectPath'] = project
+        self.installed['plugins'].setdefault(f'{plugin}@m', []).append(row)
+        self.write_installed()
+        return path
+
+    def run_flow(self, *args):
+        return subprocess.run([sys.executable, SCRIPT, self.base, *args], capture_output=True, text=True,
+                              encoding='utf-8', env=self.env)
+
+    def skill_line(self, name):
+        result = self.run_flow('--skill', name)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def test_skill_status_lines(self):
+        mine = self.skill_file(self.skills, 'my-skill')
+        self.assertEqual(self.skill_line('my-skill'), f'skill ok {mine}')
+        # 作業ルートの .claude/skills のものが、自分のスキルの置き場より先
+        self.skill_file(self.skills, 'both')
+        repo = self.skill_file(os.path.join(self.work, '.claude', 'skills'), 'both')
+        self.assertEqual(self.skill_line('both'), f'skill ok {os.path.realpath(repo)}')
+        grilling = self.install('p', 'grilling', group='engineering')
+        self.assertEqual(self.skill_line('p:grilling'), f'skill ok {grilling}')
+        self.assertEqual(self.skill_line('code-review'), 'skill builtin')
+        self.assertEqual(self.skill_line('security-review'), 'skill builtin')
+        self.assertEqual(self.skill_line('no-such-skill'), 'skill missing')
+
+    def test_plugin_skill_comes_only_from_an_installed_version(self):
+        # marketplaces の写しと、installed_plugins.json に無いプラグインの cache は使わない
+        self.skill_file(os.path.join(self.plugins, 'marketplaces', 'm', 'plugins', 'q', 'skills'), 'other')
+        self.skill_file(os.path.join(self.plugins, 'cache', 'm', 'q', '1.0.0', 'skills'), 'other')
+        self.assertEqual(self.skill_line('q:other'), 'skill missing')
+        here = self.install('r', 'here', scope='project', project=self.work)
+        self.assertEqual(self.skill_line('r:here'), f'skill ok {here}')
+        self.install('s', 'elsewhere', scope='project', project=os.path.join(self.dir, 'another-repo'))
+        self.assertEqual(self.skill_line('s:elsewhere'), 'skill missing')
+
+    def test_skill_row_checks_its_requires_first(self):
+        """呼ぶスキルがあっても、requires のスキルやプラグインが無ければ使えない状態を返す。"""
+        mine = self.skill_file(self.skills, 'my-skill')
+        component = skill_component('review.my-skill', 'review', 'my-skill')
+        work = flow.work_root_of(self.base)
+        self.assertEqual(flow.status(component, None, self.env, work), f'skill ok {mine}')
+        needs_skill = dict(component, requires={'skills': ['my-skill', 'no-such-skill']})
+        self.assertEqual(flow.status(needs_skill, None, self.env, work), 'skill missing')
+        needs_plugin = dict(component, requires={'skills': ['my-skill'], 'plugins': ['no-such-plugin']})
+        self.assertEqual(flow.status(needs_plugin, None, self.env, work), 'plugin missing no-such-plugin')
+        self.install('p', 'grilling')
+        satisfied = dict(component, requires={'skills': ['my-skill', 'p:grilling'], 'plugins': ['p']})
+        self.assertEqual(flow.status(satisfied, None, self.env, work), f'skill ok {mine}')
+        builtin = dict(skill_component('review.security-review', 'review', 'security-review'), requires={})
+        self.assertEqual(flow.status(builtin, None, self.env, work), 'skill builtin')
+
+    def test_table_rows_carry_the_skill_status(self):
+        result = self.run_flow('--home', self.home)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        status = {row.split('\t')[1]: row.split('\t')[6] for row in result.stdout.splitlines()[2:]}
+        self.assertEqual(status['review.code-review'], 'skill builtin')
+        self.assertEqual(status['gate.security-review'], 'skill builtin')
+
+    def episodes_line(self):
+        result = self.run_flow('--home', self.home, '--skill-tool-episodes')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertTrue(lines[0].startswith('workflow '))
+        self.assertEqual(len(lines), 2)
+        return lines[1]
+
+    def add_component(self, data):
+        write_json(os.path.join(self.home, 'components', f'{data["id"]}.json'), data)
+
+    def test_skill_tool_episodes(self):
+        self.assertEqual(self.episodes_line(), 'skill-tool-episodes -')
+        self.install('p', 'grilling')
+        self.skill_file(self.skills, 'my-polish')
+        self.skill_file(self.skills, 'my-check')
+        self.add_component(skill_component('design.p-grilling', 'design', 'p:grilling'))
+        self.add_component(skill_component('gate.my-polish', 'gate', 'my-polish', needs=False))
+        self.add_component(skill_component('gate.my-check', 'gate', 'my-check'))
+        self.add_component(skill_component('gate.my-sub', 'gate', 'my-check', where='subagent'))
+        workflow = bundled('jev-routed')
+        workflow['stages']['design'].insert(0, 'design.p-grilling')
+        workflow['gates'].append({'after': 'finish', 'components': ['gate.my-polish']})
+        workflow['gates'].append({'after': 'review', 'components': ['gate.my-sub']})
+        write_json(os.path.join(self.base, 'workflow.json'), workflow)
+        self.assertEqual(self.episodes_line(), 'skill-tool-episodes design')
+        # 組み込みのスキルを main で動かす行は、needs_skill_tool が無くても数える
+        workflow['stages']['review'][0] = {'id': 'review.code-review', 'when': 'heavy-ask', 'where': 'main'}
+        workflow['gates'].append({'after': 'verify', 'components': ['gate.my-check']})
+        write_json(os.path.join(self.base, 'workflow.json'), workflow)
+        self.assertEqual(self.episodes_line(), 'skill-tool-episodes build,design,fix,review,test')
+        self.assertEqual(flow.skill_tool_episodes(self.base, env=self.env, home=self.home),
+                         {'build', 'design', 'fix', 'review', 'test'})
+        # 入っていないスキルの行は使えないので数えない
+        self.installed['plugins'] = {}
+        self.write_installed()
+        self.assertEqual(flow.skill_tool_episodes(self.base, env=self.env, home=self.home),
+                         {'build', 'fix', 'review', 'test'})
+
+    def test_design_skill_named_in_agents_json_needs_the_skill_tool(self):
+        # adapters.design のスキルは設計者が design の出番で動かすので、使えるときだけ design に数える
+        write_json(os.path.join(self.home, 'agents.json'), {'adapters': {'design': 'my-design'}})
+        self.assertEqual(self.episodes_line(), 'skill-tool-episodes -')
+        self.skill_file(self.skills, 'my-design')
+        self.assertEqual(self.episodes_line(), 'skill-tool-episodes design')
+        write_json(os.path.join(self.home, 'agents.json'), {'adapters': {'review': 'my-design'}})
+        self.assertEqual(self.episodes_line(), 'skill-tool-episodes -')
+
+    def test_skill_tool_episodes_refuses_a_broken_workflow(self):
+        write_json(os.path.join(self.base, 'workflow.json'), {'name': 'x', 'stages': {}})
+        with self.assertRaises(ValueError):
+            flow.skill_tool_episodes(self.base, env=self.env, home=self.home)
+
+
 class ComponentDefinitionsTest(unittest.TestCase):
     def test_bundled_components_are_valid(self):
         components, errors = flow.load_components()
@@ -494,8 +655,13 @@ class ComponentDefinitionsTest(unittest.TestCase):
         self.assertEqual(flow.status(dict(base, requires={'env': ['KEY']}), None, {}), 'env missing KEY')
         self.assertEqual(flow.status(dict(base, requires={'env': ['KEY']}), None, {'KEY': 'x'}), 'script ok')
         self.assertEqual(flow.status(dict(base, requires={'cli': ['dsh']}), {'runners': {}}, {'PATH': ''}), 'cli missing dsh')
+        empty = os.path.join(tempfile.gettempdir(), f'pbi-flow-empty-{uuid.uuid4().hex}')
+        isolated = {'PBI_PLUGINS_DIR': empty, 'PBI_SKILLS_DIR': empty, 'CLAUDE_CONFIG_DIR': empty}
         self.assertEqual(flow.status({'invoke': {'kind': 'skill', 'name': 'x:y'}, 'requires': {'skills': ['x:y']}},
-                                     None, {}), 'check skill list')
+                                     None, isolated), 'skill missing')
+        self.assertEqual(flow.status({'invoke': {'kind': 'skill', 'name': 'security-review'}}, None, isolated),
+                         'skill builtin')
+        self.assertEqual(flow.status(dict(base, requires={'skills': ['x:y']}), None, isolated), 'skill missing')
         self.assertEqual(flow.status({'invoke': {'kind': 'builtin'}}, None, {}), 'builtin')
 
     def test_component_errors(self):
@@ -514,6 +680,7 @@ class ComponentDefinitionsTest(unittest.TestCase):
             ({'doc': None}, 'doc must name the file that holds the procedure'),
             ({'invoke': {'kind': 'read-skill', 'plugin': 'pstack'}}, 'invoke (read-skill) needs plugin, path'),
             ({'calls_back': 'no'}, 'calls_back must be true or false'),
+            ({'needs_skill_tool': 'yes'}, 'needs_skill_tool must be true or false'),
         ]
         for change, expected in bad:
             with self.subTest(expected=expected):
