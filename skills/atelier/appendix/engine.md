@@ -42,30 +42,22 @@ Read this when you pick a component, cannot decide a `when`, run a `read-skill` 
 | `adapter-gate` | `adapter_gate.py` prints `run` for the phase (`appendix/review.md`) |
 | `tier-opus` | the PBI's `route.json` has tier `opus`. Per PBI, so only in a gate after route |
 | `coupling-high` | the PBI's `route.json` has `scores.coupling` 2. Per PBI, so only in a gate after route |
-| `deep` | in a gate after route: the PBI's `route.json` has review `deep`. In the review stage: any PBI does |
+| `deep` | the PBI's `route.json` has review `deep`. Gates after route only; the review stage cannot use it (`## Heavy review`) |
 | `ui-change` | the request adds a screen or a user flow, or gives screens a new look from a new direction; not when `ui-retouch` holds (`appendix/optional.md`) |
 | `ui-retouch` | the request only fixes how existing screens look (AI-looking signs, polish), adding no screen or flow. Never with `ui-change` in the same run (`appendix/optional.md`) |
 | `user-facing` | the request adds or changes something end users see or pay for (`appendix/optional.md`) |
 | `ask-user` | the user said yes when asked this run; always ask, never decide alone. Optional stages only (`appendix/optional.md`) |
-| `heavy-ask` | the run is heavy by the criterion in `## Heavy review`, and the user said yes at approval. The review stage only |
+| `heavy-ask` | the finished diff is deep work by `heavy_check.py`, and the user said run on its question page right before the final review (`appendix/review.md`, `## Heavy review`). The review stage only |
 
 A template entry `{"id", "when", "where", "models"}` replaces the component's own `when` and `where` in that template only, and `models` names the models of the subagents the component starts (`## read-skill components`). The component file is shared by every template, so these never go into it. `flow.py` accepts `models` only on an entry whose `where` is `main`, because a subagent cannot start subagents.
 
-The per-PBI values are decided by a script. Once every `route.json` exists, run `python <skill>/flow.py docs/pbi --decide` (with the same `--workflow <name>` as at the start, if any): it prints place, component, PBI, decision (`run`, `skip`, or `orchestrator` for a `when` you decide) and reason, for each row of the gates after route (one per PBI) and for each review row whose `when` is `deep` (PBI `all`). Follow it; do not judge these values yourself. A review row whose `when` is `heavy-ask` comes out as `orchestrator`: decide it as in `## Heavy review`.
+The per-PBI values are decided by a script. Once every `route.json` exists, run `python <skill>/flow.py docs/pbi --decide` (with the same `--workflow <name>` as at the start, if any): it prints place, component, PBI, decision (`run`, `skip`, or `orchestrator` for a `when` you decide) and reason, for each row of the gates after route (one per PBI) and for each review row whose `when` is `heavy-ask` (PBI `all`). Follow it; do not judge these values yourself. A `heavy-ask` row is `orchestrator` until `heavy_check.py record` has written the answer to `docs/pbi/adapters.json`, and then that `run` or `skip`.
 
 ## Heavy review
 
-A review component with `when` `heavy-ask` (pstack's `interrogate` in the recommended example) costs much more than the usual review, so it runs only on heavy work, and only when the user says yes.
+A review component with `when` `heavy-ask` (pstack's `interrogate` in the recommended example) costs much more than the usual review, so it runs only on deep work, and only when the user says run. It is not asked at approval: right before the final review, `heavy_check.py` checks the finished diff, and only a deep one becomes a question page (`appendix/review.md`, `## Heavy review`). With no answer it does not run, and the next usable row of the review stage runs (`lens-review` in the recommended example).
 
-1. Once every PBI is routed, check the run against the criterion. The run is heavy when any of these holds:
-   - it builds a new application or service from scratch (no app runs yet in the repository, or in the folder it builds in);
-   - it adds a new subsystem with its own data model or external interface, spanning 3 or more modules;
-   - it replaces the architecture of an existing app (a new framework, data store or deployment target).
-
-   A large diff, a `sensitive` PBI or a PBI with review `deep` is not heavy by itself.
-2. Heavy: put the question in the approval draft as an `ask` block under `## 決めること` (`## Decisions`, `appendix/approve.md`): the criterion that holds and why, the reviewers it starts (the entry's `models`), and two choices, the heavy review or the usual review. Not heavy: skip the row without asking.
-3. Save the result in `docs/pbi/adapters.json` as `{"heavy-review": {"heavy": true|false, "reason": "<the criterion, or why none holds>", "decision": "run|skip", "asked": true|false}}`, so a resume does not ask again. With no answer, it does not run.
-4. When it does not run, the next usable row of the review stage runs (`lens-review` in the recommended example).
+`flow.py` refuses every template that would run such a review without that check: the review stage cannot use `deep` (a PBI's review `deep` says how closely to check that PBI, not that the diff is deep), and a review row that runs in `main` (a skill that starts its own reviewers; builtin rows aside) must use `heavy-ask`.
 
 ## where and memory
 

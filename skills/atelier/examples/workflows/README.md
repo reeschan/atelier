@@ -48,7 +48,8 @@ flowchart TD
     LRA --> Q2{{Send it? dry-run of the changed files}}
     Q2 --> LRJ[check each regression]
     LRJ -->|bug-hunt, or a new function of 100 lines or more| FX2[send that PBI back]
-    LRJ --> RV[review<br/>interrogate on heavy work, when the user says yes<br/>code-review when the diff is large]
+    LRJ --> HQ{{run the heavy review? asked on an HTML page only when the diff is deep}}
+    HQ --> RV[review<br/>interrogate when you say run<br/>lens-review otherwise<br/>code-review when the diff is large]
     RV --> SC{{security-audit? the answer given at approval}}
     SC --> GS[gate: built-in security-review]
     GS --> FL[fix list<br/>every confirmed finding, once]
@@ -79,7 +80,7 @@ flowchart TD
 | route | `route.jev`, gates `gate.pstack-blast-radius`, `gate.pstack-architect` | the gates per PBI (tight coupling, opus tier) |
 | build / verify / fix | `build.runners` / `verify.builtin` / `fix.list` | always |
 | lint-recheck (after verify) | `lint-recheck.jevlint` → `lint-recheck.builtin` | always, once, after every PBI and the test stage |
-| review | `review.pstack-interrogate` → `review.lens-review` → `review.code-review` → `review.builtin` | interrogate only on heavy work, such as a new application built from scratch, when the user says yes at approval (`when` `heavy-ask`; the orchestrator runs it, adversaries on opus xhigh and sonnet high); lens-review (a lens-based review in Japanese, [reeschan/claude-plugins-official](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review)) and code-review when adapter_gate.py says run |
+| review | `review.pstack-interrogate` → `review.lens-review` → `review.code-review` → `review.builtin` | interrogate only when `heavy_check.py` finds the finished diff deep (such as a new application built from scratch) and you say run on its question page (`when` `heavy-ask`; the orchestrator runs it, adversaries on opus xhigh and sonnet high); lens-review (a lens-based review in Japanese, [reeschan/claude-plugins-official](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review)) and code-review when adapter_gate.py says run |
 | security (after review) | `security.security-audit`, gate `gate.security-review` | security-audit when you said yes at approval |
 | finish | `finish.builtin`, gate `gate.yomiyasu` | always |
 
@@ -93,6 +94,7 @@ The run stops for your answer only at the five stop points of `SKILL.md` (When t
 | In lint-survey and lint-recheck, right before a model send | send, or AST only (with files, tokens, cost and provider) | `sends` in `docs/pbi/adapters.json` |
 | After route | approve the PBI list; install missing tools, run security-audit, add leads outside the range, the drafted deferred tests | `docs/pbi/STATUS.md` |
 | A PBI reaches the rework limit, or a fix turns into a redesign | raise the tier, rewrite, or stop | `docs/pbi/STATUS.md` |
+| Right before the final review, only when the diff is deep work | run the heavy review (interrogate) or the usual review (an HTML page shows why it looks deep, the diff's numbers, the reviewers' models and the expected cost) | `heavy-review` in `docs/pbi/adapters.json` |
 | A wave boundary past Kiln's hand-off line | `/clear` and `resume` | `docs/pbi/HANDOFF.md` |
 | Before a destructive operation: deleting data, a force push, a change outside the repository | whether to go ahead | not kept |
 

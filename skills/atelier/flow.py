@@ -36,9 +36,15 @@ check skill list (Skill ツールで呼ぶスキルはスクリプトからは�
 
 --decide は、振り分けのあと (<pbi-dir>/PBI-*.route.json が揃ってから) に使う。PBI ごとに決まる when を
 route.json から判定し、表 (place / component / pbi / decision / reason) を出す。対象は after: route の関所の部品
-(PBI ごとに 1 行) と、review の工程の when が deep の部品 (pbi は all。どれかの PBI の review が deep なら run)。
+(PBI ごとに 1 行) と、review の工程の when が heavy-ask の部品 (pbi は all)。
 tier-opus は tier が opus、coupling-high は scores.coupling が 2、deep は review が deep のとき run。always は run、
-設計者が判断する when (clearly-complex など) は decision を orchestrator にする。route.json が 1 つも無ければ終了コード 2。
+設計者が判断する when (clearly-complex など) は decision を orchestrator にする。heavy-ask は <pbi-dir>/adapters.json の
+heavy-review に答え (heavy_check.py record) があればその run / skip、無ければ orchestrator (最後の見直しの直前に
+heavy_check.py check で差分を調べ、深ければユーザーに聞く)。route.json が 1 つも無ければ終了コード 2。
+
+重い見直しを確かめずに動かす道は残さない (docs/specs/heavy-review-ask.md)。review の工程では deep を使えず
+(PBI の review が deep でも、差分が深いとは限らないため)、main で動く部品 (自分でレビュアーを起こす。builtin を除く)
+は when を heavy-ask にしなければならない。どちらも検証の誤りにする。
 
 終了コード: 0 = 正常。2 = 検証の誤り (表は出さず、`error <内容>` を 1 行ずつ標準出力に出す)・
 テンプレートが読めない・<pbi-dir> が無い・引数の誤り。
@@ -89,9 +95,11 @@ WHEN = ('always', 'clearly-complex', 'ask-or-decide', 'adapter-gate', 'tier-opus
 PER_PBI_WHEN = ('tier-opus', 'coupling-high')
 # 利用者に毎回聞く条件。聞く時点を決めてあるのはオプションの工程だけ (appendix/optional.md)
 OPTIONAL_ONLY_WHEN = ('ask-user',)
-# 重い構成 (新しいアプリケーションを一から作るなど) のときだけ、設計者が基準に当てて利用者に聞く条件。
-# 承認のときに聞くので、承認のあとに動く review の工程だけで使える (appendix/engine.md)
+# 実装を終えた差分が深い実装 (新しいアプリケーションを一から作るなど) のときだけ、ユーザーに聞いて動かす条件。
+# 最後の見直しの直前に heavy_check.py が差分を調べて聞くので、review の工程だけで使える (appendix/review.md)
 REVIEW_ONLY_WHEN = ('heavy-ask',)
+# review の工程で使えない条件。deep は PBI の見込みで、差分が深いかは表さない (重い見直しを確かめずに動かさない)
+NOT_IN_REVIEW_WHEN = ('deep',)
 COST = ('low', 'mid', 'high')
 EXTERNAL_MEMORY = ('none', 'refs-only')
 # 差し戻しの上限の範囲 (今の上限は 2。5 を超える回数は設計の見直しに回すべき規模)
@@ -311,6 +319,12 @@ def check_item(item, role: str, place: str, components: dict, errors: list, afte
         errors.append(f'{place}: {cid} uses when {effective}, which only an optional stage can use')
     elif effective in REVIEW_ONLY_WHEN and role != 'review':
         errors.append(f'{place}: {cid} uses when {effective}, which only the review stage can use')
+    elif effective in NOT_IN_REVIEW_WHEN and role == 'review':
+        errors.append(f'{place}: {cid} uses when {effective}, which the review stage cannot use; use heavy-ask '
+                      '(the diff is checked and the user asked right before the final review) or adapter-gate')
+    elif role == 'review' and effective != 'heavy-ask' and component['invoke']['kind'] != 'builtin'             and entry_where(item, component) == 'main':
+        # main で動く見直しは自分でレビュアーを起こす重い見直しなので、ユーザーに聞かずに動かさない
+        errors.append(f'{place}: {cid} runs in main and starts its own reviewers, so its when must be heavy-ask')
     if isinstance(item, dict) and 'where' in item and item['where'] not in ENTRY_WHERE:
         errors.append(f'{place}: {cid} where must be one of {", ".join(ENTRY_WHERE)}')
     elif component['where'] == 'runner' and isinstance(item, dict) and 'where' in item:
@@ -411,8 +425,17 @@ def per_pbi(when: str, route: dict) -> tuple[str, str]:
     return 'orchestrator', f'when {when} is decided by the orchestrator'
 
 
-def decide_rows(workflow: dict, components: dict, routes: dict) -> list[tuple]:
-    """after: route の関所の部品 (PBI ごと) と、review の工程の deep の部品の判定の行。"""
+def heavy_decision(adapters) -> tuple[str, str]:
+    """heavy-ask の行の判定。adapters.json の heavy-review の答え (heavy_check.py record) があればそれ。"""
+    record = adapters.get('heavy-review') if isinstance(adapters, dict) else None
+    if isinstance(record, dict) and record.get('decision') in ('run', 'skip'):
+        return record['decision'], f'heavy-review {record["decision"]} by {record.get("by", "?")} (adapters.json)'
+    return 'orchestrator', ('heavy-ask: run heavy_check.py check right before the final review; '
+                            'ask with its page when the diff is deep (appendix/review.md)')
+
+
+def decide_rows(workflow: dict, components: dict, routes: dict, adapters=None) -> list[tuple]:
+    """after: route の関所の部品 (PBI ごと) と、review の工程の heavy-ask の部品の判定の行。"""
     rows = []
     for gate in workflow.get('gates', []):
         if gate['after'] != 'route':
@@ -425,12 +448,7 @@ def decide_rows(workflow: dict, components: dict, routes: dict) -> list[tuple]:
     for item in workflow['stages']['review']:
         cid, when = entry(item)
         if (when or components[cid]['when']) == 'heavy-ask':
-            rows.append(('review', cid, 'all', 'orchestrator',
-                         'heavy-ask: check the heavy criterion, ask at approval, read docs/pbi/adapters.json'))
-        if (when or components[cid]['when']) == 'deep':
-            deep = [pbi for pbi, route in routes.items() if route.get('review') == 'deep']
-            rows.append(('review', cid, 'all', 'run' if deep else 'skip',
-                         f'review deep: {", ".join(deep)}' if deep else 'no PBI has review deep'))
+            rows.append(('review', cid, 'all', *heavy_decision(adapters)))
     return rows
 
 
@@ -505,7 +523,7 @@ def main(argv=None) -> int:
                 print(f'error {line}', file=sys.stderr)
             return 2
         print(DECIDE_HEADER)
-        for cells in decide_rows(workflow, components, routes):
+        for cells in decide_rows(workflow, components, routes, common.load_json(base / 'adapters.json')):
             print('\t'.join(cells))
         return 0
     print(HEADER)
