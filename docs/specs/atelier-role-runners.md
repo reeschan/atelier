@@ -117,7 +117,7 @@ stateDiagram-v2
 - `python <skill>/role_run.py <名前> --role reviewer|tester --runner <R> --model <M> [--effort <E>] [--pbi-dir docs/pbi]`。
 - 依頼文は設計者が `docs/pbi/roles/<名前>.prompt.md` に書く。`role_run.py` は、その先頭に「`agents/atelier-<role>.md` を読んで従う」の行を付けて実行先に渡す。
 - 実行先ごとの起動:
-  - `codex`: 設計者と同じ形で `-s danger-full-access -a never`。`-o` は `<名前>.last.md`。
+  - `codex`: 設計者と同じ形で `-a never`。`-o` は `<名前>.last.md`。サンドボックスは 2026-11-15 から `workspace-write`（`docs/specs/codex-sandboxed-workers.md`）。
   - `claude`: `claude_run.py` と同じ引数・環境。
   - `dsh`・`opencode`・`agy`: `runners.md` と同じコマンド。dsh は `dsh_run.py` の作りを使う。
 - ログはすべて `docs/pbi/roles/<名前>.*`（`.jsonl` か `.json`、`.err`、`.last.md`、`.run.json`）に書く。終了コードは子の終了コードにする。合否は、レビューやテストの結果の JSON（決まったパス）が決める。
@@ -157,7 +157,8 @@ stateDiagram-v2
 ## Further Notes
 
 - 試作（2026-11-11、`gpt-6.1-terra`、effort low、`-s danger-full-access -a never`）で、Python の実行・ネットワーク（200）・入れ子の `codex exec`・shared-memory の `search`（`-c mcp_servers.shared-memory.default_tools_approval_mode=auto`）がすべて通った。使用量は input 145k（うち cached 127k）、output 372。codex は `~/.claude/skills` も読み込むので、1 ターンに約 30k の下地がかかる。
-- `codex sandbox` の `workspace-write` では、mise の Python 以外（WindowsApps と uv の Python）は起動できなかった。pnpm も見つからなかった。このため、役割もサンドボックスなしにしている。
+- `codex sandbox` の `workspace-write` では、mise の Python 以外（WindowsApps と uv の Python）は起動できなかった。pnpm も見つからなかった。このため、役割もサンドボックスなしにしていた。
+  - 2026-11-15 に、pnpm が見つからないのは Windows の elevated のサンドボックスのせいで、MXC（`-c features.prefer_mxc=true`）なら pnpm・Biome・`node --test` が動くと分かった。作業者と役割は `workspace-write` に変えた（`docs/specs/codex-sandboxed-workers.md`）。設計者は変えていない。
 - 状態の図の `%% never` の 3 つは、pstack の `/statechart` の from-chart で、「指定」と「起動」の 2 つの領域に分けたモデルとして TLC で検査した。3 つとも成り立つ（6 状態、規則を破る状態 0、2026-11-11）。TLA+ の文字列は ASCII に限られるので、検査に使った図はラベルを英語にしている。中身は上の図と同じ。
 - 既知の制約: 呼び手の Claude Code の auto モードは、`codex -a never exec -s danger-full-access` を直接流すことを「危険なエージェントの作成」として拒否した。`conductor.py run --detach` や `role_run.py` 経由の起動も止められることがある。そのときは、ユーザーが Bash の許可ルールを足すか、自分で流す。
 - 既知の制約: Agent ツールの無い設計者が `agent` の作業者を `claude -p` で動かすとき、作業者は MCP を持たない（`claude_run.py` の `--strict-mcp-config`）。そのため refs は依頼文に写す。

@@ -80,7 +80,15 @@ class RoleRunTest(unittest.TestCase):
         args = call['args']
         self.assertEqual(args[:3], ['-a', 'never', 'exec'])
         self.assertEqual(args[args.index('-m') + 1], 'gpt-6.1-terra')
-        self.assertEqual(args[args.index('-s') + 1], 'danger-full-access')
+        # 既定はサンドボックスの中。ユーザーの config.toml のネットワークと書き込み先はその回だけ閉じる。
+        # Windows では MXC を選び、戻り先は elevated (elevated では pnpm を読めず、unelevated はネットワークが開く)
+        self.assertEqual(args[args.index('-s') + 1], 'workspace-write')
+        configs = [args[i + 1] for i, word in enumerate(args) if word == '-c']
+        self.assertIn('sandbox_workspace_write.network_access=false', configs)
+        self.assertIn('sandbox_workspace_write.writable_roots=[]', configs)
+        windows = sys.platform == 'win32'
+        self.assertEqual('features.prefer_mxc=true' in configs, windows)
+        self.assertEqual('windows.sandbox="elevated"' in configs, windows)
         self.assertIn('model_reasoning_effort="high"', args)
         self.assertIn('mcp_servers.shared-memory.default_tools_approval_mode="auto"', args)
         self.assertEqual(args[-1], '-')
@@ -92,8 +100,8 @@ class RoleRunTest(unittest.TestCase):
         for suffix in ('jsonl', 'err', 'last.md', 'run.json'):
             self.assertTrue((self.roles / f'PBI-001.review.{suffix}').is_file(), suffix)
         run = json.loads((self.roles / 'PBI-001.review.run.json').read_text(encoding='utf-8'))
-        self.assertEqual((run['role'], run['runner'], run['model'], run['exit']),
-                         ('reviewer', 'codex', 'gpt-6.1-terra', 0))
+        self.assertEqual((run['role'], run['runner'], run['model'], run['exit'], run['sandbox']),
+                         ('reviewer', 'codex', 'gpt-6.1-terra', 0, 'workspace-write'))
         self.assertIn('role_run: exit=0 role=reviewer runner=codex', r.stdout)
 
     def test_definition_line_is_added_once(self):
@@ -109,13 +117,22 @@ class RoleRunTest(unittest.TestCase):
         text = (HERE / 'runners.md').read_text(encoding='utf-8')
         self.assertIn(f'Writing files: {runner_cli.CODEX_TEXT_RULE}', text)
 
-    def test_sandbox_can_be_narrowed(self):
+    def write_agents(self, codex):
+        path = self.home / 'atelier' / 'agents.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'runners': {'codex': codex}}), encoding='utf-8')
+
+    def test_sandbox_is_opened_only_when_asked(self):
+        """--sandbox danger-full-access で開け、そのときは MXC の -c を付けない。読めない値と read-only は断る。"""
         self.prompt()
         r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
-                         '--sandbox', 'workspace-write')
+                         '--sandbox', 'danger-full-access')
         self.assertEqual(r.returncode, 0, r.stderr)
         args = self.calls()[0]['args']
-        self.assertEqual(args[args.index('-s') + 1], 'workspace-write')
+        self.assertEqual(args[args.index('-s') + 1], 'danger-full-access')
+        for value in ('features.prefer_mxc=true', 'windows.sandbox="elevated"',
+                      'sandbox_workspace_write.network_access=false', 'sandbox_workspace_write.writable_roots=[]'):
+            self.assertNotIn(value, args)
         r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
                          '--sandbox', 'open')
         self.assertEqual(r.returncode, 2, r.stderr)
@@ -123,6 +140,64 @@ class RoleRunTest(unittest.TestCase):
         r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
                          '--sandbox', 'read-only')
         self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_agents_json_sets_the_sandbox(self):
+        """--sandbox が無ければ home の agents.json の runners.codex.sandbox を使い、--sandbox がそれより強い。"""
+        self.prompt()
+        self.write_agents({'enabled': True, 'sandbox': 'danger-full-access'})
+        r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        args = self.calls()[-1]['args']
+        self.assertEqual(args[args.index('-s') + 1], 'danger-full-access')
+        r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
+                         '--sandbox', 'workspace-write')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        args = self.calls()[-1]['args']
+        self.assertEqual(args[args.index('-s') + 1], 'workspace-write')
+
+    def test_unknown_agents_json_sandbox_stays_closed(self):
+        """agents.json の読めない値 (read-only・別の名前) は既定の workspace-write に戻し、warn を出す。"""
+        self.prompt()
+        for value in ('read-only', 'open', 7):
+            self.write_agents({'enabled': True, 'sandbox': value})
+            r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            args = self.calls()[-1]['args']
+            self.assertEqual(args[args.index('-s') + 1], 'workspace-write', value)
+            self.assertIn('role_run: warn agents.json runners.codex.sandbox', r.stderr)
+
+    def test_codex_sandbox_args(self):
+        """workspace-write はネットワークと足された書き込み先を閉じ、サンドボックスがあれば Windows で MXC を選ぶ。"""
+        import runner_cli
+        limits = ['-c', 'sandbox_workspace_write.network_access=false', '-c', 'sandbox_workspace_write.writable_roots=[]']
+        mxc = ['-c', 'windows.sandbox="elevated"', '-c', 'features.prefer_mxc=true']
+        self.assertEqual(runner_cli.codex_sandbox_args('workspace-write', windows=True),
+                         ['-s', 'workspace-write', *limits, *mxc])
+        self.assertEqual(runner_cli.codex_sandbox_args('read-only', windows=True), ['-s', 'read-only', *mxc])
+        self.assertEqual(runner_cli.codex_sandbox_args('danger-full-access', windows=True),
+                         ['-s', 'danger-full-access'])
+        self.assertEqual(runner_cli.codex_sandbox_args('workspace-write', windows=False),
+                         ['-s', 'workspace-write', *limits])
+        self.assertEqual(runner_cli.shell_words(['-c', 'windows.sandbox="elevated"', '-c', 'a.b=[]']),
+                         "-c 'windows.sandbox=\"elevated\"' -c 'a.b=[]'")
+        # 作業者と役割の既定はサンドボックスあり、設計者の既定はなし (入れ子の codex がコマンドを起こせないため)
+        self.assertEqual(runner_cli.CODEX_DEFAULT_SANDBOX, 'workspace-write')
+        self.assertEqual(runner_cli.codex_sandbox('auto'), 'danger-full-access')
+        self.assertEqual(runner_cli.codex_sandbox('workspace-write'), 'workspace-write')
+
+    def test_runners_md_launches_codex_workers_in_the_sandbox(self):
+        """runners.md の codex の作業者の起動は、サンドボックスの引数を prepare の行から取り、danger-full-access を書かない。"""
+        text = (HERE / 'runners.md').read_text(encoding='utf-8')
+        section = text.split('\n## codex\n', 1)[1].split('\n## ', 1)[0]
+        launch = section.split('```bash', 1)[1].split('```', 1)[0]
+        self.assertIn('<sandbox flags>', launch)
+        self.assertNotIn('danger-full-access', launch)
+        # prepare の行が無いときに写す既定の引数 (bash に貼れる形) が書いてある
+        import runner_cli
+        everywhere = runner_cli.codex_sandbox_args('workspace-write', windows=False)
+        on_windows = runner_cli.codex_sandbox_args('workspace-write', windows=True)[len(everywhere):]
+        self.assertIn(f'`{runner_cli.shell_words(everywhere)}`', section)
+        self.assertIn(f'`{runner_cli.shell_words(on_windows)}`', section)
 
     def test_exit_code_is_passed_through(self):
         self.prompt('test-final')
