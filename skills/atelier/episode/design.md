@@ -19,7 +19,7 @@ Restate the user's goal, the problem it solves and the smallest change that reac
 
 ## Run the stages
 
-Go through the stages in this order. Take the design decision (`appendix/design.md`) right after understand; map and lint-survey run only when it is run. For each stage, take the first row that is usable and whose `when` holds (`appendix/engine.md`), follow its `doc`, and write its stage record. Then run every usable row of the optional stages placed after it (`<stage> after <stage>` rows, `appendix/optional.md`), then of the gates after it; after route, `flow.py docs/pbi --decide` says which PBIs each gate row runs for.
+Go through the stages in this order. Take the design decision (`appendix/design.md`) right after understand; map and lint-survey run only when it is run. In a run that grills, map and lint-survey run after the answer of grill round 1, before round 2. For each stage, take the first row that is usable and whose `when` holds (`appendix/engine.md`), follow its `doc`, and write its stage record. Then run every usable row of the optional stages placed after it (`<stage> after <stage>` rows, `appendix/optional.md`), then of the gates after it; after route, `flow.py docs/pbi --decide` says which PBIs each gate row runs for.
 
 | Stage | Default component does | Artifact |
 |---|---|---|

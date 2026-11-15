@@ -17,7 +17,7 @@
     agy:      agy -p ... --mode accept-edits --settings <スキルの agy.settings.json> --output-format json
   CLI は runner_cli.find_command (ATELIER_<RUNNER>_CMD・agents.json の path・PATH) で探す。
 - 合否は役割が書く結果の JSON (reviews/<報告名>.review.json・verify/tests/<名前>.test-result.json) が決める。
-  ここが返すのは子の終了コード。引数・依頼文・CLI の不備は 2。
+  ここが返すのは子の終了コード。引数・依頼文・CLI の不備と、runners.skip.json で除外された実行先・モデルは 2。
 """
 import argparse
 import datetime
@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 import runner_cli
+import runner_skip
 
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 SKILL = Path(__file__).resolve().parent
@@ -150,7 +151,16 @@ def main() -> None:
     if args.effort is not None and not EFFORT.match(args.effort):
         fail(f'--effort に使えない文字があります: {args.effort!r}')
 
-    base = Path(args.pbi_dir) / 'roles'
+    pbi_dir = Path(args.pbi_dir)
+    skipped = runner_skip.load(pbi_dir)
+    skip_path = (pbi_dir / runner_skip.FILENAME).as_posix()
+    for kind, name in (('runner', args.runner), ('model', args.model)):
+        if name in skipped:
+            info = runner_skip.entry(pbi_dir, name) or {}
+            fallback = info.get('fallback') or 'none'
+            fail(f'{kind} {name} is skipped for the rest of this run ({skip_path}, fallback {fallback})')
+
+    base = pbi_dir / 'roles'
     prompt = base / f'{args.name}.prompt.md'
     if not prompt.is_file():
         fail(f'依頼文がありません: {prompt.as_posix()}')

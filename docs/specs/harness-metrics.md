@@ -123,8 +123,8 @@ flowchart LR
 
 | type | 出す人・いつ | data の項目 |
 |---|---|---|
-| `run.started` | conductor の start | `workflow`・`launch`・`roles_from` (役割ごとの出所) |
-| `run.ended` | conductor が finished・aborted にしたとき | `result` (finished/aborted)・`episodes`・`waves`・`pbis`・`seconds` |
+| `run.started` | conductor の start・lane.py record start | `workflow`・`launch`・`roles_from` (役割ごとの出所)・`lane` (light/atelier) |
+| `run.ended` | conductor が finished・aborted にしたとき・lane.py record end | `result` (finished/aborted/escalated)・`episodes`・`waves`・`pbis`・`seconds`・`files`・`lines`・`context_delta`・`findings` (重さごとの数) |
 | `episode.started` | conductor の next・run (起動したとき) | `episode`・`wave`・`launcher` (agent/headless)・`designer` (installed/fallback)・`roles` (役割ごとに model・effort・from) |
 | `episode.ended` | conductor の done (結果を受け取ったとき) | `episode`・`status`・`reason` (列挙)・`seconds`・`failures`・`next_episode` |
 | `episode.cost` | 出番の後片付け (裏で走る) | `episode`・`method` (transcript/headless/unmeasured)・役割ごとの `requests`・`input`・`output`・`cache_read`・`cache_write`・`usd` |

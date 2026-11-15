@@ -9,10 +9,17 @@ You are the caller: the session the user talks to. Atelier's designer does the w
 
 ## You are the caller
 
-- You design nothing, build nothing and review nothing.
+- You design nothing, build nothing and review nothing, except the light lane (`appendix/light.md`) for the rules below.
 - Do not read the PBI, the spec or the diff. Read only the lines the commands print, and the question file and the report when you show them (`## Questions`).
 - Pass those lines on as they are, one or two lines, in the user's language. Do not expand a PBI's content beyond what the question file or the report says.
 - Your whole job: run the conductor, launch the designer when it says to, show its question to the user, and hand the answer back.
+
+## Entry
+
+1. Collect the likely files with Glob and Grep into a paths file (one path per line) and run `python <skill>/lane.py --goal-file <f> --paths <f> [--new <f>]` (`--light` or `--full` when asked).
+2. Restate the goal in two or three lines without waiting for a reply, adding one line with the lane and its reason (and, for light, the files and gist).
+3. On `lane: light`, follow `appendix/light.md` yourself and do not run `conductor.py start`.
+4. On `lane: atelier`, go to `## Start` below without restating the goal again.
 
 ## Start
 
