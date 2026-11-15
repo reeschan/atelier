@@ -13,8 +13,13 @@
 
 ## Solution
 
-- 作業者と役割（レビュー担当・テスト担当）の codex は、既定で `-s workspace-write` にする。Windows では `-c features.prefer_mxc=true` も渡し、MXC のサンドボックスを選ぶ。
-- ネットワークは開けない。作業ツリーの外に書く場所も足さない（`--add-dir`・`writable_roots` は使わない）。
+- 作業者と役割（レビュー担当・テスト担当）の codex は、既定で `-s workspace-write` にする。
+- ネットワークは開けない。作業ツリーの外に書く場所も足さない（`--add-dir` は使わない）。
+  - ユーザーの `~/.codex/config.toml` の `sandbox_workspace_write.network_access = true` と `writable_roots` は、`-s workspace-write` でも効き残る（試した）。
+  - そこで、その回だけ `-c sandbox_workspace_write.network_access=false` と `-c sandbox_workspace_write.writable_roots=[]` で閉じる。
+- Windows では `-c windows.sandbox="elevated" -c features.prefer_mxc=true` も渡し、MXC のサンドボックスを選ぶ。
+  - MXC を使えないときの戻り先は、ユーザーの `windows.sandbox` によらず elevated に決める。unelevated に戻ると、`network_access=false` でもネットワークが開くため（試した）。
+- サンドボックスが塞ぐのは書き込みとネットワークで、読み取りは塞がない。
 - サンドボックスを外す（`danger-full-access`）のは、home の `agents.json` の `runners.codex.sandbox` で明示したときと、`role_run.py --sandbox danger-full-access` を渡したときだけにする。
 - 設計者の codex は、既定の `danger-full-access` を残す。理由は下の「設計者」に書く。
 
@@ -23,10 +28,11 @@
 - 作業者（`runners.md` の `## codex`。設計者が Bash で流す）:
 
   ```bash
-  codex -a never exec -m <model> -c model_reasoning_effort='"<effort>"' -s workspace-write -c features.prefer_mxc=true -o docs/pbi/codex/<report>.last.md - < docs/pbi/codex/<report>.prompt.md > docs/pbi/codex/<report>.log 2>&1
+  codex -a never exec -m <model> -c model_reasoning_effort='"<effort>"' -s workspace-write -c sandbox_workspace_write.network_access=false -c 'sandbox_workspace_write.writable_roots=[]' -c 'windows.sandbox="elevated"' -c features.prefer_mxc=true -o docs/pbi/codex/<report>.last.md - < docs/pbi/codex/<report>.prompt.md > docs/pbi/codex/<report>.log 2>&1
   ```
 
-  - `-s workspace-write -c features.prefer_mxc=true` の部分は、`prepare.py` が表のあとに出す `codex sandbox: <引数> (<出所>)` の行から写す。
+  - `-s workspace-write` から後のサンドボックスの引数は、`prepare.py` が表のあとに出す `codex sandbox: <引数> (<出所>)` の行から写す。
+    - 引数は bash にそのまま貼れるよう引用する（`runner_cli.shell_words`）。Windows 以外では、`windows.sandbox` と `prefer_mxc` の 2 つは付かない。
     - 行は、表の PBI の route に codex の手順があるときだけ出る。
     - 出所は `default`・`agents.json`・`agents.json invalid` のどれか。
   - `prepare.py` を通さない場合（`select_model.py` を直に流した場合）は、既定の引数を使う。
@@ -41,13 +47,15 @@
 
 | 範囲 | 開けたか | 理由 |
 |---|---|---|
+| 作業ツリーの外の読み取り | 塞がない（`workspace-write` の仕様） | 道具とその設定を読むのに要る。塞ぐのは書き込みとネットワーク |
 | 作業ツリーの中への書き込み | 開ける（`workspace-write`） | 作業者の仕事そのもの。役割は結果の JSON をリポジトリの中に書く |
 | システムの一時フォルダ（`%TEMP%`） | 開ける（codex の既定のまま） | テストの道具が一時ファイルを書く |
 | `~/.config/atelier`（run の記録） | 開けない | 記録（`record_run.py` など）は設計者が書く。作業者は書かない |
 | git worktree の共通の `.git` | 開けない | 作業者はコミットしない。`git status`・`git diff` は書けなくても動く（試した） |
-| ネットワーク | 開けない | 依存を足す `pnpm add` は、ネットワークを開けても通らない（下の表）。依存を足すのは設計者の仕事にする。`pnpm test` の lockfile の検証は、ネットワーク無しでも通った |
+| ユーザーの `writable_roots` | 閉じる（`writable_roots=[]`） | ユーザーの設定で足された書き込み先は、MXC でも効き残った。作業者の境界を作業ツリーと `%TEMP%` に揃える |
+| ネットワーク | 開けない（`network_access=false`。ユーザーの設定が true でも閉じる） | 依存を足す `pnpm add` は、ネットワークを開けても通らない（下の表）。依存を足すのは設計者の仕事にする。`pnpm test` の lockfile の検証は、ネットワーク無しでも通った |
 | pnpm の store（`%LOCALAPPDATA%\pnpm\store`） | 開けない | `writable_roots` に足しても、新しいパッケージの取り込みが拒まれた。足しても効かない場所は開けない |
-| Windows のサンドボックスの実装 | MXC を選ぶ（`features.prefer_mxc=true`） | ユーザーの `config.toml` は `windows.sandbox = "elevated"`。elevated では pnpm を読めない。MXC なら pnpm・Biome・`node --test` が動き、ネットワークも塞がる。MXC を使えない PC での動きは試していない |
+| Windows のサンドボックスの実装 | MXC を選び、戻り先を elevated に決める（`windows.sandbox="elevated"`・`features.prefer_mxc=true`） | この PC の `config.toml` は `windows.sandbox = "elevated"`。elevated では pnpm を読めない。unelevated ではネットワークが塞がらない。MXC なら pnpm・Biome・`node --test` が動き、ネットワークも塞がる。MXC を使えない PC での動きは試していない |
 
 ### 設計者
 
@@ -67,7 +75,7 @@
 - 試し場: 一時フォルダの中の小さな pnpm のリポジトリと、その git worktree。
 - 試し方:
   - モデルを使わずに、`codex sandbox -c sandbox_mode="workspace-write" ...` から PowerShell のスクリプトを流した。
-  - 最後に、新しい形の `codex -a never exec ... -s workspace-write -c features.prefer_mxc=true` を `gpt-6.1-terra`（effort low）で流した。
+  - 最後に、新しい形の `codex -a never exec ...`（上の起動の形の引数すべて）を `gpt-6.1-terra`（effort low）で流した。
     - Claude Code（auto mode）の Bash から流し、止められなかった。
 
 | 試したこと | elevated（この PC の設定） | unelevated | MXC（`prefer_mxc`） |
@@ -87,6 +95,14 @@
 - 通った: `node --version`・`pnpm --version`・`pnpm test`（pass 1）・`pnpm lint`（Biome、No fixes applied）・`node --test`・`git status --short`・作業ツリーの中への書き込み・`uv --version`
 - 拒まれた: `~/dev` への書き込み（アクセス拒否）・ネットワーク（`ENOTFOUND`）・`python --version`（WindowsApps の入口）
 
+ユーザーの設定が境界を広げる場合の試し（`CODEX_HOME` に、`windows.sandbox = "unelevated"`・`network_access = true`・`writable_roots = [<外のフォルダ>]` を書いた一時の `config.toml` を置いた）:
+
+| | `-s workspace-write` だけ | MXC と `network_access=false`（`writable_roots` は上書きなし） | 起動の形の引数すべて |
+|---|---|---|---|
+| 選ばれた実装 | unelevated（`node --test` が落ちる） | MXC | MXC |
+| ネットワーク | 開く（200） | 塞がる | 塞がる |
+| `writable_roots` のフォルダへの書き込み | 書ける | 書ける | 拒まれる |
+
 依存を足す試し（MXC、`network_access=true`）:
 
 - store に無いパッケージの `pnpm add` は、store から node_modules への取り込みで拒まれた。
@@ -97,8 +113,8 @@
 
 - Windows で Python を verify に使うリポジトリは、作業者の中で verify が通らない（WindowsApps の入口も uv の管理する Python も起動できない）。`runners.md` の `## Common rules` どおり、verify のコマンドだけが落ちたときは設計者が流す。
 - 依存を足す PBI では、作業者が Open に書き、設計者が入れる。
-- MXC を使えない Windows での動きは試していない。codex の文書では MXC は「対応する PC で勧める」実装とされ、ほかに `elevated`・`unelevated` がある。elevated で動けば pnpm が見つからない。そのときは verify を設計者が流すか、ユーザーが `runners.codex.sandbox` を `danger-full-access` にする。
-- macOS・Linux では試していない。`-s workspace-write` だけを渡す（`prefer_mxc` は Windows だけ）。
+- MXC を使えない Windows での動きは試していない。codex の文書では MXC は「対応する PC で勧める」実装とされ、ほかに `elevated`・`unelevated` がある。戻り先の elevated ではネットワークは塞がるが、pnpm が見つからない。そのときは verify を設計者が流すか、ユーザーが `runners.codex.sandbox` を `danger-full-access` にする。elevated の準備（管理者の承認）がされていない PC では、codex が起動で止まるかもしれない。そのときは使えない実行先として扱う。
+- macOS・Linux では試していない。`-s workspace-write` と `sandbox_workspace_write` の 2 つを渡す（`windows.sandbox` と `prefer_mxc` は Windows だけ）。
 
 ## Out of Scope
 
@@ -111,9 +127,9 @@
 ## Testing Decisions
 
 - `test_role_run.py`:
-  - 既定が `-s workspace-write`（Windows では `prefer_mxc` 付き）であること。
+  - 既定が `-s workspace-write` で、`network_access=false`・`writable_roots=[]` が付き、Windows では `windows.sandbox="elevated"`・`prefer_mxc` も付くこと。
   - `.run.json` の `sandbox`。
-  - `--sandbox danger-full-access` で開け、そのときは `prefer_mxc` を付けないこと。
+  - `--sandbox danger-full-access` で開け、そのときはサンドボックスの `-c` を付けないこと。
   - `agents.json` の `runners.codex.sandbox` が効き、`--sandbox` がそれより強いこと。
   - 読めない値（`read-only`・別の名前・数）は閉じたままで warn を出すこと。
   - `runner_cli.codex_sandbox_args` の組み立て。

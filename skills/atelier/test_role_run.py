@@ -80,9 +80,15 @@ class RoleRunTest(unittest.TestCase):
         args = call['args']
         self.assertEqual(args[:3], ['-a', 'never', 'exec'])
         self.assertEqual(args[args.index('-m') + 1], 'gpt-6.1-terra')
-        # 既定はサンドボックスの中。Windows では MXC を選ぶ (elevated では pnpm を読めない)
+        # 既定はサンドボックスの中。ユーザーの config.toml のネットワークと書き込み先はその回だけ閉じる。
+        # Windows では MXC を選び、戻り先は elevated (elevated では pnpm を読めず、unelevated はネットワークが開く)
         self.assertEqual(args[args.index('-s') + 1], 'workspace-write')
-        self.assertEqual('features.prefer_mxc=true' in args, sys.platform == 'win32')
+        configs = [args[i + 1] for i, word in enumerate(args) if word == '-c']
+        self.assertIn('sandbox_workspace_write.network_access=false', configs)
+        self.assertIn('sandbox_workspace_write.writable_roots=[]', configs)
+        windows = sys.platform == 'win32'
+        self.assertEqual('features.prefer_mxc=true' in configs, windows)
+        self.assertEqual('windows.sandbox="elevated"' in configs, windows)
         self.assertIn('model_reasoning_effort="high"', args)
         self.assertIn('mcp_servers.shared-memory.default_tools_approval_mode="auto"', args)
         self.assertEqual(args[-1], '-')
@@ -124,7 +130,9 @@ class RoleRunTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         args = self.calls()[0]['args']
         self.assertEqual(args[args.index('-s') + 1], 'danger-full-access')
-        self.assertNotIn('features.prefer_mxc=true', args)
+        for value in ('features.prefer_mxc=true', 'windows.sandbox="elevated"',
+                      'sandbox_workspace_write.network_access=false', 'sandbox_workspace_write.writable_roots=[]'):
+            self.assertNotIn(value, args)
         r = self.run_cli('PBI-001.review', '--role', 'reviewer', '--runner', 'codex', '--model', 'gpt-6.1-terra',
                          '--sandbox', 'open')
         self.assertEqual(r.returncode, 2, r.stderr)
@@ -159,15 +167,19 @@ class RoleRunTest(unittest.TestCase):
             self.assertIn('role_run: warn agents.json runners.codex.sandbox', r.stderr)
 
     def test_codex_sandbox_args(self):
-        """サンドボックスがあるときだけ、Windows で MXC を選ぶ -c を足す。"""
+        """workspace-write はネットワークと足された書き込み先を閉じ、サンドボックスがあれば Windows で MXC を選ぶ。"""
         import runner_cli
+        limits = ['-c', 'sandbox_workspace_write.network_access=false', '-c', 'sandbox_workspace_write.writable_roots=[]']
+        mxc = ['-c', 'windows.sandbox="elevated"', '-c', 'features.prefer_mxc=true']
         self.assertEqual(runner_cli.codex_sandbox_args('workspace-write', windows=True),
-                         ['-s', 'workspace-write', '-c', 'features.prefer_mxc=true'])
-        self.assertEqual(runner_cli.codex_sandbox_args('read-only', windows=True),
-                         ['-s', 'read-only', '-c', 'features.prefer_mxc=true'])
+                         ['-s', 'workspace-write', *limits, *mxc])
+        self.assertEqual(runner_cli.codex_sandbox_args('read-only', windows=True), ['-s', 'read-only', *mxc])
         self.assertEqual(runner_cli.codex_sandbox_args('danger-full-access', windows=True),
                          ['-s', 'danger-full-access'])
-        self.assertEqual(runner_cli.codex_sandbox_args('workspace-write', windows=False), ['-s', 'workspace-write'])
+        self.assertEqual(runner_cli.codex_sandbox_args('workspace-write', windows=False),
+                         ['-s', 'workspace-write', *limits])
+        self.assertEqual(runner_cli.shell_words(['-c', 'windows.sandbox="elevated"', '-c', 'a.b=[]']),
+                         "-c 'windows.sandbox=\"elevated\"' -c 'a.b=[]'")
         # 作業者と役割の既定はサンドボックスあり、設計者の既定はなし (入れ子の codex がコマンドを起こせないため)
         self.assertEqual(runner_cli.CODEX_DEFAULT_SANDBOX, 'workspace-write')
         self.assertEqual(runner_cli.codex_sandbox('auto'), 'danger-full-access')
@@ -180,7 +192,12 @@ class RoleRunTest(unittest.TestCase):
         launch = section.split('```bash', 1)[1].split('```', 1)[0]
         self.assertIn('<sandbox flags>', launch)
         self.assertNotIn('danger-full-access', launch)
-        self.assertIn('-s workspace-write -c features.prefer_mxc=true', section)
+        # prepare の行が無いときに写す既定の引数 (bash に貼れる形) が書いてある
+        import runner_cli
+        everywhere = runner_cli.codex_sandbox_args('workspace-write', windows=False)
+        on_windows = runner_cli.codex_sandbox_args('workspace-write', windows=True)[len(everywhere):]
+        self.assertIn(f'`{runner_cli.shell_words(everywhere)}`', section)
+        self.assertIn(f'`{runner_cli.shell_words(on_windows)}`', section)
 
     def test_exit_code_is_passed_through(self):
         self.prompt('test-final')

@@ -77,6 +77,12 @@ def write_pbi(d, name, facts, brief, quality):
     write_text(os.path.join(d, f'{name}.brief.md'), '目的: ダミー\n')
 
 
+# 作業者の codex の既定のサンドボックスの引数 (prepare の行に bash に貼れる形で出る)
+WORKSPACE_FLAGS = ("-s workspace-write -c sandbox_workspace_write.network_access=false "
+                   "-c 'sandbox_workspace_write.writable_roots=[]'"
+                   + (" -c 'windows.sandbox=\"elevated\"' -c features.prefer_mxc=true" if sys.platform == 'win32' else ''))
+
+
 def rows(out):
     return [line for line in out.stdout.splitlines() if line.startswith('| PBI-')]
 
@@ -325,9 +331,8 @@ class PrepareTest(unittest.TestCase):
         return [line for line in out.stdout.splitlines() if line.startswith('codex sandbox:')]
 
     def test_codex_route_prints_the_sandbox_flags(self):
-        """route に codex があれば、表のあとに作業者のサンドボックスの引数を出す (既定は workspace-write)。"""
-        mxc = ' -c features.prefer_mxc=true' if sys.platform == 'win32' else ''
-        self.assertEqual(self.codex_sandbox_line(), [f'codex sandbox: -s workspace-write{mxc} (default)'])
+        """route に codex があれば、表のあとに作業者のサンドボックスの引数を bash に貼れる形で出す (既定は workspace-write)。"""
+        self.assertEqual(self.codex_sandbox_line(), [f'codex sandbox: {WORKSPACE_FLAGS} (default)'])
 
     def test_codex_sandbox_opens_only_from_agents_json(self):
         """agents.json の runners.codex.sandbox が danger-full-access なら開け、読めない値は閉じたままにする。"""
@@ -335,9 +340,8 @@ class PrepareTest(unittest.TestCase):
         self.assertEqual(line, ['codex sandbox: -s danger-full-access (agents.json)'])
 
     def test_codex_sandbox_invalid_value_stays_closed(self):
-        mxc = ' -c features.prefer_mxc=true' if sys.platform == 'win32' else ''
         line = self.codex_sandbox_line({'runners': {'codex': {'enabled': True, 'sandbox': 'off'}}})
-        self.assertEqual(line, [f'codex sandbox: -s workspace-write{mxc} (agents.json invalid)'])
+        self.assertEqual(line, [f'codex sandbox: {WORKSPACE_FLAGS} (agents.json invalid)'])
 
     def test_no_codex_route_prints_no_sandbox_line(self):
         self.use_home(app=None)
