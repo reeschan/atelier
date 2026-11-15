@@ -99,21 +99,25 @@ UNREADABLE_STATE = 'retry'
 # モデルを使わず、conductor がスクリプトで流す出番 (設計者を起こさない)
 SCRIPT_EPISODES = ('e2e',)
 E2E_SCRIPT = SKILL / 'e2e_run.py'
-# 出番のつながり (done の next に許すもの)。finish は run を閉じる
+# 出番のつながり (done の next に許すもの)。finish は run を閉じる。
+# 最後の見直しは 1 回で、差し戻さない: review の指摘は fix (修正の段) が一度に直し、E2E は最後の最後に流す
+# (docs/specs/fix-stage-once.md)。build -> e2e と e2e -> test は、この形より前に始めた run の途中のためだけに残す
 NEXT_ALLOWED = {
     'design': ('build',),
     'build': ('build', 'e2e', 'test', 'review', 'finish'),
-    'e2e': ('test',),
-    # test -> test は、担当が設計者に渡す (needs_designer) か、設計者が担当に戻すときだけ
+    'e2e': ('fix', 'finish', 'test'),
+    # test -> test と fix -> fix は、担当が設計者に渡す (needs_designer) か、設計者が担当に戻すときだけ
     'test': ('build', 'test', 'review'),
-    'review': ('build', 'finish'),
+    'review': ('fix', 'e2e', 'finish'),
+    'fix': ('fix', 'e2e', 'finish'),
     'finish': (),
 }
 
 DEFAULT_ROLES = {
     'designer': {'runner': 'agent', 'model': 'opus', 'effort': None, 'permission_mode': 'auto'},
     # 出番ごとの設計者。層が決めなければ振り分けテンプレートの中段 (TEMPLATE_TIER) から取り、ここは最後の頼り
-    'episodes': {'test': {'runner': 'agent', 'model': 'sonnet', 'effort': 'high', 'permission_mode': 'auto'}},
+    'episodes': {'test': {'runner': 'agent', 'model': 'sonnet', 'effort': 'high', 'permission_mode': 'auto'},
+                 'fix': {'runner': 'agent', 'model': 'sonnet', 'effort': 'high', 'permission_mode': 'auto'}},
     'reviewer': {'deep': {'runner': 'agent', 'model': 'opus', 'effort': None},
                  'other': {'runner': 'agent', 'model': 'sonnet', 'effort': 'high'}},
     'tester': {'runner': 'agent', 'model': 'sonnet', 'effort': None},
@@ -126,7 +130,7 @@ META_PREFIX = 'reply-meta-'
 FENCE_OPEN = '```am-reply-meta'
 
 # イベントの値の語彙 (skills/atelier/harness.schema.json と合わせる。外れた値は dropped に落ちる)
-EPISODE_TYPES = ('design', 'build', 'e2e', 'test', 'review', 'finish')
+EPISODE_TYPES = ('design', 'build', 'e2e', 'test', 'review', 'fix', 'finish')
 ROLE_SOURCES = ('run', 'repo', 'home', 'template', 'default')
 QUESTION_TOPICS = ('runner-unavailable', 'omm', 'recheck', 'unknown', 'approve-ask',
                    'design-approval', 'headless', 'other')
@@ -677,14 +681,14 @@ _RELEASED = set()
 # 役割の値は、キーごとに強い順の層から取る: run (start --role) → repo (docs/pbi/roles.json) → home (agents.json) → 既定。
 # 取った値の出所は running.roles と history に残し、next の roles: の行に出す。
 
-ROLE_PARTS = ('designer', 'episodes.test', 'reviewer.deep', 'reviewer.other', 'tester')
+ROLE_PARTS = ('designer', 'episodes.test', 'episodes.fix', 'reviewer.deep', 'reviewer.other', 'tester')
 ROLE_KEYS = ('runner', 'model', 'effort', 'permission_mode')
 ROLE_HEADS = ('designer', 'episodes', 'reviewer', 'tester')
 # 層 (run・repo・home) が runner も model も決めていない部分は、振り分けテンプレートのこの段から既定を取る
 TEMPLATE_TIER = 'sonnet'
-TEMPLATE_PARTS = ('episodes.test', 'reviewer.other')
+TEMPLATE_PARTS = ('episodes.test', 'episodes.fix', 'reviewer.other')
 # 自分の出番の設計者を持つ出番 (episodes.<出番> の部分がある)
-LEAD_EPISODES = ('test',)
+LEAD_EPISODES = ('test', 'fix')
 
 
 def _default_part(name: str) -> dict:
@@ -730,7 +734,8 @@ def _empty_roles() -> dict:
 def resolve_roles(layers: list, template=None):
     """layers は強い順の [(出所, roles の辞書か None)]。(roles, 出所, warn の行) を返す。
 
-    roles と出所は agents.json の roles と同じ形 (designer・episodes.test・reviewer.deep・reviewer.other・tester)。
+    roles と出所は agents.json の roles と同じ形 (designer・episodes.test・episodes.fix・reviewer.deep・reviewer.other・
+    tester)。
     不正な値はその層を飛ばして次の層の値を使い、warn に使った値と出所を書く。
     template は {部分の名前: {runner, model, effort}} (振り分けテンプレートの中段から取った既定)。どの層も
     その部分の runner も model も決めていなければ、既定の代わりにそれを使い、出所を template にする
@@ -857,7 +862,8 @@ def template_parts(paths=None) -> dict:
 def load_roles(paths=None, run=None):
     """run の --role、repo の docs/pbi/roles.json、home の agents.json の roles を重ねる。(roles, 出所, warn の行)。
 
-    episodes.test と reviewer.other は、層が決めていなければ振り分けテンプレートの中段から取る (出所 template)。
+    episodes.test・episodes.fix と reviewer.other は、層が決めていなければ振り分けテンプレートの中段から取る
+    (出所 template)。
     """
     repo = _roles_in(paths.base / 'roles.json') if paths is not None else None
     layers = [('run', (run or {}).get('roles')), ('repo', repo),
@@ -985,7 +991,7 @@ def roles_from_record(record) -> dict | None:
         roles = _empty_roles()
         for name in ROLE_PARTS:
             # runner の無い記録 (runner のキーができる前の run.json) は既定 (agent) で埋める。
-            # 部分ごと無い記録 (episodes.test ができる前の run.json) は既定で埋める
+            # 部分ごと無い記録 (episodes.test・episodes.fix ができる前の run.json) は既定で埋める
             kept = record.get(name, {})
             part = {key: kept[key]['value'] if key in kept else default
                     for key, default in _default_part(name).items()}
@@ -2918,7 +2924,7 @@ def launch_designer(paths: Paths, run: dict, running: dict, warns: list) -> tupl
     return child, EXIT_OK, []
 
 
-def script_argv(paths: Paths, running: dict) -> list:
+def script_argv(paths: Paths, run: dict, running: dict) -> list:
     """スクリプトの出番の引数。ATELIER_E2E_CMD (JSON の文字列の配列) があれば、その後ろに同じ引数を付ける。"""
     head = [sys.executable, str(E2E_SCRIPT)]
     given = os.environ.get('ATELIER_E2E_CMD')
@@ -2929,15 +2935,27 @@ def script_argv(paths: Paths, running: dict) -> list:
             words = None
         if isinstance(words, list) and words and all(isinstance(word, str) and word.strip() for word in words):
             head = list(words)
-    return [*head, '--dir', str(paths.base), '--result', str(running.get('result')),
+    argv = [*head, '--dir', str(paths.base), '--result', str(running.get('result')),
             '--seq', str(int(running.get('seq') or 0))]
+    if isinstance(run, dict) and run.get('run_id'):
+        argv += ['--run', str(run['run_id'])]
+    if not reviewed(run):
+        # この形より前に始めた run の途中 (build -> e2e): 今までどおり e2e のあとに test を流す
+        argv.append('--before-review')
+    return argv
+
+
+def reviewed(run) -> bool:
+    """最後の見直しの出番 (review) が履歴にあるか。"""
+    history = (run or {}).get('history') if isinstance(run, dict) else None
+    return any(isinstance(row, dict) and row.get('episode') == 'review' for row in history or [])
 
 
 def launch_script(paths: Paths, run: dict, running: dict, warns: list, out_json, err_path) -> tuple:
     """スクリプトの出番 (e2e) を起こす。標準入力に渡すものは無い。(child, 終了コード, 出す行) を返す。"""
     try:
         with open(out_json, 'wb') as out, open(err_path, 'wb') as err:
-            child = subprocess.Popen(script_argv(paths, running), stdin=subprocess.PIPE, stdout=out, stderr=err,
+            child = subprocess.Popen(script_argv(paths, run, running), stdin=subprocess.PIPE, stdout=out, stderr=err,
                                      cwd=str(Path.cwd()), creationflags=NO_WINDOW)
     except OSError as error:
         code, lines = fail(paths, run, running, f"cannot start the {running.get('episode')} script: {error}",

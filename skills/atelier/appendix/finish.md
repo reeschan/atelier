@@ -1,6 +1,6 @@
 # Appendix: finish
 
-Read this when the finish stage picks `finish.builtin`: every PBI has passed or stopped, and the review stage is done.
+Read this when the finish stage picks `finish.builtin`: every PBI has passed or stopped, the review, the fix stage and the E2E rounds are done.
 
 ## Before the report
 
@@ -56,7 +56,9 @@ Open with one line that restates the user's goal in your own words, as at the st
 - **Changes**: the PBIs that passed and the files they changed.
 - **Findings**:
   - problems found on the way
-  - the skipped minors of the final review (`appendix/review.md`, `## Minor findings`): file, line, what is wrong, and why it was skipped (the user's answer, no owning PBI, or `limit`). A minor the user did not see never goes here
+  - the fix list of each round (`docs/pbi/fix/round-<r>.json`): the items fixed, the items left (`left (limit)` from the fix stage, or an `exception:` line `fix_plan.py` printed that was not fixed), and how each ADR conflict ended (the code, or the new record and its path)
+  - the skipped minors of the final review (`appendix/review.md`, `## Minor findings`): file, line, what is wrong, and why it was skipped (the user's answer). A minor the user did not see never goes here
+  - E2E: one stage record per round from `docs/pbi/verify/e2e.rounds.json` (`stage e2e: run #<k> (<n> specs, <f> failing, full suite <result>) next <fix|finish>`), the specs still failing after the last round with the PBI and the log, and what blocked a round
   - the stage records from STATUS.md, as they are (`appendix/engine.md`)
   - the two tables of `python <skill>/model_report.py`, pasted as they are: runs, outcome breakdown, unavailable rate, tokens, cost and API equivalent, time, and the provisional grades. The grades are a guide for a person to adjust later; add no reading of them here. Whether a rotate group split evenly shows in the run counts
   - runs whose archive copy failed (`archive.ok` false in `runs.jsonl`)

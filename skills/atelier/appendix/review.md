@@ -4,7 +4,9 @@ Read this when every PBI has passed, and the review stage or its gate picks `rev
 
 ## Whole check (always first)
 
-The lint recheck (`appendix/lint.md`) has run before this, and its confirmed regressions are reworked first. Whatever component is picked, look at the whole `git diff --stat` and read the parts that cross PBIs (shared types, settings, callers). The running part is the tester's whole check (`prompts/tester.md`, kind `final`): it runs every PBI's verify commands once more, with output to files as in `appendix/verify.md`, then the deferred commands. Reconcile its test-result. The stat and the parts that cross PBIs stay yours.
+The lint recheck (`appendix/lint.md`) has run before this, and its confirmed regressions are reworked first. Whatever component is picked, look at the whole `git diff --stat` and read the parts that cross PBIs (shared types, settings, callers). The running part is the tester's whole check (`prompts/tester.md`, kind `final`): it runs every PBI's verify commands once more, with output to files as in `appendix/verify.md`, then the deferred commands (the unit tests). No E2E spec runs before the final review: E2E runs once at the very end, after the fix stage (`appendix/fix.md`). Reconcile its test-result and put its path on the reviewer's `Test results:` line (`prompts/final-review.md`), so the review sees the unit tests and the checks. The stat and the parts that cross PBIs stay yours.
+
+The final review runs once per run, and nothing it finds goes back to build: every confirmed finding goes into one fix list, and the fix stage fixes the whole list at once (`## Findings`).
 
 ## Gate
 
@@ -62,21 +64,22 @@ Reconcile only once every result is in: the tester's test-result, the review ski
 
 ## Findings
 
+The final review runs once per run. Its stage record is one line, `stage review: <component> run (<reason>) findings <c>,<m>,<n>` (`appendix/engine.md`, `## Stage records`). Before you start a final review, look for that line in STATUS.md: when it is there (a resume), do not start another one; go on from its result file, and from `docs/pbi/fix/round-1.json` when that is written. A `run #1` line from a run started before this rule counts as that one review.
+
 1. Check each finding yourself: open the file at the line and confirm the claim. A reviewer's report is not proof.
-2. A confirmed finding in a file that a PBI's targets name becomes a rework of that PBI (`appendix/rework.md`), counted toward the limit. Review again once every reworked PBI passes.
-   - The final review runs at most twice per run. Each run gets its own stage record with its number, `stage review: <component> run #1|#2 (<reason>) findings <c>,<m>,<n>` (`appendix/engine.md`, `## Stage records`); never replace the first line. Before a final review, count those lines: with two already, do not start a third. After the second, rework no critical or major finding more: put those that are left into the findings of the completion report. Minors follow `## Minor findings`.
-   - A PBI that has used both reviews gets no rework from the final review either: its findings go into the completion report. This applies when its last bundle row shows `limit`, or when it shows `round 2/2` with a pass (`appendix/rework.md`).
-3. A confirmed finding in a file that no PBI owns goes into the findings of the completion report.
-4. A remark about taste or wording is not a reason for rework. Drop it. A formatting or lint remark is not a finding either: the format and lint commands run in every PBI's verify (`appendix/plan.md`, `## Format and lint first`).
-5. A confirmed conflict between the change and an accepted decision record (an ADR, in the repository's decisions folder) is never dropped, even when the user prefers the code. It ends one of two ways: rework the code, or a new record that supersedes the old one. Writing that record is the user's call: end the episode with a question (kind `decision`). Inline, put it under Waiting on you.
+2. Write every confirmed finding into the fix list `docs/pbi/fix/round-1.json` (`appendix/fix.md`, `## The fix list`), one item each: the file and line, what is wrong, how to fix it, and the command that shows it fixed (the repro, when it is a command). The confirmed findings of the security review (the gate after review) go into the same list. Never send a finding back to build, whatever file it is in: a file no PBI owns (a spec, an ADR, a shared config) is fixed by the fix stage like any other, and needs no owning PBI.
+   - critical and major: `decision` `fix`.
+   - minor: `decision` `ask` with a recommendation (`## Minor findings`).
+   - a finding the user already answered "report only" at the lint recheck: leave it out of the list; it stays in the report (`appendix/lint.md`, `## Lint recheck`).
+   - Set the list's `checks` to the type check and the unit test commands of the PBIs' verify commands, so every fix runs them, and `tier` to the tier that builds the fixes (`sonnet` unless a fix needs the top tier).
+3. A remark about taste or wording is not a finding. Drop it. A formatting or lint remark is not a finding either: the format and lint commands run in every PBI's verify (`appendix/plan.md`, `## Format and lint first`).
+4. A confirmed conflict between the change and an accepted decision record (an ADR, in the repository's decisions folder) is never dropped, even when the user prefers the code. It ends one of two ways: fix the code, or write a new record that supersedes the old one. Writing that record is the user's call: make it an item with `decision` `ask` and `recommend` `code` or `adr`; the fix stage asks it together with the minors, in its one question. Inline, ask it with the minors.
+5. End the episode: `done`, next `fix` when any item says `fix` or `ask`. With an empty list (or one that holds only drops), next `e2e` when the run has E2E (`investigate` or `final` in `docs/pbi/tests-at-end.json`, tests at the end on), otherwise `finish`. Ask the user nothing in this episode: the fix stage's lead asks, before any worker starts, so the answer does not start the designer again.
 
 ## Minor findings
 
-The confirmed minors of the final review are settled in this run, not handed to the completion report as they are.
+The confirmed minors of the final review are settled in this run, not handed to the completion report as they are. They go into the fix list with `decision` `ask` and a recommendation; the fix stage asks about all of them in one question before any fix starts (`appendix/fix.md`, `## Steps`), and the ones the user answers `fix` are fixed in the same wave as the critical and major findings.
 
-1. Once no confirmed critical or major finding is left to rework (fixed, or past the limits above), collect every confirmed minor of the final reviews of this run. A minor whose PBI is already at `fix.max_rework` or at its second review (`appendix/rework.md`, `## Minor fixes`) cannot be fixed: put it straight into the skipped minors with the reason `limit`, and leave it out of the choices. A minor in a file no PBI owns has nothing to rework either: skip it the same way with the reason `no owning PBI`. Ask about the rest in one question (kind `decision`, `appendix/questions.md`): one row per minor with its file, line, what is wrong, the PBI that owns the file, and a recommendation.
-   - Recommend `fix` when the fix is small and the minor can mislead a reader or a later change: a wrong name, a stale comment or message, a missing check, a test that asserts too little.
-   - Recommend `skip` for taste, wording and style the repository's rules do not ask for.
-   - With no confirmed minor, ask nothing.
-2. Each minor the user answers `fix` becomes a rework of its PBI (`appendix/rework.md`, `## Minor fixes`). `next` names one wave, so group the fixes by wave: end with next `build`, the first wave with fixes and the `pbis` of its PBIs. The PBI's own review checks the fix; when that build comes back, run no final review again, and send the next wave with fixes the same way. Go on to finish when no wave with accepted fixes is left. Keep the accepted fixes and the waves done in the state tablet, so a later review episode knows what is left.
-3. Each minor answered `skip`, and each one skipped before the question (`limit`, `no owning PBI`), goes into the completion report under the skipped minors (`appendix/finish.md`).
+- Recommend `fix` when the fix is small and the minor can mislead a reader or a later change: a wrong name, a stale comment or message, a missing check, a test that asserts too little.
+- Recommend `skip` for taste, wording and style the repository's rules do not ask for.
+- Each minor answered `skip` goes into the completion report under the skipped minors (`appendix/finish.md`).

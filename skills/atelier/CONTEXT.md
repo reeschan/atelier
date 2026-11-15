@@ -17,7 +17,7 @@ The designer Atelier owns, launched fresh for every episode; inline, the caller'
 _Avoid_: parent agent, オーケストレーター (only as a transliteration)
 
 **lead (担当)**:
-The model that runs one episode in the designer's place: the test episode's lead (`episodes.test`, the routing template's middle tier by default). It follows `designer.md` like the designer and hands a point it cannot decide to the designer with `needs_designer`.
+The model that runs one episode in the designer's place: the test episode's lead (`episodes.test`) and the fix episode's lead (`episodes.fix`), the routing template's middle tier by default. It follows `designer.md` like the designer and hands a point it cannot decide to the designer with `needs_designer`.
 _Avoid_: sub-designer, test designer
 
 **worker (実装担当)**:
@@ -32,8 +32,16 @@ _Avoid_: checker, QA
 The subagent that runs the tests at the end of a wave, looks into a failure whose cause is unknown (kind `investigate`) and writes a test result. It proposes the cause of each failure; the designer or the lead decides.
 _Avoid_: test runner, QA
 
+**fix list (直しの一覧)**:
+The one list the final review leaves (`docs/pbi/fix/round-<r>.json`): every confirmed finding with its file, line, what is wrong and how to fix it, to fix, skip or ask. Later rounds come from failed E2E specs.
+_Avoid_: rework list, review backlog
+
+**fix stage (修正の段)**:
+The `fix` episode, on its lead: it asks the list's open points once, fixes the whole list in one wave of workers that share no file (`fix_plan.py`), reviews only the fix's diff and runs the fast checks. It never runs the final review again and never sends work back to build.
+_Avoid_: rework round, second review
+
 **e2e episode (E2E の出番)**:
-The episode after the last wave in which `e2e_run.py`, a script with no model, runs the E2E specs in scope (the PBIs' related specs, the specs that read a changed symbol, and the full suite when the approval said yes) and hands the test-result to the test episode. It never asks.
+The episode at the very end, after the final review and the fix stage, in which `e2e_run.py`, a script with no model, runs the E2E specs in scope (the PBIs' related specs, the specs that read a changed symbol or changed in this run, and the full suite when the approval said yes). Specs that fail go to the fix stage and only they run again, up to `e2e.fix_rounds` times. It never asks.
 _Avoid_: E2E stage, E2E tester
 
 **runner (実行先)**:

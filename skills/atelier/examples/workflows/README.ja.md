@@ -51,8 +51,11 @@ flowchart TD
     LRJ --> RV[review<br/>interrogate: 重い構成で承認のとき使うと答えたとき<br/>code-review: 差分が大きいとき]
     RV --> SC{{security-audit を使う? 承認のときに聞いた答え}}
     SC --> GS[gate: built-in の security-review]
-    GS -->|確かめた指摘| FX2
-    GS --> FN[finish: 完了報告と統計<br/>yomiyasu で日本語を整える]
+    GS --> FL[直しの一覧<br/>確かめた指摘をすべて、1 回で]
+    FL --> FS[修正の段<br/>1 つの波、作業者はファイルを分け合わない<br/>直しの差分だけを見直す]
+    FS --> E2E[E2E を最後の最後に 1 回]
+    E2E -->|落ちた spec、流し直しの残りあり| FS
+    E2E --> FN[finish: 完了報告と統計<br/>yomiyasu で日本語を整える]
   end
   FX2 --> WV
 ```
@@ -74,7 +77,7 @@ flowchart TD
 | model-check (design のあと) | `model-check.pstack-statechart` | 毎回聞いて、はいのとき |
 | plan | `plan.builtin`、関所 `gate.jev` | いつも |
 | route | `route.jev`、関所 `gate.pstack-blast-radius`・`gate.pstack-architect` | 関所は PBI ごと (結合が強い・opus の段) |
-| build / verify / fix | `build.runners` / `verify.builtin` / `fix.rework` | いつも |
+| build / verify / fix | `build.runners` / `verify.builtin` / `fix.list` | いつも |
 | lint-recheck (verify のあと) | `lint-recheck.jevlint` → `lint-recheck.builtin` | いつも (全 PBI とテストの工程が終わったあと 1 回) |
 | review | `review.pstack-interrogate` → `review.lens-review` → `review.code-review` → `review.builtin` | interrogate は、新しいアプリケーションを一から作るなどの重い構成のときだけ、承認で聞いて使うと答えた run で動く (`when` は `heavy-ask`。設計者が動かし、敵役は opus xhigh と sonnet high)。lens-review (日本語の観点別レビュー、[reeschan/claude-plugins-official](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review)) と code-review は adapter_gate.py が run と言うとき |
 | security (review のあと) | `security.security-audit`、関所 `gate.security-review` | security-audit は承認のときに聞いて、はいのとき |

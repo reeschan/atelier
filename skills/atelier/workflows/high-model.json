@@ -28,7 +28,7 @@
       "review.builtin"
     ],
     "fix": [
-      "fix.rework"
+      "fix.list"
     ],
     "finish": [
       "finish.builtin"

@@ -942,21 +942,17 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.con('done')
         self.assertEqual(rc, 0, out)
         rc, out = self.con('next')
-        self.result(out, status='done', next={'episode': 'build', 'wave': 1, 'pbis': ['PBI-001']})
+        # 最後の見直しは差し戻さず、直しの一覧を修正の段に渡す
+        self.result(out, status='done', next={'episode': 'fix', 'wave': 1})
         rc, out = self.con('done')
         self.assertEqual(rc, 0, out)
-        rc, out = self.con('next')  # 差し戻しの build
-        self.assertIn('PBI-001', self.request(out))
-        # 差し戻しの build は送った review に返す (finish は断られる)
-        self.result(out, status='done', next={'episode': 'review', 'wave': 1})
-        rc, out = self.con('done')
-        self.assertEqual(rc, 0, out)
-        rc, out = self.con('next')  # 差し戻しを返した review
+        rc, out = self.con('next')  # 修正の段 (担当)
+        self.assertIn('Lead: fix', self.request(out))
         self.result(out, status='done', next={'episode': 'finish'})
         rc, out = self.con('done')
         self.assertEqual(rc, 0, out)
         rc, out = self.con('next')
-        self.assertEqual(self.line(out, 'episode'), 'finish seq 6', out)
+        self.assertEqual(self.line(out, 'episode'), 'finish seq 5', out)
         self.write('docs/pbi/report.md', '# report\n')
         self.result(out, status='done', next=None, report='docs/pbi/report.md')
         rc, out = self.con('done')
@@ -971,7 +967,7 @@ class ConductorTest(unittest.TestCase):
         self.assertIn('cost: unmeasured', out)
         run = self.read_json(RUN)
         self.assertEqual(run['schema'], 'atelier.run/1')
-        self.assertGreaterEqual(len(run['history']), 5)
+        self.assertGreaterEqual(len(run['history']), 4)
         # 仕様では finish の出番が agent_stats.py を流して roles.json を書く。進行役は書かない
         self.assertFalse(os.path.isfile(self.path('docs/pbi/stats/roles.json')))
 
@@ -1167,38 +1163,38 @@ class ConductorTest(unittest.TestCase):
         self.assertLess(took, 10, f'{took:.1f}s')
 
     def test_rework_build_records_sent_by(self):
-        """差し戻しの build は送った出番を引き継ぎ、ほかの出番 (finish も) を next にすると断る。"""
+        """差し戻しの build は送った出番 (test) を引き継ぎ、ほかの出番 (finish も) を next にすると断る。"""
         self.write_json('docs/pbi/waves.json', {'waves': [{'n': 1, 'pbis': ['PBI-001']}]})
         self.con('start', '--goal', 'rework')
         rc, out = self.con('next')
         self.result(out, status='done', next={'episode': 'build', 'wave': 1})
         self.con('done')
         rc, out = self.con('next')  # build seq 2
-        self.result(out, status='done', next={'episode': 'review'})
+        self.result(out, status='done', next={'episode': 'test', 'wave': 1})
         rc, out = self.con('done')
         self.assertEqual(rc, 0, out)
-        rc, out = self.con('next')  # review seq 3
+        rc, out = self.con('next')  # test seq 3
         self.result(out, status='done', next={'episode': 'build', 'wave': 1, 'pbis': ['PBI-001']})
         rc, out = self.con('done')
         self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
-        self.assertEqual(self.read_json(RUN)['pending']['sent_by'], 'review')
+        self.assertEqual(self.read_json(RUN)['pending']['sent_by'], 'test')
         rc, out = self.con('next')  # build seq 4 (差し戻し)
-        self.assertIn('Sent by: review', self.request(out))
-        self.assertEqual(self.read_json(RUN)['running']['sent_by'], 'review')
+        self.assertIn('Sent by: test', self.request(out))
+        self.assertEqual(self.read_json(RUN)['running']['sent_by'], 'test')
 
         self.result(out, status='done', next={'episode': 'finish'})
         rc, out = self.con('done')
         self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
-        self.assertIn('sent by review', out)
-        self.assertEqual(self.read_json(RUN)['pending']['sent_by'], 'review')  # retry も保つ
+        self.assertIn('sent by test', out)
+        self.assertEqual(self.read_json(RUN)['pending']['sent_by'], 'test')  # retry も保つ
 
         rc, out = self.con('next')  # build seq 5 (retry)
-        self.assertIn('Sent by: review', self.request(out))
-        self.result(out, status='done', next={'episode': 'review', 'wave': 1})
+        self.assertIn('Sent by: test', self.request(out))
+        self.result(out, status='done', next={'episode': 'test', 'wave': 1})
         rc, out = self.con('done')
         self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
         rc, out = self.con('next')
-        self.assertEqual(self.line(out, 'episode'), 'review seq 6', out)
+        self.assertEqual(self.line(out, 'episode'), 'test seq 6', out)
 
     def test_agent_episode_is_not_stale(self):
         """pid を 1 つも持たない agent 起動の出番は stale にせず、wait は timeout まで待つ。"""
@@ -1222,29 +1218,29 @@ class ConductorTest(unittest.TestCase):
         self.result(out, status='done', next={'episode': 'build', 'wave': 1})
         self.con('done')
         rc, out = self.con('next')
-        self.result(out, status='done', next={'episode': 'review'})
+        self.result(out, status='done', next={'episode': 'test', 'wave': 1})
         self.con('done')
         rc, out = self.con('next')
         self.result(out, status='done', next={'episode': 'build', 'wave': 1, 'pbis': ['PBI-001']})
         self.con('done')
         rc, out = self.con('next')  # 差し戻しの build
-        self.assertIn('Sent by: review', self.request(out))
+        self.assertIn('Sent by: test', self.request(out))
         rc, out = self.con('done')  # 結果無し 1 回目
         self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
         rc, out = self.con('next')
         rc, out = self.con('done')  # 2 回目: launch-failure
         self.assertEqual((rc, out.splitlines()[0]), (10, 'state: question'), out)
-        self.assertEqual(self.read_json(RUN)['question']['sent_by'], 'review')
+        self.assertEqual(self.read_json(RUN)['question']['sent_by'], 'test')
         self.show_question()
         rc, out = self.con('answer', '--text', 'go')
         self.assertEqual(rc, 0, out)
-        self.assertEqual(self.read_json(RUN)['pending']['sent_by'], 'review')
+        self.assertEqual(self.read_json(RUN)['pending']['sent_by'], 'test')
         rc, out = self.con('next')
-        self.assertIn('Sent by: review', self.request(out))
+        self.assertIn('Sent by: test', self.request(out))
         self.result(out, status='done', next={'episode': 'finish'})
         rc, out = self.con('done')
         self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
-        self.assertIn('sent by review', out)
+        self.assertIn('sent by test', out)
 
     def con_unstoppable(self, *args):
         """stop_child が常に失敗する (止められない子の代わり) conductor.py を CLI として 1 回呼ぶ。"""
@@ -1417,7 +1413,8 @@ class ConductorTest(unittest.TestCase):
         rc, out = self.con('next')
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.line(out, 'roles'),
-                         'designer fable (repo), episodes.test sonnet/high (template), reviewer.deep opus (run), '
+                         'designer fable (repo), episodes.test sonnet/high (template), '
+                         'episodes.fix sonnet/high (template), reviewer.deep opus (run), '
                          'reviewer.other sonnet (template)/low (run), '
                          'tester haiku (home)')
         self.assertIn('model=fable', self.line(out, 'launch'))
@@ -2525,12 +2522,96 @@ class ConductorTest(unittest.TestCase):
         self.assertIn('launch: headless (e2e runs as a script)', out)
         self.assertEqual(self.read_json(RUN)['state'], 'ready')
 
+    def test_review_sends_its_findings_to_the_fix_stage_not_back_to_build(self):
+        """最後の見直しは差し戻さない: review -> build は断り、review -> fix は通す。"""
+        self.to_episode('review')
+        rc, out = self.con('next')
+        self.result(out, status='done', next={'episode': 'build', 'wave': 1, 'pbis': ['PBI-001']})
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (12, 'state: retry'), out)
+        self.assertIn('review -> build is not allowed', out)
+        rc, out = self.con('next')
+        self.result(out, status='done', next={'episode': 'fix', 'wave': 1})
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertEqual(self.read_json(RUN)['pending']['episode'], 'fix')
+
+    def test_fix_episode_runs_on_its_lead_and_passes_to_the_designer(self):
+        """修正の段は episodes.fix の担当が受け、needs_designer で設計者に渡り、設計者が戻し、e2e か finish に進む。"""
+        self.to_episode('review')
+        rc, out = self.con('next')
+        self.result(out, status='done', next={'episode': 'fix', 'wave': 1})
+        self.assertEqual(self.con('done')[0], 0)
+        rc, out = self.con('next')
+        self.assertEqual(self.launch_model(out), 'sonnet', out)
+        self.assertIn('episodes.fix sonnet/high (template)', self.line(out, 'roles'))
+        self.assertIn('Lead: fix on sonnet/high', self.request(out))
+        self.result(out, status='done', next={'episode': 'fix', 'wave': 1})
+        rc, out = self.con('done')
+        self.assertIn('fix -> fix needs needs_designer', out)
+        rc, out = self.con('next')
+        self.result(out, status='done', next={'episode': 'fix', 'wave': 1, 'needs_designer': 'code or ADR?'})
+        self.assertEqual(self.con('done')[0], 0)
+        rc, out = self.con('next')
+        self.assertEqual(self.launch_model(out), 'opus', out)
+        self.assertIn('Escalated: code or ADR?', self.request(out))
+        self.result(out, status='done', next={'episode': 'fix', 'wave': 1})
+        self.assertEqual(self.con('done')[0], 0)
+        rc, out = self.con('next')
+        self.assertEqual(self.launch_model(out), 'sonnet', out)
+        # 修正の段は build に戻さない
+        self.result(out, status='done', next={'episode': 'build', 'wave': 1, 'pbis': ['PBI-001']})
+        rc, out = self.con('done')
+        self.assertIn('fix -> build is not allowed', out)
+        rc, out = self.con('next')
+        self.result(out, status='done', next={'episode': 'e2e', 'wave': 1})
+        rc, out = self.con('done')
+        self.assertEqual((rc, out.splitlines()[0]), (0, 'state: ready'), out)
+        self.assertEqual(self.read_json(RUN)['pending']['episode'], 'e2e')
+
+    def e2e_args(self, after_review):
+        """e2e の出番を偽のスクリプトで流し、渡された引数を返す。"""
+        script = os.path.join(self.tmp, 'args_e2e.py')
+        seen = os.path.join(self.tmp, 'e2e.args.json')
+        self.write_abs(script, '\n'.join([
+            'import json, sys',
+            'args = sys.argv[1:]',
+            f'open({seen!r}, "w", encoding="utf-8").write(json.dumps(args))',
+            "result, seq = args[args.index('--result') + 1], int(args[args.index('--seq') + 1])",
+            "open(result, 'w', encoding='utf-8').write(json.dumps({'schema': 'atelier.episode/1', 'episode': 'e2e',",
+            "    'seq': seq, 'status': 'done', 'summary': ['e2e: 0 specs'], 'next': {'episode': 'finish'}}))", '']))
+        if after_review:
+            self.to_episode('review')
+            rc, out = self.con('next')
+            self.result(out, status='done', next={'episode': 'e2e', 'wave': 1})
+            self.assertEqual(self.con('done')[0], 0)
+        else:
+            self.to_episode('e2e')
+        rc, out = self.con('next')
+        rc, out = self.con('run', '--max-episodes', '1', env={'ATELIER_E2E_CMD': json.dumps([sys.executable, script])})
+        self.assertEqual(rc, 0, out)
+        with open(seen, encoding='utf-8') as handle:
+            return json.loads(handle.read())
+
+    def test_e2e_after_the_review_counts_rounds_for_this_run(self):
+        """review のあとの e2e には run の id だけを渡す。履歴に review が無い (前の形の run の途中) ときだけ
+        --before-review を付け、スクリプトは今までどおり test に進む。"""
+        args = self.e2e_args(after_review=True)
+        self.assertNotIn('--before-review', args)
+        self.assertEqual(args[args.index('--run') + 1], self.read_json(RUN)['run_id'])
+        self.assertEqual(self.read_json(RUN)['pending']['episode'], 'finish')
+
+    def test_e2e_before_any_review_keeps_the_old_flow(self):
+        args = self.e2e_args(after_review=False)
+        self.assertIn('--before-review', args)
+
     def test_roles_from_a_missing_record_fall_back(self):
         """running.roles の無い古い run.json では None を返し、呼び出し側が load_roles で取り直す。"""
         for record in (None, [], 'x'):
             self.assertIsNone(conductor.roles_from_record(record))
         roles = conductor.roles_from_record({'designer': {'model': {'value': 'opus', 'from': 'default'}}})
         self.assertEqual(roles['episodes']['test']['model'], 'sonnet')
+        self.assertEqual(roles['episodes']['fix']['model'], 'sonnet')
 
     def test_e2e_script_failure_is_a_failed_episode(self):
         """スクリプトが 0 以外で終われば出番の失敗として数える。"""
