@@ -22,9 +22,29 @@ The lint recheck (`appendix/lint.md`) has run before this, and its confirmed reg
    - setting: `auto`, `off`, or a skill name from agents.json (`appendix/adapters.md`). A skill name replaces the template's review components for that phase when it is in the skill list.
 3. Put the `warn` lines under the table together in one question result (kind `decision`) and end the episode. Inline, pass each one to the user in one line.
 
+## Heavy review
+
+Read this when the review stage has a row whose `when` is `heavy-ask` (pstack's `interrogate` in the recommended example). It costs several reviews at once, so it runs only when the finished diff is deep work and the user says yes on a question page. It is decided here, after the implementation and right before the final review: never at approval, never from a PBI's review `deep`, never without the page.
+
+1. When the gate's `review` row says `skip` or `off`, the heavy review does not run either. Otherwise, after the `git add -N` of the gate, run from the repository root:
+
+   ```
+   python <skill>/heavy_check.py check docs/pbi --base <base> [--workflow <name>] --designer-model <your model family> --usual-model <the family of reviewer.deep> --lang <ja|en>
+   ```
+
+   `--lang` is the language of the user's goal. The script measures the working tree against the merge-base (`docs/pbi/` and `.claude/worktrees/` are left out), checks three criteria (a new application from scratch, a new subsystem with its own data model or external interface across 3 or more modules, a new architecture: a deployment target or a dependency swap), and writes `docs/pbi/verify/heavy.json`. A large diff, a `sensitive` PBI or a PBI with review `deep` is not deep by itself.
+2. Read its first line:
+   - `recorded run|skip ...`: a resume, or the second final review. Use that answer and ask nothing.
+   - `verdict none`: no `heavy-ask` row. Go on.
+   - `verdict light`: no criterion holds. Run `python <skill>/heavy_check.py record docs/pbi --decision skip --by auto` and go on without asking.
+   - `verdict heavy`: open the files that the criteria in `docs/pbi/verify/heavy.json` name and confirm against the diff that the work is deep by that criterion (a new manifest for fixtures, a vendored folder or generated files is not a new application). Not deep: `record --decision skip --by auto --reason "<why>"` and go on. Deep: the question draft is on the `draft` line (`docs/pbi/notes/heavy-review.question.md`), already in the shape of a decision question (`appendix/questions.md`): why the diff looks deep, the numbers of the diff, the reviewers it starts with their models and the expected cost, and two choices, run it or the usual review. Change only its wording if you must, run `design_record.py lint --draft <it> --kind decision`, and end the episode with a question of kind `decision` with that path and the state. Inline, show it with `python <skill>/present.py <draft> --kind decision` and wait for the user's answer.
+3. On the `Answer:`: run it → `record --decision run --by user`. Anything else (the usual review, no answer, an unclear one) → `record --decision skip --by user`. `record` refuses `run` unless the page was shown after the check (a `shown` row of kind `decision` in `docs/pbi/presentations.jsonl`), and refuses `run` by `auto`. The answer stays in `docs/pbi/adapters.json` under `heavy-review`, so a resume does not ask again.
+4. With `heavy-review.decision` `run`, the heavy row is the final review of this run, ahead of `## Pick the review`; run it as in `appendix/engine.md`, `## read-skill components`. With `skip`, pass over every `heavy-ask` row; `## Pick the review` picks the review as usual (lens-review in the recommended example). Never run a `heavy-ask` row without `run` in that record.
+5. Stage record: `stage review: <component> skip (heavy-review: light)`, `skip (heavy-review: not deep, <reason>)`, `skip (heavy-review: the user chose the usual review)`, or `run (heavy-review: the user said run; <criteria>)`.
+
 ## Pick the review
 
-When the `review` row says `run`, the `review-skill` row names what reviews, strongest first:
+When the `review` row says `run` and no heavy review runs (`## Heavy review`), the `review-skill` row names what reviews, strongest first:
 
 | decision | What reviews |
 |---|---|
