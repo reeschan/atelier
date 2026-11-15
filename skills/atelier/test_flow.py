@@ -27,6 +27,8 @@ sys.path.insert(0, HERE)
 import component  # noqa: E402
 import flow  # noqa: E402
 
+HEAVY_REASON = ('heavy-ask: run heavy_check.py check right before the final review; '
+                'ask with its page when the diff is deep (appendix/review.md)')
 HEADER = 'stage\tcomponent\tinvoke\twhere\tmemory\twhen\tstatus\tdoc\tmodels'
 PRESETS = ('jev-routed', 'high-model')
 # 偽の pstack に置くスキル (どれも disable-model-invocation なので read-skill の部品になる)
@@ -70,7 +72,7 @@ class FlowCliTest(unittest.TestCase):
     def install_pstack(self):
         '''偽の pstack をプラグインの置き場に作り、component.py add で home の jev-routed に差す。
 
-        how は理解、blast-radius と architect は振り分けのあとの関所 (PBI ごと)、interrogate は deep のレビュー。
+        how は理解、blast-radius と architect は振り分けのあとの関所 (PBI ごと)、interrogate は差分を調べて聞く重いレビュー (heavy-ask)。
         '''
         self.plugins = os.path.join(self.dir, 'plugins')
         root = os.path.join(self.plugins, 'cache', 'cursor-plugins', 'pstack', '0.15.30')
@@ -85,7 +87,7 @@ class FlowCliTest(unittest.TestCase):
             ['pstack:how', '--stage', 'understand', '--when', 'clearly-complex'],
             ['pstack:blast-radius', '--stage', 'gate', '--after', 'route', '--when', 'coupling-high'],
             ['pstack:architect', '--stage', 'gate', '--after', 'route', '--when', 'tier-opus'],
-            ['pstack:interrogate', '--stage', 'review', '--when', 'deep'],
+            ['pstack:interrogate', '--stage', 'review', '--when', 'heavy-ask'],
         ]
         with mock.patch.dict(os.environ, {'PBI_PLUGINS_DIR': self.plugins}), contextlib.redirect_stdout(io.StringIO()):
             for args in adds:
@@ -289,7 +291,7 @@ class FlowCliTest(unittest.TestCase):
         '''テンプレートの候補で where を上書きでき、where が main の候補だけが models (敵役などのモデル) を持てる。'''
         env = self.install_pstack()
         good = self.home_workflow()
-        interrogate = {'id': 'review.pstack-interrogate', 'when': 'deep', 'where': 'main',
+        interrogate = {'id': 'review.pstack-interrogate', 'when': 'heavy-ask', 'where': 'main',
                        'models': ['opus xhigh', 'sonnet high', 'inherit']}
         data = copy.deepcopy(good)
         data['stages']['review'][0] = interrogate
@@ -306,9 +308,9 @@ class FlowCliTest(unittest.TestCase):
             (f'error {place} has models but does not run in main (a subagent cannot start subagents)',
              {'id': 'review.pstack-interrogate', 'models': ['opus']}),
             (f'error {place} models must be 1 to 10 of "<opus|sonnet|haiku|fable|inherit> [low|medium|high|xhigh|max]"',
-             {'id': 'review.pstack-interrogate', 'where': 'main', 'models': ['gpt-5']}),
+             {'id': 'review.pstack-interrogate', 'when': 'heavy-ask', 'where': 'main', 'models': ['gpt-5']}),
             (f'error {place} models must be 1 to 10 of "<opus|sonnet|haiku|fable|inherit> [low|medium|high|xhigh|max]"',
-             {'id': 'review.pstack-interrogate', 'where': 'main', 'models': ['sonnet'] * 11}),
+             {'id': 'review.pstack-interrogate', 'when': 'heavy-ask', 'where': 'main', 'models': ['sonnet'] * 11}),
             (f'error {place} where must be one of main, subagent-readonly, subagent',
              {'id': 'review.pstack-interrogate', 'where': 'runner'}),
         ]
@@ -322,7 +324,8 @@ class FlowCliTest(unittest.TestCase):
         write_json(os.path.join(self.base, f'{pbi}.route.json'),
                    {'tier': tier, 'route': [], 'review': review, 'scores': {'coupling': coupling}})
 
-    def test_decide_per_pbi_gates_and_deep_review(self):
+    def test_decide_per_pbi_gates_and_heavy_review(self):
+        """PBI の review が deep でも、heavy-ask の行は run にならない (差分を調べて聞くまでは設計者に任せる)。"""
         self.write_route('PBI-001', 'opus', 1, 'normal')
         self.write_route('PBI-002', 'sonnet', 2, 'deep')
         env = self.install_pstack()
@@ -336,8 +339,48 @@ class FlowCliTest(unittest.TestCase):
             ['gate after route', 'gate.pstack-blast-radius', 'PBI-002', 'run', 'coupling 2'],
             ['gate after route', 'gate.pstack-architect', 'PBI-001', 'run', 'tier opus'],
             ['gate after route', 'gate.pstack-architect', 'PBI-002', 'skip', 'tier sonnet'],
-            ['review', 'review.pstack-interrogate', 'all', 'run', 'review deep: PBI-002'],
+            ['review', 'review.pstack-interrogate', 'all', 'orchestrator', HEAVY_REASON],
         ])
+
+    def test_decide_reads_the_recorded_heavy_review(self):
+        """heavy_check.py record の答え (adapters.json の heavy-review) があれば、heavy-ask の行はその run / skip。"""
+        self.write_route('PBI-001', 'sonnet', 1, 'deep')
+        env = self.install_pstack()
+        for decision, by in (('run', 'user'), ('skip', 'auto')):
+            with self.subTest(decision=decision):
+                write_json(os.path.join(self.base, 'adapters.json'),
+                           {'heavy-review': {'decision': decision, 'by': by}})
+                result = self.run_flow('--decide', env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                review = [line.split('\t') for line in result.stdout.splitlines()[2:] if line.startswith('review\t')]
+                self.assertEqual(review, [['review', 'review.pstack-interrogate', 'all', decision,
+                                           f'heavy-review {decision} by {by} (adapters.json)']])
+
+    def test_no_path_runs_a_heavy_review_without_asking(self):
+        """review の工程では deep を使えず、main で動く (自分でレビュアーを起こす) 部品は heavy-ask でなければ誤り。"""
+        env = self.install_pstack()
+        good = self.home_workflow()
+        place = 'review: review.pstack-interrogate'
+        cases = [
+            (f'error {place} uses when deep, which the review stage cannot use; use heavy-ask '
+             '(the diff is checked and the user asked right before the final review) or adapter-gate',
+             {'id': 'review.pstack-interrogate', 'when': 'deep'}),
+            (f'error {place} runs in main and starts its own reviewers, so its when must be heavy-ask',
+             {'id': 'review.pstack-interrogate', 'when': 'always', 'where': 'main', 'models': ['opus xhigh']}),
+            (f'error {place} runs in main and starts its own reviewers, so its when must be heavy-ask',
+             {'id': 'review.pstack-interrogate', 'where': 'main'}),
+        ]
+        for expected, item in cases:
+            with self.subTest(expected=expected):
+                data = copy.deepcopy(good)
+                data['stages']['review'][0] = item
+                self.assertIn(expected, self.errors_for(data))
+        # deep は振り分けのあとの関所ではそのまま使える (PBI ごとの判定)
+        data = copy.deepcopy(good)
+        data['gates'] = [{'after': 'route', 'components': [{'id': 'gate.pstack-architect', 'when': 'deep'}]}]
+        write_json(os.path.join(self.base, 'workflow.json'), data)
+        result = self.run_flow(env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_heavy_ask_only_in_review_and_left_to_the_designer(self):
         '''heavy-ask は review の工程だけで使え、--decide は設計者に任せる行 (orchestrator) を出す。'''
@@ -353,8 +396,7 @@ class FlowCliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         rows = [line.split('\t') for line in result.stdout.splitlines()[2:]]
         review = [row for row in rows if row[0] == 'review']
-        self.assertEqual(review, [['review', 'review.pstack-interrogate', 'all', 'orchestrator',
-                                   'heavy-ask: check the heavy criterion, ask at approval, read docs/pbi/adapters.json']])
+        self.assertEqual(review, [['review', 'review.pstack-interrogate', 'all', 'orchestrator', HEAVY_REASON]])
 
         bad = copy.deepcopy(custom)
         bad['stages']['understand'] = [{'id': 'understand.pstack-how', 'when': 'heavy-ask'}]
