@@ -1,6 +1,6 @@
 # Appendix: rework and stopping
 
-Read this when the fix stage picks `fix.rework` (verify or the final review decided rework), or a stop condition is met.
+Read this when verify, a PBI's review or the tester decided rework of one PBI (a build PBI, a test PBI or a fix PBI), or a stop condition is met. The final review never decides a rework: its findings go into the fix list (`appendix/fix.md`). When the fix stage picks `fix.rework` (a home template copied before the fix stage existed), run the fix stage by `appendix/fix.md`.
 
 ## Rework
 
@@ -26,17 +26,17 @@ Reviews have their own limit: a PBI is reviewed at most twice, its first report 
 3. Check the note with the Jev gate `rework_quality` (names_condition, states_current_and_expected, has_repro; `appendix/jev.md`). Rewrite any item under 0.6 before sending.
 4. Launch it with the prompt of `runners.md`, report name `PBI-<n>.rework-<k>`, and add one to the PBI's rework count in STATUS.md.
 
-## Minor fixes
+## Fix PBIs
 
-A minor of the final review that the user chose to fix (`appendix/review.md`, `## Minor findings`) is a rework like any other, with these differences:
+A fix PBI (it has a `- Fix round:` line; `appendix/fix.md`) is reworked like any other PBI, inside the fix episode, with these differences:
 
-- The note lists each minor as `- Minor <file>:<line>: <what is wrong>` with `Expected: <the fix>`; there is no failing criterion.
-- It counts toward `fix.max_rework` and the two reviews of the PBI. A PBI already at either limit gets no minor rework: its minors go to the completion report as skipped, with the reason `limit`.
-- Its review (`prompts/pbi-review.md`) judges the minors listed in the note as well as the acceptance criteria. No final review runs after it.
+- The note names the items (`F<n>`) whose criterion failed, with what the fix's diff (`fix_plan.py diff`) shows now and what passing looks like. Keep the other items as they are.
+- At the limit (`fix.max_rework`, or `limit` on its bundle row), do not stop the run and do not ask: the items it still fails go to the completion report as `left (limit)` (`appendix/fix.md`, `## Steps`), and the stage goes on.
+- No final review runs after it.
 
 ## Stop
 
-Stop a PBI when it still fails after the last allowed rework, when its bundle row has `limit`, or when it needs a third continue. Raise its tier, rewrite the PBI or build it yourself only when the user picks that. An unusable runner is not a stop of this kind: it has its own question (`runners.md`, When a runner is unusable).
+Stop a PBI (not a fix PBI: `## Fix PBIs`) when it still fails after the last allowed rework, when its bundle row has `limit`, or when it needs a third continue. Raise its tier, rewrite the PBI or build it yourself only when the user picks that. An unusable runner is not a stop of this kind: it has its own question (`runners.md`, When a runner is unusable).
 
 - PBIs of the same wave that do not depend on it keep running; PBIs that depend on it are held.
 - End the episode with a question (kind `rework-limit`) once every running attempt in the same wave has returned and been reconciled; do not end the episode with an attempt still running. Lay it out as the `rework-limit` row of `appendix/questions.md` (`## What goes in each kind`). A stale case (a target file changed after the design) is the same kind, `rework-limit`, laid out as the stale row of that table (each of its columns differs from the plain row, not only the summary).
