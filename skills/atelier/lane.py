@@ -149,8 +149,12 @@ def change_from_diff(root: Path, base: str, pbi: Path) -> Change:
     """heavy_check.measure で作業ツリーの差分を測り Change を返す。"""
     measured = heavy_check.measure(root, base, pbi)
     paths = tuple(dict.fromkeys(item['path'] for item in measured['files']))
-    new = frozenset(item['path'] for item in measured['files'] if item['status'] == 'A')
-    return Change(paths=paths, new=new, base_files=tuple(measured['base_files']))
+    base_files = tuple(measured['base_files'])
+    base_set = set(base_files)
+    # 追加 (A) に加えて、名前の変わったファイルの行き先 (R・C) などベースに無いパスも新しいファイルに数える
+    new = frozenset(item['path'] for item in measured['files']
+                    if item['status'] == 'A' or (item['status'] != 'D' and item['path'] not in base_set))
+    return Change(paths=paths, new=new, base_files=base_files)
 
 
 def open_run_state(pbi: Path) -> str | None:
@@ -160,7 +164,7 @@ def open_run_state(pbi: Path) -> str | None:
         text = run_path.read_text(encoding='utf-8')
     except FileNotFoundError:
         return None
-    except OSError:
+    except (OSError, UnicodeError):
         return 'unreadable'
     try:
         data = json.loads(text)
@@ -312,9 +316,9 @@ def merge_base(root: Path) -> str | None:
     return None
 
 
-def pick_reviewer(builder_model: str) -> str:
-    """作り手と別系統のレビュー用モデルラベルを返す。"""
-    roles = conductor.load_roles(None, None)[0]
+def pick_reviewer(builder_model: str, pbi: Path | None = None) -> str:
+    """作り手と別系統のレビュー用モデルラベルを返す。pbi があればその roles.json (repo の層) も読む。"""
+    roles = conductor.load_roles(conductor.Paths(str(pbi)) if pbi is not None else None, None)[0]
     reviewer = dict(roles['reviewer']['other'])
     if role_results.same_model(reviewer['model'], builder_model):
         alt = 'sonnet' if role_results.same_model(builder_model, 'opus') else 'opus'
@@ -404,7 +408,7 @@ def cmd_record_start(args: argparse.Namespace) -> int:
         print('warn: no goal file, task.profiled not written')
     else:
         emit_task_profile(pbi, goal_text, base, run_id)
-    print(f'reviewer: {pick_reviewer(args.builder_model)}')
+    print(f'reviewer: {pick_reviewer(args.builder_model, pbi)}')
     settings, _ = agents.load_adapters(common.resolve_home(None))
     _, decision, reason = adapter_gate.review_skill_row(settings['review'], root, os.environ)
     print(f'review-skill: {decision} ({reason})')

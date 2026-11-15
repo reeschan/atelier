@@ -181,6 +181,23 @@ class LaneDecideTest(LaneTestBase):
         self.assertEqual(second[0], 'lane: atelier')
         self.assertIn('reason: files 9 > 8', second)
 
+    def test_renamed_to_a_data_model_file_counts_as_new(self):
+        """名前を変えたファイルの行き先がデータモデルのファイルなら、新しいファイルとして理由が出る。"""
+        self.git('mv', 'src/a/x.py', 'src/a/models.py')
+        lines = self.check_diff()
+        self.assertEqual(lines[0], 'lane: atelier')
+        self.assertIn('reason: new data-model file src/a/models.py', lines)
+
+    def test_run_json_that_is_not_utf8_counts_as_open(self):
+        """UTF-8 として読めない run.json は落ちずに、読めない開いた run として扱う。"""
+        path = self.path(RUN_JSON)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'wb') as f:
+            f.write(bytes([0xff, 0xfe]) + b'{"state": "finished"}')
+        lines = self.decide(['src/a/x.py', 'src/a/y.py'], 'small refactor', '--light')
+        self.assertEqual(lines[0], 'lane: atelier')
+        self.assertIn(f'reason: open run {RUN_JSON} (state unreadable)', lines)
+
     def tree(self):
         found = {}
         for folder, _, names in os.walk(self.path('docs/pbi')):
@@ -236,6 +253,15 @@ class LaneRecordTest(LaneTestBase):
         self.assertIsNotNone(reviewer, out)
         self.assertNotIn('opus', reviewer)
         self.assertIsNotNone(self.line(out, 'review-skill'), out)
+
+    def test_reviewer_follows_the_repo_roles_json(self):
+        """repo の docs/pbi/roles.json の reviewer.other が home より優先される。"""
+        self.set_reviewer('opus')
+        self.write_json('docs/pbi/roles.json', {'roles': {'reviewer': {'other': {'model': 'haiku'}}}})
+        out = self.record_start('claude-opus-5-5')
+        reviewer = self.line(out, 'reviewer')
+        self.assertIsNotNone(reviewer, out)
+        self.assertIn('haiku', reviewer)
 
     def test_C17(self):
         self.set_reviewer('sonnet')
