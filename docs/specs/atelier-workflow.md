@@ -147,7 +147,7 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 ### pstack の部品・when の判定・メモリの点検 (PR 3)
 
 - **read-skill の実行**: `flow.py` が read-skill の部品の status を、プラグインの置き場 (`PBI_PLUGINS_DIR`、無ければ `~/.claude/plugins`) の下の `<プラグイン名>/` か `<プラグイン名>/<版>/` の直下に `invoke.path` があるかで決める (`plugin ok <SKILL.md の場所>` / `plugin missing <名前>`)。設計者はその SKILL.md を、部品の `where` のサブエージェントに読ませて従わせる (`appendix/engine.md`)。
-- **PBI ごとの when の判定**: `flow.py <pbi-dir> --decide` が route.json から判定する。読めない route.json や型の違う欄 (tier・scores・review) があれば、表を出さずに終了コード 2。`tier-opus` は tier が opus、`coupling-high` は scores.coupling が 2、`deep` は review が deep。after: route の関所の部品は PBI ごとに 1 行、review の工程の deep の部品は「どれかの PBI が deep なら run」の 1 行。設計者は自分で判定しない。
+- **PBI ごとの when の判定**: `flow.py <pbi-dir> --decide` が route.json から判定する。読めない route.json や型の違う欄 (tier・scores・review) があれば、表を出さずに終了コード 2。`tier-opus` は tier が opus、`coupling-high` は scores.coupling が 2、`deep` は review が deep。after: route の関所の部品は PBI ごとに 1 行。設計者は自分で判定しない。(2026-11-15 に改めた: review の工程の deep は使えなくなり、review の工程の heavy-ask の部品は adapters.json の heavy-review の答えを出す。下の「重い見直しは実装のあとに差分を調べて聞く」)
 - **メモリの点検**: 実行先に道具を渡さない仕組みは実行先ごとにまちまちなので、強制は「毎回の記録で確かめる」形にした。`record_run.py` が試行ごとに実装担当の shared-memory の呼び出しを調べ、`runs.jsonl` の `memory` に残す。agent は会話記録の tool_use を数え、get した id が PBI の Refs に無ければ `unlisted_refs` に入れる。外部の実行先は JSON / JSONL のログを読み、道具の名前の欄 (tool・name など) が shared-memory の道具の名前と完全に一致する呼び出しだけを数え、引数から get の id を取る (文中に名前が出ただけでは数えない)。Refs の id は語ごとに比べる。読めるログが無いとき、id の分からない get があるときは `violation` を null (確かめられない) にする。許す使い方は agent が refs-only、外部の実行先がテンプレートの `build.external_memory`。search・write、none での get、Refs に無い id の get を `violation` にして、標準出力に `memory violation` の 1 行を出す。設計者は STATUS.md に書き、同じ実行先が繰り返したら (モデルを問わず) `--skip <実行先>` で外し、完了報告に並べる。
 - **yomiyasu**: `gate.yomiyasu` (Skill ツールの `yomiyasu:yomiyasu`、MIT、https://github.com/nanaism/yomiyasu) を `after: finish` の関所に足した (下の「外部部品」で、同梱から外し、利用者が登録する形にした)。完了報告を `docs/pbi/REPORT.md` に書いてから、日本語の報告の言い回しだけを整え、数値・id・パス・コマンド・貼った表は変えない。入っていなければ飛ばす。
 
@@ -225,6 +225,12 @@ pbi-orchestration-jev は、PBI に分けて安いモデルに振り分ける仕
 - 同梱の部品は自分と Claude Code の built-in だけ、の決まりは変えない。`map.builtin` は oh-my-mermaid の `omm-scan` を呼び出し先として手順の中で使い、無ければ同じ部品の中で代わりの依頼文に切り替える。`lint-survey.jevlint`・`lint-recheck.jevlint` はこのスキルの script (`lint_run.py`) で、requires は cli `jevlint`。
 - agents.json の `tools.<名前>.path` で、実行先ではない道具 (jevlint など) の場所を指せる。flow.py は runners が無い agents.json でも tools を読む。
 - テンプレートに `lint` (比べる線) を足した。`build.tests_at_end` と `kiln` は既定で有効にし、run の写しの `"enabled": false` で止める。flow.py は `lint`・`kiln` を検証しない (読むのは lint_run.py・lint_compare.py・kiln_log.py)。
+
+### 重い見直しは実装のあとに差分を調べて聞く (2026-11-15)
+
+- 仕様は `docs/specs/heavy-review-ask.md`。持ち主の指示 (2026-11-15): interrogate を動かすときは、本当に深い実装をしたのかを調べたうえで、answer-me-with-html の HTML のページで見せ、ユーザーに必ず確かめさせる。
+- `heavy-ask` の意味を変えた。承認のときに計画から聞くのをやめ、最後の見直しの直前に `heavy_check.py check` が実装を終えた差分を測って 3 つの基準に当て、深いときだけ問いのページ (kind decision) で聞く。答えは `heavy_check.py record` が `docs/pbi/adapters.json` の `heavy-review` に残す。`run` はユーザーの答えで、確認のページを見せた記録 (`presentations.jsonl` の shown) があるときだけ書ける。
+- 確かめずに重い見直しが動く道を塞いだ。review の工程では `deep` を使えない (`flow.py` の検証の誤り)。main で動く見直し (自分でレビュアーを起こす。builtin を除く) は `heavy-ask` でなければ誤り。`flow.py --decide` の heavy-ask の行は、記録があればその run / skip、無ければ orchestrator。
 
 ### 設計者を Atelier の中へ (v6)
 

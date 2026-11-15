@@ -218,27 +218,32 @@ class ComponentCliTest(unittest.TestCase):
         self.assertEqual(self.load('components', 'understand.pstack-how.json')['when'], 'always')
 
     def test_models_live_on_the_workflow_entry(self):
-        code, out, err = self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--when', 'deep',
+        code, out, err = self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--when', 'heavy-ask',
                                       '--where', 'main', '--models', 'opus xhigh', 'sonnet high')
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['review'][0],
-                         {'id': 'review.pstack-interrogate', 'when': 'deep', 'where': 'main',
+                         {'id': 'review.pstack-interrogate', 'when': 'heavy-ask', 'where': 'main',
                           'models': ['opus xhigh', 'sonnet high']})
         # where と models は共有の部品の定義に書かないので、登録済みの部品のまま別のテンプレートで変えられる
         component_file = self.load('components', 'review.pstack-interrogate.json')
         self.assertEqual(component_file['where'], 'subagent-readonly')
         self.assertNotIn('models', component_file)
         code, out, err = self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--workflow', 'high-model',
-                                      '--where', 'main', '--models', 'sonnet high')
+                                      '--when', 'heavy-ask', '--where', 'main', '--models', 'sonnet high')
         self.assertEqual(code, 0, out + err)
-        # 登録し直して --when だけ変えても、where と models は残り、--no-models で消える
-        self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--when', 'always')
+        # main で動く見直しは聞かずに動かせないので、--when always への登録し直しは断り、テンプレートは元のまま
+        code, out, _ = self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--when', 'always')
+        self.assertEqual(code, 2)
+        self.assertIn('error review: review.pstack-interrogate runs in main and starts its own reviewers, '
+                      'so its when must be heavy-ask', out)
+        # 登録し直して --when だけ渡しても、where と models は残り、--no-models で消える
+        self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--when', 'heavy-ask')
         self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['review'][0],
-                         {'id': 'review.pstack-interrogate', 'when': 'always', 'where': 'main',
+                         {'id': 'review.pstack-interrogate', 'when': 'heavy-ask', 'where': 'main',
                           'models': ['opus xhigh', 'sonnet high']})
-        self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--when', 'always', '--no-models')
+        self.run_cli('add', 'pstack:interrogate', '--stage', 'review', '--when', 'heavy-ask', '--no-models')
         self.assertEqual(self.load('workflows', 'jev-routed.json')['stages']['review'][0],
-                         {'id': 'review.pstack-interrogate', 'when': 'always', 'where': 'main'})
+                         {'id': 'review.pstack-interrogate', 'when': 'heavy-ask', 'where': 'main'})
         # サブエージェントで動く部品は、さらにサブエージェントを起こせないので models を持てない
         _, out, _ = self.run_cli('add', 'pstack:how', '--stage', 'understand', '--models', 'opus')
         self.assertIn('error understand: understand.pstack-how has models but does not run in main '

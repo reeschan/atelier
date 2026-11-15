@@ -48,7 +48,8 @@ flowchart TD
     LRA --> Q2{{送ってよい? 変わったファイルの dry-run}}
     Q2 --> LRJ[悪くなった所を 1 件ずつ確かめる]
     LRJ -->|bug-hunt か 新しい 100 行以上の関数| FX2[その PBI を差し戻す]
-    LRJ --> RV[review<br/>interrogate: 重い構成で承認のとき使うと答えたとき<br/>code-review: 差分が大きいとき]
+    LRJ --> HQ{{重い見直しを動かす? 差分が深いときだけ、HTML のページで聞く}}
+    HQ --> RV[review<br/>interrogate: 動かすと答えたとき<br/>lens-review: ふだん<br/>code-review: 差分が大きいとき]
     RV --> SC{{security-audit を使う? 承認のときに聞いた答え}}
     SC --> GS[gate: built-in の security-review]
     GS --> FL[直しの一覧<br/>確かめた指摘をすべて、1 回で]
@@ -79,7 +80,7 @@ flowchart TD
 | route | `route.jev`、関所 `gate.pstack-blast-radius`・`gate.pstack-architect` | 関所は PBI ごと (結合が強い・opus の段) |
 | build / verify / fix | `build.runners` / `verify.builtin` / `fix.list` | いつも |
 | lint-recheck (verify のあと) | `lint-recheck.jevlint` → `lint-recheck.builtin` | いつも (全 PBI とテストの工程が終わったあと 1 回) |
-| review | `review.pstack-interrogate` → `review.lens-review` → `review.code-review` → `review.builtin` | interrogate は、新しいアプリケーションを一から作るなどの重い構成のときだけ、承認で聞いて使うと答えた run で動く (`when` は `heavy-ask`。設計者が動かし、敵役は opus xhigh と sonnet high)。lens-review (日本語の観点別レビュー、[reeschan/claude-plugins-official](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review)) と code-review は adapter_gate.py が run と言うとき |
+| review | `review.pstack-interrogate` → `review.lens-review` → `review.code-review` → `review.builtin` | interrogate は、実装を終えた差分を `heavy_check.py` が調べて深い実装 (新しいアプリケーションを一から作るなど) に当たり、問いのページで動かすと答えた run だけで動く (`when` は `heavy-ask`。設計者が動かし、敵役は opus xhigh と sonnet high)。lens-review (日本語の観点別レビュー、[reeschan/claude-plugins-official](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review)) と code-review は adapter_gate.py が run と言うとき |
 | security (review のあと) | `security.security-audit`、関所 `gate.security-review` | security-audit は承認のときに聞いて、はいのとき |
 | finish | `finish.builtin`、関所 `gate.yomiyasu` | いつも |
 
@@ -93,6 +94,7 @@ flowchart TD
 | lint-survey と lint-recheck で、モデルに送る直前 | 送るか、AST だけにするか (ファイル数・トークン・費用・送り先を見せる) | `docs/pbi/adapters.json` の `sends` |
 | route のあと | PBI の一覧の承認。無い道具を入れるか、security-audit を使うか、範囲の外の候補を足すか、あとに回すテストの案 | `docs/pbi/STATUS.md` |
 | PBI が差し戻しの上限に達したとき、直しが設計のやり直しになるとき | 段を上げる・書き直す・止める | `docs/pbi/STATUS.md` |
+| 最後の見直しの直前、差分が深い実装に当たったときだけ | 重い見直し (interrogate) を動かすか、ふつうの見直しにするか (深いと見た理由・差分の数字・レビュアーのモデルと費用の見込みを HTML のページで見せる) | `docs/pbi/adapters.json` の `heavy-review` |
 | 波の区切りで、Kiln の引き継ぎの線を越えたとき | `/clear` して `resume` する | `docs/pbi/HANDOFF.md` |
 | データを消す・force push・リポジトリの外を変えるなど、壊す操作の前 | してよいか | 答えだけ (残さない) |
 
