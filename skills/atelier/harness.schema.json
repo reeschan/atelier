@@ -8,16 +8,25 @@
       "fields": {
         "workflow": {"type": "id"},
         "launch": {"type": "id"},
-        "roles_from": {"type": "map", "keys": {"type": "id"}, "values": {"type": "enum", "values": ["run", "repo", "home", "template", "default"]}}
+        "roles_from": {"type": "map", "keys": {"type": "id"}, "values": {"type": "enum", "values": ["run", "repo", "home", "template", "default"]}},
+        "lane": {"type": "enum", "values": ["light", "atelier"]}
       }
     },
     "run.ended": {
       "fields": {
-        "result": {"type": "enum", "values": ["finished", "aborted"]},
+        "result": {"type": "enum", "values": ["finished", "aborted", "escalated"]},
         "episodes": {"type": "int"},
         "waves": {"type": "int"},
         "pbis": {"type": "int"},
-        "seconds": {"type": "number"}
+        "seconds": {"type": "number"},
+        "files": {"type": "int"},
+        "lines": {"type": "int"},
+        "context_delta": {"type": "int"},
+        "findings": {"type": "object", "fields": {
+          "critical": {"type": "int"},
+          "major": {"type": "int"},
+          "minor": {"type": "int"}
+        }}
       }
     },
     "episode.started": {
@@ -141,14 +150,14 @@
     "question.asked": {
       "fields": {
         "kind": {"type": "enum", "values": ["approve", "rework-limit", "destructive", "send-approval", "decision", "handoff-loop", "launch-failure"]},
-        "topic": {"type": "enum", "values": ["runner-unavailable", "omm", "recheck", "unknown", "approve-ask", "design-approval", "headless", "other"]},
+        "topic": {"type": "enum", "values": ["runner-unavailable", "omm", "recheck", "unknown", "approve-ask", "design-approval", "headless", "grill-round", "other"]},
         "items": {"type": "int"}
       }
     },
     "question.answered": {
       "fields": {
         "kind": {"type": "enum", "values": ["approve", "rework-limit", "destructive", "send-approval", "decision", "handoff-loop", "launch-failure"]},
-        "topic": {"type": "enum", "values": ["runner-unavailable", "omm", "recheck", "unknown", "approve-ask", "design-approval", "headless", "other"]},
+        "topic": {"type": "enum", "values": ["runner-unavailable", "omm", "recheck", "unknown", "approve-ask", "design-approval", "headless", "grill-round", "other"]},
         "choice": {"type": "enum", "values": ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "yes", "no", "revise"]},
         "wait_s": {"type": "int"},
         "revise": {"type": "bool"}

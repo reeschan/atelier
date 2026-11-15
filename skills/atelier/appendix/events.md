@@ -34,6 +34,7 @@ An episode result's `question` may carry an optional `topic` (`appendix/episodes
 
 | Question | `topic` |
 |---|---|
+| One grill round (including its child, alignment, map and optional asks) | `grill-round` |
 | An unusable runner (another route step, wait, or hold) | `runner-unavailable` |
 | An OMM cache miss (repo, cache or skip) | `omm` |
 | A lint recheck rework candidate | `recheck` |

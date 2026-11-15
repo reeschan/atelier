@@ -1,6 +1,6 @@
 """担当を決める。
 
-  python select_model.py <facts.json> [<brief の Jev 応答.json>] [--today YYYY-MM-DD] [--tier haiku|sonnet|opus] [--skip opencode,agy,<model>] [--pbi N] [--routing <routing.json>] [--home DIR] [--now ISO]
+  python select_model.py <facts.json> [<brief の Jev 応答.json>] [--today YYYY-MM-DD] [--tier haiku|sonnet|opus] [--skip opencode,agy,<model>] [--pbi N] [--routing <routing.json>] [--home DIR] [--now ISO] [--dir docs/pbi]
   python select_model.py --all docs/pbi [--only PBI-003,PBI-004 [--tier haiku|sonnet|opus]] [--today ...] [--skip ...] [--routing ...] [--home ...] [--now ...]
   python select_model.py --override PBI-003 --route <runner>/<model>[@<effort>][,...] [--why TEXT] [--dir docs/pbi] [--tier ...]
 
@@ -531,6 +531,7 @@ def main():
         print(f"override {override}: {' / '.join(label(s) for s in out['route'])} ({why})")
         return
     all_dir = pop_opt(args, '--all')
+    base = Path(all_dir or pop_opt(args, '--dir') or 'docs/pbi')
     only_s = pop_opt(args, '--only')
     only = [s for s in (only_s or '').split(',') if s]
     if only and not all_dir:
@@ -542,6 +543,14 @@ def main():
     if unknown:
         sys.exit(f'--skip は {"/".join(RUNNERS)} のどれかかモデル ID（カンマ区切り。agent は外せない）: '
                  f'{",".join(sorted(unknown))}')
+    try:
+        import runner_skip
+    except ImportError:
+        saved_skip = frozenset()
+    else:
+        saved_skip = runner_skip.load(base)
+    skip |= frozenset(s for s in saved_skip
+                      if s in RUNNERS or '/' in s or s in known_models(routing, home))
     if all_dir:
         run_all(Path(all_dir), today, skip, routing, home, now, only=only, tier=forced)
         return

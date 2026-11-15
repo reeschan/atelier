@@ -1347,6 +1347,67 @@ class QuestionDraftLintTest(unittest.TestCase):
         with open(os.path.join(FIXTURES, 'approve-good.md'), encoding='utf-8') as f:
             self.assertEqual(design_record.lint_text(f.read(), 'approve'), ([], []))
 
+    def with_decisions(self, *asks):
+        body = '## 決めること\n' + '\n'.join(f'```ask\n{ask}\n```\n' for ask in asks) + '\n'
+        return self.replace_section('## 決めること', '## 判断の材料', body)
+
+    def assert_grill_error(self, text, line, message):
+        result = self.lint(text, '--topic', 'grill-round')
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        errors = [row for row in result.stderr.splitlines() if row.startswith('✗ L')]
+        self.assertTrue(any(row.startswith(f'✗ L{line} ') and message in row for row in errors),
+                        f'no "✗ L{line} … {message}" in:\n{result.stderr}')
+        return result
+
+    def test_C1(self):
+        text = self.with_decisions('Q1 どちらにしますか\n- A | 説明A\n- B | 説明B')
+        self.assert_grill_error(text, self.line_of(text, '```ask'), 'ask needs exactly one recommended option')
+
+    def test_C2(self):
+        text = self.with_decisions('Q1 どちらにしますか\n* A | 説明A\n* B | 説明B')
+        self.assert_grill_error(text, self.line_of(text, '```ask'), 'ask needs exactly one recommended option')
+
+    def test_C3(self):
+        text = self.with_decisions('Aligned この内容で進めますか\n* yes | この内容で進める\n- no | 決まっていない点を聞き直す')
+        self.assert_grill_error(text, self.line_of(text, '```ask'), 'alignment ask has a recommended option')
+
+    def test_C4(self):
+        text = self.with_decisions(
+            'Aligned 最初の確認ですか\n- yes | 進める\n- no | 聞き直す',
+            'Aligned 二つ目の確認ですか\n- yes | 進める\n- no | 聞き直す',
+        )
+        rows = text.split('\n')
+        second_line = rows.index('```ask', rows.index('```ask') + 1) + 1
+        self.assert_grill_error(text, second_line, 'multiple alignment asks')
+
+    def test_C5(self):
+        example = os.path.join(HERE, 'examples', 'question-grill.md')
+        result = subprocess.run(
+            [sys.executable, SCRIPT, 'lint', '--draft', example, '--kind', 'decision', '--topic', 'grill-round'],
+            capture_output=True, env=self.env,
+        )
+        stdout = result.stdout.decode('utf-8')
+        stderr = result.stderr.decode('utf-8', errors='replace')
+        self.assertEqual(result.returncode, 0, stdout + stderr)
+        self.assertIn('ok\t0 warning(s)', stdout)
+
+    def test_C6(self):
+        page_c2 = self.with_decisions('Q1 どちらにしますか\n* A | 説明A\n* B | 説明B')
+        page_c3 = self.with_decisions('Aligned この内容で進めますか\n* yes | この内容で進める\n- no | 決まっていない点を聞き直す')
+        for name, text in (('C2', page_c2), ('C3', page_c3)):
+            with self.subTest(page=name):
+                result = self.lint(text)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn('ask needs exactly one recommended option', result.stderr)
+                self.assertNotIn('alignment ask has a recommended option', result.stderr)
+
+    def test_C7(self):
+        page_c2 = self.with_decisions('Q1 どちらにしますか\n* A | 説明A\n* B | 説明B')
+        result = self.lint(page_c2, '--topic', 'other')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('ask needs exactly one recommended option', result.stderr)
+        self.assertNotIn('alignment ask has a recommended option', result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

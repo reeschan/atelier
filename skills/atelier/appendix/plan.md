@@ -40,6 +40,7 @@ Keep each PBI small: about 3 changed files at most. Write one file per PBI, `doc
 - List only the refs this PBI needs. A worker never looks for refs that are not listed.
 - When the lint survey ran (`appendix/lint.md`), add its `jevlint:` lines to the Notes of each PBI whose Targets name a file with a long function or a confirmed weak point: one or two lines, as limits to keep. Never paste the survey itself. A function of 100 lines or more is a sign to split by role when the PBI touches it, not a reason to add a PBI.
 - With tests at the end on (the default), keep test files out of the Targets and write `Tests for the end:` lines instead, and a `Breaks by design:` line for each existing test the change breaks on purpose (`appendix/tests-at-end.md`, `## Plan`).
+- After an escalation from the light lane (`appendix/light.md`, `## Escalation`), assign every file already changed to a PBI.
 
 ## Format and lint first
 

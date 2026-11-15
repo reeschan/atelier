@@ -29,8 +29,8 @@ Draw both with an am component: `flow` for a flow, `tree`, `er` or `sequence` wh
 
 | Kind | Summary says | Before shows | After shows | Details (optional) |
 |---|---|---|---|---|
-| decision (one grill round) | How many points this round decides, and what happens if all the recommended answers stand | Today's behavior | The flow when every recommended answer passes (change marks) | A note per Q |
-| decision (end of grill) | Asks whether the understanding is shared; the number of points decided | Today's behavior | A summary of everything decided so far (change marks) | A table of the decisions |
+| decision (one grill round) | How many points this round decides, and what happens if all the recommended answers stand | Today's behavior | The flow when every recommended answer passes (change marks) | A note per Q; see `examples/question-grill.md` |
+| decision (end of grill) | The last round also asks whether the understanding is shared | Today's behavior | The flow with the recommended answers (change marks) | A table of the decisions |
 | decision (design choice, ask-user, map, optional) | What choosing changes | Today's behavior | The flow with the recommended answer (change marks) | A comparison table |
 | decision (install a tool?) | Install it, or go on with the fallback | The flow so far and where it stopped | Install / go on with the fallback (edge labels) | How to install, and the fallback |
 | decision (rework candidates from the lint recheck, `appendix/lint.md`) | How many candidates the recheck confirmed, and that each one is reworked or only reported | The flow so far and where it stopped (the recheck, before the final review) | Rework (back to build, counted toward the limit) / report only (on to the final review) (edge labels) | Needed: each candidate with its PBI, file and claim |
@@ -43,20 +43,20 @@ Draw both with an am component: `flow` for a flow, `tree`, `er` or `sequence` wh
 | conductor questions (`no-agent-tool`, `handoff-loop`, `launch-failure`) | What happened and why it stopped | The flow so far and where it stopped | One branch per option (edge labels) | None |
 
 - Details is optional, except where its cell says Needed: a send approval costs money and cannot be taken back, and a rework limit cannot be answered without knowing what happened. The check looks at the shape of the sections only, so this table and the examples are how you learn it.
-- One grill round is one page. Draw one pair of diagrams for the whole round, and put one `ask` per Q, with the recommended answer first (`*`).
+- One grill round is one page. Draw one pair of diagrams for the whole round, and put each child `ask` after its parent. Put the recommended answer first (`*`) in each Q. On the round expected to empty the frontier, put the alignment `ask` last, without `*`. For the tree fields and alignment rules see `appendix/design.md` (`## Design: grill`); for the page shape see `examples/question-grill.md`.
 - The conductor writes its own questions itself, in fixed English sentences with the same sections (the conductor does not know the user's language); you do not write them. They pass the same check.
 
 ## Decisions
 
 - Every `ask` sits inside `## 決めること`, never above or below it.
-- Every option carries `| what changes when you pick it`. Put the one you would pick first, with `*`.
+- Every option carries `| what changes when you pick it`. Put the one you would pick first, with `*`, except for the grill alignment ask.
 - `なし` (`None`) cannot be written: a question with no `ask` is not a question, and the check refuses it.
 - When a question needs an internal term (`grill`, `stale`, a kind name), explain it on the same line, in parentheses right after it. Without the explanation the line gets a `!` warning.
 - Ask only what changes what the user gets, what it costs, how long it takes or what can go wrong; decide the insides yourself.
 
 ## Check the draft
 
-Run `python <skill>/design_record.py lint --draft <file> --kind <kind>` as the last change before you end the episode. `<kind>` is `decision`, `send-approval`, `rework-limit`, `destructive`, `full-run`, `handoff-loop` or `launch-failure`; without `--kind` the draft is checked as an approval. The check looks at the shape of the sections only, so the table above and the examples are how you learn what each kind carries. Read the output like this:
+Run `python <skill>/design_record.py lint --draft <file> --kind <kind>` as the last change before you end the episode. For a grill round use `python <skill>/design_record.py lint --draft <file> --kind decision --topic grill-round`. `<kind>` is `decision`, `send-approval`, `rework-limit`, `destructive`, `full-run`, `handoff-loop` or `launch-failure`; without `--kind` the draft is checked as an approval. The check looks at the shape of the sections only, so the table above and the examples are how you learn what each kind carries. Read the output like this:
 
 - `✗ L<line> <what is wrong>` followed by `  例: <the fixed form>` is an error. All errors are printed together and the exit code is 6. Fix every one and run it again.
 - `! L<line> <term> → <rewording>` is a warning for an internal term with no explanation on that line. The exit code stays 0. Reword it, add the explanation in parentheses, or keep it when the user knows the word.

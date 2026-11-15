@@ -482,13 +482,32 @@ def lint_draft(draft: str) -> tuple[list[Finding], list[Finding]]:
     return lint_text(draft, 'approve')
 
 
-def lint_text(text: str, kind: str = 'approve') -> tuple[list[Finding], list[Finding]]:
+def lint_text(text: str, kind: str = 'approve', topic: str | None = None) -> tuple[list[Finding], list[Finding]]:
     """原稿を点検する。(誤り, 警告)。approve は承認の原稿、QUESTION_DRAFT_KINDS は問いの原稿の規則。
     yomiyasu は呼ばない (進行役がプロセスの中から呼べるように、外の道具に頼らない)。"""
     if kind == 'approve':
         return lint_sections(text, APPROVAL_SECTIONS, len(APPROVAL_SECTIONS), True)
     if kind in QUESTION_DRAFT_KINDS:
-        return lint_sections(text, QUESTION_SECTIONS, QUESTION_REQUIRED, False)
+        errors, warnings = lint_sections(text, QUESTION_SECTIONS, QUESTION_REQUIRED, False)
+        if topic == 'grill-round':
+            aligned_count = 0
+            for section in parse_draft(text):
+                if section['title'] is None or section_index(section['title'], QUESTION_SECTIONS) != SECTION_DECISIONS:
+                    continue
+                for (number, _), body in ask_blocks(section['rows']):
+                    rows = [(n, row) for n, row in body if row.strip()]
+                    aligned = bool(rows and rows[0][1].lstrip().startswith(('揃ったか', 'Aligned')))
+                    marked = sum(1 for _, row in rows[1:] if OPTION.match(row) and row.lstrip().startswith('* '))
+                    if aligned:
+                        aligned_count += 1
+                        if aligned_count > 1:
+                            errors.append((number, 'multiple alignment asks', 'keep at most one alignment ask'))
+                        if marked:
+                            errors.append((number, 'alignment ask has a recommended option', 'use only - options'))
+                    elif marked != 1:
+                        errors.append((number, 'ask needs exactly one recommended option', 'mark one option with *'))
+            errors.sort(key=lambda e: e[0])
+        return errors, warnings
     raise ValueError(f'unknown kind {kind!r}: use approve or one of {", ".join(QUESTION_DRAFT_KINDS)}')
 
 
@@ -1148,7 +1167,7 @@ def read_stdin() -> str:
 
 def cmd_lint(args) -> int:
     draft = read_text(args.draft)
-    errors, warnings = lint_text(draft, args.kind)
+    errors, warnings = lint_text(draft, args.kind, args.topic)
     warnings = lint_with_yomiyasu(draft, errors, warnings, 'approval draft' if args.kind == 'approve' else 'question draft')
     if errors:
         return EXIT_DRAFT
@@ -1251,6 +1270,7 @@ def main(argv=None) -> int:
     li = sub.add_parser('lint')
     li.add_argument('--draft', required=True)
     li.add_argument('--kind', default='approve', choices=['approve', *QUESTION_DRAFT_KINDS])
+    li.add_argument('--topic')
     ck = sub.add_parser('check-reply')
     ck.add_argument('--reply')
     ck.add_argument('--draft')

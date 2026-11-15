@@ -319,7 +319,7 @@ class JudgedEventTest(unittest.TestCase):
         base = self.example('episode.json')
         base.update(status='question', state='episode.state.md',
                     question={'kind': 'decision', 'path': 'q.md', 'summary': 'pick one'})
-        for topic, expected in ((None, 0), ('omm', 0), ('poem', 3)):
+        for topic, expected in ((None, 0), ('omm', 0), ('grill-round', 0), ('poem', 3)):
             with self.subTest(topic=topic):
                 data = json.loads(json.dumps(base))
                 if topic is not None:
