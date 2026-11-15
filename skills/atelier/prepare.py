@@ -26,7 +26,7 @@
   --tier のときは指定だけ。指定が無ければ全部)。route.json に override (goal で指定した route) があれば select_model.py がそのまま残す
 - --tier は --only と一緒のときだけ受け付け、select_model.py に --only と一緒に渡す (tier up で route.json を書き直す)
 - --home・--now はテンプレートの home (templates.resolve_home) と今の時刻 (templates.parse_time)。select_model.py にもそのまま渡す
-- 表の PBI の route に codex の手順があれば、表のあとに 1 行「codex sandbox: <引数> (<出所>)」を出す。
+- 表の PBI の route に codex の手順があれば、表のあとに 1 行「codex sandbox: <引数> (<出所>)」を出す (引数は bash に貼れる形に引用する)。
   設計者は codex の作業者をその引数で起こす (runners.md の codex)。引数と出所は runner_cli.codex_worker_sandbox
   (home の agents.json の runners.codex.sandbox、無ければ workspace-write) と codex_sandbox_args から
 """
@@ -70,7 +70,7 @@ def codex_line(base: Path, pbis, home) -> str | None:
         steps = (load(base / f"{p}.route.json") or {}).get("route") or []
         if any(isinstance(step, dict) and step.get("runner") == "codex" for step in steps):
             sandbox, source = runner_cli.codex_worker_sandbox(home)
-            return f"codex sandbox: {' '.join(runner_cli.codex_sandbox_args(sandbox))} ({source})"
+            return f"codex sandbox: {runner_cli.shell_words(runner_cli.codex_sandbox_args(sandbox))} ({source})"
     return None
 
 

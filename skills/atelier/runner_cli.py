@@ -6,8 +6,8 @@ conductor.py (設計者) と role_run.py (レビュー担当・テスト担当) 
   home の agents.json の runners.<runner>.path、PATH の <runner> の順に探す。
 - 使えるかは、agents.json で enabled が true で、CLI が見つかること。
 - codex は `-a never exec --json -s <サンドボックス>` で起こし、shared-memory の道具の承認を `-c` で自動にする
-  (ユーザーの ~/.codex/config.toml は書き換えない)。サンドボックスがあるときは、Windows では `-c features.prefer_mxc=true`
-  も渡す (codex_sandbox_args)。
+  (ユーザーの ~/.codex/config.toml は書き換えない)。workspace-write では、ネットワークと足された書き込み先を `-c` で
+  その回だけ閉じ、Windows では MXC を選ぶ `-c` も渡す (codex_sandbox_args)。
 - サンドボックスは、作業者と役割 (レビュー担当・テスト担当) が既定で workspace-write、設計者が既定で danger-full-access。
   作業者と役割を danger-full-access に戻すのは、home の agents.json の runners.codex.sandbox で明示したときだけ
   (codex_worker_sandbox)。
@@ -15,6 +15,7 @@ conductor.py (設計者) と role_run.py (レビュー担当・テスト担当) 
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -37,10 +38,16 @@ CODEX_WORKER_SANDBOXES = ('workspace-write', 'danger-full-access')
 # (プロセス作成エラー)、~/.config/atelier の記録・各 CLI の home (~/.codex・~/.claude など) への書き込みと
 # ネットワークも要るので、サンドボックスでは回らない。permission_mode でサンドボックスの名前を指定すれば、それを使う
 CODEX_DESIGNER_SANDBOX = 'danger-full-access'
+# workspace-write の境界を、その回だけ決まった値にする -c。ユーザーの config.toml の
+# sandbox_workspace_write.network_access = true と writable_roots は -s workspace-write でも効き残るので
+# (2026-11-15 に確かめた)、ネットワークを閉じ、足された書き込み先を空にする。%TEMP% への書き込みは codex の既定のまま
+CODEX_WORKSPACE_LIMITS = ('sandbox_workspace_write.network_access=false', 'sandbox_workspace_write.writable_roots=[]')
 # Windows で codex が選ぶサンドボックスの実装。elevated (別の利用者 CodexSandboxOffline で動く) では
-# %LOCALAPPDATA%\pnpm を読めず pnpm が動かず、unelevated では node --test が子を起こせない (spawn EPERM)。
-# MXC なら両方動き、ネットワークも塞がる (MXC を使えない PC での動きは試していない)
-CODEX_PREFER_MXC = 'features.prefer_mxc=true'
+# %LOCALAPPDATA%\pnpm を読めず pnpm が動かず、unelevated では node --test が子を起こせない (spawn EPERM) うえ、
+# network_access = false でもネットワークが塞がらない。MXC なら pnpm・node --test が動き、ネットワークも塞がる。
+# MXC を選び、MXC を使えないときの戻り先は、ユーザーの windows.sandbox によらず elevated に決める
+# (unelevated に戻るとネットワークが開くため。elevated ではネットワークが塞がることを確かめた。MXC の無い PC は試していない)
+CODEX_WINDOWS_SANDBOX = ('windows.sandbox="elevated"', 'features.prefer_mxc=true')
 CODEX_MCP_APPROVAL = 'mcp_servers.shared-memory.default_tools_approval_mode="auto"'
 # codex がファイルを書くときの決まり。codex のシェルは Windows PowerShell 5.1 で、外のコマンドへ渡す文字を
 # $OutputEncoding (既定 US-ASCII) で符号化するので、日本語が ? (0x3F) になる。設計者の依頼文と role_run.py が
@@ -170,13 +177,26 @@ def codex_worker_sandbox(home=None) -> tuple:
 
 
 def codex_sandbox_args(sandbox: str, windows=None) -> list:
-    """サンドボックスの引数。サンドボックスがあれば、Windows では MXC を選ぶ -c を足す。"""
+    """サンドボックスの引数。
+
+    workspace-write なら、ネットワークと足された書き込み先をその回だけ閉じる -c (CODEX_WORKSPACE_LIMITS) を足す。
+    サンドボックスがあれば、Windows では MXC を選ぶ -c (CODEX_WINDOWS_SANDBOX) も足す。danger-full-access は -s だけ。
+    """
     if windows is None:
         windows = sys.platform == 'win32'
     args = ['-s', sandbox]
+    if sandbox == 'workspace-write':
+        for value in CODEX_WORKSPACE_LIMITS:
+            args += ['-c', value]
     if windows and sandbox != 'danger-full-access':
-        args += ['-c', CODEX_PREFER_MXC]
+        for value in CODEX_WINDOWS_SANDBOX:
+            args += ['-c', value]
     return args
+
+
+def shell_words(args) -> str:
+    """引数を bash にそのまま貼れる 1 行にする (runners.md の起動の行に写す prepare.py の行)。"""
+    return ' '.join(shlex.quote(str(word)) for word in args)
 
 
 def codex_args(model: str, effort, sandbox: str, last_path, windows=None) -> list:
