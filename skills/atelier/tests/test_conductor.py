@@ -60,12 +60,22 @@ def start_run(tmp: Path, with_spec: bool = True, force: bool = False) -> dict:
     return out
 
 
+VALID_FACTS = {
+    "schema": "atelier.facts/1",
+    "modules": [{"id": "m1", "text": "ok", "source": "a.py:1"}],
+    "layers": [],
+    "likely_files": [],
+    "tests": [],
+    "conventions": [],
+}
+
+
 def reach_building(tmp: Path, pbis: list[dict] | None = None) -> dict:
     """Drive straight from start to building with fake results, returning next action."""
     start_run(tmp)
     code, act = run_cli("next", "--root", str(tmp))
     assert code == 0 and act["role"] == "surveyor"
-    write_result_for(act, {"summary": "surveyed", "facts": [{"fact": "ok", "source": "a.py:1"}]})
+    write_result_for(act, VALID_FACTS)
     code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
     assert code == 0 and act["action"] == "ask" and act["kind"] == "interview_or_skip"
 
@@ -142,11 +152,11 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertEqual(act["action"], "launch")
             self.assertEqual(act["role"], "surveyor")
             self.assertEqual(act["runner"], "agent")
-            self.assertEqual(act["model"], "opus")
+            self.assertEqual(act["model"], "haiku")
             self.assertIsNone(act["pbi"])
             self.assertTrue(Path(act["prompt"]).exists())
 
-            write_result_for(act, {"summary": "facts ready", "facts": []})
+            write_result_for(act, VALID_FACTS)
             code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0)
             self.assertEqual(act["action"], "ask")
@@ -205,7 +215,7 @@ class TestConductorSeam1(unittest.TestCase):
             _, a2 = run_cli("next", "--root", str(tmp))
             self.assertEqual(a1, a2)
 
-            write_result_for(a1, {"summary": "ok"})
+            write_result_for(a1, VALID_FACTS)
             _, q1 = run_cli("done", "--root", str(tmp), "--launch-id", a1["launch_id"])
             _, q2 = run_cli("next", "--root", str(tmp))
             self.assertEqual(q1, q2)
@@ -219,7 +229,7 @@ class TestConductorSeam1(unittest.TestCase):
             tmp = Path(td)
             start_run(tmp, with_spec=False)
             _, act = run_cli("next", "--root", str(tmp))
-            write_result_for(act, {"summary": "surveyed"})
+            write_result_for(act, VALID_FACTS)
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(act["kind"], "interview_or_skip")
 
@@ -269,7 +279,7 @@ class TestConductorSeam1(unittest.TestCase):
             tmp = Path(td)
             start_run(tmp)
             _, act = run_cli("next", "--root", str(tmp))
-            write_result_for(act, {"summary": "ok"})
+            write_result_for(act, VALID_FACTS)
             run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             _, act = run_cli("answer", "--root", str(tmp), "--choice", "skip")
 
@@ -524,7 +534,7 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertIn("error", err)
 
             # Valid result advances, and answer writes the answer file
-            write_result_for(act, {"summary": "ok"})
+            write_result_for(act, VALID_FACTS)
             run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             code, _ = run_cli("answer", "--root", str(tmp), "--choice", "skip")
             self.assertEqual(code, 0)
@@ -752,7 +762,7 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertIn("error", err)
 
-            write_result_for(act, {"summary": "ok"})
+            write_result_for(act, VALID_FACTS)
             run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             reply = tmp / "reply.json"
             reply.write_text(json.dumps({"choice": "skip"}), encoding="utf-8")

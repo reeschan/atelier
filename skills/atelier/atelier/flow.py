@@ -36,10 +36,18 @@ STATES: tuple[str, ...] = (
     "asking_budget",
     "asking_plan_broken",
     "asking_sensitive",
+    "asking_template_switch",
+    "asking_guard",
 )
 
 CROSS_CUTTING_STATES: frozenset[str] = frozenset(
-    {"asking_budget", "asking_plan_broken", "asking_sensitive"}
+    {
+        "asking_budget",
+        "asking_plan_broken",
+        "asking_sensitive",
+        "asking_template_switch",
+        "asking_guard",
+    }
 )
 TERMINAL_STATES: frozenset[str] = frozenset({"reporting", "done"})
 
@@ -63,8 +71,20 @@ def check_invariants(run: dict[str, Any]) -> None:
         raise InvariantError("never BuildWithoutPlan: entered building without approved plan")
     if s == "planning" and not approvals["spec"]:
         raise InvariantError("never PlanWithoutSpec: entered planning without approved spec")
-    if s == "auto_fixing" and c["auto_fix_count"] >= 2:
-        raise InvariantError("never TwoAutoFixes: entered auto_fixing with auto_fix_count >= 2")
+    if s == "auto_fixing":
+        pbis = run.get("pbis", [])
+        if pbis:
+            active_id = run.get("auto_fix_pbi")
+            if active_id:
+                target = next((p for p in pbis if p.get("id") == active_id), None)
+                if target is not None and target.get("auto_fix_count", 0) >= 2:
+                    raise InvariantError(
+                        f"never TwoAutoFixes: {active_id} entered auto_fixing with auto_fix_count >= 2"
+                    )
+            elif any(p.get("status") == "failed" and p.get("auto_fix_count", 0) >= 2 for p in pbis):
+                raise InvariantError("never TwoAutoFixes: failed PBI entered auto_fixing with auto_fix_count >= 2")
+        elif c["auto_fix_count"] >= 2:
+            raise InvariantError("never TwoAutoFixes: entered auto_fixing with auto_fix_count >= 2")
     if s == "reviewing" and c["review_count"] >= 1:
         raise InvariantError("never SecondReview: entered reviewing with review_count >= 1")
     if s == "fixing" and not approvals["fix_list"] and c["e2e_failures"] == 0:
@@ -85,12 +105,43 @@ def _approve_fix_list(run: dict[str, Any]) -> None:
     run["approvals"]["fix_list"] = True
 
 
+def _failed_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
+    return [p for p in run.get("pbis", []) if p.get("status") == "failed"]
+
+
+def _can_auto_fix(run: dict[str, Any]) -> bool:
+    failed = _failed_pbis(run)
+    if run.get("pbis") and failed:
+        return all(p.get("auto_fix_count", 0) == 0 for p in failed)
+    return run["counters"]["auto_fix_count"] == 0
+
+
+def _needs_rebuild_ask(run: dict[str, Any]) -> bool:
+    return not _can_auto_fix(run)
+
+
 def _reset_auto_fix(run: dict[str, Any]) -> None:
-    run["counters"]["auto_fix_count"] = 0
+    run["auto_fix_pbi"] = None
+    if not run.get("pbis"):
+        run["counters"]["auto_fix_count"] = 0
+
+
+def _clear_active_auto_fix(run: dict[str, Any]) -> None:
+    run["auto_fix_pbi"] = None
 
 
 def _inc_auto_fix(run: dict[str, Any]) -> None:
+    failed = _failed_pbis(run)
+    if failed:
+        target = failed[0]
+        target["auto_fix_count"] = target.get("auto_fix_count", 0) + 1
+        run["auto_fix_pbi"] = target["id"]
     run["counters"]["auto_fix_count"] += 1
+
+
+def _inc_rebuild_fail(run: dict[str, Any]) -> None:
+    if not _failed_pbis(run):
+        run["counters"]["auto_fix_count"] += 1
 
 
 def _inc_review(run: dict[str, Any]) -> None:
@@ -148,17 +199,17 @@ TRANSITIONS: tuple[Transition, ...] = (
         "checking",
         "check_failed",
         "auto_fixing",
-        guard=lambda r: r["counters"]["auto_fix_count"] == 0,
+        guard=_can_auto_fix,
         effect=_inc_auto_fix,
     ),
     Transition(
         "checking",
         "check_failed",
         "asking_rebuild",
-        guard=lambda r: r["counters"]["auto_fix_count"] >= 1,
-        effect=_inc_auto_fix,
+        guard=_needs_rebuild_ask,
+        effect=_inc_rebuild_fail,
     ),
-    Transition("auto_fixing", "auto_fix_returned", "checking"),
+    Transition("auto_fixing", "auto_fix_returned", "checking", effect=_clear_active_auto_fix),
     Transition(
         "asking_rebuild",
         "rebuild_retry",
@@ -232,12 +283,18 @@ TRANSITIONS: tuple[Transition, ...] = (
     Transition("asking_plan_broken", "stop", "reporting"),
     Transition("asking_sensitive", "resume", "$return_state"),
     Transition("asking_sensitive", "stop", "reporting"),
+    Transition("asking_template_switch", "resume", "$return_state"),
+    Transition("asking_template_switch", "stop", "reporting"),
+    Transition("asking_guard", "resume", "$return_state"),
+    Transition("asking_guard", "stop", "reporting"),
 )
 
 CROSS_CUTTING_EVENTS: dict[str, str] = {
     "budget_exceeded": "asking_budget",
     "plan_broken": "asking_plan_broken",
     "sensitive_detected": "asking_sensitive",
+    "switch_expired": "asking_template_switch",
+    "guard_violation": "asking_guard",
 }
 
 
