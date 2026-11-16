@@ -23,6 +23,10 @@ def state_path(root: Path) -> Path:
     return run_dir(root) / "run.json"
 
 
+def record_path(root: Path) -> Path:
+    return run_dir(root) / "record.jsonl"
+
+
 def has_run(root: Path) -> bool:
     return state_path(root).exists()
 
@@ -36,6 +40,8 @@ def new_run_state(
     switch: dict[str, Any] | None = None,
     agents_path: str | None = None,
     active_template: dict[str, Any] | None = None,
+    components: dict[str, Any] | None = None,
+    base_commit: str | None = None,
 ) -> dict[str, Any]:
     limits = copy.deepcopy(active_template["limits"]) if active_template else {
         "auto_fix": 1,
@@ -49,6 +55,7 @@ def new_run_state(
         "root": str(root.resolve()),
         "goal_file": str(goal_file.resolve()),
         "spec_file": str(spec_file.resolve()) if spec_file else None,
+        "base_commit": base_commit,
         "state": "surveying",
         "subphase": None,
         "return_state": None,
@@ -56,6 +63,7 @@ def new_run_state(
         "switch": copy.deepcopy(switch) if switch is not None else None,
         "agents_path": agents_path,
         "active_template": copy.deepcopy(active_template) if active_template is not None else None,
+        "components": copy.deepcopy(components) if components is not None else {},
         "limits": limits,
         "counters": {
             "auto_fix_count": 0,
@@ -82,13 +90,30 @@ def new_run_state(
             "unknown_cost": 0,
             "launches": [],
         },
+        "planner_mode": "plan",
+        "plan_revision_request": "",
+        "open_questions": [],
         "pbis": [],
         "findings": [],
         "fix_list": [],
+        "triage_ask_items": [],
+        "fix_groups": [],
+        "fix_group_index": 0,
+        "launch_reads": {},
+        "pbi_launches": {},
+        "first_pass_checked_pbis": [],
+        "approved_destructive": [],
         "auto_fix_pbi": None,
         "last_check_failure": "",
+        "last_failed_rules": [],
+        "last_e2e_failure": "",
+        "last_fix_launch_ids": [],
+        "last_fix_model": "",
         "pending_action": None,
         "pending_snapshot": None,
+        "pending_tree_snapshot": None,
+        "pending_plan_sends": None,
+        "pending_interview_questions": None,
         "guard_issue": None,
         "pending_plan_change": None,
         "budget_approved_next": False,

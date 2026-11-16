@@ -50,7 +50,7 @@ def draft(kind, run):
         raise PageError('承認ページの種類が不正です。')
     conclusion = _cell(run.get('conclusion'))
     decisions = list(run.get('decisions') or [])
-    decisions.append({'question': titles[kind] + '???????', 'options': [{'label': '????', 'note': '????', 'recommended': True}, {'label': '?????????', 'note': '??????????'}]})
+    decisions.append({'question': titles[kind] + 'を進めますか', 'options': [{'label': '承認する', 'note': 'このまま進める', 'recommended': True}, {'label': '修正を指定する', 'note': '変更点を伝えて直す'}]})
     lines = ['---', 'lang: ja', 'template: sheet', 'cols: 2', 'title: ' + titles[kind], '---',
              '## 結論 {span=2}', '```callout info 確認してください', conclusion, '```', '',
              '## 今の流れ', _cell(run.get('before')), '', '## この run のあとの流れ', _cell(run.get('after')), '',
