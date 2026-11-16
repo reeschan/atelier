@@ -565,7 +565,7 @@ def _make_launch(
     launch_id: str,
 ) -> dict[str, Any]:
     result_path.parent.mkdir(parents=True, exist_ok=True)
-    spec = runners.launch_spec(role, step, prompt_path, result_path, run_root)
+    spec = runners.launch_spec(role, step, prompt_path, result_path, run_root, agents_path=run.get("agents_path"))
     if step["runner"] == "agent":
         return {
             "action": "launch",
@@ -854,7 +854,7 @@ def _launch_for_state(run_root: Path, run: dict[str, Any], role: str, pbi_id: st
             )
 
         # G11: forbidden arguments configured on component
-        spec_preview = runners.launch_spec(role, step, final_prompt_path, result_path, run_root)
+        spec_preview = runners.launch_spec(role, step, final_prompt_path, result_path, run_root, agents_path=run.get("agents_path"))
         blocked = _forbidden_args_for_launch(run, role, step, spec_preview)
         if blocked:
             _cleanup_survey_prompt()

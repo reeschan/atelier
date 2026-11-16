@@ -641,6 +641,268 @@ class TestIntegrationSeam1(unittest.TestCase):
             self.assertTrue(Path(done_act["report"]).is_file())
             self.assertTrue((root / "docs" / "pbi" / "REPORT.md").is_file())
 
+    def test_conductor_passes_resolved_agents_path_for_external_cli_outside_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            init_git_repo(root)
+            tool_dir = root / "outside_path"
+            tool_dir.mkdir()
+            worker_script = root / "ext_worker.py"
+            worker_script.write_text(
+                "import json, re, sys; from pathlib import Path\n"
+                "task = sys.stdin.read()\n"
+                "m = re.search(r'Write the result to (.+)\\.', task)\n"
+                "if m:\n"
+                "    Path(m.group(1)).write_text(json.dumps({'status': 'ok'}), encoding='utf-8')\n"
+                "if '-o' in sys.argv:\n"
+                "    Path(sys.argv[sys.argv.index('-o') + 1]).write_text('done', encoding='utf-8')\n"
+                "print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 5, 'output_tokens': 2}}))\n",
+                encoding="utf-8",
+            )
+            if os.name == "nt":
+                cli_path = tool_dir / "codex-custom.cmd"
+                cli_path.write_text(f'@echo off\n"{sys.executable}" "{worker_script}" %*\n', encoding="utf-8")
+            else:
+                cli_path = tool_dir / "codex-custom"
+                cli_path.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{worker_script}" "$@"\n', encoding="utf-8")
+                cli_path.chmod(0o755)
+
+            agents = root / "agents.json"
+            write_json(agents, {
+                "runners": {
+                    "agent": {"enabled": True},
+                    "codex": {"enabled": True, "path": str(cli_path)},
+                }
+            })
+            base = json.loads((SKILLS_DIR / "template.default.json").read_text(encoding="utf-8"))
+            base["routes"] = {f"L{i}": [{"runner": "codex", "model": "gpt-test", "effort": "low"}] for i in range(1, 6)}
+            tmpl = root / "template.json"
+            write_json(tmpl, base)
+
+            # Pass --agents and run without ATELIER_CODEX_CMD; cli_path is in tool_dir outside PATH
+            _, goal, spec = init_workspace(root)
+            clean_env = {k: v for k, v in os.environ.items() if k != "ATELIER_CODEX_CMD"}
+            with patch.dict(os.environ, clean_env, clear=True):
+                code, out = run_cli(
+                    "start", "--root", str(root), "--goal-file", str(goal), "--spec", str(spec),
+                    "--agents", str(agents), "--template", str(tmpl),
+                )
+                self.assertEqual(code, 0, out)
+                saved_run = json.loads((root / "docs" / "pbi" / "run.json").read_text(encoding="utf-8"))
+                self.assertEqual(saved_run["agents_path"], str(agents.resolve()))
+                _, act = run_cli("next", "--root", str(root))
+                write_result_for(act, VALID_FACTS)
+                _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
+                _, act = run_cli("answer", "--root", str(root), "--choice", "skip")
+                write_result_for(act, make_plan([make_pbi("PBI-1", targets=["app.py"])]))
+                _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
+                _, w1 = run_cli("answer", "--root", str(root), "--choice", "approve")
+                self.assertEqual(w1["runner"], "codex")
+                self.assertEqual(w1["command"][0], str(cli_path))
+                code, chk = run_cli("run", "--root", str(root), "--launch-id", w1["launch_id"])
+            self.assertEqual(code, 0, chk)
+            self.assertEqual(chk["action"], "check")
+
+    def test_worker_garbled_text_raises_guard_question(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            init_git_repo(root)
+            (root / "README.md").write_text("# 見出し\n仕様 → 実装\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "readme"], check=True)
+
+            agents, tmpl = write_agents_and_template(root)
+            _, goal, spec = init_workspace(root)
+            run_cli(
+                "start", "--root", str(root), "--goal-file", str(goal), "--spec", str(spec),
+                "--agents", str(agents), "--template", str(tmpl),
+            )
+            _, act = run_cli("next", "--root", str(root))
+            write_result_for(act, VALID_FACTS)
+            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
+            _, act = run_cli("answer", "--root", str(root), "--choice", "skip")
+            write_result_for(act, make_plan([make_pbi("PBI-1", targets=["README.md"])]))
+            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
+            _, w1 = run_cli("answer", "--root", str(root), "--choice", "approve")
+            self.assertEqual(w1["role"], "worker")
+
+            (root / "README.md").write_text("# ??????\n仕様?実装\n", encoding="utf-8")
+            write_result_for(w1, {"status": "ok"})
+            code, ask = run_cli("done", "--root", str(root), "--launch-id", w1["launch_id"])
+            self.assertEqual(code, 0, ask)
+            self.assertEqual(ask["action"], "ask")
+            self.assertEqual(ask["kind"], "guard")
+            q_text = Path(ask["question"]).read_text(encoding="utf-8")
+            self.assertIn("G14", q_text)
+            self.assertIn("README.md", q_text)
+
+            # Approving resume re-launches the worker and does not re-trigger on the approved line
+            code, w2 = run_cli("answer", "--root", str(root), "--choice", "resume")
+            self.assertEqual(code, 0, w2)
+            self.assertEqual(w2["action"], "launch")
+            write_result_for(w2, {"status": "ok"})
+            code, chk = run_cli("done", "--root", str(root), "--launch-id", w2["launch_id"])
+            self.assertEqual(code, 0, chk)
+            self.assertEqual(chk["action"], "check")
+
+    def test_caller_loop_subprocess_end_to_end(self) -> None:
+        conductor_py = SKILLS_DIR / "conductor.py"
+
+        def call_conductor(*args: str) -> dict:
+            proc = subprocess.run(
+                [sys.executable, str(conductor_py), *args],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            self.assertEqual(proc.returncode, 0, f"cmd={args} stderr={proc.stderr} stdout={proc.stdout}")
+            lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+            self.assertEqual(len(lines), 1, proc.stdout)
+            return json.loads(lines[0])
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            init_git_repo(root)
+            agents, tmpl = write_agents_and_template(root, limits={"e2e_rounds": 1})
+            _, goal, _ = init_workspace(root, with_spec=False)
+
+            start_res = call_conductor(
+                "start", "--root", str(root), "--goal-file", str(goal),
+                "--agents", str(agents), "--template", str(tmpl),
+            )
+            act = start_res["next"]
+
+            # Track counts so the caller loop mirrors SKILL.md purely from returned actions
+            interview_rounds = 0
+            build_checks = 0
+            e2e_checks = 0
+            saw_interview_round = False
+            saw_auto_fix = False
+            saw_rebuild = False
+            saw_fix_approval = False
+            saw_e2e_failure = False
+
+            while act["action"] != "done":
+                kind = act["action"]
+                if kind == "launch":
+                    self.assertEqual(act["runner"], "agent")
+                    role = act["role"]
+                    prompt_text = Path(act["prompt"]).read_text(encoding="utf-8")
+                    if role == "surveyor":
+                        write_result_for(act, {**VALID_FACTS, "tokens": {"input": 100, "output": 50, "total": 150}, "cost": 0.01})
+                    elif role == "interviewer":
+                        if interview_rounds == 0:
+                            interview_rounds += 1
+                            tree_path = root / "docs" / "pbi" / "interview" / "tree.json"
+                            write_json(tree_path, {
+                                "schema": "atelier.tree/1",
+                                "decided": [],
+                                "open": [{"id": "Q1", "question": "出力形式は？", "recommended": "JSON", "depends_on": []}],
+                            })
+                            q_file = root / "docs" / "pbi" / "interview" / "round-1-questions.md"
+                            q_file.parent.mkdir(parents=True, exist_ok=True)
+                            q_file.write_text("1. [Q1] 出力形式は？\n   - おすすめの答え: JSON\n", encoding="utf-8")
+                            write_result_for(act, {
+                                "done": False, "question_file": str(q_file), "frontier_ids": ["Q1"],
+                                "tokens": {"input": 80, "output": 40, "total": 120},
+                            })
+                        else:
+                            spec_path = root / "docs" / "pbi" / "interview" / "spec.md"
+                            spec_path.write_text(TO_SPEC_BODY, encoding="utf-8")
+                            write_result_for(act, {"done": True, "spec_path": str(spec_path)})
+                    elif role == "planner":
+                        if "Mode: triage" in prompt_text:
+                            write_result_for(act, {
+                                "schema": "atelier.triage/1",
+                                "items": [{"id": "F-1", "decision": "fix", "reason": "must fix"}],
+                                "tokens": {"input": 60, "output": 20, "total": 80},
+                            })
+                        else:
+                            write_result_for(act, {
+                                **make_plan([make_pbi("PBI-1", level="L1", targets=["app.py"])]),
+                                "tokens": {"input": 90, "output": 30, "total": 120},
+                            })
+                    elif role == "worker":
+                        if "Mode: auto_fix" in prompt_text:
+                            saw_auto_fix = True
+                            write_result_for(act, {"status": "ok", "fixed_rules": ["G9"]})
+                        elif "Mode: fix" in prompt_text:
+                            write_result_for(act, {"status": "ok", "fixed_rules": ["review"]})
+                        else:
+                            # Omit tokens/cost on build worker so 'unknown' counts are exercised separately
+                            (root / "app.py").write_text("x = 2\n", encoding="utf-8")
+                            write_result_for(act, {"status": "ok"})
+                    elif role == "reviewer":
+                        write_result_for(act, {
+                            "schema": "atelier.findings/1",
+                            "findings": [make_finding("F-1", file="app.py")],
+                            "tokens": {"input": 70, "output": 25, "total": 95},
+                        })
+                    act = call_conductor("done", "--root", str(root), "--launch-id", act["launch_id"])
+
+                elif kind == "check":
+                    res_path = act["result"]
+                    if "e2e-" in res_path:
+                        e2e_checks += 1
+                        if e2e_checks == 1:
+                            saw_e2e_failure = True
+                            write_result_for(act, {"exit_code": 1, "output": "e2e failed once"})
+                        else:
+                            write_result_for(act, {"exit_code": 0})
+                    elif "fixcheck-" in res_path:
+                        write_result_for(act, {"exit_code": 0})
+                    else:
+                        build_checks += 1
+                        if build_checks <= 2:
+                            write_result_for(act, {"exit_code": 1, "failed_pbis": ["PBI-1"], "rules": ["G9"], "output": f"fail {build_checks}"})
+                        else:
+                            write_result_for(act, {"exit_code": 0})
+                    # SKILL.md calls `conductor.py done --root <work-root>` for check (without --launch-id)
+                    act = call_conductor("done", "--root", str(root))
+
+                elif kind == "ask":
+                    ask_kind = act["kind"]
+                    if act.get("page"):
+                        self.assertTrue(Path(act["page"]).is_file())
+                        self.assertTrue(act.get("summary"))
+                    else:
+                        self.assertTrue(Path(act["question"]).is_file())
+                    if ask_kind == "interview_or_skip":
+                        act = call_conductor("answer", "--root", str(root), "--choice", "interview")
+                    elif ask_kind == "interview_round":
+                        saw_interview_round = True
+                        act = call_conductor("answer", "--root", str(root), "--text", "1. JSON")
+                    elif ask_kind in ("spec_approval", "plan_approval"):
+                        act = call_conductor("answer", "--root", str(root), "--choice", "approve")
+                    elif ask_kind == "rebuild":
+                        saw_rebuild = True
+                        act = call_conductor("answer", "--root", str(root), "--choice", "retry")
+                    elif ask_kind == "fix_approval":
+                        saw_fix_approval = True
+                        act = call_conductor("answer", "--root", str(root), "--choice", "approve")
+                    else:
+                        self.fail(f"unexpected ask kind: {ask_kind}")
+                else:
+                    self.fail(f"unexpected action: {act}")
+
+            self.assertTrue(saw_interview_round)
+            self.assertTrue(saw_auto_fix)
+            self.assertTrue(saw_rebuild)
+            self.assertTrue(saw_fix_approval)
+            self.assertTrue(saw_e2e_failure)
+
+            report_path = Path(act["report"])
+            self.assertTrue(report_path.is_file())
+            self.assertEqual(report_path.name, "REPORT.md")
+            report_text = report_path.read_text(encoding="utf-8")
+            self.assertIn("記録の集計", report_text)
+            # Token totals with known sum and separate unknown counts
+            self.assertIn("合計:", report_text)
+            self.assertRegex(report_text, r"合計:\s*[1-9]\d*（不明\s*[1-9]\d*\s*件）")
+            # Per-rule counts section with G9 fired & fixed counts
+            self.assertIn("## 規則ごとの件数", report_text)
+            self.assertRegex(report_text, r"- G9: .*発火\s*[1-9]\d*\s*件、直し\s*[1-9]\d*\s*件")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -103,6 +103,7 @@ def new_run_state(
         "pbi_launches": {},
         "first_pass_checked_pbis": [],
         "approved_destructive": [],
+        "approved_garbled": [],
         "auto_fix_pbi": None,
         "last_check_failure": "",
         "last_failed_rules": [],

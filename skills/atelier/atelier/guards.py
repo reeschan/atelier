@@ -1,16 +1,21 @@
 """Compare observable workspace and Git state around a role launch."""
 from __future__ import annotations
 
+from collections import Counter
+import difflib
 import fnmatch
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import re
 
 LOCKS = {'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 'Pipfile.lock', 'uv.lock', 'Cargo.lock', 'Gemfile.lock', 'composer.lock', 'go.sum'}
 MANIFESTS = {'package.json', 'pyproject.toml', 'requirements.txt', 'Pipfile', 'Cargo.toml', 'Gemfile', 'composer.json', 'go.mod'}
+_TRIPLE_Q_RE = re.compile(r'\?{3,}')
+_CJK_CHAR = r'[\u3040-\u309f\u30a0-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af\uff66-\uff9f]'
+_CJK_Q_CJK_RE = re.compile(rf'{_CJK_CHAR}\?{_CJK_CHAR}')
 
 
 def _git(root, *args):
@@ -164,4 +169,65 @@ def destructive_changes(root, base):
                 schema_sql = True
         if schema_name or schema_sql:
             findings.append({'kind': 'schema', 'path': name})
+    return findings
+
+
+def _is_fake_test_path(name):
+    parts = PurePosixPath(name.replace('\\', '/').lstrip('./')).parts
+    return any(parts[i:i + 2] == ('tests', 'fakes') for i in range(len(parts) - 1))
+
+
+def _git_show_bytes(root, ref, name):
+    if not ref:
+        return b''
+    proc = subprocess.run(['git', '-C', str(root), 'show', f'{ref}:{name}'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return proc.stdout if proc.returncode == 0 else b''
+
+
+def garbled_changes(root, before, base=None):
+    """Detect added garbled text (U+FFFD, new ???+, CJK?CJK) in changed non-binary files."""
+    root = Path(root).resolve()
+    after = snapshot(root)
+    changed = sorted(
+        p for p in before['files'].keys() | after['files'].keys()
+        if before['files'].get(p) != after['files'].get(p)
+        and after['files'].get(p) is not None
+        and not str(after['files'].get(p)).startswith('link:')
+    )
+    base_ref = base or before.get('head') or ''
+    findings = []
+    for name in changed:
+        if _is_fake_test_path(name):
+            continue
+        try:
+            raw = (root / name).read_bytes()
+        except OSError:
+            continue
+        if b'\x00' in raw:
+            continue
+        base_raw = _git_show_bytes(root, base_ref, name)
+        if b'\x00' in base_raw:
+            continue
+        base_lines = base_raw.decode('utf-8', 'replace').splitlines()
+        new_lines = raw.decode('utf-8', 'replace').splitlines()
+        matcher = difflib.SequenceMatcher(None, base_lines, new_lines)
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag not in ('replace', 'insert'):
+                continue
+            base_runs = Counter(m.group(0) for bl in base_lines[i1:i2] for m in _TRIPLE_Q_RE.finditer(bl))
+            for offset, line in enumerate(new_lines[j1:j2]):
+                reasons = []
+                if '\ufffd' in line:
+                    reasons.append('U+FFFD')
+                for m in _TRIPLE_Q_RE.finditer(line):
+                    run = m.group(0)
+                    if base_runs[run] > 0:
+                        base_runs[run] -= 1
+                    else:
+                        reasons.append('???')
+                        break
+                if _CJK_Q_CJK_RE.search(line):
+                    reasons.append('CJK?CJK')
+                if reasons:
+                    findings.append({'path': name, 'line': j1 + offset + 1, 'text': line, 'reason': ', '.join(reasons)})
     return findings

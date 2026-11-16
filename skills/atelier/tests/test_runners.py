@@ -58,6 +58,51 @@ class RunnerTests(unittest.TestCase):
                 self.assertIsNotNone(result['unusable_reason'])
                 self.assertEqual(result['tokens'], 'unknown')
 
+    def test_registered_cli_path_used_outside_path_and_env_wins(self):
+        fake = Path(__file__).parent / 'fakes' / 'cli.py'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / 'prompt.txt'
+            prompt.write_text('work', encoding='utf-8')
+            tool_dir = root / 'outside_path'
+            tool_dir.mkdir()
+            if os.name == 'nt':
+                cli_path = tool_dir / 'my-codex.cmd'
+                cli_path.write_text(f'@echo off\n"{sys.executable}" "{fake}" %*\n', encoding='utf-8')
+            else:
+                cli_path = tool_dir / 'my-codex'
+                cli_path.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake}" "$@"\n', encoding='utf-8')
+                cli_path.chmod(0o755)
+            agents_file = root / 'agents.json'
+            agents_file.write_text(json.dumps({
+                'runners': {
+                    'agent': {'enabled': True},
+                    'codex': {'enabled': True, 'path': str(cli_path)},
+                }
+            }), encoding='utf-8')
+            clean_env = {k: v for k, v in os.environ.items() if k != 'ATELIER_CODEX_CMD'}
+            clean_env['PATH'] = ''
+            with patch.dict(os.environ, clean_env, clear=True):
+                spec = runners.launch_spec('worker', {'runner': 'codex', 'model': 'test'}, prompt, root / 'r1.json', root, agents_path=agents_file)
+                self.assertEqual(spec[0], str(cli_path))
+                res = runners.run_external(spec, 10)
+                self.assertIsNone(res['unusable_reason'])
+                self.assertEqual(res['tokens'], {'input': 7, 'output': 3, 'total': 10})
+
+            # Default ~/.config/atelier/agents.json lookup when agents_path is omitted
+            fake_home = root / 'home'
+            default_agents = fake_home / '.config' / 'atelier' / 'agents.json'
+            default_agents.parent.mkdir(parents=True)
+            default_agents.write_text(agents_file.read_text(encoding='utf-8'), encoding='utf-8')
+            with patch.dict(os.environ, clean_env, clear=True), patch('atelier.runners.Path.home', return_value=fake_home):
+                spec_default = runners.launch_spec('worker', {'runner': 'codex', 'model': 'test'}, prompt, root / 'r2.json', root)
+                self.assertEqual(spec_default[0], str(cli_path))
+
+            # ATELIER_<RUNNER>_CMD still wins over agents.json
+            with patch.dict(os.environ, {**clean_env, 'ATELIER_CODEX_CMD': json.dumps([sys.executable, str(fake)])}, clear=True):
+                spec_env = runners.launch_spec('worker', {'runner': 'codex', 'model': 'test'}, prompt, root / 'r3.json', root, agents_path=agents_file)
+                self.assertEqual(spec_env[:2], [sys.executable, str(fake)])
+
 
 if __name__ == '__main__':
     unittest.main()
