@@ -69,6 +69,64 @@ VALID_FACTS = {
     "conventions": [],
 }
 
+TO_SPEC_BODY = (
+    "# Spec\n\n"
+    "## Problem Statement\nNeed feature.\n\n"
+    "## Solution\nImplement minimal change.\n\n"
+    "## User Stories\n1. Works as expected.\n\n"
+    "## Implementation Decisions\nStandard library only.\n\n"
+    "## Testing Decisions\nUnit tests.\n\n"
+    "## Out of Scope\nNone.\n\n"
+    "## Further Notes\nNone.\n"
+)
+
+
+def make_valid_plan(pbis: list[dict] | None = None) -> dict:
+    raw = pbis or [{"id": "PBI-1", "title": "Single PBI", "depends_on": [], "level": "L1", "reason": "small"}]
+    normalized = []
+    for item in raw:
+        pid = item["id"]
+        lvl_reason = item.get("level_reason") or item.get("reason") or "small change"
+        normalized.append({
+            "id": pid,
+            "title": item.get("title", pid),
+            "goal": item.get("goal", item.get("title", pid)),
+            "level": item.get("level", "L2"),
+            "level_reason": lvl_reason,
+            "sensitive_candidate": bool(item.get("sensitive_candidate", False)),
+            "sensitive_reason": item.get("sensitive_reason", ""),
+            "depends_on": list(item.get("depends_on") or []),
+            "targets": list(item.get("targets") or item.get("files") or ["app.py"]),
+            "do_not_touch": list(item.get("do_not_touch") or []),
+            "checks": list(item.get("checks") or ["python run_tests.py"]),
+            "facts": list(item.get("facts") or ["m1"]),
+            "acceptance": list(item.get("acceptance") or [f"{pid} passes checks"]),
+        })
+    return {"schema": "atelier.plan/1", "pbis": normalized, "open_questions": []}
+
+
+def make_finding(
+    fid: str = "F-1",
+    *,
+    severity: str = "major",
+    confidence: int = 95,
+    kind: str = "correctness",
+    files: list[str] | None = None,
+) -> dict:
+    item: dict = {
+        "id": fid,
+        "file": (files[0] if files else "a.py"),
+        "line": 1,
+        "severity": severity,
+        "confidence": confidence,
+        "kind": kind,
+        "why": f"why {fid}",
+        "fix": f"fix {fid}",
+    }
+    if files is not None:
+        item["files"] = files
+    return item
+
 
 def reach_building(tmp: Path, pbis: list[dict] | None = None) -> dict:
     """Drive straight from start to building with fake results, returning next action."""
@@ -83,7 +141,7 @@ def reach_building(tmp: Path, pbis: list[dict] | None = None) -> dict:
     assert code == 0 and act["action"] == "launch" and act["role"] == "planner"
 
     plan_pbis = pbis or [{"id": "PBI-1", "title": "Single PBI", "depends_on": [], "level": "L1", "reason": "small"}]
-    write_result_for(act, {"summary": "planned", "pbis": plan_pbis})
+    write_result_for(act, make_valid_plan(plan_pbis))
     code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
     assert code == 0 and act["action"] == "ask" and act["kind"] == "plan_approval"
 
@@ -109,20 +167,19 @@ def reach_running_e2e_via_fix(tmp: Path) -> dict:
     """Drive to reviewing with 1 actionable finding -> triage -> approve -> fix -> e2e."""
     act = reach_reviewing(tmp)
     write_result_for(act, {
-        "summary": "1 finding",
+        "schema": "atelier.findings/1",
         "findings": [
-            {"id": "F-1", "severity": "major", "confidence": 95, "summary": "bug", "files": ["a.py"]},
-            {"id": "F-2", "severity": "minor", "confidence": 90, "summary": "style nit", "kind": "style", "files": ["a.py"]},
-            {"id": "F-3", "severity": "major", "confidence": 60, "summary": "uncertain", "files": ["a.py"]},
+            make_finding("F-1", severity="major", confidence=95, files=["a.py"]),
+            make_finding("F-2", severity="minor", confidence=90, kind="style", files=["a.py"]),
+            make_finding("F-3", severity="major", confidence=60, files=["a.py"]),
         ],
     })
     code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
     assert code == 0 and act["action"] == "launch" and act["role"] == "planner"
 
     write_result_for(act, {
-        "summary": "triaged",
-        "fix_list": [{"id": "F-1", "summary": "fix bug", "files": ["a.py"]}],
-        "deferred": [],
+        "schema": "atelier.triage/1",
+        "items": [{"id": "F-1", "decision": "fix", "reason": "fix bug"}],
     })
     code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
     assert code == 0 and act["action"] == "ask" and act["kind"] == "fix_approval"
@@ -168,7 +225,7 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertEqual(act["action"], "launch")
             self.assertEqual(act["role"], "planner")
 
-            write_result_for(act, {"summary": "1 pbi", "pbis": [{"id": "PBI-1", "title": "Build", "depends_on": []}]})
+            write_result_for(act, make_valid_plan([{"id": "PBI-1", "title": "Build", "depends_on": [], "level": "L1", "reason": "small"}]))
             code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0)
             self.assertEqual(act["action"], "ask")
@@ -192,7 +249,7 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertEqual(act["role"], "reviewer")
 
             # No findings -> directly reaches running_e2e
-            write_result_for(act, {"summary": "clean", "findings": []})
+            write_result_for(act, {"schema": "atelier.findings/1", "findings": []})
             code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0)
             self.assertEqual(act["action"], "check")
@@ -240,7 +297,13 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertEqual(act["role"], "interviewer")
 
             # interviewing -> interviewing (round with open questions -> ask -> answer)
-            write_result_for(act, {"done": False, "questions": ["Q1: target scope?"]})
+            tree_path = tmp / "docs" / "pbi" / "interview" / "tree.json"
+            write_json(tree_path, {
+                "schema": "atelier.tree/1",
+                "decided": [],
+                "open": [{"id": "Q1", "question": "target scope?", "recommended": "minimal", "depends_on": []}],
+            })
+            write_result_for(act, {"done": False, "frontier_ids": ["Q1"]})
             code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0)
             self.assertEqual(act["action"], "ask")
@@ -252,7 +315,10 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertEqual(act["role"], "interviewer")
 
             # interviewing -> awaiting_spec_approval
-            write_result_for(act, {"done": True, "spec": "# 仕様\n確定"})
+            spec_path = tmp / "docs" / "pbi" / "interview" / "spec.md"
+            spec_path.parent.mkdir(parents=True, exist_ok=True)
+            spec_path.write_text(TO_SPEC_BODY, encoding="utf-8")
+            write_result_for(act, {"done": True, "spec_path": str(spec_path)})
             code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0)
             self.assertEqual(act["action"], "ask")
@@ -265,7 +331,8 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertEqual(act["role"], "interviewer")
 
             # interviewing -> awaiting_spec_approval -> planning
-            write_result_for(act, {"done": True, "spec": "# 仕様\n修正版"})
+            spec_path.write_text(TO_SPEC_BODY + "\nUpdated.\n", encoding="utf-8")
+            write_result_for(act, {"done": True, "spec_path": str(spec_path)})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(act["kind"], "spec_approval")
 
@@ -283,7 +350,7 @@ class TestConductorSeam1(unittest.TestCase):
             run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             _, act = run_cli("answer", "--root", str(tmp), "--choice", "skip")
 
-            write_result_for(act, {"pbis": [{"id": "PBI-1", "title": "v1", "depends_on": []}]})
+            write_result_for(act, make_valid_plan([{"id": "PBI-1", "title": "v1", "depends_on": []}]))
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(act["kind"], "plan_approval")
 
@@ -291,7 +358,7 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(act["role"], "planner")
 
-            write_result_for(act, {"pbis": [{"id": "PBI-1", "title": "v2", "depends_on": []}]})
+            write_result_for(act, make_valid_plan([{"id": "PBI-1", "title": "v2", "depends_on": []}]))
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(act["kind"], "plan_approval")
 
@@ -459,12 +526,16 @@ class TestConductorSeam1(unittest.TestCase):
             tmp = Path(td)
             act = reach_reviewing(tmp)
             write_result_for(act, {
-                "findings": [{"id": "F-1", "severity": "major", "confidence": 90, "summary": "questionable"}]
+                "schema": "atelier.findings/1",
+                "findings": [make_finding("F-1", severity="major", confidence=90)],
             })
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(act["role"], "planner")
 
-            write_result_for(act, {"fix_list": [], "deferred": [{"id": "F-1"}]})
+            write_result_for(act, {
+                "schema": "atelier.triage/1",
+                "items": [{"id": "F-1", "decision": "skip", "reason": "acceptable"}],
+            })
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(act["kind"], "fix_approval")
 
@@ -559,7 +630,7 @@ class TestConductorSeam1(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             act = reach_reviewing(tmp)
-            write_result_for(act, {"findings": []})
+            write_result_for(act, {"schema": "atelier.findings/1", "findings": []})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             write_result_for(act, {"exit_code": 0})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
@@ -725,9 +796,9 @@ class TestConductorSeam1(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             act = reach_reviewing(tmp)
-            write_result_for(act, {"findings": [{"id": "F-1", "severity": "major", "confidence": 95}]})
+            write_result_for(act, {"schema": "atelier.findings/1", "findings": [make_finding("F-1", severity="major", confidence=95)]})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            write_result_for(act, {"fix_list": [{"id": "F-1"}]})
+            write_result_for(act, {"schema": "atelier.triage/1", "items": [{"id": "F-1", "decision": "fix", "reason": "fix"}]})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             _, act = run_cli("answer", "--root", str(tmp), "--choice", "approve")
             write_result_for(act, {"status": "ok"})

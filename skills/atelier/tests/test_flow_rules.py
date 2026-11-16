@@ -17,7 +17,7 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent
 if str(SKILLS_DIR) not in sys.path:
     sys.path.insert(0, str(SKILLS_DIR))
 
-from tests.test_conductor import init_workspace, run_cli, start_run, write_json, write_result_for
+from tests.test_conductor import init_workspace, make_valid_plan, run_cli, start_run, write_json, write_result_for
 
 
 VALID_FACTS: dict = {
@@ -96,7 +96,7 @@ def reach_building_with(
 
     code, act = run_cli("answer", "--root", str(root), "--choice", "skip")
     assert code == 0 and act["role"] == "planner", act
-    write_result_for(act, {"summary": "planned", "pbis": pbis})
+    write_result_for(act, make_valid_plan(pbis))
     code, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
     assert code == 0 and act["kind"] == "plan_approval", act
 
@@ -495,7 +495,7 @@ class TestFlowRulesSeam1(unittest.TestCase):
                 {"id": "PBI-3", "title": "Blocked Dep", "depends_on": ["PBI-2"], "level": "L1", "reason": "dep", "files": ["b.py"]},
                 {"id": "PBI-4", "title": "Proceed Dep", "depends_on": ["PBI-2"], "level": "L1", "reason": "mocked", "files": ["c.py"]},
             ]
-            write_result_for(act, {"summary": "plan", "pbis": pbis})
+            write_result_for(act, make_valid_plan(pbis))
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             self.assertEqual(act["kind"], "plan_approval")
 
@@ -578,7 +578,7 @@ class TestFlowRulesSeam1(unittest.TestCase):
             _, chk = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             write_result_for(chk, {"exit_code": 0})
             _, rev = run_cli("done", "--root", str(root), "--launch-id", chk["launch_id"])
-            write_result_for(rev, {"findings": []})
+            write_result_for(rev, {"schema": "atelier.findings/1", "findings": []})
             _, e2e = run_cli("done", "--root", str(root), "--launch-id", rev["launch_id"])
             self.assertEqual(e2e["action"], "check")
 

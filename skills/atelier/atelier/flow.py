@@ -97,8 +97,17 @@ def _approve_spec(run: dict[str, Any]) -> None:
     run["approvals"]["spec"] = True
 
 
+def _clear_spec_approval(run: dict[str, Any]) -> None:
+    run["approvals"]["spec"] = False
+
+
 def _approve_plan(run: dict[str, Any]) -> None:
     run["approvals"]["plan"] = True
+
+
+def _clear_plan_approval(run: dict[str, Any]) -> None:
+    run["approvals"]["plan"] = False
+    run["approvals"].pop("plan_sends", None)
 
 
 def _approve_fix_list(run: dict[str, Any]) -> None:
@@ -184,11 +193,17 @@ TRANSITIONS: tuple[Transition, ...] = (
     # Interviewing & Spec approval
     Transition("interviewing", "interview_round", "interviewing"),
     Transition("interviewing", "interview_done", "awaiting_spec_approval"),
-    Transition("awaiting_spec_approval", "revise_spec", "interviewing"),
+    Transition("awaiting_spec_approval", "revise_spec", "interviewing", effect=_clear_spec_approval),
     Transition("awaiting_spec_approval", "spec_approved", "planning", effect=_approve_spec),
     # Planning & Plan approval
     Transition("planning", "plan_done", "awaiting_plan_approval", guard=lambda r: r["approvals"]["spec"]),
-    Transition("awaiting_plan_approval", "revise_plan", "planning", guard=lambda r: r["approvals"]["spec"]),
+    Transition(
+        "awaiting_plan_approval",
+        "revise_plan",
+        "planning",
+        guard=lambda r: r["approvals"]["spec"],
+        effect=_clear_plan_approval,
+    ),
     Transition("awaiting_plan_approval", "plan_approved", "building", effect=_approve_plan),
     # Building & Checking & Auto-fix & Rebuild
     Transition("building", "worker_returned", "building", guard=lambda r: r["approvals"]["plan"]),
