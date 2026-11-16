@@ -33,14 +33,22 @@ class PageTests(unittest.TestCase):
  def test_render_uses_node_and_parses_path(self):
   with TemporaryDirectory() as d:
    path = Path(d) / 'draft.md'; path.write_text('正常', encoding='utf-8')
-   with patch('atelier.pages.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='✓ C:/page.html\n', stderr='')) as run:
-    self.assertEqual(pages.render(path, script='custom.mjs', node='node-test'), Path('C:/page.html'))
-    self.assertEqual(run.call_args.args[0], ['node-test', 'custom.mjs', 'render', str(path), '--no-open'])
+   script = Path(d) / 'custom.mjs'; script.write_text('', encoding='utf-8')
+   with patch('atelier.pages.shutil.which', return_value='node-test'), patch('atelier.pages.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='✓ C:/page.html\n', stderr='')) as run:
+    self.assertEqual(pages.render(path, script=script, node='node-test'), Path('C:/page.html'))
+    self.assertEqual(run.call_args.args[0], ['node-test', str(script), 'render', str(path), '--no-open'])
  def test_render_failure_is_not_success(self):
   with TemporaryDirectory() as d:
    path = Path(d) / 'draft.md'; path.write_text('正常', encoding='utf-8')
-   with patch('atelier.pages.subprocess.run', return_value=SimpleNamespace(returncode=1, stdout='', stderr='失敗')):
-    with self.assertRaises(pages.PageError): pages.render(path)
+   script = Path(d) / 'am.mjs'; script.write_text('', encoding='utf-8')
+   with patch('atelier.pages.shutil.which', return_value='node'), patch('atelier.pages.subprocess.run', return_value=SimpleNamespace(returncode=1, stdout='', stderr='失敗')):
+    with self.assertRaises(pages.PageError): pages.render(path, script=script)
+ def test_render_without_answer_me_with_html_returns_no_page(self):
+  with TemporaryDirectory() as d:
+   path = Path(d) / 'draft.md'; path.write_text('正常', encoding='utf-8')
+   with patch('atelier.pages.subprocess.run') as run:
+    self.assertIsNone(pages.render(path, script=Path(d) / 'missing.mjs'))
+    run.assert_not_called()
  def test_missing_information_is_visible(self):
   result = pages.draft('plan', {'pbis': [{'id': 'PBI-1'}]})
   self.assertIn('未確認', result['text'])

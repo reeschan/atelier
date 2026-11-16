@@ -769,7 +769,7 @@ def _make_approval_ask(
         "action": "ask",
         "kind": ask_kind,
         "question": str(q_path.resolve()),
-        "page": str(page_path.resolve()),
+        "page": str(page_path.resolve()) if page_path else None,
         "draft": str(draft_path.resolve()),
         "summary": summary_lines,
         "attachments": all_attachments,

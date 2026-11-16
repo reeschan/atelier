@@ -14,7 +14,7 @@ Repeat using the returned action (from `start`'s `next`, or `python conductor.py
 - `launch` with `runner == "agent"`: launch an agent subagent at depth 1 with the `prompt` file, `model`, and `effort`; then run `python conductor.py done --root <work-root> --launch-id <launch_id>`.
 - `launch` with an external `runner`: run `python conductor.py run --root <work-root> --launch-id <launch_id>` and use its returned action.
 - `check`: run `commands`, write a JSON object with integer `exit_code` (and optional `output`) to `result`, then run `python conductor.py done --root <work-root>`.
-- `ask`: show `page` (and `attachments`, if any) using the file-send tool when `page` is non-null, and write `summary` lines in chat (or the contents of the `question` file when `summary` is absent). Pass the user's reply to `python conductor.py answer --root <work-root> --choice <id>` (from `choices`), `--text <reply>` (for `interview_round`), or `--reply <file>`.
+- `ask`: show `page` (and `attachments`, if any) using the file-send tool; when `page` is null (answer-me-with-html is not installed), send `draft` instead, and write `summary` lines in chat (or the contents of the `question` file when `summary` is absent). Pass the user's reply to `python conductor.py answer --root <work-root> --choice <id>` (from `choices`), `--text <reply>` (for `interview_round`), or `--reply <file>`.
 - `done`: hand over `report` (`REPORT.md`) and stop.
 
 G12: Before deleting data or changing anything outside the repository, stop and ask the user.
