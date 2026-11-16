@@ -1,0 +1,19 @@
+{
+  "name": "default",
+  "routes": {
+    "L1": [{"runner": "agent", "model": "haiku", "effort": null}],
+    "L2": [{"runner": "agent", "model": "sonnet", "effort": "low"}],
+    "L3": [{"runner": "agent", "model": "sonnet", "effort": "high"}],
+    "L4": [{"runner": "agent", "model": "opus", "effort": "high"}],
+    "L5": [{"runner": "agent", "model": "opus", "effort": "max"}]
+  },
+  "roles": {
+    "surveyor": {"runner": "agent", "model": "haiku", "effort": null},
+    "interviewer": {"runner": "agent", "model": "opus", "effort": null},
+    "planner": {"runner": "agent", "model": "opus", "effort": null},
+    "reviewer": {"runner": "agent", "model": "opus", "effort": null}
+  },
+  "limits": {"auto_fix": 1, "e2e_rounds": 2, "budget_tokens": null, "budget_usd": null},
+  "parts": {},
+  "reading": {}
+}

@@ -1,0 +1,7 @@
+[
+  {"id":"L1","name":"小さな変更","expert_time":"15分以内","design_judgment":false,"examples":["表示文の修正","既存の定数の変更"]},
+  {"id":"L2","name":"明確な変更","expert_time":"1時間以内","design_judgment":false,"examples":["既存画面への入力項目追加","既存規約に沿う検証の追加"]},
+  {"id":"L3","name":"複数箇所の変更","expert_time":"4時間以内","design_judgment":true,"examples":["複数層にまたがる小機能","既存処理の責務の整理"]},
+  {"id":"L4","name":"大きな変更","expert_time":"半日程度","design_judgment":true,"examples":["新しい処理フローの追加","複数モジュールの連携変更"]},
+  {"id":"L5","name":"広範な変更","expert_time":"半日を超える","design_judgment":true,"examples":["中核機能の再設計","複数システムにまたがる機能追加"]}
+]
