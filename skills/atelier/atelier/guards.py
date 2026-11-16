@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import re
 
 LOCKS = {'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 'Pipfile.lock', 'uv.lock', 'Cargo.lock', 'Gemfile.lock', 'composer.lock', 'go.sum'}
 MANIFESTS = {'package.json', 'pyproject.toml', 'requirements.txt', 'Pipfile', 'Cargo.toml', 'Gemfile', 'composer.json', 'go.mod'}
@@ -96,3 +97,71 @@ def compare(root, before):
         except (OSError, ValueError):
             violations.append({'rule': 'G14', 'detail': 'missing or unfinished report: ' + str(path)})
     return violations
+
+
+def sends_approved(run, pbi, step):
+    runner = step.get('runner') if isinstance(step, dict) else None
+    if runner == 'agent':
+        return True
+    approvals = run.get('approvals', {})
+    sends = approvals.get('plan_sends', {})
+    identifier = pbi.get('id') if isinstance(pbi, dict) else pbi
+    return bool(runner and approvals.get('plan') is True and isinstance(sends, dict)
+                and isinstance(sends.get(identifier), list) and runner in sends[identifier])
+
+
+def scan_secrets(text):
+    """Return categories and line numbers without exposing matched values."""
+    patterns = [
+        ('private_key', r'-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----'),
+        ('api_key', r'\b(?:sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{30,}|AKIA[A-Z0-9]{16})\b'),
+        ('token', r'\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|Bearer\s+[A-Za-z0-9._~+/-]{16,})'),
+        ('secret_assignment', r'(?im)^\s*(?:export\s+)?(?=[A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|CREDENTIAL))[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^\s#]+'),
+    ]
+    findings = []
+    for kind, pattern in patterns:
+        for match in re.finditer(pattern, text):
+            findings.append({'kind': kind, 'line': text.count('\n', 0, match.start()) + 1})
+    return sorted(findings, key=lambda item: (item['line'], item['kind']))
+
+
+def install_attempts(before, after):
+    old, new = before['files'], after['files']
+    return sorted(name for name in old.keys() | new.keys()
+                  if Path(name).name in LOCKS | MANIFESTS
+                  and (name not in old or name not in new or old[name] != new[name]))
+
+
+def forbidden_args(component, argv):
+    blocked = component.get('forbidden_args', [])
+    if not isinstance(blocked, list) or not all(isinstance(x, str) and x for x in blocked):
+        raise ValueError('forbidden_args must be a list of nonempty strings')
+    return [option for option in blocked if any(arg == option or arg.startswith(option + '=') for arg in argv)]
+
+
+def destructive_changes(root, base):
+    """Inspect tracked and untracked working-tree changes against a commit."""
+    root = Path(root).resolve()
+    _git(root, 'cat-file', '-e', base + '^{commit}')
+    fields = _git(root, 'diff', '--name-status', '-z', '--no-renames', base, '--').split('\0')
+    changes = [(fields[i], fields[i + 1]) for i in range(0, len(fields) - 1, 2) if fields[i]]
+    untracked = _git(root, 'ls-files', '--others', '--exclude-standard', '-z').split('\0')
+    changes.extend(('?', name) for name in untracked if name)
+    findings = []
+    for status, name in changes:
+        path = Path(name)
+        if status == 'D':
+            findings.append({'kind': 'deleted', 'path': name})
+        if any(part.lower() in ('migration', 'migrations') for part in path.parts) or re.search(r'(^|[_.-])migration(s)?([_.-]|$)', path.name, re.I):
+            findings.append({'kind': 'migration', 'path': name})
+        schema_name = re.search(r'(^|[_.-])schema([_.-]|$)', path.name, re.I)
+        schema_sql = False
+        if path.suffix.lower() == '.sql' and status != 'D':
+            try:
+                content = (root / path).read_text(encoding='utf-8')
+                schema_sql = bool(re.search(r'\b(?:CREATE|ALTER|DROP|TRUNCATE)\s+(?:TABLE|SCHEMA|DATABASE|INDEX|TYPE|VIEW)\b', content, re.I))
+            except (OSError, UnicodeError):
+                schema_sql = True
+        if schema_name or schema_sql:
+            findings.append({'kind': 'schema', 'path': name})
+    return findings
