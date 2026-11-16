@@ -1,12 +1,14 @@
 """Build Japanese approval drafts and render them with answer-me-with-html."""
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
 from . import template as routing
 
-DEFAULT_SCRIPT = Path.home() / '.claude/skills/answer-me-with-html/scripts/am.mjs'
+DEFAULT_SCRIPT = Path(os.environ.get('ATELIER_AM_SCRIPT') or Path.home() / '.claude/skills/answer-me-with-html/scripts/am.mjs')
 
 
 class PageError(ValueError):
@@ -102,12 +104,17 @@ def draft(kind, run):
 
 
 def render(draft_path, *, script=DEFAULT_SCRIPT, node='node'):
-    """Render a UTF-8 draft, returning the resulting page path."""
+    """Render a UTF-8 draft and return the page path, or None when answer-me-with-html is not installed.
+
+    Without a page the caller shows the draft and the summary lines instead. A garbled draft is always refused (G10).
+    """
     path = Path(draft_path)
     try:
         text = path.read_text(encoding='utf-8-sig')
         if '???' in text or '\ufffd' in text:
             raise PageError('文字化けした原稿です。原稿を書き直してください。')
+        if not Path(script).is_file() or not shutil.which(str(node)):
+            return None
         result = subprocess.run([str(node), str(script), 'render', str(path), '--no-open'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
         raise PageError(f'ページを作成できません: {exc}') from exc

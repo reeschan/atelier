@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+from atelier import pages
 from pathlib import Path
 from unittest.mock import patch
 
@@ -100,6 +102,14 @@ def read_records(root: Path) -> list[dict]:
 
 
 class TestIntegrationSeam1(unittest.TestCase):
+    def assert_page_or_draft(self, ask: dict) -> None:
+        """With answer-me-with-html installed the ask carries a page; without it, only the draft."""
+        self.assertTrue(Path(ask["draft"]).is_file())
+        if Path(pages.DEFAULT_SCRIPT).is_file():
+            self.assertTrue(ask["page"] and Path(ask["page"]).is_file())
+        else:
+            self.assertIsNone(ask["page"])
+
     def test_pages_approval_renders_and_g10_refuses_corrupt_draft(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -117,7 +127,7 @@ class TestIntegrationSeam1(unittest.TestCase):
             code, spec_ask = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0, spec_ask)
             self.assertEqual(spec_ask["kind"], "spec_approval")
-            self.assertTrue(spec_ask["page"] and Path(spec_ask["page"]).is_file())
+            self.assert_page_or_draft(spec_ask)
             self.assertTrue(spec_ask.get("summary"))
             self.assertTrue(Path(spec_ask["draft"]).is_file())
 
@@ -136,7 +146,7 @@ class TestIntegrationSeam1(unittest.TestCase):
             code, plan_ask = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0, plan_ask)
             self.assertEqual(plan_ask["kind"], "plan_approval")
-            self.assertTrue(plan_ask["page"] and Path(plan_ask["page"]).is_file())
+            self.assert_page_or_draft(plan_ask)
             self.assertTrue(plan_ask.get("summary"))
 
             # Progress to fix_approval -> rendered page
@@ -154,7 +164,7 @@ class TestIntegrationSeam1(unittest.TestCase):
             code, fix_ask = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0, fix_ask)
             self.assertEqual(fix_ask["kind"], "fix_approval")
-            self.assertTrue(fix_ask["page"] and Path(fix_ask["page"]).is_file())
+            self.assert_page_or_draft(fix_ask)
             self.assertTrue(fix_ask.get("summary"))
 
     def test_interview_wiring_enforces_tree_g6_and_to_spec(self) -> None:

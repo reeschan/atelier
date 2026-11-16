@@ -9,6 +9,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 AGENT = 'agent'
@@ -391,6 +392,9 @@ def _node_argv(env: dict | None) -> list:
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='replace')
     import argparse
     parser = argparse.ArgumentParser(description='Atelier setup')
     sub = parser.add_subparsers(dest='action', required=True)
