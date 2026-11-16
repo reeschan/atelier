@@ -1,0 +1,92 @@
+stateDiagram-v2
+    state Whole {
+        state Run {
+            [*] --> S0
+            S0 --> S1: L0
+            S1 --> S2: L1
+            S1 --> S3: L2
+            S2 --> S2: L3
+            S2 --> S4: L4
+            S4 --> S2: L5
+            S4 --> S3: L6
+            S3 --> S5: L7
+            S5 --> S3: L8
+            S5 --> S6: L9
+            S6 --> S7: L10
+            S7 --> S8: L11 [gL12]
+            %% when S9
+            S8 --> S7: L13
+            S7 --> S10: L11 [gL14]
+            %% when S11
+            S10 --> S6: L15
+            S10 --> S6: L16
+            S7 --> S6: L17
+            S7 --> S12: L18
+            S12 --> S13: L19
+            S13 --> S14: L20
+            S14 --> S15: L21
+            S14 --> S16: L22
+            S15 --> S16: L23
+            S16 --> S15: L24 [gL25]
+            %% when S17, S18
+            S16 --> S19: L24 [gL26]
+            %% when S20, S21
+            S19 --> S15: L27
+            S19 --> S22: L28
+            S16 --> S22: L29
+        }
+        --
+        state Plan {
+            [*] --> S23
+            S23 --> S24: L9
+        }
+        --
+        state Spec {
+            [*] --> S25
+            S25 --> S26: L6
+            S25 --> S26: L2
+        }
+        --
+        state FixList {
+            [*] --> S27
+            S27 --> S28: L21
+        }
+        --
+        state AutoFix {
+            [*] --> S9
+            S9 --> S11: L11 [gL30]
+            %% when S7
+            S11 --> S29: L11 [gL30]
+            %% when S7
+            S11 --> S9: L15
+            S11 --> S9: L16
+            S11 --> S9: L17
+        }
+        --
+        state Review {
+            [*] --> S30
+            S30 --> S31: L19 [gL31]
+            %% when S12
+            S31 --> S32: L19 [gL31]
+            %% when S12
+        }
+        --
+        state E2E {
+            [*] --> S17
+            S17 --> S18: L24 [gL32]
+            %% when S16
+            S18 --> S20: L24 [gL32]
+            %% when S16
+            S20 --> S33: L24 [gL32]
+            %% when S16
+            S33 --> S21: L27
+            S21 --> S33: L24 [gL32]
+            %% when S16
+        }
+    }
+    %% never BuildWithoutPlan: S6 & S23 -- BuildWithoutPlan
+    %% never PlanWithoutSpec: S3 & S25 -- PlanWithoutSpec
+    %% never TwoAutoFixes: S8 & S29 -- TwoAutoFixes
+    %% never SecondReview: S12 & S31 -- SecondReview
+    %% never FixWithoutList: S15 & S27 & S17 -- FixWithoutList
+    %% never FixPastLimit: S15 & S33 -- FixPastLimit

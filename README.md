@@ -9,604 +9,90 @@
 
 English | [日本語](README.ja.md)
 
-Atelier (formerly **pbi-orchestration-jev**) is a [Claude Code](https://claude.com/claude-code) skill that runs development as a **workflow template**: nine stages (understand, design, plan, route, build, verify, review, fix, finish), each filled by a component you can swap. Its default template splits multi-file implementation work into **PBIs (Product Backlog Items) and hands them to sub-agents**. The main session acts as the orchestrator: it writes the PBIs, picks a model for each, reviews the results and sends work back. The sub-agents (the opencode CLI with DeepSeek, Codex CLI, Claude via the Antigravity CLI, DeepSeek Harness (`dsh`), or Claude Code's Agent tool) do the implementation.
-
-Some judgment calls along the way go to **Jev** ([TypeSafe](https://api.typesafe.ai)), a judgment API, as short text. Pass/fail is still decided by actually running verification commands, and counts are kept in a status file.
-
-> Coming from pbi-orchestration-jev? See [Moving from pbi-orchestration-jev](#moving-from-pbi-orchestration-jev).
+Atelier is a Claude Code skill for implementation work that spans several files. It turns a request into an agreed spec, splits it into small work items (PBIs), routes each PBI to a model, builds and checks them, reviews the whole change once, and reports what it cost. It is not meant for a one-file fix.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture-light.svg" alt="Atelier architecture. The developer gives a task to the caller (their Claude Code session, or Codex or Grok through AGENTS.md, which need the claude CLI) and approves it. The caller only runs conductor.py, a script with no model that keeps the run state in docs/pbi/conductor/run.json and starts a new designer (atelier-designer on Opus, through the Agent tool or claude -p) for every episode; each episode ends with episode.result.json. The designer hands each report to a reviewer (atelier-reviewer, never the model that built it), which runs verify.py and writes review.json; role_results.py bundles a wave's reviews back to the designer, and a tester (atelier-tester on Sonnet) runs the tests at the end and writes test-result.json. The designer passes facts to prepare.py, which asks Jev for gate 1 (brief and PBI quality), picks a tier and a route with select_model.py, reads the routing, overrides and agents.json from your home (~/.config/atelier) and docs/pbi/routing.json, and drops steps whose runner is unusable. PBIs go to pbi-worker (the Agent tool), the default runner for every tier, or to external runners (opencode, Codex, Antigravity, DeepSeek Harness, Claude Code headless) chosen in setup and named in routing.json; they change the source code of the target repository. The designer asks Jev in plain text only when a report and the verification disagree and to check rework notes, and records STATUS, waves.json and reports in docs/pbi/. An optional shared-memory MCP holds per-task refs and the hand-off memory; pbi-worker can only get refs. setup_agents.py and model_fetch.py detect the runner CLIs and fetch each runner's model list into agents.json and models/ in your home. The developer uses the local editor (studio/serve.py, with tabs for agents and models, routing, priority templates and application, and workflow templates) to read and save those files in home only. templates.py keeps priority templates and the local overrides.json, which is the source of truth; the optional priority templates web page (a claude.ai artifact) only syncs with it. Phase adapters use optional callee skills when they are installed: the designer runs mattpocock-skills grilling for design, and after all PBIs adapter_gate.py reads the PBIs and the adapters setting in agents.json to decide whether the final and security reviews run; the final reviewer (atelier-reviewer) then calls lens-review (from reeschan-plugins, a review in Japanese) or the built-in /code-review and /security-review, and writes the findings to docs/pbi/reviews/final.review.md and final.review.detail.md. An optional jev-mcp server (jev_mcp.py, on 127.0.0.1) lets an MCP client claim and submit tasks and use Jev's own steps: route (select_model.py), run (one try on a runner, as runners.md describes) and record (record_run.py); it reads the routing and agents.json from your home and writes prompts, reports and runs in docs/pbi/. lint_run.py and lint_compare.py run jevlint for the lint survey and recheck, reading the source code and a merge-base worktree, and send file contents to Jev (jevlint's provider) only after you approve each send. omm_cache.py reuses oh-my-mermaid scans kept in .omm-cache outside the repository and calls the omm-scan skill on a miss. kiln_log.py records each Kiln cool-down decision in docs/pbi/.kiln/, following sac-strategic-compact when it is installed. setup also runs tools_check.py for the recommended tools.">
+  <img src="assets/architecture-light.svg" alt="Atelier v8 architecture. The developer talks to the caller, their Claude Code session. The caller loops over the conductor (conductor.py, a script with no model) with start, next, done, answer and run, and launches every model role at depth 1: surveyor, interviewer, planner, worker and reviewer. The conductor holds the run state machine and uses one template (difficulty levels L1 to L5 mapped to routes, plus roles and limits), the guard rules G1 to G14 and the run record. It runs external runners (Codex, Antigravity, opencode, dsh, claude -p) itself and reads only runner registration from ~/.config/atelier/agents.json. Roles and the conductor write to docs/pbi in the target repository (run.json, the fact sheet, the design tree, PBIs, record.jsonl and REPORT.md), and workers change the source code. Approval pages are drawn with answer-me-with-html, and the surveyor updates the OMM map with omm-pr-scan --cache from a cache outside the repository.">
 </picture>
 
-The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lang.com)).
+The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lang.com) through the arch-diagram skill).
 
-## Highlights
+## How a run goes
 
-- The workflow is a template. Which skill or procedure fills each stage is data in `workflows/` and `components/`, not prose in the skill. Swap a component, add your own skill, or pick another template, without editing the skill (see [Stages, components and templates](#stages-components-and-templates)).
-- Models are chosen by a decision table, not by gut feeling. `select_model.py` combines facts the orchestrator counts (files changed, modules touched, sensitivity) with Jev's reading of a short brief (novelty, coupling, ambiguity) and picks a tier: haiku, sonnet or opus.
-- Runners are tried in order. Each tier comes with a `route`, an ordered list of runners. If one is out of quota or fails, the next one takes over.
-- Pass/fail comes from verification commands. Neither the sub-agent's report nor Jev's answer is taken at face value. The worker starts its report with a status line (`DONE` / `DONE_WITH_CONCERNS` / `NEEDS_CONTEXT` / `BLOCKED`); the orchestrator sorts the report by that status and the verification results, and asks Jev to triage only when the two disagree. The orchestrator runs the commands itself and checks each acceptance criterion.
-- Two reviews at most, and an optional tier up. Every report is reviewed, and each PBI is reviewed at most twice (its first report and one rework), so a PBI that fails its review goes back with the review notes once; when the rework fails its review too, the orchestrator stops and asks the user. `fix.max_rework` (2) is the upper bound for all reworks, but this review limit is reached first. The final review runs once per run: everything it confirms goes into one fix list, which the fix stage fixes at once (workers that share no file, a review of the fix's diff only, no second final review). E2E runs once at the very end; only the failing specs are fixed and run again, up to `e2e.fix_rounds` times. The orchestrator can raise a PBI's tier (for example haiku to sonnet) with `prepare.py --only PBI-<n> --tier <tier>`, which rewrites that PBI's route from the routing in effect at that moment. If the design needs rethinking, or a PBI fails its second review, the orchestrator stops and asks the user.
-- Only prose goes to Jev's gates. PBI text, briefs, excerpts from reports and rework notes. Never source code, diffs, environment variables or credentials. The one exception is jevlint in the lint survey and recheck, which sends file contents only after you approve that send (below).
-- The orchestrator's context stays small. Every token in the orchestrator's context is re-read on every later turn. Workers end with a 5-line report that starts with a status line and put the details in a file, long command output goes to log files, and PBI text is written once and passed by path (`worker.md`, and "Keep the context small" in `SKILL.md`).
-- Hand-off when the context grows. Between waves of PBIs the orchestrator measures its context with `agent_stats.py --ctx`. Above 250,000 tokens it writes `docs/pbi/HANDOFF.md` (plus a hand-off memory when shared memory is available) and asks you to `/clear` and resume with `/atelier resume`. From a session started without a project folder, run `/atelier resume <repository path>`; without the path, the skill finds the repository from the hand-off memory.
-- Kiln, from Compaction (Japanese reading 窯), caps working context for the whole run and is on by default. The orchestrator measures at every stage and wave boundary and cools down through a short state tablet (`docs/pbi/CONTEXT_STATE.md`) or a hand-off. Every subagent and external worker gets the same rules as a prompt block (`prompts/kiln-chamber.md`): a worker that will not finish under its peak stops at a clean point, writes its `## State`, and a fresh worker continues from it. `kiln_log.py` writes one compact-event line per decision. The lines are designer 120,000 / 180,000 and implementer 60,000 / 90,000, with the hand-off at 250,000. The companion skill [sac-strategic-compact](https://github.com/reeschan/sac-strategic-compact) is followed when it is installed; without it, the bundled copy of its rules applies. `{"enabled": false}` in `docs/pbi/kiln.json` turns Kiln off. Details: [skills/atelier/appendix/kiln.md](skills/atelier/appendix/kiln.md).
-- Tests at the end, on by default. Workers change only the code; the slow checks run once per wave, by the orchestrator, instead of once per worker on half-finished trees. After the last wave, a test stage sorts the tests of the change into keep, fix, rewrite, delete and add with pstack's `principle-test-behavior-not-implementation`, and test PBIs carry out the result ([skills/atelier/appendix/tests-at-end.md](skills/atelier/appendix/tests-at-end.md)). Deciding what to test and writing the test are split: the worker who built the code writes concrete cases (input, expected, mock) with an existing test as the style exemplar, and a cheaper model writes the tests from them (`implement_tier`: the bottom tier of the routing template in the bundled templates); a failing test is fixed case by case, not rewritten. In the author's runs a worker went from 70–95 minutes to a few minutes and used less than half the tokens.
-- A map and a lint survey before the design. When the work is designed, the `map` stage summarises the layers and modules in scope from an [oh-my-mermaid](https://github.com/oh-my-mermaid/oh-my-mermaid) scan kept in a cache outside the repository (keyed by the tree hash, so the same base is never scanned twice), and `lint-survey` ranks that range with [jevlint](https://github.com/INDXDev/jevlint): scores, functions of 100 lines or more, weak principles and bug-hunt leads. The orchestrator opens each lead before it goes into the spec, and leads outside the range wait for you at the approval ([skills/atelier/appendix/map.md](skills/atelier/appendix/map.md), [skills/atelier/appendix/lint.md](skills/atelier/appendix/lint.md)).
-- A lint recheck before the review. After the test stage, `lint-recheck` compares the merge-base (checked out in a temporary worktree) with the working tree and lists what got worse. Only confirmed bug-hunt leads and functions that newly reach 100 lines send a PBI back; score drops and other measures go to the reviewer and the completion report.
-- Nothing leaves without asking. jevlint's model questions send file contents to an outside provider (TypeSafe's Jev by default). Atelier sends only in the survey and the recheck, shows the dry-run numbers (files, tokens, cost, provider) right before each send, and sends only after you say yes; `lint_run.py` refuses without that answer for the same file list. Secret files and the files of sensitive PBIs stay AST only, workers never run jevlint, and everything else runs with `--ast-only`.
-- Recommended tools, with fallbacks. oh-my-mermaid, jevlint, sac-strategic-compact and pstack's test principle are used when installed. `tools_check.py` lists the missing ones with their install commands at the approval and in setup; Atelier installs nothing itself, and when you go on without them a bundled prompt does their job inside Claude Code.
-- Opus designs and reviews; cheaper models implement. Only PBIs that need design decisions are implemented by Opus. Sensitive or tightly coupled PBIs are implemented by Sonnet and get a deep review from the Opus orchestrator.
-- Optional output compression with [rtk](https://github.com/rtk-ai/rtk). A bundled hook rewrites Bash / PowerShell commands to `rtk <cmd>` only in sessions where the skill switched it on.
-- Mechanical steps run as scripts. `prepare.py` runs Jev gate 1 (brief and PBI quality) plus the decision table in one call, and `verify.py` runs a PBI's verification commands; both return only a table to the orchestrator. Files a PBI must not touch are checked by `unchanged.py`, which hashes them before the worker starts. The skill body is split into a core and `appendix/` files that are read only when needed. In the author's measurements (2026-10, 6 tasks) these two changes cut cost by 15%.
-- Workers get just what they need (optional). With a shared-memory MCP (`mcp__shared-memory__*`), only the orchestrator writes per-task "refs" (one fact each) and lists their ids in the PBI. The `pbi-worker` sub-agent can only `get` memories, never search or write.
-- CLAUDE.md first. Stable repository knowledge (conventions, commands, pitfalls) is expected to live in layered CLAUDE.md files; the orchestrator searches memory only as a supplement.
-- Set up once, then build the routing in one editor. Setup finds the runner CLIs on your machine, records which ones you use and fetches each runner's model list. The editor then has four tabs — agents and models, routing, priority templates and application, workflow — and saves everything to your home (see Setup and the editor below).
-- Override routing for a while. Turn on a priority template and it replaces per-tier routes until its deadline, then asks whether to continue. You can also set it from a web page (an artifact); see Priority templates below.
-- Usage stats. `agent_stats.py` reads Claude Code transcripts and reports tokens per model and per agent, how often the prompt cache had to be rebuilt, and the current context size.
-- A record per run. Each time the orchestrator decides a run (pass, rework, promotion, unavailable, on hold), `record_run.py` appends one line to `docs/pbi/runs.jsonl`: runner, model, effort, tokens, cost, steps, time and verification results are read from the logs, and only the outcome and the review finding counts come from the orchestrator. Values it cannot read stay null. It also copies that run's raw logs to an archive outside the repository: `$PBI_RUNS_ARCHIVE` if set (point it at a synced folder to keep logs off the machine), otherwise `~/.claude/pbi-runs`. `model_report.py` sums the runs per model, across repositories with `--archive`, and adds a provisional A–D grade for people to adjust later; it never changes routing.
-- Records for an outer harness. A rework, tier up or hold also records its cause (`spec`, `convention`, `scope`, `memory`, `model`, `env`), and every row carries the version of `docs/pbi/worker.md`, the base commit and the refs the worker did not read. At finish, `export_cases.py` writes one normalized case per PBI to `docs/pbi/cases.jsonl` and the archive: what was injected into the worker (system prompt, the CLAUDE.md conventions that applied, refs), the PBI's sections and size (the facts estimate, counts of Targets, criteria and refs, and the length of worker.md, the PBI and the refs' gists), every attempt's result with its time, steps, tokens and cost, and the rework notes' expectations kept apart for scoring. Atelier builds no prompt from them; an outer harness such as harness2 reads them to replay PBIs and propose changes to the instructions (`skills/atelier/appendix/cases.md`).
-- Costs are estimates. The bundled `prices.json` is a sample price list; a `prices.json` in your home overrides and extends it. `agent_stats.py --cost` reports the designer's cost in API-equivalent USD, and `model_report.py` reports how many runs have no known cost (it leaves them out of the sums).
+1. **Survey.** A cheap model writes a fact sheet about the repository, every item with its source (`path:line` or an OMM element). The OMM map comes from a cache outside the repository and is updated from the nearest commit by diff.
+2. **Interview (optional).** When no complete spec is given, an interviewer asks numbered questions with recommended answers, round by round, until nothing is open, then writes the spec. You decide whether to skip this step.
+3. **Plan.** The planner turns the approved spec and the fact sheet into PBIs. Each PBI has a difficulty level (L1 to L5) with its reason, its checks, and, when it needs care, a sensitive-candidate flag with a reason.
+4. **Approve.** One page shows the roles and models, every PBI with its level, reason, rule and route, the sensitive candidates, the PBIs that go to external models, the limits and an estimate, and what is left to decide. Sensitive parts you mark leave the run and get a hand-off note.
+5. **Build in waves.** Workers build the PBIs whose dependencies are done. Each wave gets machine checks only (tests, lint, type checks, untouched files); exit codes decide. A PBI that fails gets one automatic fix with the failure output and the diff; after that you choose: same route again, one level up, or hold.
+6. **One final review.** A reviewer reads the whole change once. Findings carry severity and confidence; low-confidence and style-only findings are dropped; the planner sorts the rest into fix, skip or ask, and you approve the fix list.
+7. **Fix and E2E.** Workers fix the approved list in groups that share no file. E2E runs as a script with no model; failures go back to fixing up to the template's limit, then you are asked.
+8. **Report.** `docs/pbi/REPORT.md` lists tokens and cost by PBI, role and model, every guard rule's counts, and the first-pass rate by level and model.
 
-## v6: the designer lives inside Atelier
+The agreed state diagram and its TLC check are in [docs/specs/atelier-v8.md](docs/specs/atelier-v8.md).
 
-In v6 the caller and the designer are separate. The **caller** (Claude Code, Codex, Grok …) talks to the user and runs the conductor; it reads no PBI, diff or review. The **conductor** (`conductor.py`, a script) keeps the run in `docs/pbi/conductor/run.json` and hands the designer one episode at a time. The **designer** starts fresh for every episode and has no memory of the last one.
+## Two layers
 
-```mermaid
-flowchart TD
-  U[User] <--> C[Caller<br/>Claude Code, Codex, Grok …]
-  C -- "start / next / done / answer / run / wait" --> K[Conductor<br/>conductor.py<br/>docs/pbi/conductor/run.json]
-  K -- "one fresh launch per episode<br/>(agent or claude -p)" --> D[Designer<br/>atelier-designer, Opus]
-  D --> W[Worker<br/>pbi-worker, route model]
-  D --> R[Reviewer<br/>atelier-reviewer]
-  D --> T[Tester<br/>atelier-tester, Sonnet]
-  R -- "reviews/&lt;report&gt;.review.json" --> B[(Bundle<br/>role_results.py bundle<br/>reads the verify JSON itself)]
-  B --> D
-  T -- "test-result.json" --> D
-  D -- "episode result<br/>episode.result.json" --> K
-```
+- **Caller**: your session. It runs the conductor's commands, launches the model roles it is told to, shows pages and passes your answers back. It designs nothing.
+- **Conductor** (`conductor.py`): a script with no model. It keeps the run state in `docs/pbi/run.json` and returns one next action at a time. It counts retries, checks the budget, runs external runners with before/after checks, and turns anything it cannot decide by rule into a question for you.
 
-| Role | What it does | Where it lives |
-|---|---|---|
-| caller | talks to the user, runs `conductor.py`, passes the episode's lines and questions on, and returns the answers with `answer`. Reads no PBI, diff or review | the user's session (Claude Code, Codex, Grok …) |
-| conductor | keeps the run in `docs/pbi/conductor/run.json` and decides the next episode and its prompt (a script, not a model) | `conductor.py` |
-| designer | the first design (understand to route) and the approval draft, reconciling the reviewers' bundle and the test results; starts the worker, reviewer and tester | `agents/atelier-designer.md` (Opus) |
-| worker | builds one PBI from the PBI and its refs | `agents/pbi-worker.md` (the route's model) |
-| reviewer | one per report; runs `verify.py`, checks the criteria and the diff, writes `reviews/<report>.review.json` | `agents/atelier-reviewer.md` (never the model that built it) |
-| tester | the tests deferred after a wave, the test stage's survey and the final run; writes `verify/tests/<name>.test-result.json` | `agents/atelier-tester.md` (Sonnet) |
+The planner is called at three fixed points only: writing the PBIs, revising them when you ask at approval, and sorting the final review's findings.
 
-- Files are the source of truth. Every hand-over between roles is a file on disk: a subagent's reply may be empty, and the run goes on when the file at its fixed path exists.
-- The designer stops at four points: the approval, the rework limit (or a redesign), before a destructive operation, and before a send out of the machine. The wave-boundary hand-off is no longer a stop point; it is the episode's `handoff`. When the context crosses a Kiln line the designer writes the state tablet and ends with `handoff`, and the conductor starts a fresh designer with `Continue from:` (`/clear` and resume are no longer needed). With the inline fallback (no Agent tool and no `claude`), the caller's session is the designer, and the hand-off and Kiln notes below still apply.
-- The definitions in `agents/` are `atelier-designer.md`, `atelier-reviewer.md`, `atelier-tester.md` and `pbi-worker.md`. Install all four with `mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/*.md ~/.claude/agents/`. Without them the fallback runs (general-purpose, and `--agents` for headless).
-- A caller that reads AGENTS.md (Codex, Grok …) can use this paragraph: `python <skill>/conductor.py start --launch headless` starts the run; `python <skill>/conductor.py run --detach` launches the designer detached; repeat `python <skill>/conductor.py wait --timeout 300` until the state is no longer running; when there is a question, answer it with `python <skill>/conductor.py answer`, and read the state with `python <skill>/conductor.py status`. That machine needs the `claude` CLI; without it Atelier cannot be used.
-- Terms are in [skills/atelier/CONTEXT.md](skills/atelier/CONTEXT.md); the contract of the stages and components is [docs/specs/atelier-workflow.md](docs/specs/atelier-workflow.md); the v6 design is [docs/specs/atelier-v6.md](docs/specs/atelier-v6.md).
+## Template and levels
 
-## Stages, components and templates
+One template holds everything you can tune:
 
-A run is a **workflow template** (`workflows/<name>.json`): nine stages in a fixed order, each with an ordered list of **components**, plus optional **gates** after a stage. A stage runs the first component that is usable and whose `when` holds; the last one in each stage is always a built-in or a script, so every stage has a fallback. A gate runs every component whose `when` holds. `python skills/atelier/flow.py docs/pbi` prints the plan the orchestrator will follow.
+- `routes`: for each level L1 to L5, the runners, models and efforts to try, in order. Neighbouring levels may share a model with different efforts.
+- `roles`: the model of each role (surveyor, interviewer, planner, reviewer, and optionally a separate model for fixes).
+- `limits`: E2E fix rounds, and an optional token or cost budget.
+- `parts` and `reading`: which parts run, and which rule texts and prompt sections a model reads.
 
-| Stage | What happens | Bundled components (default template `jev-routed`) |
-|---|---|---|
-| understand | read the code and the CLAUDE.md files | `understand.builtin` |
-| design | write the spec and its open assumptions (only when the work calls for it) | `design.builtin` |
-| plan | split the work into PBIs | `plan.builtin`, then the gate `gate.jev` (Jev gate 1: brief and PBI quality) |
-| route | pick a tier and a try order per PBI | `route.jev` (decision table + routing templates); `route.opus` in `high-model` |
-| build | the worker (`worker.md`) builds each PBI on its routed runner | `build.runners` |
-| verify | run each PBI's verification commands | `verify.builtin` |
-| review | the final review of the whole diff | `review.code-review` (built-in `/code-review`), then `review.builtin`; the gate `gate.security-review` follows |
-| fix | fix the final review's whole fix list at once (one wave of workers that share no file), then the failing E2E specs only | `fix.list` |
-| finish | the completion report | `finish.builtin` |
+Levels are defined by an expert's time estimate and whether design judgment is needed (`skills/atelier/atelier/levels.json`); they never name a model. You can switch to another template until a date. The shipped default is `skills/atelier/template.default.json`.
 
-- Templates: two are bundled: `jev-routed` (the default; cheap models where the decision table allows) and `high-model` (every PBI goes to the opus agent). A `docs/pbi/workflow.json` in the target repository, then `workflows/<name>.json` in your home, take precedence over the bundled ones. Each template also sets `fix.max_rework` (0-5) and `build.external_memory` (whether external runners may read the refs listed in a PBI).
-- Your own components: install any skill with Claude Code's plugin commands and register it with `component.py add`; see [External components](#external-components). The bundled templates use only this skill and Claude Code's built-ins.
-- Optional stages: three are in the bundled templates and pick their first usable component like a stage, ending with a fallback prompt: `map` and `lint-survey` (after understand, only when the work is designed) and `lint-recheck` (after verify: once, after the test stage and before review). Four more run only when a template turns them on, right after the stage it picks: `ui-design` (screens: direction, theme, mockups, a walkthrough video; default after design), `marketing` (who the work is for and how they react; default after understand), `model-check` (a checked model of the states the work moves through, drawn as a statechart a non-programmer can read; default after design) and `security` (a security audit of the changed code; default after review). They run every component whose `when` holds and need no fallback; when nothing is usable they are skipped. The orchestrator decides `ui-change` and `user-facing`; `ui-retouch` is the other half of the screen decision (only fixing how existing screens look) and never holds with `ui-change`; `ask-user` always asks you (with the PBI list approval when the stage comes after route; optional stages only). Their files go to `docs/pbi/ui/<slug>/`, `docs/pbi/marketing/<slug>.md`, `docs/pbi/model-check/<slug>/` and `docs/pbi/security/<slug>.md`; the plan links the screens in the PBIs that build them, turns each broken rule of the model into a test, and a confirmed security finding sends its PBI back to fix (`skills/atelier/appendix/optional.md`). No bundled template turns those four on; register a skill with `component.py add <skill> --stage ui-design` (or `marketing`, `model-check` or `security`, with `--after <stage>` to move it).
-- Per-template settings on a component: a template entry can be `{"id", "when", "where", "models"}`. `where` runs the component somewhere else in this template only (`main`: the orchestrator runs it itself), and `models` names the models of the subagents it starts, such as `["opus xhigh", "sonnet high"]` for interrogate's adversaries. `models` needs `where` `main`, because a subagent cannot start subagents. The editor's Workflow tab shows a models field on such rows.
-- To build a template without writing JSON, use the editor's Workflow tab: it arranges components per stage, gate and optional stage and saves the template to your home (see [Setup and the editor](#setup-and-the-editor)).
-- The spec is [docs/specs/atelier-workflow.md](docs/specs/atelier-workflow.md) (Japanese); the orchestrator's procedure is `skills/atelier/appendix/engine.md`.
+## Guard rules and the record
 
-## The default flow (jev-routed)
+- [GUARDS.md](skills/atelier/GUARDS.md) lists the fourteen guard rules (G1 to G14), each with how it is stopped: before launch, refused by the conductor, checked afterwards, or, for two of them only, an instruction.
+- `docs/pbi/record.jsonl` gets one line per launch (role, model, tokens or `unknown`, and the tokens read per rule and prompt section), per check and per fix. The template can switch a rule text or a section off, so runs with and without it can be compared by counts.
 
-The default template is the PBI orchestration this skill grew out of:
-
-```mermaid
-flowchart TD
-  U[Understand the code and memory] --> D{Design this work?}
-  D -->|yes| MAP[map: layers and modules in scope<br/>OMM cache, omm-scan or fallback prompt]
-  MAP --> LS[lint-survey: jevlint over the range<br/>AST locally; model only if you approve the send]
-  LS --> S[Spec: checked bug-hunt leads in range]
-  D -->|no| P
-  S --> P[Split into PBIs<br/>facts.json, jevlint: lines in Notes]
-  P --> C[prepare.py<br/>Jev: judge the brief and PBI quality<br/>select_model.py: tier and route]
-  C --> F{User approval<br/>missing tools, deferred tests}
-  F --> G[Run a wave along the route<br/>workers change code only]
-  G --> V[verify.py --skip-deferred, review each PBI]
-  V --> W[End of wave: deferred tests once]
-  W -->|rework| G
-  W -->|next wave| K{Kiln line crossed?}
-  K -->|cool or hand off| N[CONTEXT_STATE.md or HANDOFF.md<br/>/compact or /clear and resume]
-  N --> G
-  K -->|no| G
-  W -->|last wave done| T[Test stage<br/>keep, fix, rewrite, delete, add]
-  T --> LR[lint-recheck: merge-base vs working tree]
-  LR -->|confirmed regression| G
-  LR --> R[Final review and security gate]
-  R -->|confirmed finding| G
-  R --> J[Final report and stats]
-```
-
-The whole flow of the author's template, with every stop point and what leaves your machine, is drawn in [skills/atelier/examples/workflows/README.md](skills/atelier/examples/workflows/README.md).
-
-## Routing
-
-| Condition (evaluated top to bottom) | Tier | Review |
-|---|---|---|
-| `novelty` = 2 and `ambiguity` = 2 (design decisions needed) | opus | normal |
-| `sensitive` is true | sonnet (Agent tool only) | deep |
-| `coupling` = 2 | sonnet | deep |
-| any score ≥ 1, or files changed ≥ 4, or modules ≥ 2 | sonnet | normal |
-| none of the above | haiku | normal |
-
-The bundled default routes every tier to the Agent tool: `haiku` at effort `max`, `sonnet` at effort `high`, and `opus` at its default effort. The default lives in `routing.default.json`; `select_model.py` keeps no table of its own. To use external runners, write your own routing template in `routing.json` in `docs/pbi/` of the target repository or in your home (see [Priority templates](#priority-templates)). The bundled example is `skills/atelier/examples/routing/multi-runner.json`.
-
-After the route is built (from `routing.json` or a priority template), the skill checks each step against `agents.json` in your home and against the CLIs it can find. It drops a step whose runner is disabled there, whose CLI is missing, or whose model is not in that runner's model list, and the approval list shows each dropped step with its reason. The last Agent step is never dropped.
-
-A minimal `agents.json` in your home:
-
-```json
-{"runners": {"opencode": {"enabled": true, "models": ["opencode-go/deepseek-v4.1-flash"]}}}
-```
-
-- A Jev score with confidence below 0.7 is lowered by one step. Without Jev, the tier is decided from the facts alone: files changed, modules and sensitivity.
-- Antigravity offers no Haiku, so a route that sends the haiku tier to `agy` has to use Sonnet at low effort.
-- `--skip opencode,agy` drops runners that hit a quota or got denied in this session. `--all docs/pbi` routes every PBI at once and prints one line per PBI.
-- "deep" review means the Opus orchestrator reads the whole diff itself. A normal review over 300 lines is delegated to an Opus reviewer agent.
-
-## Setup and the editor
-
-The setup and the editor have three commands:
-
-```
-/atelier setup      # detect, fetch the model lists, open the editor, optional integrations
-/atelier models     # fetch the model lists again
-/atelier templates  # open the editor
-```
-
-When you run it without an argument and home has no `agents.json`, it asks one question first: **set up now** or **start with agent only**. The answer is written to `agents.json`, so later runs ask nothing.
-
-Setup looks for the `opencode`, `codex`, `agy` and `dsh` CLIs on the `PATH`, in the global installs of fnm and nvm, and, for `dsh`, at `PBI_DSH_BIN`. `agent` (the Agent tool) is always available. One multiple-choice question picks the runners you use; the choice, each CLI path and version, and the check time go to `agents.json` in your home.
-
-The model lists come from each runner:
-
-| Runner | How the list is obtained | Effort levels |
-|---|---|---|
-| opencode | `opencode models --standalone` (one id per line) | the model cache opencode keeps |
-| codex | `codex debug models` (JSON) | the reasoning levels in the same JSON |
-| agy | `agy models` (tab-separated) | the level at the end of the model id |
-| dsh | the bundled `dsh.models.json` catalog and `dsh headless --dump-config` | the thinking level in the catalog |
-| agent | the Agent tool's built-in definitions (haiku, sonnet, opus, fable) | low through max |
-
-A runner whose list could not be fetched keeps its previous list (or starts empty) and shows the error. Add a model by hand in the editor's agents tab or with `python setup_agents.py add-model --runner <runner> --id <model>`; the other runners are not affected.
-
-The editor is one local page with four tabs:
-
-1. Agents and models: tick the runners and the models to use, add a model by hand, and read the quality and price references beside the list.
-2. Routing template: build the try order for each tier from the models chosen in the first tab.
-3. Priority templates and application: create and edit priority templates (rotate groups included), then apply one with a deadline and an expiry rule.
-4. Workflow: pick a workflow template and arrange its components per stage and gate (order, a `when` per entry, add and remove), plus the rework limit and the external runners' memory access. It checks the template like `flow.py` before saving to `workflows/<name>.json` in home; deleting the home copy brings back the bundled one.
-
-Every save goes to your home: `agents.json`, `models/<runner>.json`, `routing.json`, `templates/<name>.json`, `overrides.json` and `workflows/<name>.json`. No target repository is involved. To open the editor without the skill:
-
-```sh
-python ~/.claude/skills/atelier/studio/serve.py
-```
-
-- The page is in English or Japanese. It follows your browser language, and the 日本語 / EN button in the header switches it (the choice is remembered). `?lang=en` or `?lang=ja` in the URL also works.
-- The server listens on 127.0.0.1 only. `/api/*` needs the per-run token embedded in the page and a Host header of `127.0.0.1` or `localhost`, and it accepts at most 64 KB of JSON per write. It prints `SAVED <kind> <path>` for every save and `CLOSED` or `TIMEOUT` when it ends. `--tab agents|routing|priority|flow` starts on a tab, `--home DIR` uses another home, and `--timeout 0` waits without a limit.
-- The quality and price reference comes from `studio/catalog.json` (refresh it with `python studio/update_catalog.py`; prices and new models come from OpenRouter, quality from the Artificial Analysis coding index when `AA_API_KEY` is set). It is a reference only: the models you can pick come from the fetched lists.
-- Design notes (Japanese): [docs/template-studio.md](docs/template-studio.md).
-
-## Phase adapters
-
-The design, final review and security review stages have extra rules on whether they run, and a switch in `agents.json` (`adapters`) to turn them off or name a skill for them. An **adapter** calls a skill you already have at those phases. The bundled templates call only this skill's own procedures and the reviews built into Claude Code. Other skills, such as mattpocock-skills, pstack and yomiyasu, are installed by you and added as external components (see [External components](#external-components)).
-
-| Phase | When | Callees, in priority order | Notes |
-|---|---|---|---|
-| design | before the split into PBIs | the orchestrator's own procedure; with `setup --recommended`, `mattpocock-skills:grilling` | it runs in the main session, because it asks you questions |
-| final review | after the last PBI | the built-in `/code-review` (with `setup --recommended`, `lens-review:lens-review` first) | the built-in one runs at level `medium` with no flags; each gets the merge-base, the head and the spec path |
-| security review | at the same time, when a PBI is sensitive or deep | the built-in `/security-review` | no arguments |
-
-A review callee only reports. It gets the merge-base, the head, the spec path and "report, do not fix, do not post", and never sees `--fix`, `--comment`, `ultra` or `--max-findings`. The orchestrator compares `git rev-parse HEAD` and `git status --porcelain` before and after the call; if anything changed, it throws the result away and goes back to its own procedure, and a callee that tries to ask you something ends the wrapper with `BLOCKED`, which means the same fallback. Findings are checked, not taken at face value: a real one becomes a rework of the PBI that owns the file and counts towards the limit of two, a finding outside every PBI goes to the "found" list of the final report, and style preferences cause no rework.
-
-With nothing installed the run still finishes. Both built-in reviews are part of Claude Code, so the final and security reviews work from the first run. Only design has no built-in callee: the orchestrator then writes the decisions it made and the assumptions it left open into `docs/specs/<slug>.md` with a short procedure of its own, and the approval list shows those assumptions so you can correct them there.
-
-Whether a phase runs:
-
-- Design: clearly complex (a new concept, an outside interface or a data model change, across two modules or more) runs it without asking. Clearly simple (the plan is settled, or one module and three PBIs at most) skips it, also without asking. Anything in between asks you once, before the split; the answer is kept in `docs/pbi/adapters.json`, so a resume does not ask again. Starting with a spec path (for example, handed over by your own design skill) counts as design done.
-- Final review: skipped only when the whole diff is 300 lines or less, there are two PBIs or fewer, and no PBI is deep or sensitive. Otherwise it runs. `adapter_gate.py` applies this table, so the decision does not drift between runs.
-- Security review: runs when at least one PBI is sensitive or deep.
-
-Each phase leaves one line in `STATUS.md` and `HANDOFF.md` — `adapter <phase>: <callee or built-in> run|skip|fallback|off (<reason>)` — so the next session can see what ran and why.
-
-To stop a phase or name a callee, add `adapters` to `agents.json` in your home. The keys are `design`, `review` and `security`; a value is `auto` (the default), `off`, or a skill name. A bad key or value is ignored with one line saying why, and `off` wins over the criteria above:
-
-```json
-{"adapters": {"design": "off", "review": "mattpocock-skills:code-review", "security": "auto"}}
-```
-
-Naming a skill here is the only way to use a callee outside the table; a name that merely looks like one of the above is never picked up on its own, and skills marked `disable-model-invocation` are never used here (register them as external components instead; they then run as `read-skill`).
-
-### External components
-
-This skill bundles no one else's skill and no component for one. Install a skill with Claude Code's plugin commands, then register it with `component.py add`: it reads the installed `SKILL.md`, writes the component to `components/` in your home, and puts it into a template in your home's `workflows/` (default `jev-routed`, copied from the bundled one the first time). `component.py remove <id>` takes it out, and `component.py list` shows what you have. Your own skills in `~/.claude/skills/<name>/` work the same way (`add <name>`).
-
-```sh
-S=skills/atelier   # or wherever the skill is installed
-
-# mattpocock-skills (MIT): grilling for design, code-review for the final review
-/plugin install mattpocock-skills@claude-plugins-official
-python $S/component.py add mattpocock-skills:grilling --stage design --when ask-or-decide
-python $S/component.py add mattpocock-skills:code-review --stage review --when adapter-gate
-
-# pstack (MIT, cursor/plugins): read-skill components, since its skills cannot be invoked by the model
-/plugin marketplace add cursor/plugins
-/plugin install pstack@cursor-plugins
-python $S/component.py add pstack:how --stage understand --when clearly-complex
-python $S/component.py add pstack:blast-radius --stage gate --after route --when coupling-high
-python $S/component.py add pstack:architect --stage gate --after route --when tier-opus --forbid "do not run Phase D (implementation) or Phase E"
-python $S/component.py add pstack:interrogate --stage review --when heavy-ask --where main --models "opus xhigh" "sonnet high"
-python $S/component.py add pstack:statechart --stage model-check --when ask-user
-
-# yomiyasu (MIT): polishes the wording of a Japanese completion report
-/plugin marketplace add nanaism/yomiyasu
-/plugin install yomiyasu@yomiyasu
-python $S/component.py add yomiyasu:yomiyasu --stage gate --after finish
-
-# founder-skill (MIT): a simulated buyer panel for the marketing stage
-/plugin marketplace add Jakeschincariol/founder-skill
-/plugin install founder-skill@founder-skill
-python $S/component.py add founder-skill:founder-consumer --stage marketing --when user-facing
-
-# your own skills for the UI design stage (design-studio, and ui-video from this repository)
-python $S/component.py add design-studio --stage ui-design --when ui-change
-python $S/component.py add ui-video --stage ui-design --when ui-change
-
-# heydamir/unslop (CC BY 4.0): audits existing screens for AI-looking signs; for retouch work, not a new look
-git clone https://github.com/heydamir/unslop ~/dev/unslop && mkdir -p ~/.claude/skills && cp -r ~/dev/unslop/skills/unslop ~/.claude/skills/
-python $S/component.py add unslop --stage ui-design --when ui-retouch \n  --forbid "Stop after the direction (unslop's steps 1-4: look, audit, decide how much, direction). Do not edit the app's files; the passes are built as PBIs."
-
-# Cloudflare's security-audit (MIT): the security stage, asked every run
-npx skills add https://github.com/cloudflare/security-audit-skill --skill security-audit --global --agent claude-code --yes
-python $S/component.py add security-audit --stage security --when ask-user
-```
-
-Add `--workflow high-model` to put a component into another template. A skill that is not installed, a component whose `when` does not fit its place, or an id that a bundled component already uses stops with exit code 2 and leaves nothing behind.
-
-### The author's recommended template
-
-Nothing outside this skill and Claude Code is used by default. The author's own setup is kept as an example template, `examples/workflows/recommended.json`: jev-routed plus [pstack](https://github.com/cursor/plugins) (understand with `how`, `blast-radius` and `architect` after route, `interrogate` for a deep review only when the finished diff is deep work, such as a new application built from scratch, and the user says run on a question page right before the final review, run by the orchestrator with adversaries on opus xhigh and sonnet high), [mattpocock-skills](https://github.com/mattpocock/skills) (`grilling` for design), the author's [lens-review](https://github.com/reeschan/claude-plugins-official/tree/reeschan/plugins/lens-review) (the final review in Japanese, Apache-2.0) and [yomiyasu](https://github.com/nanaism/yomiyasu) (polishing the Japanese completion report), plus all four optional stages: model check with pstack's `statechart` (asked every run), marketing with [founder-skill](https://github.com/Jakeschincariol/founder-skill)'s `founder-consumer` (a simulated buyer panel, for user-facing work) and UI design with the author's [design-studio](https://github.com/reeschan/claude-skill-design-studio) and [ui-video](skills/ui-video/SKILL.md) (for work that adds screens or a new look) and [unslop](https://github.com/heydamir/unslop) (for work that only retouches existing screens), and security with Cloudflare's [security-audit](https://github.com/cloudflare/security-audit-skill) (asked every run). All are MIT except unslop (CC BY 4.0) and lens-review (Apache-2.0). It also carries the three bundled stages (map, lint survey, lint recheck), tests at the end and Kiln. The example holds only the template and, for each skill, how to install and register it; none of the other people's skills is copied into this repository. The full flow, the questions you are asked and when, what is sent where, and the fallbacks are in [skills/atelier/examples/workflows/README.md](skills/atelier/examples/workflows/README.md).
-
-```sh
-/atelier setup --recommended          # checks, asks once, installs what is missing, registers, writes the template
-```
-
-The same steps by hand:
-
-```sh
-python $S/component.py example check recommended   # which skills are missing, and the install commands (exit 3 while missing)
-# run every install line that check printed; on a fresh machine they are:
-claude plugin marketplace add cursor/plugins
-claude plugin install pstack@cursor-plugins --scope user
-claude plugin install mattpocock-skills@claude-plugins-official --scope user
-claude plugin marketplace add nanaism/yomiyasu
-claude plugin install yomiyasu@yomiyasu --scope user
-claude plugin marketplace add Jakeschincariol/founder-skill
-claude plugin install founder-skill@founder-skill --scope user
-git clone https://github.com/reeschan/claude-skill-design-studio.git ~/dev/claude-skill-design-studio && node ~/dev/claude-skill-design-studio/scripts/install-self.ts
-git clone https://github.com/reeschan/atelier.git ~/dev/atelier && mkdir -p ~/.claude/skills && cp -r ~/dev/atelier/skills/ui-video ~/.claude/skills/
-git clone https://github.com/heydamir/unslop ~/dev/unslop && mkdir -p ~/.claude/skills && cp -r ~/dev/unslop/skills/unslop ~/.claude/skills/
-npx skills add https://github.com/cloudflare/security-audit-skill --skill security-audit --global --agent claude-code --yes
-python $S/component.py example use recommended --as jev-routed --replace   # make it your default template
-```
-
-- `check` installs nothing; it prints one `install <command>` line per command still needed. `setup --recommended` shows the skills with their licenses and links, and runs those commands only after you say yes.
-- `use` registers every skill as an external component and writes the template to `workflows/` in your home: under its own name (`recommended`, which you then ask for by name), or with `--as jev-routed --replace` as your default. A component already registered with other settings stops it; nothing is left behind on an error.
-- `component.py example list` lists the bundled examples. Run `/reload-plugins` or restart Claude Code after installing.
-- The recommended tools are not skills, so `example check` does not list them. `python $S/tools_check.py` shows each one's status, install command and fallback:
-
-```sh
-npm install -g oh-my-mermaid                       # omm, for the map stage
-claude plugin marketplace add oh-my-mermaid/oh-my-mermaid
-claude plugin install oh-my-mermaid@oh-my-mermaid --scope user
-npm install -g @indxjp/jevlint                     # needs Node 22.23.4+, 24.22.1+ or 26.12.1+; the repository's Node does not matter
-jevlint auth set typesafe                          # only for the model questions; without a key jevlint runs AST only
-git clone https://github.com/reeschan/sac-strategic-compact.git ~/dev/sac-strategic-compact   # then copy its skill into ~/.claude/skills/sac-strategic-compact
-```
-
-## Priority templates
-
-A **priority template** overrides the routing for a while. The editor sets the usual routing (home's `routing.json`); a priority template sits on top of it. Save per-tier routes under a name (the same shape as `routing.json`), turn the template on with a deadline, and until that deadline the overridden tiers take their route from the template instead of the usual one; tiers without an override are unaffected, and the last fallback is still that tier's Claude Code agent from `routing.json`. When the deadline passes, your choice of expiry behaviour decides the rest: with `ask`, the skill asks whether to continue (extend, stop, or make it indefinite); with `drop`, it stops applying the template without asking. You create, edit and apply templates in the editor's priority tab or from the chat. The source of truth is the local `overrides.json` in your home; the bundled web page (an artifact with its own database) is an optional sync target, and when `web.json` holds its URL the skill syncs the page with the local copy at the start of a run.
-
-Two things a template cannot change:
-
-- `sensitive` PBIs never go to an external runner, whatever the template says.
-- Design reassessment and review duties stay with the decision table.
-
-Templates are personal settings and live in your home. The default home is `~/.config/atelier` (`$XDG_CONFIG_HOME/atelier` when `XDG_CONFIG_HOME` is set), and `ATELIER_HOME` (or the old `PBI_HOME`) points it somewhere else. The home holds `agents.json` (the runners, their CLI path and version, the selected models, the billing kind), `models/<runner>.json` (the last model list fetched for each runner), `routing.json` (try order), `templates/<name>.json` (priority templates), `overrides.json` (the current application; the source of truth), `history.jsonl` (one line per finished application), the web page URL `web.json` and `prices.json` (price overrides). None of them is required; setup and the editor create the directory and a file only when a save needs it. To try the bundled example, copy it into `templates/` there:
-
-```sh
-mkdir -p ~/.config/atelier/templates
-cp skills/atelier/examples/templates/cheap-all-tiers.json ~/.config/atelier/templates/
-```
-
-Replace `~/.config/atelier` with your home if you set `XDG_CONFIG_HOME` or `ATELIER_HOME`.
-
-The example routes every tier to `opencode-go/deepseek-v4.1-flash` at effort `max`. A step in a priority template can also be a rotate group, `{"rotate": [step, step, ...]}`: the PBI number picks which member goes first, and the other members follow as that PBI's fallbacks, so PBIs are spread evenly across the members (for example, alternating between two free-tier models before two paid ones). For the file format, the home rules and the full walkthrough, see `skills/atelier/appendix/priority-templates.md`.
+Terms are in [GLOSSARY.md](skills/atelier/GLOSSARY.md).
 
 ## Requirements
 
 | Tool | Required | Used for |
 |---|---|---|
-| [Claude Code](https://claude.com/claude-code) | yes | the orchestrator and the Agent tool |
-| Python 3.10+ | yes | scripts such as `prepare.py`, `select_model.py` and `verify.py`, and the Jev client |
-| Jev API key | recommended | without it, Jev gates are skipped and the tier is decided from the facts alone |
-| shared-memory MCP (`mcp__shared-memory__*`) | no | per-task refs and the hand-off memory; without it, facts go into the PBI notes |
-| [mattpocock-skills](https://github.com/mattpocock/skills) | no | the design and final review adapters (see [Phase adapters](#phase-adapters)) |
-| [opencode](https://opencode.ai) + OpenCode Go | no | external runner you enable in `routing.json` (see `examples/routing/multi-runner.json`) |
-| [Codex CLI](https://github.com/openai/codex) | no | external runner you enable in `routing.json` |
-| Antigravity CLI (`agy`) | no | Claude via a Google AI subscription |
-| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) | no | external runner for `routing.json` or a priority template, e.g. the official DeepSeek API through dsh headless |
-| `claude` (Claude Code headless) | no | external runner for `routing.json` or a priority template, only when enabled in `agents.json`; the setting is `default` or `edit-only` |
-| Node.js | no | the rtk hook, and the JS Jev client (`jev.mjs`) |
-| [rtk](https://github.com/rtk-ai/rtk) | no | compressing command output |
-| [oh-my-mermaid](https://github.com/oh-my-mermaid/oh-my-mermaid) (`omm` and the `omm-scan` skill) | recommended | the map stage; without it a fallback prompt summarises the layers |
-| [jevlint](https://github.com/INDXDev/jevlint) (`@indxjp/jevlint`, Node 22.23.4+ / 24.22.1+ / 26.12.1+) | recommended | the lint survey and recheck; without it a fallback prompt reads with the same measures. Its model questions need a provider key and your approval per send |
-| [sac-strategic-compact](https://github.com/reeschan/sac-strategic-compact) | recommended | Kiln's cool-down recipe; without it the bundled copy applies |
-
-Only Claude Code is required. Jev, shared-memory, the external CLIs, the web pages and rtk are optional. Setup looks for the optional CLIs (opencode, codex, agy, dsh) on the `PATH`, in the fnm and nvm globals, and at `PBI_DSH_BIN`, and records only the ones you choose. A missing runner just means the route moves on; Claude Code alone is enough to run the skill.
+| [Claude Code](https://claude.com/claude-code) | yes | the caller and the model roles |
+| Python 3.10+ | yes | the conductor and its modules (standard library only) |
+| Node.js and the answer-me-with-html skill | recommended | drawing the approval pages |
+| oh-my-mermaid and the omm-pr-scan skill (v1.2+) | no | the OMM map for the survey; without them the surveyor reads the code |
+| [Codex CLI](https://github.com/openai/codex), Antigravity CLI (`agy`), [opencode](https://opencode.ai), DeepSeek Harness (`dsh`), `claude` | no | external runners named in the template's routes |
 
 ## Install
 
 ```sh
 git clone https://github.com/reeschan/atelier.git
 cp -r atelier/skills/atelier ~/.claude/skills/
-mkdir -p ~/.claude/agents && cp atelier/skills/atelier/agents/*.md ~/.claude/agents/
+python ~/.claude/skills/atelier/setup.py runners
+python ~/.claude/skills/atelier/setup.py models codex
 ```
 
-### Moving from pbi-orchestration-jev
-
-The skill was renamed from `pbi-orchestration-jev` to `atelier`. Nothing you set up is lost:
-
-- Home: the default home is now `~/.config/atelier` (`$XDG_CONFIG_HOME/atelier`). While that folder does not exist and `~/.config/pbi-orchestration-jev` does, the old folder keeps being used. To move, rename the folder. `ATELIER_HOME` is the new variable; `PBI_HOME` (and the older `PBI_TEMPLATES_HOME`) are still read.
-- Skill: copy `skills/atelier` as above. `skills/pbi-orchestration-jev` is now a small stub that only points to `/atelier`; copy it over the old skill so `/pbi-orchestration-jev` keeps working, or delete the old folder.
-- rtk hook: if you added the rtk hook, change its path in `settings.json` to `skills/atelier/rtk/rtk-gate.mjs`.
-- Work in progress: `docs/pbi/` in your repositories is unchanged; `/atelier resume` picks it up.
-
-`agents/*.md` holds the definitions of the designer (`atelier-designer`), the reviewer (`atelier-reviewer`), the tester (`atelier-tester`) and the worker (`pbi-worker`). Restart Claude Code to load them. Without them the fallback runs (general-purpose, and `--agents` for headless); you only lose some guards, such as the one that stops workers from searching memory.
-
-Put your Jev API key in one of these places (checked in this order):
-
-1. the `TYPESAFE_API_KEY` environment variable
-2. a credentials file at `~/.config/typesafe/credentials.json` containing `{"api_key": "..."}`. Override the path with `TYPESAFE_CREDENTIALS_FILE`.
-
-Never commit the key. Consider adding the credentials file to `permissions.deny` in Claude Code's `settings.json` so agents cannot read it.
-
-### Optional: rtk
-
-[rtk](https://github.com/rtk-ai/rtk) is a CLI proxy that compresses the output of common commands (git, tests, builds). The skill does not use `rtk init -g`, which would turn it on for every session. Instead, a bundled hook rewrites commands only in sessions where the skill ran `rtk/rtk-mode.mjs on`.
-
-1. Install rtk (for example `winget install rtk-ai.rtk`, or `cargo install --git https://github.com/rtk-ai/rtk`; plain `cargo install rtk` is a different package) and check `rtk gain` works.
-2. Add the hook to `~/.claude/settings.json`:
-
-   ```json
-   {
-     "hooks": {
-       "PreToolUse": [
-         {
-           "matcher": "Bash|PowerShell",
-           "hooks": [{ "type": "command", "command": "node \"<HOME>/.claude/skills/atelier/rtk/rtk-gate.mjs\"", "timeout": 10 }]
-         }
-       ]
-     }
-   }
-   ```
-
-3. Restart Claude Code so the hook and `rtk` on your `PATH` are picked up.
-
-Without the flag file (`~/.claude/state/rtk/<session_id>.on`), or without `rtk` on the `PATH`, the hook passes commands through unchanged. For opencode and Codex, rtk's own `rtk init -g --opencode` / `rtk init -g --codex` apply globally.
-
-### Notes on opencode
-
-- The DeepSeek models on OpenCode Go return HTTP 400 unless the workspace's privacy setting is Global.
-- Starting several `opencode run` at the same moment can fail with `database is locked`. The skill staggers starts by 30 seconds.
-- If opencode lives in a Node installed by fnm or nvm, it may not be on Claude Code's `PATH`. `runners.md` shows how to find it.
-
-### Notes on DeepSeek Harness (`dsh`)
-
-- `dsh` is not in the default routing; add it to your `routing.json` or a priority template. A step looks like `{"runner": "dsh", "model": "deepseek-official/deepseek-flash", "effort": "high"}`: the model is `<dsh provider>/<model>`, and the effort is passed to dsh as `reasoningEffort`. Supported values depend on the provider and the installed dsh version. Omit `effort` to omit `reasoningEffort`; dsh may then apply its provider default.
-- `dsh_run.py` runs one PBI: it writes a per-run `--patch` overlay with the provider, model and effort, runs `dsh --profile headless --json`, and keeps the events, the final answer and the start/end time under `docs/pbi/dsh/`. `record_run.py` sums the token usage from the `status` events (no cost is reported).
-- API keys come from the environment (`DEEPSEEK_API_KEY`, `OPENCODE_GO_API_KEY`) or from key-only files (`~/.config/deepseek/deepseek.key`, `~/.config/opencode/opencode-go.key`). Values are never printed.
-- It uses `dsh` on the `PATH` (`npm i -g @deepseek-ai/dsh`), or `PBI_DSH_BIN` / `PBI_DSH_NODE`. Custom providers go in the `cordis.patch.yml` of `DSH_HOME`.
-- Headless runs use `DSH_PERMISSION_MODE=workspace-write`: writes stay inside the repository, and escalation requests are denied because nobody is there to approve them. Builds that need named pipes may fail inside the sandbox; the orchestrator runs the verification itself.
-
-### Notes on Antigravity
-
-- Headless runs (`agy -p`) auto-deny any command the allow list does not match. A command line is matched as a whole, so allowing `pnpm` or `git status` still leaves `rg`, `Get-Content`, `;` chains and pipes denied.
-- The skill therefore passes the bundled `skills/atelier/agy.settings.json` with `--settings` on every worker and role launch (that run only; `~/.gemini/antigravity-cli/settings.json` is not changed). It allows every command (`command(*)`) and denies, anywhere in a command line, git commit, push, reset, rebase, checkout, switch, restore, stash, clean, merge, cherry-pick, tag and worktree, `rm -rf` and `Remove-Item -Recurse`. Commands run outside the sandbox, with the user's own rights (Codex workers, by contrast, run in the `workspace-write` sandbox). The deny rules match text: they guard against mistakes, not a security boundary (checked with agy 1.5.7).
-- `agy` **denies commands it has no permission for and still exits 0**. Denials only show up in `denied_actions` in the JSON result and on stderr. The skill checks `denied_actions` every time and drops `agy` for the rest of the session when one still shows up. A command that hits a deny rule comes back to the model as an error, not in `denied_actions`, and the run goes on.
+`setup.py runners` finds the CLIs and records their paths and versions in `~/.config/atelier/agents.json` (runner registration only). `setup.py models <runner>` stores the runner's model list under `~/.config/atelier/models/`. Use `--home <directory>` for another folder, and for example `runners --codex <path>` for a CLI outside the `PATH`.
 
 ## Usage
 
-In Claude Code, invoke it for work that spans several files:
-
-```
-/atelier <what you want built>
-```
-
-To set up the runners and the model lists, run `/atelier setup`. `/atelier models` fetches the lists again, and `/atelier templates` opens the editor (see Setup and the editor above).
-
-Everything is recorded under `docs/pbi/` in the target repository.
-
-| Path | Contents |
-|---|---|
-| `docs/pbi/STATUS.md` | status, runner and rework count per PBI |
-| `docs/pbi/HANDOFF.md` | what the next session needs after a hand-off |
-| `docs/pbi/PBI-<n>.md` | the PBI itself |
-| `docs/pbi/PBI-<n>.facts.json` / `.brief.md` / `.route.json` | routing inputs and result |
-| `docs/pbi/worker.md` | how workers proceed and report (copied from the skill) |
-| `docs/pbi/tools/unchanged.py` | checks files a PBI must not touch (copied from the skill) |
-| `docs/pbi/routing.json` | try order read for this repository (without it, the `routing.json` in your home, written by the editor, or the bundled default applies) |
-| `docs/pbi/reports/`, `docs/pbi/notes/` | workers' detailed reports and research notes |
-| `docs/pbi/verify/`, `docs/pbi/reviews/` | verification logs and delegated reviews |
-| `docs/pbi/jev-log.jsonl` | routing decisions when they change, decision-table overrides, hand-offs, and report triage by Jev |
-| `docs/pbi/jev.config.json` | Jev gates (created from the template) |
-| `docs/pbi/opencode/`, `docs/pbi/codex/`, `docs/pbi/agy/`, `docs/pbi/dsh/` | prompts and outputs for each runner |
-| `docs/pbi/stats/` | token and cache stats |
-
-The orchestrator only stops to wait for the user in four cases: approving the PBI list, hitting the rework limit (or needing a redesign), before destructive operations, and when it hands off a large context. After a hand-off, run `/clear` and then `/atelier resume`.
-
-A session started without a project folder (the Claude desktop app runs it in an empty folder it creates) has no `docs/pbi/STATUS.md` in its working directory. The skill then picks the repository in this order:
-
-1. the path in `/atelier resume <repository path>`
-2. without a path, the path in the hand-off memory (tag `handoff`) in shared memory; if several tasks are mid hand-off, it asks which one to resume
-3. otherwise, it asks you
-
-It then checks that `STATUS.md` and the branch match, and either moves the session to that folder or keeps working with absolute paths. That is why `HANDOFF.md` and the hand-off memory always carry the repository's absolute path and branch.
-
-## Files
-
-```
-skills/atelier/
-├── SKILL.md                    # the caller's procedure: run the conductor and launch the designer per episode
-├── designer.md                 # the designer's procedure (fresh for every episode; files carry the state)
-├── CONTEXT.md                  # glossary (English and Japanese terms)
-├── flow.py                     # resolves and checks a workflow template; prints the plan per stage
-├── component.py                # registers an installed skill as an external component in your home
-├── conductor.py                # the conductor: keeps the run and hands the designer one episode at a time
-├── role_results.py             # checks the episode, review and test-result JSON; bundles a wave's reviews
-├── workflows/                  # bundled workflow templates (jev-routed, high-model)
-├── components/                 # component definitions: what fills each stage, and the doc that runs it (this skill and Claude Code built-ins only)
-├── runners.md                  # how to hand PBIs to opencode / Codex / Antigravity / dsh
-├── dsh_run.py                  # runs one PBI on DeepSeek Harness headless
-├── claude_run.py               # runs one PBI on Claude Code headless
-├── worker.md                   # how workers proceed and report
-├── appendix/                   # read only when needed: engine, episodes (appendix/episodes.md), the stage procedures (design, plan, verify, review, rework, finish, optional, map, lint, tests-at-end), cases, handoff, kiln, memory, jev, setup, adapters, priority-templates
-├── prompts/                    # prompts: the designer's episodes (prompts/designer-episode.md), subagents (design review, PBI review, final review, tester (prompts/tester.md)), the Kiln block for every subagent, and the map and lint fallbacks
-├── agents/pbi-worker.md        # worker sub-agent (copy to ~/.claude/agents)
-├── agents/atelier-designer.md  # designer (Opus)
-├── agents/atelier-reviewer.md  # reviewer
-├── agents/atelier-tester.md    # tester (Sonnet)
-├── prepare.py                  # Jev gate 1 + decision table in one call; prints a table
-├── verify.py                   # runs a PBI's verification commands; prints exit codes and tails; --deferred runs the tests-at-end checks once per wave
-├── lint_run.py                 # jevlint for the lint survey and recheck: file lists, send approvals, the merge-base worktree
-├── lint_compare.py             # what got worse between two jevlint reports
-├── omm_cache.py                # OMM scans kept outside the repository, keyed by tree hash
-├── kiln_log.py                 # one compact-event line per Kiln decision; keeps the run id
-├── tools_check.py              # the recommended tools: status, install command, fallback
-├── record_run.py               # one line per run in runs.jsonl, and a copy of its raw logs in the archive
-├── model_report.py             # results, tokens, cost and a provisional grade per model, from runs.jsonl
-├── export_cases.py             # one normalized case per judged PBI in cases.jsonl, for an outer harness
-├── prices.json                 # sample API prices for the cost_api_equiv estimate (a prices.json in your home overrides it; not what you are billed)
-├── select_model.py             # decision table: tier, route and review depth; drops steps per agents.json
-├── adapter_gate.py             # whether the final and security reviews run, and why
-├── setup_agents.py             # setup: detect the runner CLIs, record the choice in agents.json, fetch the model lists
-├── model_fetch.py              # one runner's model list from its CLI (or the bundled dsh catalog / built-in agent list)
-├── dsh.models.json             # bundled model catalog for dsh, used when dsh cannot list its models
-├── agents.py                   # reads agents.json and finds runner CLIs (PATH, fnm, nvm)
-├── common.py                   # shared helpers: home resolution, prices, paths, labels
-├── routing.default.json        # default routing: every tier on the Agent tool (override with routing.json in docs/pbi/ or your home)
-├── studio/                     # the editor: four tabs over home (index.html, serve.py, catalog.json, update_catalog.py)
-├── templates.py                # priority templates: validate, sync from the web page, apply / answer / push writes
-├── web/priority-templates.html # web page (artifact) to view and set priority templates
-├── examples/kiln.json          # sample Kiln lines for docs/pbi/kiln.json (Kiln is on by default; {"enabled": false} turns it off)
-├── examples/lint.json          # sample lint lines for docs/pbi/lint.json
-├── examples/map.json           # sample scan directories for docs/pbi/map.json
-├── examples/tests-at-end.json  # sample deferred checks and test paths for docs/pbi/tests-at-end.json
-├── examples/routing/           # example routing template with external runners (multi-runner.json)
-├── examples/templates/         # example priority templates (copy to templates/ in your home)
-├── examples/workflows/         # example workflow templates with the skills they need (component.py example); README.md explains the recommended one
-├── unchanged.py                # hash snapshot to check files a PBI must not touch
-├── jev_mcp.py                  # jev-mcp: MCP server that hands PBIs to MCP clients (stdio / HTTP)
-├── agent_stats.py              # tokens, cache rebuilds and context size from transcripts
-├── jev.config.template.json    # template for Jev gates
-├── opencode.config.json        # opencode permissions (no push, no reset, no outside dirs)
-├── opencode.edit-only.config.json # opencode permissions for edit-only (read, write and search only, no commands)
-├── rtk/
-│   ├── rtk-gate.mjs            # optional PreToolUse hook for rtk
-│   └── rtk-mode.mjs            # turn rtk on / off for the current session
-├── jev/
-│   ├── jev.py / jev.mjs        # Jev client (Python / JS)
-│   └── test_jev.py / jev.test.mjs
-├── test_select_model.py / test_agents.py / test_common.py
-├── test_setup_agents.py / test_model_fetch.py / test_templates.py / test_prepare.py / test_unchanged.py
-├── test_record_run.py / test_model_report.py / test_export_cases.py / test_dsh_run.py / test_jev_mcp.py
-├── test_claude_run.py          # claude_run: arguments, settings and tools
-├── test_adapter_gate.py        # the review gates: 299/300/301 lines, 2/3 PBIs, deep and sensitive
-├── test_lint_run.py / test_lint_compare.py / test_omm_cache.py / test_kiln_log.py / test_tools_check.py / test_verify.py
-├── test_references.py          # every file the skill docs name exists
-└── test_agent_stats.py
-skills/ui-video/                # the author's skill for the ui-design stage: records a walkthrough video of UI pages from a storyboard (Playwright, ffmpeg)
-skills/pbi-orchestration-jev/   # the old name; points to atelier
-```
-
-### Jev client
+In Claude Code, ask for the work and invoke `/atelier`. The caller writes your goal to a file and runs:
 
 ```sh
-python jev/jev.py <config.json> <gate> <text-file>   # use a gate from the config
-python jev/jev.py --request <request.json>           # send a raw request
+python skills/atelier/conductor.py start --root <work root> --goal-file <file> [--spec <spec file>]
 ```
 
-On success it prints the response JSON and exits 0. A Jev failure prints `{"error": ...}` and exits 1; bad arguments exit 2. 429/529 are retried up to 3 times; 5xx, connection errors and timeouts are retried once.
-
-### jev-mcp (MCP server)
-
-`jev_mcp.py` is the interface through which an outside MCP client uses Jev's routing, execution and recording unchanged. The orchestrator writes the prompt to `docs/pbi/mcp/<report>.prompt.md` as for any external runner. The client claims it, works, and reports back in the usual shape: details in `docs/pbi/reports/<report>.md` and the 5-line summary in `docs/pbi/mcp/<report>.last.md`. Approval, verification, review and rework stay with the orchestrator.
-
-```sh
-python skills/atelier/jev_mcp.py --root /path/to/repo                      # stdio
-python skills/atelier/jev_mcp.py --http --port 7830 --root /path/to/repo   # http://127.0.0.1:7830/mcp
-```
-
-| Tool | What it does |
-|---|---|
-| `list_tasks` | prompts in `docs/pbi/mcp/` with their state (queued / claimed / done) |
-| `claim_task` | marks a prompt claimed (only once) and returns the prompt, the PBI and its sections, verification commands, rework text, facts, route and `worker.md` |
-| `submit_result` | writes the details file and the 5-line summary; `artifacts` (for example the client's own summary) is kept as `<report>.artifacts.json` |
-| `fail_task` | reports NEEDS_CONTEXT / BLOCKED in the same two files |
-| `verify` | runs `verify.py` in a work tree (a worktree, for example) and returns the table and exit codes |
-| `jev_gate` | asks one Jev gate through `jev/jev.py`; the API key stays on the server |
-| `route` | one `select_model.py` decision: the tier, the ordered steps to try, the dropped steps, the review and the scores, the same as `python select_model.py <facts.json> [--tier T] [--skip S]`; it writes no `route.json` |
-| `run` | one step for a report, passed the way `runners.md` says (`dsh`, `opencode` or `claude`): `setting` (`default` or `edit-only`) picks the runner's tools (edit-only is read, write and search only, with no commands; `dsh` has no `edit-only`). It writes the prompt to `docs/pbi/<runner>/<report>.prompt.md` and starts that runner once |
-| `record` | one `record_run.py` call: one line for an attempt in `docs/pbi/runs.jsonl` |
-
-`route`, `run` and `record` are the three calls an outside MCP client needs: `route` to get the steps to try, `run` to do one of them, and `record` to keep the result. They add no model, no fence and no row of their own; each takes the arguments of the script it wraps. `route` takes `repo`, `report`, `tier` (`--tier`) and `skip` (`--skip`). `run` takes `repo`, `report`, `runner`, `model`, `effort`, `setting`, `prompt`, `workdir` and `timeout`; `workdir` stays under `--root` and defaults to `repo`, and the call returns the exit code, the `.last.md`, the report and log paths, and whether the runner was unusable by the rules in `runners.md`. `record` takes `repo`, `report`, `attempt`, `outcome`, `findings`, `runner`, `model`, `effort` and `tier`. Run jev-mcp on the machine where those runners work.
-
-Only repositories under `--root` (or `PBI_MCP_ROOTS`) are served. HTTP listens on 127.0.0.1 only, rejects other Host headers and any browser Origin other than its own, and accepts only `application/json` bodies. There is no authentication, so do not expose it to other machines. See the mcp section of `runners.md`.
-
-## Tuning
-
-- The decision table and thresholds are starting points. After 10–20 PBIs, look at the results per model (`model_report.py --archive`: first-try pass, reworks, promotions, tokens and cost) and adjust the constants in `select_model.py` and `prepare.py`.
-- Runner models and effort levels come from a routing template (`routing.json`, same shape as `routing.default.json`). Put it at `docs/pbi/routing.json` in the target repo, or `routing.json` in your home, and `select_model.py` uses it; without one, the bundled `routing.default.json` applies.
-- You can also build the template in the editor (see Setup and the editor above).
-- Review the hand-off threshold (250,000 tokens) and the results of the external runners at the same time.
-- Kiln is on by default and its lines replace the fixed 150,000 / 250,000: `docs/pbi/kiln.json` when it exists, otherwise the template's `kiln`. Copy [skills/atelier/examples/kiln.json](skills/atelier/examples/kiln.json) to change them. See [skills/atelier/appendix/kiln.md](skills/atelier/appendix/kiln.md).
-- The lint lines (a score drop of 5, functions of 100 lines, compliance 0.7, an existing finding that grew by more than 10%) are in the template's `lint` and `docs/pbi/lint.json`. Put test files in `report_only_paths`: their long functions never ask for rework.
+then follows the actions of `next`, `done`, `answer` and `run` as [SKILL.md](skills/atelier/SKILL.md) says. The run's files are in `<work root>/docs/pbi/`.
 
 ## Tests
 
 ```sh
 cd skills/atelier
 python run_tests.py
-python run_tests.py -s studio
-cd jev
-python -m unittest test_jev
-node --test --test-reporter=tap jev.test.mjs
 ```
-
-`run_tests.py` runs the same tests as `python -m unittest discover -p 'test_*.py'`, split over one process per CPU (`-j N` to change it), so the skill's suite takes about 1.5 minutes instead of about 13. `python -m unittest` still works, for a single module or test.
-
-The Jev client tests only talk to a mock server on 127.0.0.1; they never call the real Jev.
 
 ## License
 

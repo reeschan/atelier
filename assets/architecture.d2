@@ -1,20 +1,6 @@
-# Atelier のアーキテクチャ図
+# Atelier v8 のアーキテクチャ図
 # __MONO__ は単色ロゴの色。render.py がライト用 (000000) とダーク用 (ffffff) に置き換えて 2 枚描く
 # 生成: python ~/.claude/skills/arch-diagram/versions/v1.1/scripts/render.py assets/architecture.d2
-# 2026-10-21 に汎用化の段 1 に合わせて描き直した: 既定は全段 pbi-worker、外部の実行先は routing.json で有効にしたときだけ、
-# 利用者の home (routing.json・templates・overrides・agents.json・prices.json)、agents.py による手順の照合、Jev は食い違うときの報告と差し戻し文の点検
-# 2026-10-21 に段 2 に合わせて描き直した: setup_agents.py が CLI を検出してモデル一覧を home に控え、編集画面 (3 タブ) は home だけに書く。
-# 優先テンプレートの正本はローカルの overrides.json で、Web ページは任意の同期先
-# 2026-10-21 にフェーズ・アダプターに合わせて描き直した: adapter_gate.py が最終・セキュリティレビューを使うかを決め、
-# 包むサブエージェント (general-purpose) が任意の呼び出し先 (mattpocock-skills・built-in のレビュー) を呼ぶ。設計の grilling はメインのセッションから
-# 2026-10-23 に jev-mcp を足した: 外の MCP クライアントが、タスクの受け渡しと、Jev の振り分け (route = select_model)・実行 (run = runners.md の渡し方)・記録 (record = record_run.py) を使う
-# 2026-10-23 に外部の実行先 claude (Claude Code の headless、既定と読む・書くだけの設定) を足した
-# 2026-11-08 に v4 に合わせて足した: lint_run.py と lint_compare.py (jevlint の下調べと見直し。ファイルの中身を Jev に送るのは送る直前の許可のあとだけ)、
-# omm_cache.py (oh-my-mermaid の omm-scan の結果をリポジトリの外の .omm-cache に置く)、kiln_log.py (Kiln の記録。sac-strategic-compact は任意)、setup に tools_check.py
-# 2026-11-11 に v6 に合わせて描き直した: オーケストレーターを 呼び出し側・進行役 (conductor.py)・設計者 (出番ごとに新規) に分け、
-# レビュー担当・テスト担当と role_results.py の束を足した。Codex・Grok は AGENTS.md から conductor.py を headless で回す
-# 2026-11-12 に最終レビューを描き直した: 最終レビューは atelier-reviewer が回し、呼び出し先は lens-review (reeschan-plugins の日本語レビュー、任意) と built-in のレビュー。
-# 結果は final.review.md と final.review.detail.md。mattpocock-skills は設計の grilling だけになった
 direction: right
 
 vars: {
@@ -58,87 +44,31 @@ cc: Claude Code {
   class: zone
   icon: https://cdn.simpleicons.org/anthropic/__MONO__
 
-  caller: "Caller (your session)\nruns conductor.py, passes its lines and questions" {
+  caller: "Caller (your session)\nloops next → act → done/answer" {
     class: svc
     icon: https://cdn.simpleicons.org/claude
   }
-  conductor: "conductor.py (conductor, no model)\nrun.json, one episode at a time, 4 stop points" {
-    class: svc
-    icon: https://cdn.simpleicons.org/python
-  }
-  orch: "Designer (atelier-designer, Opus)\nnew per episode: design, PBIs, judge, handoff" {
-    class: svc
-    icon: https://cdn.simpleicons.org/claude
-  }
-  reviewer: "Reviewer (atelier-reviewer)\none per report, not the builder's model" {
-    class: svc
-    icon: https://cdn.simpleicons.org/claude
-  }
-  tester: "Tester (atelier-tester, Sonnet)\ntests at end, final run" {
-    class: svc
-    icon: https://cdn.simpleicons.org/claude
-  }
-  prepare: "prepare.py → select_model.py + agents.py\nJev gate 1, tier + route, drop unusable steps" {
-    class: svc
-    icon: https://cdn.simpleicons.org/python
-  }
-  verify: "verify.py + unchanged.py + role_results.py\nrun checks, hash untouched files, bundle reviews" {
-    class: svc
-    icon: https://cdn.simpleicons.org/python
-  }
-  templates: "templates.py\npriority templates, local overrides.json" {
-    class: svc
-    icon: https://cdn.simpleicons.org/python
-  }
-  worker: "pbi-worker (Agent tool)\ndefault runner for every tier, memory get only" {
-    class: svc
-    icon: https://cdn.simpleicons.org/claude
-  }
-  setup: "setup_agents.py + model_fetch.py + tools_check.py\ndetect CLIs and recommended tools, fetch models" {
-    class: svc
-    icon: https://cdn.simpleicons.org/python
-  }
-  gate: "adapter_gate.py\nrun or skip the final and security reviews" {
-    class: svc
-    icon: https://cdn.simpleicons.org/python
-  }
-  lint: "lint_run.py + lint_compare.py\njevlint survey and recheck, sends only after your yes" {
-    class: svc
-    icon: https://cdn.simpleicons.org/python
-  }
-  map: "omm_cache.py\nOMM scans reused by tree hash" {
-    class: svc
-    icon: https://cdn.simpleicons.org/python
-  }
-  kiln: "kiln_log.py\nKiln: one line per cool-down decision" {
-    class: svc
-    icon: https://cdn.simpleicons.org/python
-  }
-  final: "Final reviewer (atelier-reviewer)\nFINAL.review / FINAL.security, report only" {
+  roles: "Model roles (depth 1)\nsurveyor · interviewer · planner\nworker · reviewer" {
     class: svc
     icon: https://cdn.simpleicons.org/claude
   }
 }
 
-callees: "Callee skills (optional, used when installed)" {
-  class: saas
-  direction: down
+conductor: "Conductor (conductor.py, no model)" {
+  class: zone
+  icon: https://cdn.simpleicons.org/python
 
-  mp: "mattpocock-skills\ngrilling, domain-modeling" {
-    shape: hexagon
-  }
-  lens: "lens-review (reeschan-plugins)\nJapanese review by six lenses" {
-    shape: hexagon
-  }
-  omm: "oh-my-mermaid omm-scan\nlayers and modules, scanned on a cache miss" {
-    shape: hexagon
-  }
-  sac: "sac-strategic-compact\nKiln recipe, else the bundled copy" {
-    shape: hexagon
-  }
-  builtin: "Built-in /code-review, /security-review\nship with Claude Code" {
+  flow: "Run state machine\nnext action, limits, budget, questions" {
     class: svc
-    icon: https://cdn.simpleicons.org/claude
+  }
+  template: "Template\nlevels L1–L5 → routes, roles, limits" {
+    class: svc
+  }
+  guards: "Guard rules G1–G14\nbefore launch, refuse, after-check" {
+    class: svc
+  }
+  record: "Run record\ntokens, rules read and fired" {
+    class: svc
   }
 }
 
@@ -146,75 +76,41 @@ home: "Your home (~/.config/atelier)" {
   class: zone
   icon: https://icons.terrastruct.com/essentials%2F245-folder.svg
 
-  routing: "routing.json · templates/ · overrides.json\ntry order, priority templates" {
-    class: svc
-    shape: page
-  }
-  agents: "agents.json · models/ · prices.json\nrunners, model lists, picks, adapters, prices" {
+  agents: "agents.json · models/\nrunner registration only" {
     class: svc
     icon: https://icons.terrastruct.com/essentials%2F204-settings.svg
   }
 }
 
-runners: "External runners (optional, chosen in setup)" {
+runners: "External runners (optional)" {
   class: saas
   direction: down
 
-  opencode: "opencode CLI\ne.g. DeepSeek V4.1 Flash (OpenCode Go)" {
-    shape: hexagon
-  }
   codex: "Codex CLI" {
     shape: hexagon
   }
-  agy: "Antigravity CLI\nClaude Sonnet 5.5" {
+  agy: "Antigravity CLI" {
     class: svc
     icon: https://cdn.simpleicons.org/google
   }
-  dsh: "DeepSeek Harness (dsh)\ne.g. DeepSeek API V4.1 Flash" {
+  other: "opencode · dsh · claude -p" {
     shape: hexagon
   }
-  claude: "Claude Code (headless)\nclaude -p, default or edit-only setting" {
-    class: svc
-    icon: https://cdn.simpleicons.org/claude
+}
+
+tools: "Skills used when installed" {
+  class: saas
+  direction: down
+
+  am: "answer-me-with-html\napproval pages" {
+    shape: hexagon
+  }
+  omm: "omm-pr-scan --cache\nOMM map, updated by diff" {
+    shape: hexagon
   }
 }
 
-jevmcp: "jev-mcp (jev_mcp.py, 127.0.0.1)\ntasks: claim, submit, verify\nJev: route, run, record" {
-  class: svc
-  icon: https://cdn.simpleicons.org/modelcontextprotocol/__MONO__
-}
-
-othercaller: "Codex / Grok (AGENTS.md)\ncaller via conductor.py, needs the claude CLI" {
-  shape: hexagon
-  style.stroke-dash: 3
-}
-
-harness: "MCP client (optional)\nuses tasks, routing, runs, records" {
-  shape: hexagon
-  style.stroke-dash: 3
-}
-
-jev: "Jev (TypeSafe)\njudgment API (text); jevlint's provider" {
-  shape: hexagon
-}
-
-memory: "shared-memory MCP (optional)\nrefs per work, handoff memory" {
-  class: svc
-  icon: https://cdn.simpleicons.org/modelcontextprotocol/__MONO__
-  style.stroke-dash: 3
-}
-
-web: "Priority templates page (optional)\nclaude.ai Artifact, sync target" {
-  class: svc
-  icon: https://cdn.simpleicons.org/claude
-}
-
-studio: "Editor (studio/serve.py, 127.0.0.1)\ntabs: agents & models, routing,\npriority templates & application" {
-  class: svc
-  icon: https://icons.terrastruct.com/tech%2Fbrowser-2.svg
-}
-
-ommcache: ".omm-cache (outside the repository)\nOMM scans by fingerprint" {
+ommcache: ".omm-cache (outside the repository)" {
   shape: page
 }
 
@@ -222,67 +118,28 @@ repo: Target repository {
   class: zone
   icon: https://cdn.simpleicons.org/git
 
-  code: "Source code\nchanged by the runner" {
+  code: "Source code\nchanged by workers" {
     class: svc
   }
-  pbi: "docs/pbi/\nPBIs, STATUS, HANDOFF, reports, runs" {
-    class: svc
-    shape: page
-  }
-  routing: "docs/pbi/routing.json\ntry order for this repository" {
+  pbi: "docs/pbi/\nrun.json, facts, design tree, PBIs,\nrecord.jsonl, REPORT.md" {
     class: svc
     shape: page
   }
 }
 
-dev <-> cc.caller: task / approval
-cc.caller <-> cc.conductor: "start, next, done, answer, run, wait"
-cc.conductor -> cc.orch: "episode prompt (Agent or claude -p)"
-cc.orch -> cc.conductor: "episode.result.json"
-dev <-> othercaller: task / approval {style.stroke-dash: 4}
-othercaller -> cc.conductor: "start --launch headless,\nrun --detach, wait" {style.stroke-dash: 4}
-cc.orch -> cc.reviewer: report
-cc.reviewer -> cc.verify: "verify.py → review.json"
-cc.verify -> cc.orch: "bundle of the wave"
-cc.orch -> cc.tester: tests at end
-cc.tester -> repo.pbi: "test-result.json"
-cc.orch -> cc.prepare: facts
-cc.prepare -> jev: brief, PBI quality
-cc.orch <-> jev: report on mismatch, rework note
-cc.orch -> cc.worker: PBI path
-cc.orch -> runners: "" {style.stroke-dash: 4}
-cc.worker -> repo.code
+dev <-> cc.caller: "task, answers, approvals"
+cc.caller <-> conductor.flow: "start · next · done · answer · run"
+cc.caller -> cc.roles: "launch with prompt file"
+cc.roles -> repo.pbi: "results"
+cc.roles -> repo.code: "builds"
+conductor.flow -> runners: "run external roles" {style.stroke-dash: 4}
 runners -> repo.code {style.stroke-dash: 4}
-cc.orch -> repo.pbi: "STATUS, waves.json, reports"
-cc.conductor -> repo.pbi: "conductor/run.json, episodes/"
-cc.orch <-> memory: write refs, handoff {style.stroke-dash: 4}
-cc.worker -> memory: get refs {style.stroke-dash: 4}
-cc.prepare -> repo.routing: reads
-cc.prepare -> home: reads routing, overrides, agents.json
-cc.templates <-> home.routing: templates, overrides {style.stroke-dash: 4}
-web <-> cc.templates: sync / answer {style.stroke-dash: 4}
-dev -> web: apply, extend, stop {style.stroke-dash: 4}
-cc.setup -> runners: "--version, list models" {style.stroke-dash: 4}
-cc.setup -> home.agents: agents.json, models/
-dev -> studio: pick models, build routing, apply
-studio <-> home: read / save
-cc.orch -> callees.mp: "design: grilling" {style.stroke-dash: 4}
-cc.orch -> cc.gate: after all PBIs
-cc.gate -> home.agents: adapters
-cc.orch -> cc.final: when the gate says run
-cc.final -> callees.lens: "final review" {style.stroke-dash: 4}
-cc.final -> callees.builtin: "code-review, security-review" {style.stroke-dash: 4}
-cc.final -> repo.pbi: reviews/final.*.md
-harness <-> jevmcp: "claim tasks, route,\nrun, record" {style.stroke-dash: 4}
-harness -> repo.code: "" {style.stroke-dash: 4}
-jevmcp -> repo.pbi: "prompts, reports, runs.jsonl" {style.stroke-dash: 4}
-jevmcp -> home: "reads routing, agents.json" {style.stroke-dash: 4}
-cc.orch -> cc.map: map stage
-cc.map <-> ommcache: hit or store
-cc.map -> callees.omm: "scan on a miss" {style.stroke-dash: 4}
-cc.orch -> cc.lint: "survey, recheck"
-cc.lint -> repo.code: "reads, merge-base worktree"
-cc.lint -> jev: "file contents, only after your yes" {style.stroke-dash: 4}
-cc.orch -> cc.kiln: every stage and wave boundary
-cc.kiln -> repo.pbi: ".kiln/compact-events.jsonl"
-cc.orch -> callees.sac: "Kiln recipe" {style.stroke-dash: 4}
+conductor.flow -> conductor.template
+conductor.flow -> conductor.guards
+conductor.flow -> conductor.record
+conductor.template -> home.agents: "reads runners"
+conductor.flow <-> repo.pbi: "state and checks"
+conductor.record -> repo.pbi: "record.jsonl, REPORT.md"
+conductor.flow -> tools.am: "approval pages" {style.stroke-dash: 4}
+cc.roles -> tools.omm: "surveyor" {style.stroke-dash: 4}
+tools.omm <-> ommcache: "nearest cache, delta"
