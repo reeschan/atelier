@@ -69,5 +69,11 @@ class TemplateTests(unittest.TestCase):
     def test_bad_inputs(self):
         with self.assertRaises(template.TemplateError):
             template.resolve_template(None, [], agents_path=self.agents)
+
+    def test_missing_registration_allows_only_agent(self):
+        missing = self.root / 'missing' / 'agents.json'
+        self.assertEqual(template.load_template(agents_path=missing)['name'], self.default['name'])
+        external = json.loads(json.dumps(self.default))
+        external['routes']['L1'] = [{'runner': 'codex', 'model': 'gpt', 'effort': None}]
         with self.assertRaises(template.TemplateError):
-            template.load_template(agents_path=self.root / 'missing')
+            template.validate_template(external, agents_path=missing)

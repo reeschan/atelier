@@ -33,7 +33,11 @@ def _text(value: Any) -> bool:
 
 
 def _runners(path: Path | str | None) -> set[str]:
-    data = _read(Path(path).expanduser() if path is not None else Path.home() / '.config/atelier/agents.json', '実行先の登録')
+    """Enabled runners. Without a registration file only Claude Code itself (agent) is available."""
+    file = Path(path).expanduser() if path is not None else Path.home() / '.config/atelier/agents.json'
+    if not file.exists():
+        return {'agent'}
+    data = _read(file, '実行先の登録')
     if not isinstance(data, dict) or not isinstance(data.get('runners'), dict):
         _fail('実行先の登録には runners が必要です')
     enabled = set()
