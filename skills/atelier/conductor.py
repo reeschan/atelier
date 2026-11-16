@@ -1,3471 +1,1331 @@
-"""進行役: 設計者の出番を 1 つずつ回す (LLM ではないスクリプト)。run の状態を <dir>/conductor/run.json に持つ。
+"""Atelier v8 conductor CLI: start | next | run | done | answer | status."""
 
-使い方 (リポジトリのルートで):
-  python <このディレクトリ>/conductor.py start --goal TEXT|--goal-file F [--workflow N] [--launch agent|headless] [--role R[.K]=V ...] [--force] [--dir docs/pbi]
-  python <このディレクトリ>/conductor.py next [--relaunch] [--dir docs/pbi]
-  python <このディレクトリ>/conductor.py done [--dir docs/pbi]
-  python <このディレクトリ>/conductor.py answer (--reply F | --text T | --approve [--choices 1=a,2=b] | --revise (--text T | --reply F)) [--dir docs/pbi]
-  python <このディレクトリ>/conductor.py run [--max-episodes N] [--detach] [--launch agent|headless] [--dir docs/pbi]
-  python <このディレクトリ>/conductor.py wait [--timeout S] [--dir docs/pbi]
-  python <このディレクトリ>/conductor.py status [--dir docs/pbi]
-  python <このディレクトリ>/conductor.py abort [--reason T] [--dir docs/pbi]
+from __future__ import annotations
 
-置き場所: <dir>/conductor/ の run.json (schema atelier.run/1)・goal.md・lock・episodes/<seq>-<出番>.prompt.md・
-episodes/<seq>-read.md (設計者が最初に読むファイル。read_first.json の表から組む)・
-<run_id の先頭 8 文字>-<seq>-<出番>.result.json (run_id の無い run.json は <seq>-<出番>.result.json)・.alive・answers/<seq>-<種類>.md。
-波の中身は <dir>/waves.json。
-状態: none・ready・running・question・retry・finished・aborted。出力の 1 行目はいつも `state: <状態>`、全部で 8 行以内。
-run は headless で設計者を `claude -p` (環境変数 ATELIER_DESIGNER_CMD で差し替え可) から起こし、依頼文・起動・done を
-問い・終わり・失敗まで繰り返す。claude -p の子を待つ間はロックを持たず、retry になったら 12 で止まる。
-run --detach は runner_pid を残してロックを放ち、自分を切り離してすぐ running で返る。wait は running でなくなるか
---timeout 秒まで run.json を読む (ロックは取らない)。running の子も runner も生きていなければ、timeout を待たずに stale を出して返る。
-
-終了コード: 0 進める・終わった・running の案内 / 10 ユーザーの答え待ち / 12 起動か結果の失敗 /
-2 引数と状態の誤り (ロック・答える問いが無い・終わっていない run がある start・waves.json に無い波・running でない run の --relaunch・
-headless の設計者か runner が動いている間の done (state: running と then: wait を出す))
-
-立て直し: next --relaunch は止まった running の子を止めて新しい seq で起こし直す。launch が headless の run の next は
-起動の指示を出さず run --detach を案内する。no-agent-tool の問いのあとに run --launch headless が呼ばれたら、問いを閉じて
-その出番を headless で起こす。start --force は前の run の子を止めてから run.json を退ける。失敗 (結果なし・壊れ・表に無い next・error) は retry にして数え、同じ出番で 2 回続けば
-launch-failure の問い、handoff は進み (runs.jsonl の行数と、STATUS.md と stages.md を合わせたハッシュ) が 3 回続けて
-無ければ handoff-loop の問い、error の no-agent-tool は数えずに decision の問い (どれも
-<dir>/conductor/episodes/<seq>-<種類>.question.md に説明を書く)。handoff と問い (approve 以外) の状態の板が
-kiln_log.tablet_problems に外れれば、板を Continue from に残して同じ出番を起こし直す (2 回続けば launch-failure)。
-
-エージェントの定義: start は定義が足りず agents.json に agent_defs の記録も無ければ、run を作らずに ask agents: の行を出して
-2 で止まる (呼び手が setup_agents.py defs --install で答えを残す)。写した定義が同梱より古ければ写し直す。
-next の起動のしかたは、定義が読み込まれていれば Agent tool、そうでなく claude の CLI があれば headless (--agents で同梱の
-定義を渡す)、どちらも無いか headless が 2 回続けて失敗したら general-purpose に定義を読ませる。出番に Skill ツールを要る
-行があれば (flow.skill_tool_episodes) atelier-designer-skills、無ければ atelier-designer の定義で起こす。
-子の pid (child_pid・runner_pid) は record_pid で起動の時刻 (<key>_started) と一緒に残す。止める前に時刻を比べ、合わない・
-読めない pid は自分の子でない (使い回し) として止めず、run.json から消して warn を出す。時刻の記録が無い古い run.json は、
-launched_at より前に起きたプロセスだけ止める。
-"""
 import argparse
-import datetime
 import hashlib
 import json
-import os
 import re
-import shutil
-import signal
-import socket
 import subprocess
 import sys
-import tempfile
-import time
-import uuid
 from pathlib import Path
+from typing import Any
 
-import common
-import agents as agents_module
-import claude_run
-import design_record
-import flow
-import kiln_log
-import present
-import read_first
-import role_results
-import runner_cli
-import setup_agents
+from atelier import actions, flow, guards, interview, pages, plan, record, runners, state, survey, template
 
-try:
-    import events
-except (Exception, SystemExit):  # events.py の無い古い install でも run を止めない
-    events = None
 
-SCHEMA = 'atelier.run/1'
-SKILL = Path(__file__).resolve().parent
-TEMPLATE = SKILL / 'prompts' / 'designer-episode.md'
+class ConductorError(Exception):
+    """Refused command error returned as exit code 2 with JSON {"error": ...}."""
 
-# Windows で子プロセスのコンソールのウインドウを出さない (ほかのスクリプトと同じ。Windows 以外は 0)
-NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
-EXIT_OK = 0
-EXIT_USAGE = 2
-EXIT_ASK = 10
-EXIT_FAIL = 12
+class _JsonArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise ConductorError(message)
 
-CLOSED = ('finished', 'aborted')
-MAX_LINES = 8
-LOCK_WAIT = 5.0
-SUMMARY_MAX = 200
-# Windows では読み手がファイルを開いている間 os.replace が PermissionError になる。短く取り直す
-REPLACE_WAIT = 2.0  # 置き換えを取り直す長さ (秒)
-READ_WAIT = 1.0  # 読めない run.json を取り直す長さ (秒)
-REMOVE_WAIT = 2.0  # 手放したロックを消すのを取り直す長さ (秒)
-STOP_WAIT = 3.0  # 止めた子が死ぬのを待つ長さ (秒)
-WAIT_POLL = 1.0  # wait が run.json を読み直す間隔 (秒)
-WAIT_LOCK_WAIT = 5.0  # wait が、running でなくなったあとにロックの消えるのを待つ長さ (秒)
-WAIT_DEFAULT = 300.0  # wait --timeout の既定 (秒)
-LOOP_LIMIT = 3  # 進みの無い handoff がこの回数続いたら handoff-loop の問い
-FAIL_LIMIT = 2  # 同じ出番の失敗がこの回数続いたら launch-failure の問い
-AGENT_ROLE = 'atelier-designer'  # ふだんの設計者の定義 (Skill ツールなし)
-SKILLS_ROLE = 'atelier-designer-skills'  # Skill ツールを要る行を main で動かす出番の設計者の定義
-AGENTS_DIR = Path(__file__).resolve().parent / 'agents'
-STATES = ('none', 'ready', 'running', 'question', 'retry', 'finished', 'aborted')
-# run.json が在るのに読めず、この処理で一度も状態を読めていないときに 1 行目に出す状態。
-# none は「無い」と誤らせ、finished・aborted は start を誘うので、起こし直し待ちの retry にする
-UNREADABLE_STATE = 'retry'
 
-# モデルを使わず、conductor がスクリプトで流す出番 (設計者を起こさない)
-SCRIPT_EPISODES = ('e2e',)
-E2E_SCRIPT = SKILL / 'e2e_run.py'
-# 出番のつながり (done の next に許すもの)。finish は run を閉じる。
-# 最後の見直しは 1 回で、差し戻さない: review の指摘は fix (修正の段) が一度に直し、E2E は最後の最後に流す
-# (docs/specs/fix-stage-once.md)。build -> e2e と e2e -> test は、この形より前に始めた run の途中のためだけに残す
-NEXT_ALLOWED = {
-    'design': ('build',),
-    'build': ('build', 'e2e', 'test', 'review', 'finish'),
-    'e2e': ('fix', 'finish', 'test'),
-    # test -> test と fix -> fix は、担当が設計者に渡す (needs_designer) か、設計者が担当に戻すときだけ
-    'test': ('build', 'test', 'review'),
-    'review': ('fix', 'e2e', 'finish'),
-    'fix': ('fix', 'e2e', 'finish'),
-    'finish': (),
-}
+def _emit(payload: dict[str, Any]) -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-DEFAULT_ROLES = {
-    'designer': {'runner': 'agent', 'model': 'opus', 'effort': None, 'permission_mode': 'auto'},
-    # 出番ごとの設計者。層が決めなければ振り分けテンプレートの中段 (TEMPLATE_TIER) から取り、ここは最後の頼り
-    'episodes': {'test': {'runner': 'agent', 'model': 'sonnet', 'effort': 'high', 'permission_mode': 'auto'},
-                 'fix': {'runner': 'agent', 'model': 'sonnet', 'effort': 'high', 'permission_mode': 'auto'}},
-    'reviewer': {'deep': {'runner': 'agent', 'model': 'opus', 'effort': None},
-                 'other': {'runner': 'agent', 'model': 'sonnet', 'effort': 'high'}},
-    'tester': {'runner': 'agent', 'model': 'sonnet', 'effort': None},
-}
 
-DECISION = re.compile(r'^(\d+)\. \[([^\]]*)\] (.*)$')
-ANSWER_LINE = re.compile(r'^ {3}[←→] (.*)$')
-UNANSWERED = '**—**'
-META_PREFIX = 'reply-meta-'
-FENCE_OPEN = '```am-reply-meta'
+def _validate_no_answer_field(result: dict[str, Any]) -> None:
+    # G6: role results must never supply user answers
+    for forbidden in ("answer", "answers", "user_answer"):
+        if forbidden in result:
+            raise ConductorError(f"G6: role result must not contain '{forbidden}'")
 
-# イベントの値の語彙 (skills/atelier/harness.schema.json と合わせる。外れた値は dropped に落ちる)
-EPISODE_TYPES = ('design', 'build', 'e2e', 'test', 'review', 'fix', 'finish')
-ROLE_SOURCES = ('run', 'repo', 'home', 'template', 'default')
-QUESTION_TOPICS = ('runner-unavailable', 'omm', 'recheck', 'unknown', 'approve-ask',
-                   'design-approval', 'headless', 'grill-round', 'other')
-QUESTION_CHOICES = tuple('abcdefghijklmnopqrstuvwxyz') + ('yes', 'no', 'revise')
-END_REASONS = {'missing': 'result-missing', 'invalid': 'result-invalid', 'error': 'episode-error',
-               'launch-failed': 'launch-failed', 'aborted': 'other'}
-EVENT_ID = re.compile(r'^[A-Za-z0-9._:/@-]{1,64}\Z')
-SETTLE_TIMEOUT = 120.0
 
-
-class Refused(Exception):
-    """引数か状態の誤り (終了コード 2)。メッセージは error: の行になる。"""
-
-
-class Locked(Refused):
-    """生きているロックがある (終了コード 2)。"""
-
-
-class Unusable(Refused):
-    """run.json は在るが使えない (取り直しても読めない・JSON のオブジェクトでない・schema が違う)。終了コード 2。"""
-
-
-# ---- 出力 ----
-
-def fold(text, limit=None) -> str:
-    """複数行の文を 1 行に畳む (行の区切りは ' / ')。limit があればそこで切る。"""
-    parts = [part.strip() for part in str(text).splitlines() if part.strip()]
-    line = ' / '.join(parts)
-    if limit is not None and len(line) > limit:
-        line = line[:limit - 3] + '...'
-    return line
-
-
-def emit(lines) -> None:
-    """行を出す。複数行の値は 1 行に畳む。8 行を超えるときは warn の行を 1 行にまとめ、それでも超えれば切る。"""
-    lines = [fold(line) for line in lines if line is not None]
-    if len(lines) > MAX_LINES:
-        warns = [line for line in lines if line.startswith('warn ')]
-        rest = [line for line in lines if not line.startswith('warn ')]
-        if warns:
-            rest.insert(1, f'{warns[0]} (+{len(warns) - 1} more warn)' if len(warns) > 1 else warns[0])
-        lines = rest[:MAX_LINES]
-    print('\n'.join(lines))
-
-
-quoted = common.quoted
-DEFAULT_DIR = 'docs/pbi'
-
-
-def command(*words) -> str:
-    """呼び出し側に出す、このスクリプトのコマンドの行。"""
-    return ' '.join(['python', quoted(SKILL / 'conductor.py'), *words])
-
-
-def iso_now() -> str:
-    return common.now().isoformat(timespec='seconds')
-
-
-# ---- パス ----
-
-class Paths:
-    def __init__(self, base: str):
-        self.base = Path(base)
-        self.conductor = self.base / 'conductor'
-        self.run = self.conductor / 'run.json'
-        self.lock = self.conductor / 'lock'
-        self.goal = self.conductor / 'goal.md'
-        self.episodes = self.conductor / 'episodes'
-        self.answers = self.conductor / 'answers'
-        self.seen = None  # 最後に読んだ run の状態 (main の error の行に使う)
-
-    def episode_file(self, seq: int, episode: str, suffix: str) -> Path:
-        return self.episodes / f'{seq}-{episode}{suffix}'
-
-    def result_file(self, seq: int, episode: str, run_short: str, launcher: str) -> Path:
-        """出番の結果のパス。起動のしかたによらず、名前に run_id の先頭 8 文字を入れる。
-
-        agent の設計者 (Agent ツールの子) は start --force で止められず、headless の設計者も止められなければ
-        stuck_pids に移るだけで動き続ける。前の run の設計者があとから書いた結果を新しい run が受け取らない
-        ように、<run8>-<seq>-<出番>.result.json にする。run_id の無い run.json だけ <seq>-<出番>.result.json。
-        launcher は呼び出し元との互換のために受け取るだけで、名前には効かない。
-        """
-        if not run_short:
-            return self.episode_file(seq, episode, '.result.json')
-        return self.episodes / f'{run_short}-{seq}-{episode}.result.json'
-
-
-def _backoff(attempt: int, cap: float) -> None:
-    time.sleep(min(0.005 * 2 ** attempt, cap))
-
-
-def load_run(paths: Paths):
-    """run.json を読む。無ければ None (state: none)。
-
-    書き換えの途中で読めない (PermissionError・JSON が壊れている) ときは READ_WAIT 秒まで取り直し、
-    それでも読めなければ Unusable にする。JSON のオブジェクトでない・schema が違う・state が STATES に無いものも Unusable。
-    読めない・使えない run.json を none と言わない。ロックは取らない (status はこのまま読む)。
-    """
-    missing = 0
-    problem = None
-    attempt = 0
-    deadline = time.monotonic() + READ_WAIT
-    while True:
-        try:
-            data = json.loads(paths.run.read_text(encoding='utf-8'))
-        except FileNotFoundError:
-            # 置き換えの瞬間を無いと見誤らないよう、もう 1 度だけ見る
-            missing += 1
-            if missing >= 2:
-                paths.seen = 'none'
-                return None
-            problem = 'missing'
-        except (OSError, ValueError) as error:
-            problem = error
-        else:
-            if not isinstance(data, dict):
-                raise Unusable(f'run.json is not an {SCHEMA} run (not a JSON object)')
-            if data.get('schema') != SCHEMA:
-                raise Unusable(f"run.json has schema {data.get('schema')!r}, not {SCHEMA}")
-            state = data.get('state')
-            if state not in STATES:
-                raise Unusable(f'run.json has no valid state ({state!r})')
-            paths.seen = state
-            return data
-        if time.monotonic() >= deadline:
-            break
-        _backoff(attempt, 0.1)
-        attempt += 1
-    raise Unusable(f'run.json unreadable ({fold(problem)})')
-
-
-def replace_retry(source, target) -> None:
-    """os.replace を、PermissionError のあいだ短く取り直す (Windows で読み手が開いている間)。"""
-    # status はロックを取らずに読むので、読み手が開いていない隙を拾うよう待ちは短く刻む
-    deadline = time.monotonic() + REPLACE_WAIT
-    attempt = 0
-    while True:
-        try:
-            os.replace(source, target)
-            return
-        except PermissionError:
-            if time.monotonic() >= deadline:
-                raise
-            _backoff(attempt, 0.02)
-            attempt += 1
-
-
-def write_json(path, data) -> None:
-    """common.write_json と同じ形 (一時ファイル + 置き換え) で書き、置き換えだけを取り直す。"""
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(data, ensure_ascii=False, indent=2) + '\n'
-    handle, temporary = tempfile.mkstemp(prefix=f'.{target.name}.', suffix='.tmp', dir=str(target.parent))
-    try:
-        with os.fdopen(handle, 'w', encoding='utf-8', newline='\n') as stream:
-            stream.write(text)
-        replace_retry(temporary, target)
-    except BaseException:
-        try:
-            os.remove(temporary)
-        except OSError:
-            pass
-        raise
-
-
-# ---- プロセスの生死とロック ----
-
-def _win_open(pid: int):
-    import ctypes
-    from ctypes import wintypes
-    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
-    kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE, *([ctypes.POINTER(ctypes.c_ulonglong)] * 4))
-    process_query_limited_information = 0x1000
-    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
-    return kernel32, handle
-
-
-def pid_alive(pid: int) -> bool:
-    """pid のプロセスが生きているか。Windows は OpenProcess と GetExitCodeProcess (os.kill(pid, 0) は Ctrl+C を送る)。"""
-    if not isinstance(pid, int) or pid <= 0:
-        return False
-    if os.name == 'nt':
-        import ctypes
-        from ctypes import wintypes
-        kernel32, handle = _win_open(pid)
-        if not handle:
-            return False
-        try:
-            code = wintypes.DWORD()
-            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-                return False
-            return code.value == 259  # STILL_ACTIVE
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    # 止めたあと親がまだ回収していないゾンビも os.kill(pid, 0) は通るので、終わったものとして扱う
-    return not _posix_zombie(pid)
-
-
-def _posix_zombie(pid: int) -> bool:
-    """POSIX で pid がゾンビ (終わったが親が回収していない) か。読めなければ False (生きているとみなす)。"""
-    try:
-        stat = Path(f'/proc/{pid}/stat')
-        if stat.parent.parent.is_dir() and Path('/proc/self/stat').exists():
-            # 2 つ目の欄 (コマンド名) は括弧の中に空白を含みうるので、最後の ')' のあとを読む
-            return stat.read_text().rsplit(')', 1)[1].split()[0] in ('Z', 'X')
-        # /proc が無い POSIX (macOS・BSD) は ps の状態の欄を読む
-        out = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True, text=True,
-                             env=dict(os.environ, LC_ALL='C'), creationflags=NO_WINDOW).stdout.strip()
-        return out.startswith('Z')
-    except (OSError, IndexError):
-        return False
-
-
-def stop_child(pid) -> bool:
-    """pid が生きていれば止める。止まった (もう生きていない) ら True。止められなければ False。
-
-    Windows は OpenProcess(PROCESS_TERMINATE) と TerminateProcess、POSIX は SIGTERM。自分自身は止めない。
-    生死の確かめは pid_alive。止めたあと短く待って死んだことを確かめる。
-    """
-    if not pid_alive(pid):
-        return True
-    if pid == os.getpid():
-        return False
-    try:
-        if os.name == 'nt':
-            import ctypes
-            from ctypes import wintypes
-            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-            kernel32.OpenProcess.restype = wintypes.HANDLE
-            kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-            kernel32.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
-            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-            handle = kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
-            if not handle:
-                return not pid_alive(pid)
-            try:
-                kernel32.TerminateProcess(handle, 1)
-            finally:
-                kernel32.CloseHandle(handle)
-        else:
-            os.kill(pid, signal.SIGTERM)
-    except OSError:
-        return not pid_alive(pid)
-    deadline = time.monotonic() + STOP_WAIT
-    while pid_alive(pid):
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(0.05)
-    return True
-
-
-PID_KEYS = ('child_pid', 'runner_pid')
-START_SLACK = 1.0  # 起動の時刻の比べに許す秒
-
-
-def record_pid(holder: dict, key: str, pid: int) -> None:
-    """pid を run.json に残す。使い回しの確かめ用に、そのプロセスの起動の時刻を <key>_started に一緒に残す。"""
-    holder[key] = pid
-    begun = process_started(pid)
-    if begun is None:
-        holder.pop(key + '_started', None)
-    else:
-        holder[key + '_started'] = begun
-
-
-def pid_slots(run: dict) -> list:
-    """止める対象 (holder, key, pid): running の子 (child_pid)、run --detach の runner_pid (running の中か run の直下)、
-    前に止められなかった pid (run の stuck_pids の {pid, pid_started})。"""
-    running = run.get('running') or {}
-    slots = []
-    for holder in (running, run):
-        for key in PID_KEYS:
-            pid = holder.get(key)
-            if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
-                slots.append((holder, key, pid))
-    stuck = run.get('stuck_pids')
-    for holder in stuck if isinstance(stuck, list) else ():
-        pid = holder.get('pid') if isinstance(holder, dict) else None
-        if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
-            slots.append((holder, 'pid', pid))
-    return slots
-
-
-def move_stuck(target: dict, holder: dict) -> list:
-    """holder (running か前の run) に残った child_pid・runner_pid を、target の stuck_pids に移す。移した pid を返す。
-
-    stop_children が止められなかった pid は holder に残っている。running を None にしたり run.json を退けたりしても、
-    次の abort・start --force が止めにいけるように run の直下に残す。
-    """
-    moved = []
-    for key in PID_KEYS:
-        pid = holder.get(key)
-        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-            continue
-        entry = {'pid': pid}
-        # 残っているのは自分の子と確かめた pid なので、記録が無ければ今の起動の時刻を残す (次の確かめに使う)
-        begun = holder.get(key + '_started')
-        if begun is None:
-            begun = process_started(pid)
-        if begun is not None:
-            entry['pid_started'] = begun
-        target.setdefault('stuck_pids', []).append(entry)
-        moved.append(pid)
-        holder.pop(key, None)
-        holder.pop(key + '_started', None)
-    return moved
-
-
-def stuck_line(pids) -> str:
-    """止められなかった pid を run.json に残したことを知らせる warn の行。"""
-    return f"warn stuck pids {' '.join(str(pid) for pid in pids)} kept in run.json; abort or start --force tries again"
-
-
-def pid_is_ours(holder: dict, key: str, pid: int, launched_at) -> bool:
-    """今この pid のプロセスが、記録した子か。pid の使い回しなら False。起動の時刻が読めなくても False。
-
-    記録した時刻 (<key>_started) があれば 1 秒以内で合うこと。古い run.json (記録なし) は launched_at より前に起きたこと
-    (ロックの確かめと同じ)。
-    """
-    begun = process_started(pid)
-    if begun is None:
-        return False
-    recorded = holder.get(key + '_started')
-    if isinstance(recorded, (int, float)) and not isinstance(recorded, bool):
-        return abs(begun - recorded) <= START_SLACK
-    launched = parse_time(launched_at)
-    return launched is not None and begun <= launched.timestamp() + START_SLACK
-
-
-def stop_children(run: dict):
-    """生きている子の pid を止める。(warn の行, 止められなかったか) を返す。
-
-    自分の子でない pid (使い回し・時刻が読めない) は止めず、run.json から消して warn を 1 行。止めた pid も消す。
-    止められなかった pid だけ残す。
-    """
-    warns = []
-    stuck = False
-    running = run.get('running') or {}
-    launched_at = running.get('launched_at') or run.get('created_at')
-    for holder, key, pid in pid_slots(run):
-        if pid_alive(pid) and not pid_is_ours(holder, key, pid, launched_at):
-            warns.append(f'warn pid {pid} is not our child; not stopped')
-        elif not stop_child(pid):
-            warns.append(f'warn child {pid} still alive')
-            stuck = True
-            continue
-        holder.pop(key, None)
-        holder.pop(key + '_started', None)
-    # 止めた・自分の子でなかった stuck_pids の項目は消す (止められなかったものだけ残る)
-    if 'stuck_pids' in run:
-        left = [entry for entry in run.get('stuck_pids') or [] if isinstance(entry, dict) and entry.get('pid')]
-        if left:
-            run['stuck_pids'] = left
-        else:
-            run.pop('stuck_pids', None)
-    return warns, stuck
-
-
-def process_started(pid: int):
-    """プロセスの起動の時刻 (UNIX 時刻の秒)。取れなければ None。"""
-    try:
-        if os.name == 'nt':
-            import ctypes
-            kernel32, handle = _win_open(pid)
-            if not handle:
-                return None
-            try:
-                times = [ctypes.c_ulonglong() for _ in range(4)]
-                if not kernel32.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
-                    return None
-                # FILETIME (1601 年からの 100 ナノ秒) を UNIX 時刻に
-                return (times[0].value - 116444736000000000) / 10_000_000
-            finally:
-                kernel32.CloseHandle(handle)
-        if os.path.exists('/proc/self/stat'):
-            stat = Path(f'/proc/{pid}/stat').read_text()
-            fields = stat.rsplit(')', 1)[1].split()
-            ticks = int(fields[19])  # starttime (22 番目の欄)
-            boot = next(int(line.split()[1]) for line in Path('/proc/stat').read_text().splitlines()
-                        if line.startswith('btime '))
-            return boot + ticks / os.sysconf('SC_CLK_TCK')
-        # /proc が無い POSIX (macOS・BSD) は ps の lstart (地方時) を読む
-        out = subprocess.run(['ps', '-o', 'lstart=', '-p', str(pid)], capture_output=True, text=True,
-                             env=dict(os.environ, LC_ALL='C'), creationflags=NO_WINDOW).stdout
-        return time.mktime(time.strptime(out.strip(), '%a %b %d %H:%M:%S %Y'))
-    except (OSError, ValueError, IndexError, StopIteration, AttributeError):
-        return None
-
-
-def parse_time(text):
-    if not isinstance(text, str):
-        return None
-    try:
-        moment = datetime.datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return moment if moment.tzinfo else moment.astimezone()
-
-
-def lock_alive(info) -> bool:
-    """ロックの持ち主が生きているか。ほかのホストのロックは生きているとみなす。"""
-    if info.get('host') != socket.gethostname():
-        return True
-    pid = info.get('pid')
-    if not pid_alive(pid):
-        return False
-    started = parse_time(info.get('started_at'))
-    if started is not None:
-        begun = process_started(pid)
-        # started_at は秒に丸めてあるので 1 秒の余裕をみる。ロックより後に起きたプロセスは使い回しの pid
-        if begun is not None and begun > started.timestamp() + 1:
-            return False
-    return True
-
-
-class Lock:
-    """<dir>/conductor/lock。状態を読み書きする間だけ持つ。状態を書いてから消す。"""
-
-    def __init__(self, paths: Paths):
-        self.path = paths.lock
-
-    def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        deadline = time.monotonic() + LOCK_WAIT
-        holder = None
-        while True:
-            try:
-                handle = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                holder = self._holder()
-                if holder is not None and not holder.get('alive', True):
-                    # 外せたときだけすぐ作り直す。外せなければ下の期限と待ちを通る (空回りしない)
-                    if self._take_over(holder):
-                        continue
-            else:
-                # 時刻はマイクロ秒まで書く (同じ処理の続けての取り直しでも中身が変わり、手放した印と混ざらない)
-                info = {'pid': os.getpid(), 'started_at': common.now().isoformat(), 'host': socket.gethostname()}
-                with os.fdopen(handle, 'w', encoding='utf-8') as stream:
-                    stream.write(json.dumps(info))
-                return self
-            if time.monotonic() >= deadline:
-                pid = holder.get('pid', '?') if holder else '?'
-                host = holder.get('host', '?') if holder else '?'
-                raise Locked(f'locked by pid {pid} on {host} ({self.path.as_posix()})')
-            time.sleep(0.2)
-
-    @staticmethod
-    def _mark(path: Path):
-        """ロックのファイルの見分け (中身と更新時刻)。同じ死んだロックかを確かめるのに使う。"""
-        try:
-            stat = path.stat()
-        except OSError:
-            return None
-        try:
-            text = path.read_text(encoding='utf-8')
-        except OSError:
-            text = None
-        return text, stat.st_mtime_ns, stat.st_size
-
-    def _holder(self):
-        """今のロックの中身と生死。読めないロックは、5 秒より古ければ死とみなす (書きかけの途中を待つ)。"""
-        mark = self._mark(self.path)
-        if mark is None:
-            return None
-        try:
-            if mark[0] is None:
-                raise OSError
-            info = json.loads(mark[0])
-            if not isinstance(info, dict):
-                raise ValueError
-        except (OSError, ValueError):
-            old = time.time() - mark[1] / 1e9 > LOCK_WAIT
-            return {'alive': not old, 'mark': mark}
-        # この処理が手放したのに消せずに残ったロックは、自分のものとして取る
-        mine = mark[0] in _RELEASED and info.get('pid') == os.getpid() and info.get('host') == socket.gethostname()
-        return dict(info, alive=False if mine else lock_alive(info), mark=mark)
-
-    def _take_over(self, holder: dict) -> bool:
-        """死んだロックを外す。外せたら True。ほかの待ち手が作ったばかりの生きたロックを消さないよう、
-        まず一意の名前に移し、移したものが見た死んだロックのままかを確かめてから消す。違えば元に戻す。"""
-        aside = self.path.with_name(f'{self.path.name}.stale.{os.getpid()}.{uuid.uuid4().hex[:8]}')
-        try:
-            os.rename(self.path, aside)
-        except FileNotFoundError:
-            return True  # もう誰かが外した。作り直しから取り直す
-        except OSError:
-            return False  # 移せない (読み手が開いている など)。待ってから見直す
-        if self._mark(aside) == holder.get('mark'):
-            _RELEASED.discard(holder['mark'][0])
-            try:
-                os.remove(aside)
-            except OSError:
-                pass
-            return True
-        # 見たあとで入れ替わった生きたロック: 元の名前に戻す
-        try:
-            os.rename(aside, self.path)
-        except OSError:
-            # 3 つの処理が重なると、戻す前に別の待ち手が作ったロックと 2 つが並ぶ窓が残る (受け入れ済み)。
-            # 移したロックは戻せないので残し、持ち主は __exit__ で自分の pid を確かめる
-            pass
-        return False
-
-    def __exit__(self, *exc):
-        try:
-            text = self.path.read_text(encoding='utf-8')
-            info = json.loads(text)
-        except (OSError, ValueError):
-            return False
-        if not (isinstance(info, dict) and info.get('pid') == os.getpid()):
-            return False
-        # Windows では読み手が開いている間は消せない。短く取り直し、それでも残れば手放した印を覚えておく
-        # 読み手が開いていない隙を拾うよう、待ちは短く刻む
-        deadline = time.monotonic() + REMOVE_WAIT
-        attempt = 0
-        while True:
-            try:
-                os.remove(self.path)
-                return False
-            except FileNotFoundError:
-                return False
-            except OSError:
-                if time.monotonic() >= deadline:
-                    break
-                _backoff(attempt, 0.02)
-                attempt += 1
-        _RELEASED.add(text)
-        return False
-
-
-# この処理が手放したが消せなかったロックの中身 (次の Lock が自分のものとして取る)
-_RELEASED = set()
-
-
-# ---- roles ----
-# 役割の値は、キーごとに強い順の層から取る: run (start --role) → repo (docs/pbi/roles.json) → home (agents.json) → 既定。
-# 取った値の出所は running.roles と history に残し、next の roles: の行に出す。
-
-ROLE_PARTS = ('designer', 'episodes.test', 'episodes.fix', 'reviewer.deep', 'reviewer.other', 'tester')
-ROLE_KEYS = ('runner', 'model', 'effort', 'permission_mode')
-ROLE_HEADS = ('designer', 'episodes', 'reviewer', 'tester')
-# 層 (run・repo・home) が runner も model も決めていない部分は、振り分けテンプレートのこの段から既定を取る
-TEMPLATE_TIER = 'sonnet'
-TEMPLATE_PARTS = ('episodes.test', 'episodes.fix', 'reviewer.other')
-# 自分の出番の設計者を持つ出番 (episodes.<出番> の部分がある)
-LEAD_EPISODES = ('test', 'fix')
-
-
-def _default_part(name: str) -> dict:
-    head, _, stage = name.partition('.')
-    part = DEFAULT_ROLES[head]
-    return dict(part[stage] if stage else part)
-
-
-def _valid_str(value) -> bool:
-    return isinstance(value, str) and bool(value.strip())
-
-
-def _valid_role_value(key: str, value, name: str = '') -> bool:
-    if key == 'runner':
-        return value in runner_cli.runners_for(name)
-    return _valid_str(value) if key != 'effort' else (value is None or _valid_str(value))
-
-
-def _layer_part(roles, name: str, source: str, warns: list):
-    """ある層の roles の中の 1 つの役割 (か reviewer の段) の辞書。無ければ None。辞書でなければ warn を足して None。"""
-    if roles is None:
-        return None
-    node = roles
-    path = []
-    for step in name.split('.'):
-        path.append(step)
-        if not isinstance(node, dict):
-            return None
-        node = node.get(step)
-        if node is None:
-            return None
-        if not isinstance(node, dict):
-            warns.append(f"warn roles.{'.'.join(path)} ({source}): not an object; skipped")
-            return None
-    return node
-
-
-def _empty_roles() -> dict:
-    return {head: ({} if isinstance(DEFAULT_ROLES[head], dict) and 'model' not in DEFAULT_ROLES[head] else None)
-            for head in ROLE_HEADS}
-
-
-def resolve_roles(layers: list, template=None):
-    """layers は強い順の [(出所, roles の辞書か None)]。(roles, 出所, warn の行) を返す。
-
-    roles と出所は agents.json の roles と同じ形 (designer・episodes.test・episodes.fix・reviewer.deep・reviewer.other・
-    tester)。
-    不正な値はその層を飛ばして次の層の値を使い、warn に使った値と出所を書く。
-    template は {部分の名前: {runner, model, effort}} (振り分けテンプレートの中段から取った既定)。どの層も
-    その部分の runner も model も決めていなければ、既定の代わりにそれを使い、出所を template にする
-    (層の model とテンプレートの runner が混ざらないように、片方でも層が決めていれば使わない)。
-    """
-    warns = []
-    roles, sources = _empty_roles(), _empty_roles()
-    for name in ROLE_PARTS:
-        default = _default_part(name)
-        parts = [(source, _layer_part(given, name, source, warns)) for source, given in layers]
-        given_keys = {key for _, part in parts if part for key in part}
-        from_template = (template or {}).get(name) if not given_keys & {'runner', 'model'} else None
-        value, origin = {}, {}
-        for key, fallback in default.items():
-            bad = []
-            value[key], origin[key] = fallback, 'default'
-            if from_template and key in from_template:
-                value[key], origin[key] = from_template[key], 'template'
-            for source, part in parts:
-                if part is None or key not in part:
-                    continue
-                if _valid_role_value(key, part[key], name):
-                    value[key], origin[key] = part[key], source
-                    break
-                bad.append((source, part[key]))
-            for source, got in bad:
-                warns.append(f'warn roles.{name}.{key} ({source}): {got!r} is not valid; '
-                             f'using {value[key]!r} ({origin[key]})')
-        head, _, stage = name.partition('.')
-        if stage:
-            roles[head][stage], sources[head][stage] = value, origin
-        else:
-            roles[head], sources[head] = value, origin
-    return roles, sources, warns
-
-
-def parse_role_args(items) -> dict:
-    """start --role の値 (`<役割>[.<キー>]=<値>`、キーの既定は model、effort の none は null) を roles の形にする。"""
-    given = {}
-    for item in items or []:
-        name, sep, value = item.partition('=')
-        if not sep or not value.strip():
-            raise Refused(f'--role {item!r}: give <role>[.<key>]=<value>')
-        part, key = name, 'model'
-        for candidate in ROLE_KEYS:
-            if name.endswith('.' + candidate):
-                part, key = name[:-len(candidate) - 1], candidate
-        if part not in ROLE_PARTS:
-            raise Refused(f"--role {item!r}: the role is one of {', '.join(ROLE_PARTS)}")
-        if key not in _default_part(part):
-            raise Refused(f'--role {item!r}: {part} has no {key}')
-        value = value.strip()
-        if key == 'effort' and value.lower() in ('none', 'null'):
-            value = None
-        if key == 'runner' and value not in runner_cli.runners_for(part):
-            raise Refused(f"--role {item!r}: {part} takes a runner of {', '.join(runner_cli.runners_for(part))}")
-        head, _, stage = part.partition('.')
-        target = given.setdefault(head, {})
-        if stage:
-            target = target.setdefault(stage, {})
-        target[key] = value
-    return given
-
-
-_UNREADABLE = object()
-
-
-def _roles_in(path: Path):
-    """ファイルの roles。ファイルが無ければ None、在るのに読めない・JSON でなければ _UNREADABLE。"""
+def _read_result(path: Path) -> dict[str, Any]:
     if not path.exists():
+        raise ConductorError(f"result file not found: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConductorError(f"invalid result JSON at {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConductorError(f"result must be a JSON object: {path}")
+    _validate_no_answer_field(data)
+    return data
+
+
+def _is_git_repo(root: Path) -> bool:
+    proc = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return proc.returncode == 0
+
+
+def _git_head(root: Path) -> str | None:
+    if not _is_git_repo(root):
         return None
-    data = common.load_json(path, _UNREADABLE)
-    if data is _UNREADABLE:
-        return _UNREADABLE
-    return data.get('roles') if isinstance(data, dict) else None
+    proc = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
 
 
-def _routing_table(paths=None):
-    """振り分けテンプレート: <dir>/routing.json → home の routing.json → 同梱の routing.default.json。
+def _ensure_snapshot(root: Path, run: dict[str, Any], act: dict[str, Any]) -> None:
+    if act.get("action") == "launch" and act.get("runner") == "agent":
+        existing = run.get("pending_snapshot")
+        if existing is not None and existing.get("launch_id") == act.get("launch_id"):
+            return
+        if _is_git_repo(root):
+            snap = guards.snapshot(
+                root,
+                allowed_paths=actions.allowed_paths_for(run, act["role"], act.get("pbi")),
+                report_path=act["result"],
+            )
+            snap["launch_id"] = act["launch_id"]
+            run["pending_snapshot"] = snap
+        else:
+            run["pending_snapshot"] = None
+    else:
+        run["pending_snapshot"] = None
 
-    select_model.py と同じ探し方。読めない・形の違うファイルは飛ばす (select_model.py の誤りは route で出る)。
-    """
-    import select_model
-    candidates = ([paths.base / 'routing.json'] if paths is not None else []) +         [common.resolve_home(None) / 'routing.json', select_model.DEFAULT_ROUTING]
-    for path in candidates:
-        table = common.load_json(path) if Path(path).is_file() else None
-        if isinstance(table, dict) and select_model.routing_error(table) is None:
-            return table
-    return None
+
+def _ensure_action_and_snapshot(root: Path, run: dict[str, Any]) -> dict[str, Any]:
+    act = actions.ensure_pending_action(root, run)
+    _ensure_snapshot(root, run, act)
+    return act
 
 
-def _usable_step(name: str, step, today) -> bool:
-    """役割の部分に置ける、今使える手順か (実行先がその部分に置け、until を過ぎず、agent 以外は使える)。"""
-    if not isinstance(step, dict) or step.get('runner') not in runner_cli.runners_for(name):
-        return False
-    if not _valid_str(step.get('model')):
-        return False
-    until = step.get('until')
-    if until:
+def _advance_and_save(root: Path, run: dict[str, Any]) -> dict[str, Any]:
+    run["pending_action"] = None
+    run["pending_snapshot"] = None
+    act = _ensure_action_and_snapshot(root, run)
+    state.save_state(root, run)
+    return act
+
+
+def _load_json_arg(raw: str | None, label: str) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    p = Path(raw)
+    text = p.read_text(encoding="utf-8-sig") if p.is_file() else raw
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise ConductorError(f"invalid {label} JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConductorError(f"{label} must be a JSON object")
+    return data
+
+
+def _apply_resolved_template(run: dict[str, Any], tmpl: dict[str, Any]) -> None:
+    run["active_template"] = tmpl
+    run["limits"] = dict(tmpl["limits"])
+    run["counters"]["e2e_limit"] = tmpl["limits"].get("e2e_rounds", 2)
+
+
+def _normalize_tokens(tokens: Any) -> Any:
+    if isinstance(tokens, dict):
+        inp = tokens.get("input", tokens.get("input_tokens", tokens.get("inputTokens", "unknown")))
+        out = tokens.get("output", tokens.get("output_tokens", tokens.get("outputTokens", "unknown")))
+        tot = tokens.get("total", tokens.get("total_tokens", tokens.get("totalTokens", "unknown")))
+        if type(inp) is not int or inp < 0:
+            inp = "unknown"
+        if type(out) is not int or out < 0:
+            out = "unknown"
+        if type(tot) is not int or tot < 0:
+            tot = inp + out if isinstance(inp, int) and isinstance(out, int) else "unknown"
+        return {"input": inp, "output": out, "total": tot}
+    if type(tokens) is int and tokens >= 0:
+        return {"input": "unknown", "output": "unknown", "total": tokens}
+    return "unknown"
+
+
+def _normalize_cost(cost: Any) -> Any:
+    if type(cost) in (int, float) and cost >= 0:
+        return cost
+    return "unknown"
+
+
+def _try_append_record(root: Path, event: dict[str, Any]) -> list[dict[str, Any]]:
+    """Scan record event for secrets (G4) before appending to record.jsonl."""
+    line = json.dumps(event, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    hits = guards.scan_secrets(line)
+    if hits:
+        return hits
+    record.append(state.record_path(root), event)
+    return []
+
+
+def _record_launch_event(
+    root: Path,
+    run: dict[str, Any],
+    pending: dict[str, Any],
+    *,
+    tokens: Any,
+    cost: Any,
+) -> list[dict[str, Any]]:
+    pbi_id = pending.get("pbi")
+    pbi_obj = state.get_pbi(run, pbi_id) if pbi_id else None
+    level = (pbi_obj.get("level") if pbi_obj else None) or (
+        "L2" if pending.get("role") == "worker" and run.get("state") == "fixing" else None
+    )
+    lid = pending["launch_id"]
+    read_map = (run.get("launch_reads") or {}).pop(lid, {})
+    event = {
+        "type": "launch",
+        "launch_id": lid,
+        "role": pending["role"],
+        "pbi": pbi_id,
+        "runner": pending.get("runner", "agent"),
+        "model": pending.get("model", ""),
+        "effort": pending.get("effort"),
+        "level": level,
+        "tokens": _normalize_tokens(tokens),
+        "cost": _normalize_cost(cost),
+        "read": read_map,
+    }
+    hits = _try_append_record(root, event)
+    if not hits:
+        if pbi_id:
+            run.setdefault("pbi_launches", {}).setdefault(pbi_id, []).append(lid)
+        if run.get("state") == "fixing":
+            run.setdefault("last_fix_launch_ids", []).append(lid)
+    return hits
+
+
+def _record_guard_check(
+    root: Path,
+    run: dict[str, Any],
+    pending: dict[str, Any],
+    violations: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    pbi_id = pending.get("pbi")
+    pbi_obj = state.get_pbi(run, pbi_id) if pbi_id else None
+    level = (pbi_obj.get("level") if pbi_obj else None) or ("L2" if run.get("state") == "fixing" else "none")
+    lid = pending.get("launch_id")
+    rules = sorted({v["rule"] for v in violations if v.get("rule")})
+    event = {
+        "type": "check",
+        "pbi": pbi_id,
+        "rules": rules,
+        "stage": "guard",
+        "model": pending.get("model", ""),
+        "level": level,
+        "result": "fail" if rules else "pass",
+        "read_launch_ids": [lid] if lid else [],
+        "first_pass": False,
+    }
+    return _try_append_record(root, event)
+
+
+def _cmd_start(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.root)
+    if not root.is_dir():
+        raise ConductorError(f"work root does not exist: {root}")
+    goal_file = Path(args.goal_file)
+    if not goal_file.is_file():
+        raise ConductorError(f"goal file does not exist: {goal_file}")
+    spec_file = Path(args.spec) if args.spec else None
+    if spec_file is not None and not spec_file.is_file():
+        raise ConductorError(f"spec file does not exist: {spec_file}")
+
+    # G7: refuse overwriting an unfinished run unless --force is passed
+    if state.has_run(root):
         try:
-            if today > datetime.date.fromisoformat(until):
-                return False
-        except (TypeError, ValueError):
-            return False
-    return step['runner'] == 'agent' or runner_cli.unusable_reason(step['runner']) is None
+            existing = state.load_state(root)
+            unfinished = existing.get("state") != "done"
+        except state.StateError:
+            unfinished = True
+        if unfinished and not args.force:
+            raise ConductorError("G7: an unfinished run exists; pass --force to overwrite")
+
+    switch_obj = _load_json_arg(args.switch, "switch")
+    components_obj = _load_json_arg(args.components, "components")
+    resolved_agents = str(
+        (Path(args.agents).expanduser() if args.agents is not None else Path.home() / ".config" / "atelier" / "agents.json").resolve()
+    )
+    selection = template.resolve_template(args.template, switch_obj, agents_path=resolved_agents)
+
+    run = state.new_run_state(
+        root,
+        goal_file,
+        spec_file,
+        template_path=args.template,
+        switch=switch_obj,
+        agents_path=resolved_agents,
+        active_template=selection["template"],
+        components=components_obj,
+        base_commit=_git_head(root),
+    )
+    if selection["ask"]:
+        flow.apply_event(run, "switch_expired")
+
+    act = _ensure_action_and_snapshot(root, run)
+    state.save_state(root, run)
+    return {"schema": run["schema"], "run_id": run["run_id"], "state": run["state"], "next": act}
 
 
-def template_parts(paths=None) -> dict:
-    """TEMPLATE_PARTS の既定を、振り分けテンプレートの中段の手順の先頭 (その部分に置けて使えるもの) から取る。
-
-    中段の最後は必ず agent なので、ふつうは何か取れる。テンプレートが読めなければ空 (DEFAULT_ROLES を使う)。
-    """
-    table = _routing_table(paths)
-    steps = ((table or {}).get('tiers') or {}).get(TEMPLATE_TIER) or []
-    today = datetime.date.today()
-    out = {}
-    for name in TEMPLATE_PARTS:
-        step = next((s for s in steps if _usable_step(name, s, today)), None)
-        if step is not None:
-            out[name] = {'runner': step['runner'], 'model': step['model'], 'effort': step.get('effort')}
-    return out
-
-
-def load_roles(paths=None, run=None):
-    """run の --role、repo の docs/pbi/roles.json、home の agents.json の roles を重ねる。(roles, 出所, warn の行)。
-
-    episodes.test・episodes.fix と reviewer.other は、層が決めていなければ振り分けテンプレートの中段から取る
-    (出所 template)。
-    """
-    repo = _roles_in(paths.base / 'roles.json') if paths is not None else None
-    layers = [('run', (run or {}).get('roles')), ('repo', repo),
-              ('home', _roles_in(common.resolve_home(None) / 'agents.json'))]
-    warns = []
-    for source, given in layers:
-        if given is _UNREADABLE:
-            # 書き損じた設定で上書きが黙って消えないよう、読めなかったことを出す
-            warns.append(f'warn roles ({source}): unreadable; skipped')
-        elif given is not None and not isinstance(given, dict):
-            warns.append(f'warn roles ({source}): not an object; skipped')
-    layers = [(source, given if isinstance(given, dict) else None) for source, given in layers]
-    roles, sources, more = resolve_roles(layers, template_parts(paths))
-    return roles, sources, warns + more
+def _cmd_next(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.root)
+    run = state.load_state(root)
+    before = json.dumps(run, sort_keys=True, ensure_ascii=False)
+    if (
+        run.get("pending_action") is None
+        and run.get("switch") is not None
+        and run["state"] not in flow.CROSS_CUTTING_STATES
+        and run["state"] not in flow.TERMINAL_STATES
+    ):
+        selection = template.resolve_template(
+            run.get("template_path"),
+            run.get("switch"),
+            agents_path=run.get("agents_path"),
+        )
+        if selection["ask"]:
+            flow.apply_event(run, "switch_expired")
+        elif selection["template"] is not None:
+            _apply_resolved_template(run, selection["template"])
+    act = _ensure_action_and_snapshot(root, run)
+    after = json.dumps(run, sort_keys=True, ensure_ascii=False)
+    if before != after:
+        state.save_state(root, run)
+    return act
 
 
-def _label_pieces(part: dict) -> list:
-    """表示の部品 [(文字, キー)]: model、/effort (あれば)、@runner (agent でなければ)。"""
-    pieces = [(part['model'], 'model')]
-    if part.get('effort'):
-        pieces.append((f"/{part['effort']}", 'effort'))
-    if part.get('runner', 'agent') != 'agent':
-        pieces.append((f"@{part['runner']}", 'runner'))
-    return pieces
+def _append_check_records_for_wave(root: Path, run: dict[str, Any], result: dict[str, Any], exit_code: int) -> None:
+    checked_pbis = [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")]
+    failed_ids = set(result.get("failed_pbis") or [])
+    raw_rules = [str(r) for r in (result.get("rules") or [])]
+    first_checked = run.setdefault("first_pass_checked_pbis", [])
+    pbi_launches = run.get("pbi_launches") or {}
+
+    if not checked_pbis:
+        rules = raw_rules or ([] if exit_code == 0 else ["G9"])
+        hits = _try_append_record(root, {
+            "type": "check",
+            "pbi": None,
+            "rules": rules,
+            "stage": "build",
+            "model": "",
+            "level": "unknown",
+            "result": "pass" if exit_code == 0 else "fail",
+            "read_launch_ids": [],
+            "first_pass": False,
+        })
+        if hits:
+            raise ConductorError(f"G4: secret detected in check record ({hits[0]['kind']})")
+        return
+
+    for pbi in checked_pbis:
+        pid = pbi["id"]
+        passed = exit_code == 0 or (bool(failed_ids) and pid not in failed_ids)
+        is_first = pid not in first_checked
+        if is_first:
+            first_checked.append(pid)
+        rules = [] if passed else (raw_rules or ["G9"])
+        model = (pbi.get("last_step") or {}).get("model") or ""
+        level = pbi.get("level") or "unknown"
+        hits = _try_append_record(root, {
+            "type": "check",
+            "pbi": pid,
+            "rules": rules,
+            "stage": "build",
+            "model": model,
+            "level": level,
+            "result": "pass" if passed else "fail",
+            "read_launch_ids": list(pbi_launches.get(pid, [])),
+            "first_pass": is_first,
+        })
+        if hits:
+            raise ConductorError(f"G4: secret detected in check record ({hits[0]['kind']})")
 
 
-def role_parts(roles: dict):
-    """(部分の名前, その値) を ROLE_PARTS の順に。"""
-    for name in ROLE_PARTS:
-        head, _, stage = name.partition('.')
-        yield name, roles[head][stage] if stage else roles[head]
+def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) -> None:
+    exit_code = result.get("exit_code")
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        raise ConductorError("G9: check result must include integer 'exit_code'")
+
+    s = run["state"]
+    if s == "checking":
+        _append_check_records_for_wave(root, run, result, exit_code)
+        if exit_code == 0:
+            run["last_check_failure"] = ""
+            run["last_failed_rules"] = []
+            for pbi in run.get("pbis", []):
+                if pbi.get("status") in ("built", "failed"):
+                    pbi["status"] = "passed"
+            if state.any_pending_pbis(run):
+                flow.apply_event(run, "wave_passed_next")
+            else:
+                flow.apply_event(run, "all_pbis_passed")
+        else:
+            run["last_check_failure"] = (
+                result.get("output")
+                or result.get("error")
+                or result.get("summary")
+                or json.dumps(result, ensure_ascii=False)
+            )
+            run["last_failed_rules"] = [str(r) for r in (result.get("rules") or ["G9"])]
+            failed_ids = set(result.get("failed_pbis") or [])
+            if failed_ids:
+                for pbi in run.get("pbis", []):
+                    if pbi.get("status") in ("built", "failed"):
+                        pbi["status"] = "failed" if pbi["id"] in failed_ids else "passed"
+            else:
+                for pbi in run.get("pbis", []):
+                    if pbi.get("status") == "built":
+                        pbi["status"] = "failed"
+            flow.apply_event(run, "check_failed")
+    elif s == "fixing":
+        rules = [str(r) for r in (result.get("rules") or ([] if exit_code == 0 else ["G9"]))]
+        hits = _try_append_record(root, {
+            "type": "check",
+            "pbi": None,
+            "rules": rules,
+            "stage": "fix",
+            "model": run.get("last_fix_model", ""),
+            "level": "L2",
+            "result": "pass" if exit_code == 0 else "fail",
+            "read_launch_ids": list(run.get("last_fix_launch_ids") or []),
+            "first_pass": False,
+        })
+        if hits:
+            raise ConductorError(f"G4: secret detected in fix check record ({hits[0]['kind']})")
+        if exit_code == 0:
+            run["last_fix_launch_ids"] = []
+            run["fix_groups"] = []
+            run["fix_group_index"] = 0
+            flow.apply_event(run, "fix_check_passed")
+        else:
+            run["fix_group_index"] = 0
+            run["subphase"] = "build"
+    elif s == "running_e2e":
+        rules = [str(r) for r in (result.get("rules") or ([] if exit_code == 0 else ["G9"]))]
+        hits = _try_append_record(root, {
+            "type": "check",
+            "pbi": None,
+            "rules": rules,
+            "stage": "e2e",
+            "model": "script",
+            "level": "e2e",
+            "result": "pass" if exit_code == 0 else "fail",
+            "read_launch_ids": [],
+            "first_pass": False,
+        })
+        if hits:
+            raise ConductorError(f"G4: secret detected in e2e check record ({hits[0]['kind']})")
+        if exit_code == 0:
+            run["last_e2e_failure"] = ""
+            flow.apply_event(run, "e2e_passed")
+        else:
+            run["last_e2e_failure"] = (
+                result.get("output")
+                or result.get("error")
+                or result.get("summary")
+                or json.dumps(result, ensure_ascii=False)
+            )
+            run["fix_groups"] = []
+            run["fix_group_index"] = 0
+            flow.apply_event(run, "e2e_failed")
+    else:
+        raise ConductorError(f"unexpected check completion in state {s}")
 
 
-def check_role_runners(roles: dict) -> list:
-    """agent 以外の実行先が使えるかを確かめ、使えなければ Refused。モデルが一覧に無ければ warn の行を返す。"""
-    warns = []
-    for name, part in role_parts(roles):
-        runner = part.get('runner', 'agent')
-        if runner == 'agent':
+def _build_pbis_from_plan(run: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
+    wave_list = plan.waves(result)
+    tmpl = actions.active_template(run)
+    built: list[dict[str, Any]] = []
+    for wave_idx, wave_items in enumerate(wave_list):
+        for item in wave_items:
+            pid = item["id"]
+            level = item["level"]
+            level_reason = item["level_reason"]
+            targets = list(item.get("targets") or [])
+            pbi = {
+                "id": pid,
+                "title": item["title"],
+                "goal": item["goal"],
+                "depends_on": list(item.get("depends_on") or []),
+                "level": level,
+                "level_reason": level_reason,
+                "reason": level_reason,
+                "targets": targets,
+                "files": targets,
+                "do_not_touch": list(item.get("do_not_touch") or []),
+                "checks": list(item.get("checks") or []),
+                "facts": list(item.get("facts") or []),
+                "acceptance": list(item.get("acceptance") or []),
+                "sensitive_candidate": bool(item.get("sensitive_candidate", False)),
+                "sensitive_reason": item.get("sensitive_reason") or "",
+                "wave": wave_idx,
+                "status": "pending",
+                "auto_fix_count": 0,
+                "route_index": 0,
+            }
+            choice = template.choose_route(tmpl, pbi)
+            pbi["route"] = choice["route"]
+            pbi["route_rule"] = choice["rule"]
+            pbi["route_inputs"] = choice["inputs"]
+            pbi["route_template"] = choice["template"]
+            built.append(pbi)
+    return built
+
+
+def _validate_completion_before_accept(
+    root: Path,
+    run: dict[str, Any],
+    pending: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    if pending["action"] != "launch":
+        return
+    if any(result.get(flag) for flag in ("plan_broken", "sensitive_detected", "budget_exceeded")):
+        return
+
+    s = run["state"]
+    if s == "surveying":
+        errors = survey.validate_facts(result)
+        if errors:
+            raise ConductorError(" ".join(errors))
+    elif s == "interviewing":
+        after_tree = interview.load_tree(root)
+        before_tree = run.get("pending_tree_snapshot") or interview.empty_tree()
+        errors = interview.validate_interviewer_tree_update(before_tree, after_tree)
+        if errors:
+            raise ConductorError(" ".join(errors))
+        if result.get("done"):
+            spec_path = Path(result.get("spec_path") or (state.run_dir(root) / "interview" / "spec.md"))
+            if not spec_path.is_file():
+                raise ConductorError(f"interview spec file not found: {spec_path}")
+            missing = interview.validate_to_spec(spec_path)
+            if missing:
+                raise ConductorError(f"spec missing required to-spec sections: {', '.join(missing)}")
+    elif s == "planning":
+        errors = plan.validate_plan(result)
+        if errors:
+            raise ConductorError(" ".join(errors))
+        try:
+            plan.waves(result)
+        except ValueError as exc:
+            raise ConductorError(str(exc)) from exc
+    elif s == "reviewing":
+        errors = plan.validate_findings(result)
+        if errors:
+            raise ConductorError(" ".join(errors))
+    elif s == "triaging":
+        expected_ids = [f["id"] for f in run.get("findings", [])]
+        errors = plan.validate_triage(result, expected_ids=expected_ids)
+        if errors:
+            raise ConductorError(" ".join(errors))
+
+
+def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any], result: dict[str, Any]) -> None:
+    # Cross-cutting flags reported by a role
+    for flag, event in (
+        ("plan_broken", "plan_broken"),
+        ("sensitive_detected", "sensitive_detected"),
+        ("budget_exceeded", "budget_exceeded"),
+    ):
+        if result.get(flag):
+            if pending.get("pbi"):
+                pbi = state.get_pbi(run, pending["pbi"])
+                if pbi is not None and pbi.get("status") == "building":
+                    pbi["status"] = "pending"
+            if flag == "plan_broken":
+                run["pending_plan_change"] = {
+                    "changed_pbis": list(result.get("changed_pbis") or []),
+                    "reason": result.get("reason", ""),
+                }
+            flow.apply_event(run, event)
+            return
+
+    s = run["state"]
+    if s == "surveying":
+        run["facts_file"] = str(Path(pending["result"]).resolve())
+        flow.apply_event(run, "survey_done")
+    elif s == "interviewing":
+        run["pending_tree_snapshot"] = None
+        run["counters"]["round"] += 1
+        if result.get("done"):
+            spec_path = Path(result.get("spec_path") or (state.run_dir(root) / "interview" / "spec.md"))
+            run["spec_file"] = str(spec_path.resolve())
+            run["pending_interview_questions"] = None
+            flow.apply_event(run, "interview_done")
+        else:
+            after_tree = interview.load_tree(root)
+            frontier_qs = interview.frontier(after_tree)
+            q_file = result.get("question_file")
+            if not q_file or not Path(q_file).is_file():
+                q_path = state.run_dir(root) / "interview" / f"round-{run['counters']['round']}-questions.md"
+                q_path.parent.mkdir(parents=True, exist_ok=True)
+                q_path.write_text(
+                    interview.format_questions(frontier_qs, run["counters"]["round"]),
+                    encoding="utf-8",
+                )
+                q_file = str(q_path.resolve())
+            run["pending_interview_questions"] = {
+                "question_file": str(Path(q_file).resolve()),
+                "frontier_ids": [q["id"] for q in frontier_qs],
+            }
+            run["subphase"] = "ask"
+    elif s == "planning":
+        run["pbis"] = _build_pbis_from_plan(run, result)
+        run["open_questions"] = list(result.get("open_questions") or [])
+        plan_file = state.run_dir(root) / "plan.json"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        flow.apply_event(run, "plan_done")
+    elif s == "building":
+        pbi_id = pending.get("pbi")
+        if pbi_id:
+            state.mark_pbi_status(run, pbi_id, "built")
+        if state.next_buildable_pbi(run) is not None:
+            flow.apply_event(run, "worker_returned")
+        else:
+            flow.apply_event(run, "wave_built")
+    elif s == "auto_fixing":
+        pbi_id = pending.get("pbi")
+        if pbi_id:
+            state.mark_pbi_status(run, pbi_id, "built")
+        fixed_rules = [str(r) for r in (result.get("fixed_rules") or run.get("last_failed_rules") or ["G9"])]
+        for rule_id in fixed_rules:
+            hits = _try_append_record(root, {"type": "fix", "rule": rule_id, "method": "auto"})
+            if hits:
+                raise ConductorError(f"G4: secret detected in fix record ({hits[0]['kind']})")
+        flow.apply_event(run, "auto_fix_returned")
+    elif s == "reviewing":
+        kept = plan.filter_findings(list(result.get("findings") or []))
+        run["findings"] = kept
+        kept_path = state.run_dir(root) / "results" / "findings_kept.json"
+        kept_path.parent.mkdir(parents=True, exist_ok=True)
+        kept_path.write_text(
+            json.dumps({"schema": plan.SCHEMA_FINDINGS, "findings": kept}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        flow.apply_event(run, "review_returned")
+        if not kept:
+            run["fix_list"] = []
+            run["triage_ask_items"] = []
+            flow.apply_event(run, "triaged")
+            flow.apply_event(run, "nothing_to_fix")
+    elif s == "triaging":
+        finding_by_id = {f["id"]: f for f in run.get("findings", [])}
+        fix_items: list[dict[str, Any]] = []
+        ask_items: list[dict[str, Any]] = []
+        for item in result.get("items") or []:
+            fid = item["id"]
+            base = dict(finding_by_id.get(fid, {"id": fid}))
+            merged = {
+                **base,
+                "id": fid,
+                "decision": item["decision"],
+                "reason": item["reason"],
+                "title": base.get("fix") or base.get("why") or fid,
+            }
+            if item["decision"] == "fix":
+                fix_items.append(merged)
+            elif item["decision"] == "ask":
+                ask_items.append(merged)
+        run["fix_list"] = fix_items
+        run["triage_ask_items"] = ask_items
+        flow.apply_event(run, "triaged")
+    elif s == "fixing":
+        fixed_rules = [str(r) for r in (result.get("fixed_rules") or ["review" if run.get("approvals", {}).get("fix_list") else "e2e"])]
+        for rule_id in fixed_rules:
+            hits = _try_append_record(root, {"type": "fix", "rule": rule_id, "method": "asked"})
+            if hits:
+                raise ConductorError(f"G4: secret detected in fix record ({hits[0]['kind']})")
+        groups = run.get("fix_groups") or []
+        if groups:
+            run["fix_group_index"] = run.get("fix_group_index", 0) + 1
+            if run["fix_group_index"] < len(groups):
+                run["subphase"] = "build"
+                return
+        run["subphase"] = "check"
+    else:
+        raise ConductorError(f"unexpected launch completion in state {s}")
+
+
+def _raise_guard_question(
+    root: Path,
+    run: dict[str, Any],
+    pending: dict[str, Any],
+    *,
+    violations: list[dict[str, str]],
+    unusable_reason: str | None = None,
+    pending_destructive: list[dict[str, str]] | None = None,
+    pending_garbled: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    parts: list[str] = []
+    if unusable_reason:
+        parts.append(f"runner unusable: {unusable_reason}")
+    parts.extend(f"{v['rule']}: {v['detail']}" for v in violations)
+    if pending.get("launch_id"):
+        run.setdefault("completed_launches", []).append(pending["launch_id"])
+    pbi_id = pending.get("pbi")
+    if pbi_id:
+        pbi = state.get_pbi(run, pbi_id)
+        if pbi is not None and pbi.get("status") == "building":
+            pbi["status"] = "pending"
+    run["guard_issue"] = {
+        "launch_id": pending.get("launch_id"),
+        "role": pending.get("role"),
+        "pbi": pbi_id,
+        "runner": pending.get("runner"),
+        "unusable_reason": unusable_reason,
+        "violations": violations,
+        "pending_destructive": list(pending_destructive or []),
+        "pending_garbled": list(pending_garbled or []),
+        "detail": "; ".join(parts),
+    }
+    flow.apply_event(run, "guard_violation")
+    return _advance_and_save(root, run)
+
+
+def _record_result_usage(
+    root: Path,
+    run: dict[str, Any],
+    pending: dict[str, Any],
+    result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    tokens = result.get("tokens", result.get("usage", "unknown"))
+    cost = result.get("cost_usd", result.get("cost", "unknown"))
+    state.record_usage(
+        run,
+        launch_id=pending.get("launch_id", ""),
+        role=pending.get("role", ""),
+        runner=pending.get("runner", "agent"),
+        model=pending.get("model", ""),
+        pbi_id=pending.get("pbi"),
+        tokens=tokens,
+        cost=cost,
+    )
+    return _record_launch_event(root, run, pending, tokens=tokens, cost=cost)
+
+
+def _finalize_completion(
+    root: Path,
+    run: dict[str, Any],
+    pending: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    usage_recorded: bool = False,
+) -> dict[str, Any]:
+    _validate_completion_before_accept(root, run, pending, result)
+
+    if pending["action"] == "launch" and not usage_recorded:
+        secret_hits = _record_result_usage(root, run, pending, result)
+        if secret_hits:
+            return _raise_guard_question(
+                root,
+                run,
+                pending,
+                violations=[{"rule": "G4", "detail": f"secret ({h['kind']}) in record line {h['line']}"} for h in secret_hits],
+            )
+
+    expected_id = pending.get("launch_id")
+    if expected_id:
+        run.setdefault("completed_launches", []).append(expected_id)
+
+    if pending["action"] == "check":
+        _handle_check_done(root, run, result)
+    else:
+        _handle_launch_done(root, run, pending, result)
+
+    return _advance_and_save(root, run)
+
+
+def _validate_pending_launch(run: dict[str, Any], launch_id: str | None, *, require_launch: bool = False) -> dict[str, Any]:
+    pending = run.get("pending_action")
+    if not pending or pending.get("action") not in ("launch", "check"):
+        raise ConductorError(f"no pending launch or check in state {run['state']}")
+    if require_launch and pending.get("action") != "launch":
+        raise ConductorError(f"no pending launch in state {run['state']}")
+    if launch_id and launch_id in run.get("completed_launches", []):
+        raise ConductorError(f"G8: launch '{launch_id}' already completed")
+    expected_id = pending.get("launch_id")
+    if pending["action"] == "launch":
+        if not launch_id or launch_id != expected_id:
+            raise ConductorError(f"launch_id mismatch: expected {expected_id}, got {launch_id}")
+    elif launch_id and launch_id != expected_id:
+        raise ConductorError(f"launch_id mismatch: expected {expected_id}, got {launch_id}")
+    return pending
+
+
+def _collect_post_launch_violations(
+    root: Path,
+    run: dict[str, Any],
+    pending: dict[str, Any],
+    before: dict[str, Any] | None,
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+    violations = guards.compare(root, before) if before is not None else []
+    pending_destructive: list[dict[str, str]] = []
+    pending_garbled: list[dict[str, str]] = []
+
+    if before is None:
+        rpath = Path(pending["result"])
+        try:
+            data = json.loads(rpath.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or not data:
+                violations.append({"rule": "G14", "detail": f"missing or unfinished report: {rpath}"})
+        except (OSError, ValueError):
+            violations.append({"rule": "G14", "detail": f"missing or unfinished report: {rpath}"})
+
+    if pending.get("role") == "worker":
+        if before is not None and _is_git_repo(root):
+            after = guards.snapshot(root)
+            existing_g5 = {v["detail"] for v in violations if v.get("rule") == "G5"}
+            for dep_path in guards.install_attempts(before, after):
+                detail = f"dependency file changed: {dep_path}"
+                if detail not in existing_g5:
+                    violations.append({"rule": "G5", "detail": detail})
+
+        base = run.get("base_commit") or (before.get("head") if before else None)
+        if before is not None and _is_git_repo(root):
+            approved_g = {(pair[0], pair[1]) for pair in (run.get("approved_garbled") or []) if len(pair) == 2}
+            for finding in guards.garbled_changes(root, before, base=base):
+                digest = hashlib.sha256(finding["text"].encode("utf-8", "replace")).hexdigest()
+                if (finding["path"], digest) not in approved_g:
+                    pending_garbled.append({"path": finding["path"], "digest": digest})
+                    violations.append({
+                        "rule": "G14",
+                        "detail": f"garbled text ({finding['reason']}) at {finding['path']}:{finding['line']}",
+                    })
+
+        if _is_git_repo(root) and base:
+            try:
+                destructive = guards.destructive_changes(root, base)
+            except RuntimeError as exc:
+                violations.append({"rule": "G12", "detail": f"git inspection failed: {exc}"})
+            else:
+                approved = {(pair[0], pair[1]) for pair in (run.get("approved_destructive") or []) if len(pair) == 2}
+                for finding in destructive:
+                    if (finding["kind"], finding["path"]) not in approved:
+                        pending_destructive.append(finding)
+                        violations.append({"rule": "G12", "detail": f"{finding['kind']}: {finding['path']}"})
+
+    return violations, pending_destructive, pending_garbled
+
+
+def _cmd_done(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.root)
+    run = state.load_state(root)
+    pending = _validate_pending_launch(run, args.launch_id)
+
+    result_path = Path(pending["result"])
+    result_obj: dict[str, Any] | None = None
+    if result_path.exists():
+        result_obj = _read_result(result_path)
+
+    if pending["action"] == "launch" and pending.get("runner") == "agent":
+        before = run.get("pending_snapshot")
+        if before is not None:
+            violations, pending_destructive, pending_garbled = _collect_post_launch_violations(root, run, pending, before)
+            if violations:
+                if result_obj is not None:
+                    secret_hits = _record_result_usage(root, run, pending, result_obj)
+                    if secret_hits:
+                        violations.extend({"rule": "G4", "detail": f"secret ({h['kind']}) in record line {h['line']}"} for h in secret_hits)
+                _record_guard_check(root, run, pending, violations)
+                return _raise_guard_question(
+                    root,
+                    run,
+                    pending,
+                    violations=violations,
+                    pending_destructive=pending_destructive,
+                    pending_garbled=pending_garbled,
+                )
+
+    if result_obj is None:
+        result_obj = _read_result(result_path)
+
+    if pending["action"] == "launch":
+        _validate_completion_before_accept(root, run, pending, result_obj)
+        secret_hits = _record_result_usage(root, run, pending, result_obj)
+        if secret_hits:
+            return _raise_guard_question(
+                root,
+                run,
+                pending,
+                violations=[{"rule": "G4", "detail": f"secret ({h['kind']}) in record line {h['line']}"} for h in secret_hits],
+            )
+        _record_guard_check(root, run, pending, [])
+        return _finalize_completion(root, run, pending, result_obj, usage_recorded=True)
+
+    return _finalize_completion(root, run, pending, result_obj)
+
+
+def _cmd_run(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.root)
+    run = state.load_state(root)
+    pending = _validate_pending_launch(run, args.launch_id, require_launch=True)
+    runner = pending.get("runner")
+    if runner == "agent":
+        raise ConductorError("runner 'agent' must be launched by the caller and completed with done")
+
+    step = {"runner": runner, "model": pending.get("model", ""), "effort": pending.get("effort")}
+    pbi_obj = state.get_pbi(run, pending["pbi"]) if pending.get("pbi") else None
+    approved = (
+        guards.sends_approved(run, pbi_obj or pending["pbi"], step)
+        if pending.get("pbi")
+        else (
+            guards.sends_approved(run, pending["role"], step)
+            or runner in (run.get("approvals", {}).get("role_sends") or {}).get(pending["role"], [])
+        )
+    )
+    if not approved:
+        violations = [{"rule": "G3", "detail": f"external send to {runner} for {pending.get('pbi') or pending['role']} is not approved"}]
+        _record_guard_check(root, run, pending, violations)
+        return _raise_guard_question(root, run, pending, violations=violations)
+
+    prompt_path = Path(pending["prompt"])
+    if prompt_path.is_file():
+        secret_hits = guards.scan_secrets(prompt_path.read_text(encoding="utf-8-sig"))
+        if secret_hits:
+            violations = [{"rule": "G4", "detail": f"secret ({h['kind']}) detected at line {h['line']}"} for h in secret_hits]
+            _record_guard_check(root, run, pending, violations)
+            return _raise_guard_question(root, run, pending, violations=violations)
+
+    spec = runners.launch_spec(pending["role"], step, pending["prompt"], pending["result"], root, agents_path=run.get("agents_path"))
+    blocked = actions._forbidden_args_for_launch(run, pending["role"], step, spec)
+    if blocked:
+        violations = [{"rule": "G11", "detail": f"forbidden args: {', '.join(blocked)}"}]
+        _record_guard_check(root, run, pending, violations)
+        return _raise_guard_question(root, run, pending, violations=violations)
+
+    before = None
+    if _is_git_repo(root):
+        before = guards.snapshot(
+            root,
+            allowed_paths=actions.allowed_paths_for(run, pending["role"], pending.get("pbi")),
+            report_path=pending["result"],
+        )
+
+    ext = runners.run_external(spec, args.timeout)
+    state.record_usage(
+        run,
+        launch_id=pending["launch_id"],
+        role=pending["role"],
+        runner=runner,
+        model=pending.get("model", ""),
+        pbi_id=pending.get("pbi"),
+        tokens=ext["tokens"],
+        cost=ext["cost"],
+    )
+    secret_hits = _record_launch_event(root, run, pending, tokens=ext["tokens"], cost=ext["cost"])
+    violations, pending_destructive, pending_garbled = _collect_post_launch_violations(root, run, pending, before)
+    if secret_hits:
+        violations.extend({"rule": "G4", "detail": f"secret ({h['kind']}) in record line {h['line']}"} for h in secret_hits)
+    _record_guard_check(root, run, pending, violations)
+
+    if ext.get("unusable_reason") or violations:
+        return _raise_guard_question(
+            root,
+            run,
+            pending,
+            violations=violations,
+            unusable_reason=ext.get("unusable_reason"),
+            pending_destructive=pending_destructive,
+            pending_garbled=pending_garbled,
+        )
+
+    result_obj = _read_result(Path(pending["result"]))
+    return _finalize_completion(root, run, pending, result_obj, usage_recorded=True)
+
+
+def _record_answer_file(root: Path, run: dict[str, Any], kind: str, payload: dict[str, Any]) -> None:
+    # G6: conductor answer is the sole writer of answer files
+    run["counters"]["answer_seq"] += 1
+    seq = run["counters"]["answer_seq"]
+    ans_path = state.run_dir(root) / "answers" / f"{seq:04d}-{kind}.json"
+    ans_path.parent.mkdir(parents=True, exist_ok=True)
+    ans_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _extract_reply(args: argparse.Namespace) -> tuple[str | None, str | None, dict[str, Any] | None]:
+    if args.reply:
+        reply_path = Path(args.reply)
+        if not reply_path.is_file():
+            raise ConductorError(f"reply file not found: {reply_path}")
+        raw = reply_path.read_text(encoding="utf-8").strip()
+        try:
+            obj = json.loads(raw)
+            if isinstance(obj, dict):
+                return obj.get("choice"), obj.get("text"), obj
+        except json.JSONDecodeError:
+            pass
+        return None, raw, None
+    return args.choice, args.text, None
+
+
+def _next_level(level: str) -> str:
+    idx = template.LEVELS.index(level) if level in template.LEVELS else 1
+    return template.LEVELS[min(idx + 1, len(template.LEVELS) - 1)]
+
+
+def _parse_interview_answers(
+    tree: dict[str, Any],
+    text: str | None,
+    reply_obj: dict[str, Any] | None,
+) -> dict[str, str] | list[dict[str, Any]]:
+    if reply_obj and "answers" in reply_obj:
+        return reply_obj["answers"]
+    raw_text = (reply_obj.get("text") if reply_obj else text) or ""
+    frontier_qs = interview.frontier(tree)
+    if not frontier_qs:
+        raise ConductorError("no open frontier questions in design tree")
+
+    frontier_ids = [q["id"] for q in frontier_qs]
+    frontier_set = set(frontier_ids)
+    parsed: dict[str, str] = {}
+    line_re = re.compile(r"^\s*(?:[-*]\s*)?(?:\[?([A-Za-z0-9_.-]+)\]?\s*[:：.)])\s*(.+?)\s*$")
+    for raw_line in raw_text.splitlines():
+        if not raw_line.strip():
             continue
-        reason = runner_cli.unusable_reason(runner)
+        m = line_re.match(raw_line)
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2).strip()
+        if key in frontier_set:
+            parsed[key] = val
+        elif key.isdigit():
+            idx = int(key) - 1
+            if 0 <= idx < len(frontier_ids):
+                parsed[frontier_ids[idx]] = val
+
+    if not parsed and len(frontier_qs) == 1 and raw_text.strip():
+        parsed[frontier_ids[0]] = raw_text.strip()
+    if not parsed:
+        raise ConductorError("could not map answer text to open frontier questions")
+    return parsed
+
+
+def _apply_level_changes(run: dict[str, Any], reply_obj: dict[str, Any] | None) -> None:
+    if not reply_obj:
+        return
+    changes = reply_obj.get("level_changes") or reply_obj.get("difficulty_changes")
+    if not changes:
+        return
+    tmpl = actions.active_template(run)
+    entries: list[tuple[str, str, str | None]] = []
+    if isinstance(changes, dict):
+        for pid, lvl in changes.items():
+            entries.append((str(pid), str(lvl), None))
+    elif isinstance(changes, list):
+        for item in changes:
+            if isinstance(item, dict) and item.get("id") and item.get("level"):
+                entries.append((str(item["id"]), str(item["level"]), item.get("reason")))
+    for pid, lvl, reason in entries:
+        pbi = state.get_pbi(run, pid)
+        if pbi is None:
+            continue
+        pbi["level"] = lvl
         if reason:
-            raise Refused(f'roles.{name}.runner {runner}: {reason}')
-        if runner == 'dsh' and name != 'designer':
-            warns.append(f'warn roles.{name}.runner dsh: its sandbox may refuse child processes (seen on Windows), '
-                         'so verify and test commands may not finish; codex runs them')
-        if runner_cli.model_listed(runner, part['model']) is False:
-            warns.append(f"warn roles.{name}.model: {part['model']!r} is not in the {runner} model list; "
-                         'using it as given')
-    return warns
-
-
-def lead_part(episode, escalated=None) -> str:
-    """その出番を受け持つ設計者の部分: 自分の担当を持つ出番 (LEAD_EPISODES) は episodes.<出番>、
-    担当が設計者に渡した (escalated) 出番とほかの出番は designer。"""
-    return f'episodes.{episode}' if episode in LEAD_EPISODES and not escalated else 'designer'
-
-
-def designer_of(roles: dict, part: str = 'designer') -> dict:
-    head, _, stage = part.partition('.')
-    return roles[head][stage] if stage else roles[head]
-
-
-def designer_runner(roles: dict, part: str = 'designer') -> str:
-    return designer_of(roles, part).get('runner', 'agent')
-
-
-DESIGNER_PARTS = ('designer', *(f'episodes.{episode}' for episode in LEAD_EPISODES))
-
-
-def check_agent_roles_without_agent_tool(roles: dict) -> None:
-    """codex の設計者 (出番の担当を含む) は agent の役割を claude -p で起こす。claude が使えなければ Refused。"""
-    if all(designer_runner(roles, part) != 'codex' for part in DESIGNER_PARTS):
-        return
-    left = [name for name, part in role_parts(roles)
-            if name not in DESIGNER_PARTS and part.get('runner', 'agent') == 'agent']
-    if not left:
-        return
-    reason = runner_cli.unusable_reason('claude')
-    if reason:
-        raise Refused(f"roles {', '.join(left)}: a codex designer runs agent roles on claude -p, but {reason}; "
-                      f"set their runner (--role <role>.runner=codex)")
-
-
-def model_label(part: dict) -> str:
-    """`sonnet/high`、agent 以外の実行先は `gpt-6.1-terra/high@codex`。"""
-    return ''.join(text for text, _ in _label_pieces(part))
-
-
-def role_label(part: dict, origin: dict) -> str:
-    """`sonnet/high (home)`。出所が違えば部品ごとに `sonnet (home)/high (run)`。"""
-    pieces = _label_pieces(part)
-    sources = {origin.get(key, 'default') for _, key in pieces}
-    if len(sources) == 1:
-        return f'{model_label(part)} ({sources.pop()})'
-    return ''.join(f"{text} ({origin.get(key, 'default')})" for text, key in pieces)
-
-
-def roles_line(roles: dict, sources: dict) -> str:
-    labels = []
-    for name in ROLE_PARTS:
-        head, _, stage = name.partition('.')
-        part = roles[head][stage] if stage else roles[head]
-        origin = sources[head][stage] if stage else sources[head]
-        labels.append(f'{name} {role_label(part, origin)}')
-    return 'roles: ' + ', '.join(labels)
-
-
-def roles_record(roles: dict, sources: dict) -> dict:
-    """running.roles と history に残す形: 役割ごとに {キー: {"value", "from"}}。"""
-    record = {}
-    for name in ROLE_PARTS:
-        head, _, stage = name.partition('.')
-        part = roles[head][stage] if stage else roles[head]
-        origin = sources[head][stage] if stage else sources[head]
-        record[name] = {key: {'value': part[key], 'from': origin[key]} for key in part}
-    return record
-
-
-def roles_from_record(record) -> dict | None:
-    """running.roles から roles の形に戻す。形が違う・値が不正なら None (呼び出し側が load_roles で取り直す)。"""
-    if not isinstance(record, dict):
-        return None
-    try:
-        roles = _empty_roles()
-        for name in ROLE_PARTS:
-            # runner の無い記録 (runner のキーができる前の run.json) は既定 (agent) で埋める。
-            # 部分ごと無い記録 (episodes.test・episodes.fix ができる前の run.json) は既定で埋める
-            kept = record.get(name, {})
-            part = {key: kept[key]['value'] if key in kept else default
-                    for key, default in _default_part(name).items()}
-            if not all(_valid_role_value(key, value, name) for key, value in part.items()):
-                return None
-            head, _, stage = name.partition('.')
-            if stage:
-                roles[head][stage] = part
-            else:
-                roles[head] = part
-        return roles
-    except (KeyError, TypeError):
-        return None
-
-
-# ---- 依頼文 ----
-
-def template_block() -> list:
-    text = TEMPLATE.read_text(encoding='utf-8')
-    match = re.search(r'^```text\n(.*?)^```', text.replace('\r\n', '\n'), re.S | re.M)
-    if match is None:
-        raise Refused(f'no text block in {TEMPLATE.as_posix()}')
-    return match.group(1).rstrip('\n').split('\n')
-
-
-def render(values: dict) -> str:
-    """{?name} の行は値があるときだけ残し、{name} を埋める。"""
-    out = []
-    for line in template_block():
-        optional = re.match(r'^\{\?(\w+)\}', line)
-        if optional:
-            if not values.get(optional.group(1)):
-                continue
-            line = line[optional.end():]
-        out.append(re.sub(r'\{(\w+)\}', lambda m: str(values[m.group(1)]) if m.group(1) in values else m.group(0),
-                          line))
-    return '\n'.join(out) + '\n'
-
-
-def alive_age(path: Path):
-    """.alive の古さ (秒)。無ければ None。status (PBI-014) も使う。"""
-    try:
-        return max(0, int(time.time() - path.stat().st_mtime))
-    except OSError:
-        return None
-
-
-def alive_line(path: Path) -> str:
-    age = alive_age(path)
-    return 'alive: none' if age is None else f'alive: {age}s ago'
-
-
-# ---- 状態の行 ----
-
-def episode_line(item: dict) -> str:
-    line = f"episode: {item.get('episode')} seq {item.get('seq')}"
-    return line + (f" wave {item['wave']}" if item.get('wave') is not None else '')
-
-
-def dir_option(base) -> str:
-    """既定 (docs/pbi) でない作業のディレクトリなら ` --dir <base>`。present が見せた記録を同じ場所に書くため。"""
-    return '' if base is None or Path(base) == Path(DEFAULT_DIR) else f' --dir {quoted(base)}'
-
-
-def present_line(q: dict, base=None) -> str:
-    """問いを見せる入口の 1 行。答えのコマンド (then・yes・approve など) は present.py の出力が出す。"""
-    return (f"present: python {quoted(SKILL / 'present.py')} {quoted(str(q.get('path')))} --kind {q.get('kind')}"
-            + dir_option(base))
-
-
-def question_lines(run: dict, base=None) -> list:
-    q = run.get('question') or {}
-    lines = ['state: question', f"question: {q.get('kind')} {q.get('path')}", f"summary: {fold(q.get('summary'), SUMMARY_MAX)}",
-             present_line(q, base)]
-    return with_warnings(lines, run.get('garbled') or [])
-
-
-def closed_lines(run: dict) -> list:
-    lines = [f"state: {run.get('state')}"]
-    if run.get('state') == 'finished' and run.get('report'):
-        lines.append(f"report: {run['report']}")
-        if run.get('report_from_body'):
-            # 設計者は報告のファイルを書けなかったので、完了の記憶も書いていない。書けた報告のあとで呼び手が書く
-            lines.append('then: write the done memory (appendix/memory.md, Finish); the report came from report_body')
-    if run.get('state') == 'aborted' and run.get('reason'):
-        lines.append(f"reason: {run['reason']}")
-    return lines
-
-
-def no_run(paths: Paths) -> bool:
-    """conductor/ が無ければ run.json も無い (ロックのためにディレクトリを作らない)。"""
-    return not paths.conductor.is_dir()
-
-
-def none_exit(lines) -> int:
-    emit(lines)
-    return EXIT_USAGE
-
-
-def save(paths: Paths, run: dict) -> None:
-    write_json(paths.run, run)
-    paths.seen = run.get('state')
-
-
-# ---- イベント ----
-# 出す値は harness.schema.json の許可リストに合わせる。data を組む処理で run を止めないよう、
-# 組む処理は _emit の try の中 (呼び出し側では lambda に包む) か、例外を飲む小さな関数に置く。
-
-def _emit(paths: Paths, type: str, data, **kw) -> None:
-    """イベントを 1 件出す。events.py が無ければ何もしない。data は辞書か、辞書を返す関数。"""
-    if events is None:
-        return
-    try:
-        value = data() if callable(data) else data
-        if not isinstance(value, dict):
-            return
-        events.emit(paths.base, type, value, **kw)
-    except (Exception, SystemExit):
-        pass
-
-
-def _int_or_none(value):
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
-
-
-def _seconds_between(first, second=None):
-    """iso_now() の形の 2 つの時刻の差 (秒、0 以上)。読めなければ None。second を省くと今。"""
-    try:
-        start = datetime.datetime.fromisoformat(str(first))
-        end = common.now() if second is None else datetime.datetime.fromisoformat(str(second))
-        if start.tzinfo is None and end.tzinfo is not None:
-            start = start.replace(tzinfo=end.tzinfo)
-        elif end.tzinfo is None and start.tzinfo is not None:
-            end = end.replace(tzinfo=start.tzinfo)
-        return int(max(0.0, (end - start).total_seconds()))
-    except (TypeError, ValueError, OverflowError):
-        return None
-
-
-def _event_roles(record) -> dict:
-    """running.roles (役割→{キー: {value, from}}) を episode.started の roles の形にする。
-
-    許可リストに通らない値 (空白を含む model など) は入れない (dropped を出さないため)。
-    """
-    out = {}
-    if not isinstance(record, dict):
-        return out
-    for name, part in record.items():
-        if not isinstance(name, str) or not EVENT_ID.match(name) or not isinstance(part, dict):
-            continue
-        model = part.get('model') if isinstance(part.get('model'), dict) else {}
-        effort = part.get('effort') if isinstance(part.get('effort'), dict) else {}
-        source = model.get('from') if model.get('from') in ROLE_SOURCES else 'default'
-        item = {'from': source}
-        if isinstance(model.get('value'), str) and EVENT_ID.match(model['value']):
-            item['model'] = model['value']
-        if isinstance(effort.get('value'), str) and EVENT_ID.match(effort['value']):
-            item['effort'] = effort['value']
-        out[name] = item
-    return out
-
-
-def _run_started_data(paths: Paths, run: dict) -> dict:
-    """run.started の data。roles_from は load_roles の出所 (役割→from、model の出所で代表する)。"""
-    _, sources, _ = load_roles(paths, run)
-    roles_from = {}
-    for name in ROLE_PARTS:
-        head, _, stage = name.partition('.')
-        origin = sources[head][stage] if stage else sources[head]
-        value = origin.get('model') if isinstance(origin, dict) else None
-        roles_from[name] = value if value in ROLE_SOURCES else 'default'
-    workflow = run.get('workflow')
-    launch = run.get('launch')
-    return {'workflow': workflow if isinstance(workflow, str) and EVENT_ID.match(workflow) else 'default',
-            'launch': launch if launch in ('agent', 'headless') else 'agent',
-            'roles_from': roles_from}
-
-
-def _episode_started_data(run: dict, installed: bool):
-    """episode.started の data。出番の名前が語彙に無ければ None (出さない)。"""
-    running = run.get('running') or {}
-    episode = running.get('episode')
-    if episode not in EPISODE_TYPES:
-        return None
-    data = {'episode': episode, 'designer': 'installed' if installed else 'fallback',
-            'launcher': 'headless' if running.get('launcher') == 'headless' else 'agent',
-            'roles': _event_roles(running.get('roles'))}
-    wave = _int_or_none(running.get('wave'))
-    if wave is not None:
-        data['wave'] = wave
-    return data
-
-
-def _episode_ended_data(run: dict, running: dict, before: int):
-    """history に足された 1 行から episode.ended の data を作る。足されていなければ None。"""
-    history = run.get('history') or []
-    if len(history) <= before:
-        return None
-    row = history[-1]
-    if not isinstance(row, dict) or row.get('seq') != running.get('seq'):
-        return None
-    episode = row.get('episode')
-    if episode not in EPISODE_TYPES:
-        return None
-    status = row.get('status')
-    status = status if isinstance(status, str) and EVENT_ID.match(status) else 'other'
-    data = {'episode': episode, 'status': status}
-    reason = END_REASONS.get(status)
-    if status == 'error':
-        # no-agent-tool は問いの文 (conductor が組んだもの) にだけ残っている
-        summary = str((run.get('question') or {}).get('summary') or '')
-        reason = 'no-agent-tool' if 'no-agent-tool' in summary else 'episode-error'
-    if reason:
-        data['reason'] = reason
-    seconds = _seconds_between(running.get('launched_at'))
-    if seconds is not None:
-        data['seconds'] = seconds
-    failures = run.get('failures')
-    count = _int_or_none(failures.get('count')) if isinstance(failures, dict) else None
-    data['failures'] = count if count is not None and count >= 0 else 0
-    pending = run.get('pending')
-    if isinstance(pending, dict) and pending.get('episode') in EPISODE_TYPES:
-        data['next_episode'] = pending['episode']
-    return data
-
-
-def _emit_episode_ended(paths: Paths, run: dict, running: dict, before: int) -> None:
-    """出番の終わりの行。同じ run の同じ seq は once で 1 度だけ (fail と process_done の両方から呼ぶ)。"""
-    seq = _int_or_none(running.get('seq'))
-    run_id = run.get('run_id') if isinstance(run.get('run_id'), str) else ''
-    once = f'episode.ended:{run_id}:{seq}' if run_id and seq is not None else None
-    _emit(paths, 'episode.ended', lambda: _episode_ended_data(run, running, before),
-          once=once, **({'seq': seq} if seq is not None else {}))
-
-
-def _question_topic(kind, given=None) -> str:
-    """question の topic。結果が付けた値 → approve は design-approval → ほかは other。"""
-    if isinstance(given, str) and given in QUESTION_TOPICS:
-        return given
-    return 'design-approval' if kind == 'approve' else 'other'
-
-
-def _question_items(path) -> int:
-    """問いのファイルの決定 (選択肢) の数。読めなければ 1。"""
-    try:
-        text = Path(path).read_text(encoding='utf-8', errors='replace')
-    except (OSError, TypeError):
-        return 1
-    numbers = {match.group(1) for match in DECISION.finditer(text)}
-    try:
-        asks = len(design_record.draft_asks(text))
-    except (Exception, SystemExit):
-        asks = 0
-    return max(1, len(numbers) + asks)
-
-
-def _emit_question_asked(paths: Paths, kind, topic: str, items, seq) -> None:
-    seq = _int_or_none(seq)
-    _emit(paths, 'question.asked', {'kind': kind, 'topic': topic, 'items': items},
-          **({'seq': seq} if seq is not None else {}))
-
-
-def _answered_data(run: dict, q: dict, choices: dict, revise: bool) -> dict:
-    answers = run.get('answers') or []
-    at = answers[-1].get('at') if answers and isinstance(answers[-1], dict) else None
-    choice = None
-    if revise:
-        choice = 'revise'
-    elif isinstance(choices, dict) and len(choices) == 1:
-        given = next(iter(choices.values()))
-        if isinstance(given, str) and given in QUESTION_CHOICES:
-            choice = given
-    asked = q.get('asked_at')
-    wait_s = _seconds_between(asked, at if isinstance(at, str) else None) if isinstance(asked, str) else None
-    return {'kind': q.get('kind'), 'topic': _question_topic(q.get('kind'), q.get('topic')),
-            'choice': choice, 'wait_s': wait_s, 'revise': bool(revise)}
-
-
-def _emit_question_answered(paths: Paths, run: dict, q: dict, choices: dict, revise: bool) -> None:
-    seq = _int_or_none(q.get('seq'))
-    _emit(paths, 'question.answered', lambda: _answered_data(run, q, choices, revise),
-          **({'seq': seq} if seq is not None else {}))
-
-
-def _wave_counts(paths: Paths):
-    """waves.json の (波の数, PBI の数)。読めなければ None。"""
-    data = common.load_json(paths.base / 'waves.json')
-    waves = data.get('waves') if isinstance(data, dict) else None
-    if not isinstance(waves, list):
-        return None
-    pbis = set()
-    for wave in waves:
-        if isinstance(wave, dict):
-            pbis.update(pbi for pbi in wave.get('pbis') or [] if isinstance(pbi, str))
-    return len(waves), len(pbis)
-
-
-def _run_ended_data(paths: Paths, run: dict, result: str) -> dict:
-    """run.ended の data。episodes は起動した出番の数 (run['seq'])。"""
-    stamp = run.get('finished_at') if result == 'finished' else run.get('aborted_at')
-    data = {'result': result, 'episodes': _int_or_none(run.get('seq')) or 0}
-    seconds = _seconds_between(run.get('created_at'), stamp if isinstance(stamp, str) else None)
-    if seconds is not None:
-        data['seconds'] = seconds
-    counts = _wave_counts(paths)
-    if counts is not None:
-        data['waves'], data['pbis'] = counts
-    return data
-
-
-def _emit_run_ended(paths: Paths, run: dict, result: str) -> None:
-    seq = _int_or_none(run.get('seq'))
-    _emit(paths, 'run.ended', lambda: _run_ended_data(paths, run, result),
-          **({'seq': seq} if seq is not None else {}))
-
-
-def settle_after(paths: Paths, seq, sync=False) -> None:
-    """出番・run の終わりに events.py settle を起こす (ATELIER_EVENTS_SETTLE に従う)。
-
-    off は起こさない、sync はその場で (出力は捨てる)、ほかは spawn_detached で run.log に向けて裏で。
-    sync=True はモードが off でなければその場で走らせる (start --force が run.json を退ける前の settle)。
-    起こせなくても run は止めない。
-    """
-    mode = os.environ.get('ATELIER_EVENTS_SETTLE')
-    seq = _int_or_none(seq)
-    if mode == 'off' or events is None or seq is None or seq < 0:
-        return
-    script = SKILL / 'events.py'
-    if not script.is_file():
-        return
-    argv = [sys.executable, str(script), 'settle', '--dir', str(paths.base), '--seq', str(seq)]
-    if sync or mode == 'sync':
-        try:
-            subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           cwd=str(Path.cwd()), creationflags=NO_WINDOW, timeout=SETTLE_TIMEOUT)
-        except (OSError, subprocess.SubprocessError):
-            pass
-        return
-    log = None
-    try:
-        log = open(paths.conductor / 'run.log', 'ab')
-        spawn_detached(argv, log)
-    except OSError:
-        pass
-    finally:
-        if log is not None:
-            try:
-                log.close()
-            except OSError:
-                pass
-
-
-# ---- start ----
-
-def aside_name(paths: Paths) -> Path:
-    stamp = common.now().strftime('%Y%m%d-%H%M%S')
-    target = paths.conductor / f'run.{stamp}.json'
-    n = 1
-    while target.exists():
-        target = paths.conductor / f'run.{stamp}-{n}.json'
-        n += 1
-    return target
-
-
-def cmd_start(args, paths: Paths) -> int:
-    if (args.goal is None) == (args.goal_file is None):
-        raise Refused('give one of --goal or --goal-file')
-    if args.goal_file is not None:
-        try:
-            goal = Path(args.goal_file).read_text(encoding='utf-8-sig')
-        except OSError as error:
-            raise Refused(f'{args.goal_file}: {error}')
+            pbi["level_reason"] = reason
+            pbi["reason"] = reason
+        route_choice = template.choose_route(tmpl, pbi)
+        pbi["route"] = route_choice["route"]
+        pbi["route_rule"] = route_choice["rule"]
+        pbi["route_inputs"] = route_choice["inputs"]
+        pbi["route_template"] = route_choice["template"]
+        pbi["route_index"] = 0
+
+
+def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
+    provided = [bool(args.text is not None), bool(args.reply is not None), bool(args.choice is not None)]
+    if sum(provided) != 1:
+        raise ConductorError("specify exactly one of --text, --reply, or --choice")
+
+    root = Path(args.root)
+    run = state.load_state(root)
+    pending = run.get("pending_action")
+    if not pending or pending.get("action") != "ask":
+        raise ConductorError(f"no pending question in state {run['state']}")
+
+    choice, text, reply_obj = _extract_reply(args)
+    _record_answer_file(
+        root,
+        run,
+        pending["kind"],
+        {"kind": pending["kind"], "choice": choice, "text": text, **({"reply": reply_obj} if reply_obj else {})},
+    )
+
+    s = run["state"]
+    if s == "asking_interview":
+        if choice == "skip":
+            spec_file = run.get("spec_file")
+            if not spec_file or not Path(spec_file).is_file():
+                raise ConductorError("cannot skip interview without an existing spec file")
+            flow.apply_event(run, "skip_interview")
+        elif choice == "interview":
+            flow.apply_event(run, "start_interview")
+        else:
+            raise ConductorError(f"invalid choice '{choice}' for {s}")
+    elif s == "interviewing":
+        tree = interview.load_tree(root)
+        answers = _parse_interview_answers(tree, text, reply_obj)
+        updated = interview.apply_answers(tree, answers)
+        interview.save_tree(root, updated)
+        run["pending_interview_questions"] = None
+        flow.apply_event(run, "interview_round")
+    elif s == "awaiting_spec_approval":
+        if choice == "approve":
+            flow.apply_event(run, "spec_approved")
+        elif choice == "revise":
+            flow.apply_event(run, "revise_spec")
+        else:
+            raise ConductorError(f"invalid choice '{choice}' for {s}")
+    elif s == "awaiting_plan_approval":
+        _apply_level_changes(run, reply_obj)
+        if choice == "approve":
+            if reply_obj:
+                sensitive_ids = list(reply_obj.get("sensitive_pbis") or reply_obj.get("sensitive") or [])
+                proceed_ids = list(reply_obj.get("proceed_pbis") or reply_obj.get("proceed_without_prereq") or [])
+                if sensitive_ids:
+                    state.apply_sensitive_decision(root, run, sensitive_ids, proceed_ids)
+            pending_sends = run.pop("pending_plan_sends", None)
+            run["approvals"]["plan_sends"] = dict(pending_sends if pending_sends is not None else actions._plan_sends(run))
+            state.append_approval_revision(run, action="approved", summary=text or "")
+            flow.apply_event(run, "plan_approved")
+        elif choice == "revise":
+            if reply_obj:
+                sensitive_ids = list(reply_obj.get("sensitive_pbis") or reply_obj.get("sensitive") or [])
+                proceed_ids = list(reply_obj.get("proceed_pbis") or reply_obj.get("proceed_without_prereq") or [])
+                if sensitive_ids:
+                    state.apply_sensitive_decision(root, run, sensitive_ids, proceed_ids)
+            run["planner_mode"] = "revise"
+            run["plan_revision_request"] = text or (reply_obj or {}).get("reason") or (reply_obj or {}).get("summary") or ""
+            run["pending_plan_sends"] = None
+            flow.apply_event(run, "revise_plan")
+        elif choice == "sensitive":
+            if reply_obj and (reply_obj.get("sensitive_pbis") or reply_obj.get("sensitive")):
+                run["pending_sensitive"] = {
+                    "sensitive_pbis": list(reply_obj.get("sensitive_pbis") or reply_obj.get("sensitive") or []),
+                    "proceed_pbis": list(reply_obj.get("proceed_pbis") or reply_obj.get("proceed_without_prereq") or []),
+                }
+            flow.apply_event(run, "sensitive_detected")
+        else:
+            raise ConductorError(f"invalid choice '{choice}' for {s}")
+    elif s == "asking_rebuild":
+        if choice in ("retry", "retry_up"):
+            tmpl = actions.active_template(run)
+            for pbi in run.get("pbis", []):
+                if pbi.get("status") in ("failed", "built"):
+                    pbi["status"] = "pending"
+                    pbi["auto_fix_count"] = 0
+                    if choice == "retry_up":
+                        pbi["level"] = _next_level(pbi.get("level", "L2"))
+                        route_choice = template.choose_route(tmpl, pbi)
+                        pbi["route"] = route_choice["route"]
+                        pbi["route_rule"] = route_choice["rule"]
+                        pbi["route_inputs"] = route_choice["inputs"]
+                        pbi["route_template"] = route_choice["template"]
+                        pbi["route_index"] = 0
+            flow.apply_event(run, "rebuild_retry")
+        elif choice == "hold":
+            for pbi in run.get("pbis", []):
+                if pbi.get("status") == "failed":
+                    pbi["status"] = "held"
+            if not any(p.get("status") == "held" for p in run.get("pbis", [])):
+                for pbi in run.get("pbis", []):
+                    if pbi.get("status") == "built":
+                        pbi["status"] = "held"
+            flow.apply_event(run, "rebuild_hold")
+        else:
+            raise ConductorError(f"invalid choice '{choice}' for {s}")
+    elif s == "awaiting_fix_approval":
+        if reply_obj:
+            approved_ask_ids = set(
+                reply_obj.get("approved_ask_ids")
+                or reply_obj.get("include_ids")
+                or reply_obj.get("fix_ids")
+                or []
+            )
+            if approved_ask_ids:
+                existing_ids = {f.get("id") for f in run.get("fix_list", [])}
+                for item in run.get("triage_ask_items") or []:
+                    if item.get("id") in approved_ask_ids and item.get("id") not in existing_ids:
+                        run.setdefault("fix_list", []).append(item)
+        if choice == "approve" and run.get("fix_list"):
+            run["fix_groups"] = plan.fix_groups(run["fix_list"], max_workers=3)
+            run["fix_group_index"] = 0
+            flow.apply_event(run, "fix_list_approved")
+        elif choice in ("nothing_to_fix", "approve"):
+            run["fix_groups"] = []
+            run["fix_group_index"] = 0
+            flow.apply_event(run, "nothing_to_fix")
+        else:
+            raise ConductorError(f"invalid choice '{choice}' for {s}")
+    elif s == "asking_e2e_limit":
+        if choice == "continue":
+            flow.apply_event(run, "e2e_continue")
+        elif choice == "stop":
+            flow.apply_event(run, "stop")
+        else:
+            raise ConductorError(f"invalid choice '{choice}' for {s}")
+    elif s == "asking_template_switch":
+        if choice == "drop":
+            run["switch"] = None
+            _apply_resolved_template(run, template.load_template(run.get("template_path"), run.get("agents_path")))
+            flow.apply_event(run, "resume")
+        elif choice == "keep":
+            sw = run.get("switch") or {}
+            _apply_resolved_template(run, template.load_template(sw.get("template"), run.get("agents_path")))
+            flow.apply_event(run, "resume")
+        elif choice == "stop":
+            flow.apply_event(run, "stop")
+        else:
+            raise ConductorError(f"invalid choice '{choice}' for {s}")
+    elif s == "asking_guard":
+        issue = run.get("guard_issue") or {}
+        if choice in ("retry", "resume"):
+            if issue.get("rule") == "G3" and issue.get("runner"):
+                if issue.get("pbi"):
+                    sends = run["approvals"].setdefault("plan_sends", {})
+                    lst = sends.setdefault(issue["pbi"], [])
+                    if issue["runner"] not in lst:
+                        lst.append(issue["runner"])
+                elif issue.get("role"):
+                    rsends = run["approvals"].setdefault("role_sends", {})
+                    lst = rsends.setdefault(issue["role"], [])
+                    if issue["runner"] not in lst:
+                        lst.append(issue["runner"])
+            if issue.get("pending_destructive"):
+                approved = run.setdefault("approved_destructive", [])
+                for f in issue["pending_destructive"]:
+                    pair = [f["kind"], f["path"]]
+                    if pair not in approved:
+                        approved.append(pair)
+            if issue.get("pending_garbled"):
+                approved_g = run.setdefault("approved_garbled", [])
+                for item in issue["pending_garbled"]:
+                    pair = [item["path"], item["digest"]]
+                    if pair not in approved_g:
+                        approved_g.append(pair)
+            run["guard_issue"] = None
+            flow.apply_event(run, "resume")
+        elif choice == "next_step":
+            pbi = state.get_pbi(run, issue["pbi"]) if issue.get("pbi") else None
+            if not pbi or not pbi.get("route") or (pbi.get("route_index", 0) + 1) >= len(pbi["route"]):
+                raise ConductorError("no next route step available")
+            pbi["route_index"] = pbi.get("route_index", 0) + 1
+            run["guard_issue"] = None
+            flow.apply_event(run, "resume")
+        elif choice == "stop":
+            run["guard_issue"] = None
+            flow.apply_event(run, "stop")
+        else:
+            raise ConductorError(f"invalid choice '{choice}' for {s}")
+    elif s in flow.CROSS_CUTTING_STATES:
+        if choice == "resume":
+            if s == "asking_budget":
+                run["budget_approved_next"] = True
+            elif s == "asking_sensitive":
+                pending_sens = run.pop("pending_sensitive", None) or {}
+                sens_ids = list((reply_obj or {}).get("sensitive_pbis") or (reply_obj or {}).get("sensitive") or pending_sens.get("sensitive_pbis") or [])
+                proc_ids = list((reply_obj or {}).get("proceed_pbis") or (reply_obj or {}).get("proceed_without_prereq") or pending_sens.get("proceed_pbis") or [])
+                if sens_ids:
+                    state.apply_sensitive_decision(root, run, sens_ids, proc_ids)
+            elif s == "asking_plan_broken":
+                pending_chg = run.pop("pending_plan_change", None) or {}
+                changed_pbis = list((reply_obj or {}).get("changed_pbis") or pending_chg.get("changed_pbis") or [])
+                summary = (reply_obj or {}).get("summary") or text or pending_chg.get("reason") or ""
+                if changed_pbis:
+                    state.record_plan_change(run, changed_pbis, summary=summary)
+            flow.apply_event(run, "resume")
+        elif choice == "stop":
+            run.pop("pending_plan_change", None)
+            run.pop("pending_sensitive", None)
+            flow.apply_event(run, "stop")
+        else:
+            raise ConductorError(f"invalid choice '{choice}' for {s}")
     else:
-        goal = args.goal
-    given_roles = parse_role_args(args.role)
-    # 指定された実行先が使えなければ run を作らない (黙って Claude で動かさない)
-    resolved, _, _ = load_roles(paths, {'roles': given_roles})
-    warns = check_role_runners(resolved)
-    check_agent_roles_without_agent_tool(resolved)
-    defs_warns, ask = agent_defs_lines()
-    if ask:
-        # 定義の置き場は run を始める前に決める。送り手の設定も要るなら、呼び手が 1 回で聞けるように並べて出す
-        setup = events.sender_setup_line(paths.base) if events is not None else None
-        emit([f'state: {error_state(paths, Refused(ask))}', ask, *([setup] if setup else [])])
-        return EXIT_USAGE
-    warns = warns + defs_warns
-    carried = {}  # 前の run の止められなかった pid (新しい run の stuck_pids に引き継ぐ)
-    with Lock(paths):
-        try:
-            old = load_run(paths)
-        except Unusable as error:
-            # 壊れた・形の違う run.json も、--force なら退けて始められる
-            if not args.force:
-                raise Unusable(f'{error}; start --force moves it aside')
-            old = None
-        if old is not None and old.get('state') not in CLOSED and not args.force:
-            raise Refused(f"a run is in progress (state {old.get('state')}); finish, abort or start --force")
-        if paths.run.exists():
-            # 前の run の子 (runner と designer) を止めてから退ける。止められなければ warn にして進む
-            if old is not None:
-                stop_warns, stuck = stop_children(old)
-                warns = warns + stop_warns
-                if stuck:
-                    # cmd_abort と同じく、止められなかった pid は old の直下に移す。退けるのに失敗しても
-                    # close_run が run.json に残すので、あとの abort・start --force がもう一度止めにいける。
-                    move_stuck(old, old.get('running') or {})
-                    move_stuck(old, old)
-                    if old.get('stuck_pids'):
-                        warns.append(stuck_line(entry['pid'] for entry in old['stuck_pids']))
-            if old is not None and old.get('state') not in CLOSED:
-                # 途中の run を --force で退ける: abort と同じ手順で閉じ、run.json が old のうちに settle を
-                # 同期で走らせる (裏で起こすと、退けた後に新しい run.json を読む)。失敗しても start は止めない。
-                close_run(paths, old, 'aborted')
-                settle_after(paths, _int_or_none(old.get('seq')), sync=True)
-            # 前の run は消さずに退ける (閉じた run も履歴として残す)
-            try:
-                replace_retry(paths.run, aside_name(paths))
-            except OSError as error:
-                raise Refused(f'cannot move run.json aside: {error}')
-            # 退けられたあとで、止められなかった pid を新しい run に引き継ぐ (失敗したときは carried に残さない)
-            if old is not None and old.get('stuck_pids'):
-                carried['stuck_pids'] = [entry for entry in old['stuck_pids'] if isinstance(entry, dict)]
-        paths.goal.parent.mkdir(parents=True, exist_ok=True)
-        paths.goal.write_text(goal if goal.endswith('\n') else goal + '\n', encoding='utf-8', newline='\n')
-        # 前の run の grill の木と通しの「はい」は、この run の答えではない
-        for stale in (paths.base / 'notes' / 'grill.json', full_run_token(paths),
-                      paths.base / 'runners.skip.json'):
-            stale.unlink(missing_ok=True)
-        run = {
-            'schema': SCHEMA, 'run_id': str(uuid.uuid4()), 'created_at': iso_now(),
-            'goal': paths.goal.as_posix(), 'workflow': args.workflow, 'launch': args.launch,
-            'state': 'ready', 'seq': 0,
-            'pending': {'episode': 'design', 'wave': None, 'pbis': None, 'continue_from': None, 'answer': None},
-            'running': None, 'question': None, 'history': [],
+        raise ConductorError(f"cannot answer in state {s}")
+
+    return _advance_and_save(root, run)
+
+
+def _cmd_status(args: argparse.Namespace) -> dict[str, Any]:
+    run = state.load_state(Path(args.root))
+    return {
+        "schema": run["schema"],
+        "run_id": run["run_id"],
+        "state": run["state"],
+        "counters": run["counters"],
+        "approvals": run["approvals"],
+        "limits": run.get("limits"),
+        "usage": run.get("usage"),
+        "pbis": run["pbis"],
+        "history": run.get("history", []),
+        "pending_action": run.get("pending_action"),
+    }
+
+
+def _build_parser() -> _JsonArgumentParser:
+    parser = _JsonArgumentParser(prog="conductor.py", add_help=True)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_start = sub.add_parser("start")
+    p_start.add_argument("--root", required=True)
+    p_start.add_argument("--goal-file", required=True)
+    p_start.add_argument("--spec")
+    p_start.add_argument("--template")
+    p_start.add_argument("--switch")
+    p_start.add_argument("--agents")
+    p_start.add_argument("--components")
+    p_start.add_argument("--force", action="store_true")
+
+    p_next = sub.add_parser("next")
+    p_next.add_argument("--root", required=True)
+
+    p_run = sub.add_parser("run")
+    p_run.add_argument("--root", required=True)
+    p_run.add_argument("--launch-id", required=True)
+    p_run.add_argument("--timeout", type=int, default=600)
+
+    p_done = sub.add_parser("done")
+    p_done.add_argument("--root", required=True)
+    p_done.add_argument("--launch-id")
+
+    p_ans = sub.add_parser("answer")
+    p_ans.add_argument("--root", required=True)
+    p_ans.add_argument("--text")
+    p_ans.add_argument("--reply")
+    p_ans.add_argument("--choice")
+
+    p_st = sub.add_parser("status")
+    p_st.add_argument("--root", required=True)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        parser = _build_parser()
+        args = parser.parse_args(argv)
+        handlers = {
+            "start": _cmd_start,
+            "next": _cmd_next,
+            "run": _cmd_run,
+            "done": _cmd_done,
+            "answer": _cmd_answer,
+            "status": _cmd_status,
         }
-        if given_roles:
-            run['roles'] = given_roles
-        if carried.get('stuck_pids'):
-            run['stuck_pids'] = carried['stuck_pids']
-        save(paths, run)
-        _emit(paths, 'run.started', lambda: _run_started_data(paths, run))
-    setup = events.sender_setup_line(paths.base) if events is not None else None
-    emit(['state: ready', *warns, *([setup] if setup else []), f"run: {run['run_id'][:8]}", 'next: design',
-          'then: ' + command('next')])
-    return EXIT_OK
-
-
-def agent_defs_lines() -> tuple:
-    """start の定義の確かめ。(warn の行, ask agents: の行か None) を返す。
-
-    写した定義を同梱の新しい版に揃えてから (setup_agents.refresh_definitions)、同梱の定義のどれかが
-    どちらの置き場にも無く、この作業ルートに当てはまる agent_defs の記録も無ければ、ask agents: の行を返す。
-    """
-    home = common.resolve_home(None)
-    work_root = Path.cwd()
-    try:
-        warns = setup_agents.refresh_definitions(home, os.environ, work_root)
-    except OSError as error:
-        warns = [f'warn agents: the copied definitions were not updated ({error})']
-    missing = setup_agents.missing_definitions(os.environ, work_root)
-    if not missing or setup_agents.defs_record(home, work_root) is not None:
-        return warns, None
-    return warns, (
-        f"ask agents: Atelier's agent definitions are missing ({', '.join(missing)}); ask the user once where they go, "
-        f"run python {quoted(SKILL / 'setup_agents.py')} defs --install home|work|none, then run start again. "
-        'home: copy them to ~/.claude/agents/ for every repository. '
-        "work: copy them to this work root's .claude/agents/, kept out of commits by .git/info/exclude. "
-        'none: copy nothing; the designer runs as a headless claude, the hooks run for each designer, '
-        "and the caller's screen does not show what the designer does (appendix/setup.md, ## Agent definitions)")
-
-
-# ---- next ----
-
-def designer_definition(paths: Paths, run: dict, episode) -> tuple:
-    """出番の設計者を起こす定義の名前と warn の行。
-
-    その出番に Skill ツールを要る行があれば (flow.skill_tool_episodes) SKILLS_ROLE、無ければ AGENT_ROLE。
-    テンプレートが読めず判定できないときは、使えるはずのスキルを落とさないよう SKILLS_ROLE にして warn を出す。
-    """
-    try:
-        episodes = flow.skill_tool_episodes(paths.base, run.get('workflow'))
-    except Exception as error:  # 判定の誤りで出番を止めない
-        return SKILLS_ROLE, [f'warn agents: the skill rows are unknown ({fold(error, 120)}); using {SKILLS_ROLE}']
-    return (SKILLS_ROLE if episode in episodes else AGENT_ROLE), []
-
-
-def definition_reason(run: dict, name: str):
-    """定義 name が呼び手のセッションに読み込まれていなければ、その理由 (launch: headless の括弧に出す)。読み込まれていれば None。
-
-    読み込まれているのは、定義のファイルがあって先に読まれる方が同梱の版より古くなく、agents.json の記録が
-    今の呼び手のセッションで写したものでなく、この run でそのセッションの Agent tool が定義を見つけられなかった
-    (agent_type_missing) こともないとき。
-    """
-    if setup_agents.find_definition(f'{name}.md', os.environ, Path.cwd()) is None:
-        return 'no agent definition'
-    if setup_agents.current_definition(f'{name}.md', os.environ, Path.cwd()) is None:
-        # 作業ルートの古い定義が home の新しい定義より先に読まれる
-        return 'older agent definition'
-    if setup_agents.copied_this_session(common.resolve_home(None), os.environ):
-        return 'definition installed this session'
-    missing = run.get('agent_type_missing')
-    if isinstance(missing, dict) and missing.get('session') == (os.environ.get(setup_agents.SESSION_ENV) or ''):
-        return 'agent type not found'
-    return None
-
-
-def agent_launch_mode(run: dict, name: str) -> tuple:
-    """launch が agent の run で、設計者をどう起こすか。(起こし方, headless の理由, warn の行) を返す。
-
-    起こし方は、定義が読み込まれていれば agent (Agent tool)、そうでなく claude の CLI があれば headless、
-    CLI が無いか、headless の設計者が FAIL_LIMIT 回続けて失敗していれば fallback (general-purpose に定義を読ませる)。
-    """
-    reason = definition_reason(run, name)
-    if reason is None:
-        return 'agent', None, []
-    failures = int(run.get('headless_failures') or 0)
-    if failures >= FAIL_LIMIT:
-        return 'fallback', None, [f'warn agents: {name} is not loaded ({reason}) and headless failed {failures} times '
-                                  'in a row; using general-purpose']
-    _, problem = designer_command('agent')
-    if problem:
-        return 'fallback', None, [f'warn agents: {name} is not loaded ({reason}) and {problem}; using general-purpose']
-    return 'headless', reason, []
-
-
-def answer_kind(run: dict, answer) -> tuple:
-    """Answer: のファイルの問いの種類と topic。answer が書いた answers の行から取り、無ければファイルの名前から種類だけ。"""
-    if not answer:
-        return None, None
-    for row in reversed(run.get('answers') or []):
-        if isinstance(row, dict) and row.get('path') == answer:
-            return row.get('kind'), row.get('topic')
-    match = re.match(r'^\d+-(.+)\.md$', Path(str(answer)).name)
-    return (match.group(1) if match else None), None
-
-
-def ctx_probe_line(paths: Paths, launcher: str, run_short: str, seq: int, session_id: str) -> str:
-    """依頼文の Context probe: の行。kiln_log.py の記録のコマンドで、設計者は --boundary と --phase を埋める。"""
-    probe = (f'--probe-session {session_id}' if launcher == 'headless'
-             else f'--probe-agent "ATELIER.{run_short}.{seq} "')
-    return (f"python {quoted(SKILL / 'kiln_log.py')} {quoted(paths.base)} --role designer --seq {seq} {probe} "
-            '--boundary <start|phase|wave> --phase <stage>')
-
-
-def launch(paths: Paths, run: dict, launcher=None, fallback=False, definition=None, warns=()) -> list:
-    """ready・retry の run の次の出番の依頼文と最初に読むファイルを書き、running にする。出す行を返す。
-
-    definition は設計者を起こす定義の名前 (省くと designer_definition で決める)。fallback が真なら、agent では
-    general-purpose で起こして依頼文の先頭に定義を読ませる行を付ける (headless は designer_argv が --agents で渡す)。
-    launcher を渡すと、run.json の launch によらずその起動のしかたで依頼文と running を書く
-    (run は常に headless として自分で起こす)。warns は出す行に足す warn。
-    """
-    pending = run.get('pending') or {}
-    episode = pending.get('episode') or 'design'
-    seq = int(run.get('seq') or 0) + 1
-    run_short = str(run.get('run_id', ''))[:8]
-    launcher = launcher or run.get('launch') or 'agent'
-    prompt = paths.episode_file(seq, episode, '.prompt.md')
-    result = paths.result_file(seq, episode, run_short, launcher)
-    alive = paths.episode_file(seq, episode, '.alive')
-    # 前の run の同じ名前の結果を読まないように消す。finish は前の完了報告も消し、古い報告が通らないようにする
-    stales = [result, alive] + ([paths.base / 'REPORT.md'] if episode == 'finish' else [])
-    for stale in stales:
-        try:
-            stale.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as error:
-            if stale.name == 'REPORT.md':
-                # 消せない古い報告は finish で通ってしまうので、起こす前に止める
-                raise Refused(f'cannot remove the old completion report {stale.as_posix()}: {error}')
-    roles, sources, role_warns = load_roles(paths, run)
-    warns = [*role_warns, *warns]
-    if definition is None and episode not in SCRIPT_EPISODES:
-        definition, more = designer_definition(paths, run, episode)
-        warns += more
-    session_id = str(uuid.uuid4())
-    description = f'ATELIER.{run_short}.{seq} {episode}'
-    ctx_probe = ctx_probe_line(paths, launcher, run_short, seq, session_id)
-    reviewer = roles['reviewer']
-    escalated = pending.get('escalated')
-    part = lead_part(episode, escalated)
-    designer = designer_of(roles, part)
-    codex = designer.get('runner', 'agent') == 'codex'
-    values = {
-        'work_root': Path.cwd().resolve().as_posix(), 'skill': SKILL.as_posix(), 'episode': episode, 'seq': seq,
-        'wave': pending.get('wave'), 'pbis': ','.join(pending.get('pbis') or []),
-        'goal': paths.goal.as_posix(), 'workflow': run.get('workflow'),
-        'reviewer': (f"deep={model_label(reviewer['deep'])} other={model_label(reviewer['other'])}"
-                     ' (deep for a deep PBI and other otherwise; a deep review switches to other when deep equals'
-                     ' the built model)'),
-        'tester': model_label(roles['tester']),
-        'agent_tool': 'no' if codex else 'yes',
-        'text_rule': runner_cli.CODEX_TEXT_RULE if codex else None,
-        'lead': (f'{episode} on {model_label(designer)} (you run the {episode} stage in place of the designer; '
-                 'when you cannot decide, end with next {"episode": "' + episode + '", "needs_designer": "<why>"})')
-                if part != 'designer' else None,
-        'escalated': escalated,
-        'continue_from': pending.get('continue_from'), 'answer': pending.get('answer'),
-        'conductor_answer': pending.get('conductor_answer'), 'sent_by': pending.get('sent_by'),
-        'result': result.as_posix(), 'alive': alive.as_posix(), 'ctx_probe': ctx_probe,
-        'fix_tablet': pending.get('fix_tablet'),
-    }
-    fallback = bool(fallback) and launcher != 'headless'
-    if episode in SCRIPT_EPISODES:
-        # スクリプトの出番は設計者を起こさない。依頼文の場所には、何を流すかの 1 行を残す
-        fallback = False
-        text = (f'Script episode: {episode} (seq {seq}). conductor.py run runs {E2E_SCRIPT.as_posix()} with no model;'
-                f' it writes {result.as_posix()}.\n')
-    else:
-        kind, topic = answer_kind(run, pending.get('answer'))
-        entry = read_first.entry_of(bool(pending.get('continue_from')), kind, topic, bool(escalated), values['lead'])
-        read_path = paths.episode_file(seq, 'read', '.md')
-        try:
-            read_first.build(episode, entry, read_path)
-        except (ValueError, OSError) as error:
-            raise Refused(f'cannot put the read-first file together for {episode} ({entry}): {error}')
-        values['read_first'] = read_path.as_posix()
-        text = render(values)
-    if fallback:
-        text = f'Read {(AGENTS_DIR / f"{definition}.md").as_posix()} and follow it as your instructions.\n' + text
-    prompt.parent.mkdir(parents=True, exist_ok=True)
-    prompt.write_text(text, encoding='utf-8', newline='\n')
-    run['seq'] = seq
-    run['running'] = {
-        'seq': seq, 'episode': episode, 'wave': pending.get('wave'), 'pbis': pending.get('pbis'),
-        'launched_at': iso_now(), 'launcher': launcher, 'session_id': session_id,
-        'continue_from': pending.get('continue_from'), 'answer': pending.get('answer'),
-        'conductor_answer': pending.get('conductor_answer'), 'sent_by': pending.get('sent_by'),
-        'escalated': escalated, 'designer_part': None if episode in SCRIPT_EPISODES else part,
-        'definition': definition, 'fallback': fallback, 'fix_tablet': pending.get('fix_tablet'),
-        'prompt': prompt.as_posix(), 'result': result.as_posix(), 'alive': alive.as_posix(),
-        'roles': roles_record(roles, sources),
-    }
-    run['pending'] = None
-    run['state'] = 'running'
-    # seq は run.json にまだ書いていない (save は呼び出し側) ので、明示して渡す
-    _emit(paths, 'episode.started', lambda: _episode_started_data(run, not fallback), seq=seq)
-    if episode in SCRIPT_EPISODES:
-        return ['state: running', *warns, f'episode: {episode} seq {seq}', f'launch: script {E2E_SCRIPT.name}',
-                f'result: {result.as_posix()}', 'then: ' + command('wait', '--timeout', '300')]
-    model = designer['model']
-    return ['state: running', *warns, f'episode: {episode} seq {seq}', roles_line(roles, sources),
-            f'launch: {launcher} subagent_type={"general-purpose" if fallback else definition} '
-            f'model={model} description="{description}"',
-            f'prompt: {prompt.as_posix()}', f'result: {result.as_posix()}', 'then: ' + command('done')]
-
-
-def running_lines(run: dict) -> list:
-    running = run.get('running') or {}
-    return [f"state: running since {running.get('launched_at')}", episode_line(running),
-            alive_line(Path(running.get('alive') or '')) if running.get('alive') else 'alive: none',
-            'relaunch: ' + command('next', '--relaunch')]
-
-
-def headless_lines(run: dict, warns=(), why=None) -> list:
-    """launch が headless の run (か agent 以外の設計者) の next: 起動の指示は出さず、起動する run を案内する。"""
-    launch_line = f'launch: headless ({why})' if why else 'launch: headless'
-    return [f"state: {run.get('state')}", *warns, launch_line, 'then: ' + command('run', '--detach')]
-
-
-def relaunch(paths: Paths, run: dict, agent_type_missing: bool = False):
-    """running の子を止め、同じ出番・波・Continue from・Answer で新しい seq と session を起こす。(出す行, 終了コード) を返す。
-
-    headless の run で自分の子を止められなければ running のまま error (終了コード 2): 生きた runner の隣で run --detach を起こさせない。
-    """
-    running = run.get('running') or {}
-    before = len(run.get('history') or [])
-    if agent_type_missing and running.get('launcher') == 'agent' and running.get('definition'):
-        # 呼び手の Agent tool が定義を見つけられなかった: このセッションの残りの起動は定義に頼らない
-        run['agent_type_missing'] = {'session': os.environ.get(setup_agents.SESSION_ENV) or '', 'at': iso_now()}
-    headless = run.get('launch') == 'headless' or running.get('launcher') == 'headless'
-    warns, stuck = stop_children(run)
-    if stuck and headless:
-        return [f"state: {run.get('state')}", *warns, 'error: the running child could not be stopped; not relaunched'], EXIT_USAGE
-    history_add(run, running, 'relaunched', None)
-    run['pending'] = {'episode': running.get('episode'), 'wave': running.get('wave'), 'pbis': running.get('pbis'),
-                      'continue_from': running.get('continue_from'), 'answer': running.get('answer'),
-                      'conductor_answer': running.get('conductor_answer'), 'sent_by': running.get('sent_by'),
-                      'escalated': running.get('escalated'), 'fix_tablet': running.get('fix_tablet')}
-    _emit_episode_ended(paths, run, running, before)
-    run['running'] = None
-    if running.get('episode') in SCRIPT_EPISODES:
-        # スクリプトの出番は Agent ツールで起こせない。run (detach) が起こし直す
-        run['state'] = 'ready'
-        return headless_lines(run, warns, f"{running.get('episode')} runs as a script"), EXIT_OK
-    if run.get('launch') == 'headless':
-        run['state'] = 'ready'
-        return headless_lines(run, warns), EXIT_OK
-    roles, sources, role_warns = load_roles(paths, run)
-    runner = designer_runner(roles, lead_part(running.get('episode'), running.get('escalated')))
-    if runner != 'agent':
-        # Agent ツールで起こせない実行先の設計者は、cmd_next と同じく run が起こし直す
-        run['state'] = 'ready'
-        return headless_lines(run, [*warns, *role_warns, roles_line(roles, sources)],
-                              f'designer runner {runner}'), EXIT_OK
-    name, def_warns = designer_definition(paths, run, running.get('episode'))
-    mode, reason, mode_warns = agent_launch_mode(run, name)
-    if mode == 'headless':
-        run['state'] = 'ready'
-        return headless_lines(run, [*warns, *def_warns], reason), EXIT_OK
-    lines = launch(paths, run, fallback=mode == 'fallback', definition=name, warns=[*def_warns, *mode_warns])
-    lines[1:1] = warns
-    return lines, EXIT_OK
-
-
-def relaunch_question(run: dict, launcher) -> bool:
-    """問いの relaunch が案内した起動 (run --launch <launcher> --detach) と同じ切り替えで run が呼ばれたら、
-    答え無しの再開として問いを閉じ ready に戻す。閉じたら True。ほかの問いは閉じない。"""
-    q = run.get('question') or {}
-    if not launcher or f'--launch {launcher}' not in str(q.get('relaunch') or ''):
-        return False
-    run['pending'] = {'episode': q.get('episode'), 'wave': q.get('wave'), 'pbis': q.get('pbis'),
-                      'continue_from': q.get('state'), 'answer': None,
-                      'sent_by': q.get('sent_by'), 'escalated': q.get('escalated'),
-                      'fix_tablet': q.get('fix_tablet') if q.get('state') else None}
-    run['question'] = None
-    run['failures'] = None
-    if run.get('handoff'):
-        run['handoff']['count'] = 0
-    run['state'] = 'ready'
-    return True
-
-
-def cmd_next(args, paths: Paths) -> int:
-    none = ['state: none', 'then: ' + command('start', '--goal', '"..."')]
-    if no_run(paths):
-        return none_exit(none)
-    settled = None
-    with Lock(paths):
-        run = load_run(paths)
-        if run is None:
-            return none_exit(none)
-        state = run.get('state')
-        if args.relaunch and state != 'running':
-            raise Refused(f'--relaunch needs a running episode (state {state})')
-        if state in CLOSED:
-            emit(closed_lines(run))
-            return EXIT_OK
-        if state == 'question':
-            emit(question_lines(run, paths.base))
-            return EXIT_ASK
-        if state == 'running':
-            if not args.relaunch:
-                emit(running_lines(run))
-                return EXIT_OK
-            before = len(run.get('history') or [])
-            running_seq = _int_or_none((run.get('running') or {}).get('seq'))
-            lines, code = relaunch(paths, run, agent_type_missing=args.agent_type_missing)
-            save(paths, run)
-            # 子を止められずに error を返した道は出番が終わっていない (settle しない)
-            settled = running_seq if len(run.get('history') or []) > before else None
-        else:
-            if state not in ('ready', 'retry'):
-                raise Refused(f'unknown state {state!r} in run.json')
-            if run.get('launch') == 'headless':
-                emit(headless_lines(run))
-                return EXIT_OK
-            pending = run.get('pending') or {}
-            if pending.get('episode') in SCRIPT_EPISODES:
-                # モデルを使わない出番: run (detach) がスクリプトを流す
-                emit(headless_lines(run, (), f"{pending['episode']} runs as a script"))
-                return EXIT_OK
-            roles, sources, role_warns = load_roles(paths, run)
-            runner = designer_runner(roles, lead_part(pending.get('episode'), pending.get('escalated')))
-            if runner != 'agent':
-                # Agent ツールで起こせない実行先の設計者は、run が起こす
-                emit(headless_lines(run, [*role_warns, roles_line(roles, sources)], f'designer runner {runner}'))
-                return EXIT_OK
-            name, def_warns = designer_definition(paths, run, pending.get('episode') or 'design')
-            mode, reason, mode_warns = agent_launch_mode(run, name)
-            if mode == 'headless':
-                # 定義が読み込まれていない呼び手のセッションでは、run が --agents で定義を渡して起こす
-                emit(headless_lines(run, [*role_warns, *def_warns], reason))
-                return EXIT_OK
-            lines = launch(paths, run, fallback=mode == 'fallback', definition=name, warns=[*def_warns, *mode_warns])
-            save(paths, run)
-            code = EXIT_OK
-    settle_after(paths, settled)
-    emit(lines)
-    return code
-
-
-# ---- done ----
-
-def history_add(run: dict, running: dict, status: str, summary) -> None:
-    run.setdefault('history', []).append({
-        'seq': running.get('seq'), 'episode': running.get('episode'), 'wave': running.get('wave'),
-        'launcher': running.get('launcher'), 'status': status, 'roles': running.get('roles'),
-        'summary': summary if isinstance(summary, list) else []})
-
-
-def bump_failures(run: dict, running: dict) -> int:
-    """同じ出番 (出番と波) で続けた失敗の数を 1 足して返す。出番が変われば 1 から数え直す。"""
-    given = run.get('failures') or {}
-    same = given.get('episode') == running.get('episode') and given.get('wave') == running.get('wave')
-    count = int(given.get('count') or 0) + 1 if same else 1
-    run['failures'] = {'episode': running.get('episode'), 'wave': running.get('wave'), 'count': count}
-    return count
-
-
-def last_handoff_state(run: dict, running: dict):
-    """同じ出番・波の、前の handoff の state (Continue from に使う)。無ければ None。"""
-    given = run.get('handoff') or {}
-    if given.get('episode') == running.get('episode') and given.get('wave') == running.get('wave'):
-        return given.get('state')
-    return None
-
-
-# 進行役の問いの、止まった所 (Before の線のラベル) と、選択肢を説明する文 (Summary の終わり)。
-# 内部の言葉 (handoff・headless・Agent tool) は同じ文の中で括弧に説明を付ける
-CONDUCTOR_STOPS = {
-    'handoff-loop': ('handoffs repeated without progress',
-                     'The episode handed off (saved its state and stopped so that a new episode can continue) '
-                     'again and again, so the run stopped before it loops forever.'),
-    'launch-failure': ('failed repeatedly',
-                       'The episode could not be started or finished (the launch failed several times in a row), '
-                       'so the run stopped instead of trying again.'),
-    'decision': ('the designer cannot start sub-agents',
-                 'The designer episode cannot start sub-agents (it has no Agent tool), so the run cannot go on '
-                 'this way.'),
-}
-
-
-def conductor_question_text(running: dict, kind: str, what: str, relaunch=None) -> str:
-    """進行役の問いの本文。英語の決まった文で、承認の原稿と同じ 4 つの節 (Summary・Before・After・Decisions) を書く。
-    コマンドは書かない (答え・起こし直し・閉じるのコマンドは present.py の then: の行が出す)。"""
-    stop, meaning = CONDUCTOR_STOPS[kind]
-    where = f"{running.get('episode')} seq {running.get('seq')}"
-    restart = 'Restart the same episode with your answer (the answer is attached to its request)'
-    headless = 'Run the episodes headless (each episode as its own background process, without sub-agents)'
-    again = (restart, 'the same episode starts again with your answer attached')
-    options = [again, ('Close the run', 'the run ends here and no more episodes start')]
-    if relaunch:
-        # headless で走らせる道があるときは、それを推す (Agent tool が無いままでは同じ出番がまた止まる)
-        options.insert(0, (headless, 'the run closes this question and starts the same episode headless'))
-    branches = {restart: ('the same episode runs again', 'answer and restart'),
-                headless: ('the episodes run headless', 'run headless'),
-                'Close the run': ('the run is closed', 'close the run')}
-    lines = ['## Summary', f'```callout info Run stopped', f'{what} {meaning}', '```', '',
-             '## Before', '```flow', f'(episodes so far) -> {where}', f'{where} -> {{stopped here}}: {stop}', '```', '',
-             '## After', '```flow']
-    lines += [f'{{how to go on}} -> {branches[name][0]}: {branches[name][1]}' for name, _ in options]
-    lines += ['```', '', '## Decisions', '```ask', 'How should the run go on?']
-    lines += [f"{'*' if i == 0 else '-'} {name} | {change}" for i, (name, change) in enumerate(options)]
-    lines += ['```']
-    return '\n'.join(lines) + '\n'
-
-
-def conductor_question(paths: Paths, run: dict, running: dict, kind: str, what: str, relaunch=None) -> tuple:
-    """進行役が作る問い (handoff-loop・launch-failure・decision)。本文を episodes/<seq>-<種類>.question.md に書く
-    (答えのコマンドは書かない。答えの行は present.py が出す)。(終了コード, 出す行) を返す (出すのは呼び出し側)。"""
-    path = paths.episode_file(running.get('seq'), kind, '.question.md')
-    lines = conductor_question_text(running, kind, what, relaunch).rstrip('\n').split('\n')
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='\n')
-    topic = 'headless' if kind == 'decision' else 'other'
-    run['question'] = {'kind': kind, 'path': path.as_posix(), 'summary': what, 'check': None,
-                       'state': last_handoff_state(run, running), 'seq': running.get('seq'),
-                       'episode': running.get('episode'), 'wave': running.get('wave'), 'pbis': running.get('pbis'),
-                       'relaunch': relaunch, 'sent_by': running.get('sent_by'), 'escalated': running.get('escalated'),
-                       'asked_at': iso_now(), 'topic': topic, 'conductor': True}
-    run['state'] = 'question'
-    run['running'] = None
-    run['pending'] = None
-    save(paths, run)
-    _emit_question_asked(paths, kind, topic, 1, running.get('seq'))
-    return EXIT_ASK, question_lines(run, paths.base)
-
-
-def fail(paths: Paths, run: dict, running: dict, reason: str, status: str, summary=None) -> tuple:
-    """出番の失敗: 数えて retry にし、同じ出番を Continue from 無しで起こせるようにする。
-    同じ出番で FAIL_LIMIT 回続いたら launch-failure の問いにする。(終了コード, 出す行) を返す。"""
-    before = len(run.get('history') or [])
-    history_add(run, running, status, summary)
-    run['last_error'] = reason
-    count = bump_failures(run, running)
-    if count >= FAIL_LIMIT:
-        _emit_episode_ended(paths, run, running, before)
-        return conductor_question(paths, run, running, 'launch-failure',
-                                  f"{running.get('episode')} seq {running.get('seq')} failed {count} times in a row: "
-                                  f'{fold(reason, 200)}')
-    run['state'] = 'retry'
-    run['running'] = None
-    run['pending'] = {'episode': running.get('episode'), 'wave': running.get('wave'), 'pbis': running.get('pbis'),
-                      'continue_from': None, 'answer': running.get('answer'),
-                      'conductor_answer': running.get('conductor_answer'), 'sent_by': running.get('sent_by'),
-                      'escalated': running.get('escalated')}
-    save(paths, run)
-    _emit_episode_ended(paths, run, running, before)
-    return EXIT_FAIL, ['state: retry', episode_line(running), f'error: {fold(reason, 300)}',
-                       'then: ' + command('next')]
-
-
-PROGRESS_FILES = ('STATUS.md', 'stages.md')  # handoff の進みを測る状態のファイル (段の記録は stages.md)
-
-
-def progress_sha(paths: Paths):
-    """PROGRESS_FILES を合わせた sha256。どれも無ければ None。無いファイルも、あるファイルと区別して混ぜる。"""
-    digest = hashlib.sha256()
-    found = False
-    for name in PROGRESS_FILES:
-        try:
-            data = (paths.base / name).read_bytes()
-            found = True
-            digest.update(f'{name}:{len(data)}:'.encode() + data)
-        except OSError:
-            digest.update(f'{name}:-:'.encode())
-    return digest.hexdigest() if found else None
-
-
-def handoff_count(paths: Paths, run: dict, running: dict, state_path: str) -> int:
-    """handoff の進みを測る: runs.jsonl の行の数と、STATUS.md と stages.md を合わせた sha256 を前の handoff と比べ、
-    どちらも変わらなかった回数を返す (変われば 0)。記録は run.json の handoff に残す。"""
-    try:
-        text = (paths.base / 'runs.jsonl').read_text(encoding='utf-8', errors='replace')
-        rows = len([line for line in text.splitlines() if line.strip()])
-    except OSError:
-        rows = 0
-    sha = progress_sha(paths)
-    given = run.get('handoff') or {}
-    same = given.get('episode') == running.get('episode') and given.get('wave') == running.get('wave')
-    count = int(given.get('count') or 0) + 1 if same and given.get('rows') == rows and given.get('sha') == sha else 0
-    run['handoff'] = {'episode': running.get('episode'), 'wave': running.get('wave'), 'rows': rows, 'sha': sha,
-                      'state': state_path, 'count': count}
-    return count
-
-
-def ready_lines(run: dict) -> list:
-    pending = run.get('pending') or {}
-    nxt = f"next: {pending.get('episode')}"
-    if pending.get('wave') is not None:
-        nxt += f" wave {pending['wave']}"
-    if pending.get('pbis'):
-        nxt += f" pbis {','.join(pending['pbis'])}"
-    return ['state: ready', nxt, 'then: ' + command('next')]
-
-
-def process_done(paths: Paths, run: dict) -> tuple:
-    """running の出番の結果を読み、状態を進める (ロックは呼び出し側が持つ)。(終了コード, 出す行) を返す。
-
-    どの枝 (done・question・handoff・finish・失敗) でも、終わった出番の episode.ended を 1 度だけ出す。
-    failures と next_episode は枝の save の後に確定するので、本体が返ってから出す。
-    finish のときは、閉じる出番の episode.ended を run.ended より先に出す。
-    """
-    running = run.get('running') or {}
-    before = len(run.get('history') or [])
-    finished = False
-    try:
-        result = _process_done(paths, run)
-        finished = run.get('state') == 'finished' and len(run.get('history') or []) > before
-        return result
-    finally:
-        _emit_episode_ended(paths, run, running, before)
-        if finished:
-            _emit_run_ended(paths, run, 'finished')
-
-
-def _process_done(paths: Paths, run: dict) -> tuple:
-    """process_done の本体 (イベントは出さない)。"""
-    if run.get('state') != 'running':
-        raise Refused(f"no running episode (state {run.get('state')})")
-    running = run['running']
-    data = common.load_json(running.get('result') or '')
-    if not isinstance(data, dict):
-        return fail(paths, run, running, f"result missing or broken: {running.get('result')}", 'missing')
-    errors = role_results.check_episode(data)
-    if not errors and (data.get('seq') != running.get('seq') or data.get('episode') != running.get('episode')):
-        errors.append(f"seq/episode {data.get('seq')} {data.get('episode')} != running "
-                      f"{running.get('seq')} {running.get('episode')}")
-    summary = data.get('summary')
-    if errors:
-        return fail(paths, run, running, '; '.join(errors), 'invalid', summary)
-    absent = missing_for_done(data)
-    if absent:
-        code, lines = fail(paths, run, running, f'missing {absent}', 'invalid', summary)
-        # 状態の扱いは fail と同じ。launch-failure の問いになったときはその行を返し、そうでなければ exit 2 の 1 行
-        return (EXIT_USAGE, [f'error: missing {absent}']) if code == EXIT_FAIL else (code, lines)
-    bad = tablet_error(paths, data)
-    if bad:
-        state, reasons = bad
-        code, lines = fail(paths, run, running, f'state tablet ({reasons})', 'invalid', summary)
-        if code == EXIT_ASK and isinstance(run.get('question'), dict):
-            # launch-failure の問いになっても、答えのあとの出番がその板から続けてまず板を直すよう、問いに残す
-            run['question'].update(state=state, fix_tablet=reasons)
-            save(paths, run)
-        if code != EXIT_FAIL:
-            return code, lines
-        # 板に書いた作業を失わないよう、同じ出番をその板から起こし、まず板を直させる
-        run['pending'].update(continue_from=state, fix_tablet=reasons)
-        save(paths, run)
-        return EXIT_USAGE, [f'error: state tablet ({reasons})']
-    stale = stale_envelope(data) or grill_open(paths, run, data) or question_draft_errors(data)
-    if stale:
-        code, lines = fail(paths, run, running, stale, 'invalid', summary)
-        # 断った原稿の化けも見せる (見出しまで化けた原稿は形の誤りだけでは原因が分からない)
-        return code, with_warnings(lines, keep_garbled(paths, run, data))
-    code, lines = settle_result(paths, run, running, data, summary)
-    garbled = keep_garbled(paths, run, data)
-    return code, with_warnings(lines, garbled) if lines else lines
-
-
-def keep_garbled(paths: Paths, run: dict, data: dict) -> list:
-    """結果の化けの警告を返す。wait・status・切り離した run の呼び手にも届くよう、答えるまで run.json に残す。"""
-    garbled = garbled_warnings(data)
-    if garbled:
-        run['garbled'] = merge_warnings(run.get('garbled') or [], garbled)[-GARBLED_KEEP:]
-        save(paths, run)
-    return garbled
-
-
-DRAFT_HASH = re.compile(r'^reply-meta-draft_hash:\s*(\S+)\s*$', re.M)
-
-
-def _approve_question(data: dict) -> dict | None:
-    """出番が承認 (approve) の問いで終わるなら、その question。そうでなければ None。
-    design だけでなく、build の出番の再承認 (designer.md) も同じ扱いにする。"""
-    question = data.get('question') if isinstance(data.get('question'), dict) else {}
-    if data.get('status') == 'question' and question.get('kind') == 'approve':
-        return question
-    return None
-
-
-def _needs_draft_meta(data: dict) -> bool:
-    """承認の原稿に check と照合情報を求めるか: approve の問いで終わる出番で、confirm の設定が off でない。"""
-    if _approve_question(data) is None:
-        return False
-    return not confirm_off()
-
-
-def _needs_no_check(data: dict) -> bool:
-    """承認の問いに check を付けさせないか: approve の問いで終わる出番で、confirm の設定が off。"""
-    if _approve_question(data) is None:
-        return False
-    return confirm_off()
-
-
-def confirm_off() -> bool:
-    """confirm の設定が off か。設定が読めなければ既定 (html) とみなして False (done も answer も止めない)。"""
-    try:
-        settings, _warnings = agents_module.load_adapters(common.resolve_home(None))
-    except Exception:
-        return False
-    return settings.get('confirm') == 'off'
-
-
-def _draft_meta_missing(data: dict) -> bool:
-    """承認の問いの check が design-record でない、原稿が読めない、または reply-meta-draft_hash の行が無ければ True。"""
-    question = _approve_question(data) or {}
-    if question.get('check') != 'design-record':
-        return True
-    try:
-        draft = Path(question.get('path')).read_text(encoding='utf-8')
-    except (OSError, TypeError, ValueError):
-        return True
-    return DRAFT_HASH.search(design_record.normalize(draft)) is None
-
-
-def _draft_meta_name(data: dict) -> str:
-    path = (_approve_question(data) or {}).get('path')
-    return f'approve draft check design-record and reply-meta (run design_record.py markdown last): {path}'
-
-
-def _check_present(data: dict) -> bool:
-    """承認の問いに check が付いていれば True (confirm が off のときは付けない)。"""
-    return bool((_approve_question(data) or {}).get('check'))
-
-
-def _check_present_name(data: dict) -> str:
-    path = (_approve_question(data) or {}).get('path')
-    return f'approve question with no check (confirm is off, so drop check): {path}'
-
-
-def _is_finish_done(data: dict) -> bool:
-    return data.get('episode') == 'finish' and data.get('status') == 'done'
-
-
-def _report_missing(data: dict) -> bool:
-    """完了報告のファイルが無く、report_body も無ければ True。"""
-    try:
-        if Path(data.get('report')).is_file():
-            return False
-    except (TypeError, ValueError, OSError):
-        pass
-    body = data.get('report_body')
-    return not isinstance(body, str) or not body.strip()
-
-
-# done で揃っているべきもの: (当てはまる出番の条件, 欠けているかを調べる関数, `error: missing` のあとに出す名前)。
-# 欠けていれば done は exit 2 と `error: missing <名前>` の 1 行で拒まれる (docs/adr/0002 precondition over prose)
-DONE_REQUIRES = (
-    (_needs_draft_meta, _draft_meta_missing, _draft_meta_name),
-    (_needs_no_check, _check_present, _check_present_name),
-    (_is_finish_done, _report_missing, lambda data: 'completion report (docs/pbi/REPORT.md or report_body)'),
-)
-
-
-def missing_for_done(data: dict) -> str:
-    """DONE_REQUIRES で最初に欠けているものの名前。揃っていれば空。"""
-    for applies, missing, name in DONE_REQUIRES:
-        if applies(data) and missing(data):
-            return name(data)
-    return ''
-
-
-def kiln_off(paths: Paths) -> bool:
-    """<dir>/kiln.json が enabled false か (Kiln を切った run は、設計者に状態の板の形を渡していない)。"""
-    data = common.load_json(paths.base / 'kiln.json')
-    return isinstance(data, dict) and data.get('enabled') is False
-
-
-def tablet_error(paths: Paths, data: dict):
-    """handoff と問い (approve 以外) の結果の state の板が形から外れていれば (板のパス, 理由)。合っていれば None。
-
-    理由は kiln_log.tablet_problems の行を '; ' でつないだもの。上限は kiln_log.tablet_max_chars (<dir>/kiln.json)。
-    handoff の板が無いときは settle_result が not found で断るので、ここでは見ない。
-    """
-    state = data.get('state')
-    question = data.get('question') if isinstance(data.get('question'), dict) else {}
-    if data.get('status') not in ('handoff', 'question') or not isinstance(state, str) or not state:
-        return None
-    if data.get('status') == 'question' and question.get('kind') == 'approve':
-        return None
-    if (data.get('status') == 'handoff' and not Path(state).is_file()) or kiln_off(paths):
-        return None
-    problems = kiln_log.tablet_problems(state, kiln_log.tablet_max_chars(paths.base))
-    return (state, '; '.join(problems)) if problems else None
-
-
-def stale_envelope(data: dict) -> str:
-    """check が design-record の承認の問いで、下書きの封筒の draft_hash が今の中身と合わなければ、その説明。
-
-    封筒を付けたあとで中身を書き換えると、ユーザーの返信がどれも check-reply で弾かれる。合っていれば空。
-    DONE_REQUIRES が先に保証すること: confirm が off でなければ、approve の問いは check design-record で、原稿は読めて
-    reply-meta-draft_hash の行がある。confirm が off なら、approve の問いに check は無い (ここへは来ない)。
-    ここで見るのは hash の不一致だけ (読めない・hash が無いときは空を返す)。
-    """
-    question = data.get('question') if isinstance(data.get('question'), dict) else {}
-    if data.get('status') != 'question' or question.get('kind') != 'approve' or question.get('check') != 'design-record':
-        return ''
-    path = question.get('path')
-    try:
-        draft = Path(path).read_text(encoding='utf-8')
-    except (OSError, TypeError, ValueError):
-        return ''
-    match = DRAFT_HASH.search(design_record.normalize(draft))
-    if match is None:
-        return ''
-    if match.group(1) != design_record.draft_hash(draft):
-        return (f'approve draft changed after its envelope: {path} (reply-meta-draft_hash does not match; '
-                'add the envelope last, with design_record.py markdown)')
-    return ''
-
-
-DRAFT_ERRORS_SHOWN = 2
-
-
-def question_draft_errors(data: dict) -> str:
-    """approve 以外の問いの結果で、question.path の原稿に誤りがあれば (読めないのも誤り)、その説明。
-
-    誤りは最初の DRAFT_ERRORS_SHOWN 件と残りの件数にまとめる。警告 (内部の言葉) では止めない。合っていれば空。
-    """
-    question = data.get('question') if isinstance(data.get('question'), dict) else {}
-    kind = question.get('kind')
-    if data.get('status') != 'question' or kind not in design_record.QUESTION_DRAFT_KINDS:
-        return ''
-    path = question.get('path')
-    try:
-        # design_record.py lint と同じ復号 (BOM を読み飛ばし、不正なバイトは置き換える)。lint が通す原稿を断らない
-        text = Path(path).read_bytes().decode('utf-8-sig', errors='replace')
-    except (OSError, TypeError, ValueError):
-        return f'question draft has errors: {path}: not readable'
-    errors, _ = design_record.lint_text(text, kind, question.get('topic'))
-    if not errors:
-        return ''
-    shown = '; '.join(f'L{number} {what}' for number, what, _ in errors[:DRAFT_ERRORS_SHOWN])
-    more = f' (+{len(errors) - DRAFT_ERRORS_SHOWN} more)' if len(errors) > DRAFT_ERRORS_SHOWN else ''
-    # コマンドは理由に書かない: 2 回続けて断ると launch-failure の問いの本文に入る
-    return f'question draft has errors: {path}: {shown}{more}'
-
-
-GRILL = 'atelier.grill/1'
-
-
-def grill_open(paths: Paths, run: dict, data: dict) -> str:
-    """承認の問いを出す結果で、grill の設計の木 (notes/grill.json) に答えの無い問いが残っていれば、その説明。
-
-    grill.json が無い run (設計をしない run) は見ない。問いには持ち主だけが答える: どの答えも、この run の
-    answer が書いたファイル (answered_in) から来ていなければ、答えの無い問いとして数える。
-    """
-    question = data.get('question') if isinstance(data.get('question'), dict) else {}
-    if data.get('status') != 'question' or question.get('kind') != 'approve':
-        return ''
-    path = paths.base / 'notes' / 'grill.json'
-    if not path.exists():
-        return ''
-    tree = common.load_json(path)
-    if not isinstance(tree, dict) or tree.get('schema') != GRILL:
-        return f'grill tree broken: {path.as_posix()} (schema {GRILL})'
-    answered = {Path(row['path']).as_posix() for row in run.get('answers') or []
-                if isinstance(row, dict) and isinstance(row.get('path'), str)}
-
-    def from_owner(item: dict, key: str) -> bool:
-        return isinstance(item.get(key), str) and Path(item[key]).as_posix() in answered
-
-    skipped = tree.get('skipped')
-    if isinstance(skipped, dict) and not (isinstance(skipped.get('reason'), str) and skipped['reason'].strip()):
-        return f'grill skipped without a reason: {path.as_posix()}'
-    if not isinstance(skipped, dict):
-        rounds = [rnd for rnd in tree.get('rounds') or [] if isinstance(rnd, dict)]
-        questions = [item for rnd in rounds for item in rnd.get('questions') or [] if isinstance(item, dict)]
-        by_id = {item.get('id'): item for item in questions if isinstance(item.get('id'), str)}
-        for rnd in rounds:
-            children = {}
-            for item in rnd.get('questions') or []:
-                if not isinstance(item, dict) or not isinstance(item.get('parent'), str):
-                    continue
-                parent_id = item['parent']
-                parent = by_id.get(parent_id, {})
-                if parent.get('parent'):
-                    return f"grill child of a child: {item.get('id')} (one level only)"
-                children[parent_id] = children.get(parent_id, 0) + 1
-                if children[parent_id] > 4:
-                    return f"grill round {rnd.get('n')} has more than 4 children of {parent_id}"
-                if parent.get('took_recommended') is False:
-                    return f"grill child {item.get('id')} stays after its parent took another answer (move it to dropped)"
-
-    open_ids = [str(item.get('id')) for rnd in tree.get('rounds') or [] if isinstance(rnd, dict)
-                for item in rnd.get('questions') or [] if isinstance(item, dict)
-                and not (isinstance(item.get('answer'), str) and item['answer'].strip()
-                         and from_owner(item, 'answered_in'))]
-    if open_ids:
-        return f"grill has unanswered questions: {', '.join(open_ids[:8])} (ask them as a decision question first)"
-    if tree.get('frontier'):
-        return 'grill frontier is not empty: ask the next round before approve'
-    if isinstance(skipped, dict):
-        return ''
-    if tree.get('aligned') is not True or not from_owner(tree, 'aligned_in'):
-        return 'grill is not aligned: ask the owner whether the understanding is shared before approve'
-    return ''
-
-
-def settle_result(paths: Paths, run: dict, running: dict, data: dict, summary) -> tuple:
-    """形の正しい出番の結果で状態を進める。(終了コード, 出す行) を返す。"""
-    status = data['status']
-    episode = running['episode']
-    if status == 'error':
-        if data.get('reason') == 'no-agent-tool':
-            # 数えない。headless で回すかをユーザーに聞く
-            history_add(run, running, status, summary)
-            return conductor_question(
-                paths, run, running, 'decision',
-                f"{episode} seq {running.get('seq')}: the designer has no Agent tool (no-agent-tool). "
-                'Run the episodes headless instead.', relaunch=command('run', '--launch', 'headless', '--detach'))
-        return fail(paths, run, running, f"episode error: {data.get('reason')}", 'error', summary)
-    if status == 'question':
-        run['failures'] = None
-        q = data['question']
-        topic = _question_topic(q['kind'], q.get('topic'))
-        history_add(run, running, status, summary)
-        run['question'] = {'kind': q['kind'], 'path': q['path'], 'summary': q['summary'], 'check': q.get('check'),
-                           'state': data.get('state'), 'seq': running['seq'], 'episode': episode,
-                           'wave': running.get('wave'), 'pbis': running.get('pbis'), 'topic': topic,
-                           'asked_at': iso_now(), 'sent_by': running.get('sent_by'),
-                           'escalated': running.get('escalated')}
-        run['state'] = 'question'
-        run['running'] = None
-        save(paths, run)
-        _emit_question_asked(paths, q['kind'], topic, _question_items(q['path']), running['seq'])
-        return EXIT_ASK, question_lines(run, paths.base)
-    if status == 'handoff':
-        state_path = data['state']
-        if not Path(state_path).is_file():
-            return fail(paths, run, running, f'handoff state not found: {state_path}', 'invalid', summary)
-        history_add(run, running, status, summary)
-        run['failures'] = None
-        if handoff_count(paths, run, running, state_path) >= LOOP_LIMIT:
-            return conductor_question(
-                paths, run, running, 'handoff-loop',
-                f"{episode} seq {running.get('seq')}: {LOOP_LIMIT} handoffs in a row without progress "
-                '(runs.jsonl, STATUS.md and stages.md did not change).')
-        run['pending'] = {'episode': episode, 'wave': running.get('wave'), 'pbis': running.get('pbis'),
-                          'continue_from': state_path, 'answer': None,
-                          'conductor_answer': None, 'sent_by': running.get('sent_by'),
-                          'escalated': running.get('escalated')}
-    elif episode == 'finish':
-        report = Path(data['report'])
-        if not report.is_file():
-            # 報告も report_body も無い done は DONE_REQUIRES が先に拒んでいる
-            body = data['report_body']
-            # サブエージェントが報告の .md を書けないとき、本文を受けて conductor が書く
-            report.parent.mkdir(parents=True, exist_ok=True)
-            report.write_text(body if body.endswith('\n') else body + '\n', encoding='utf-8', newline='\n')
-            run['report_from_body'] = True
-        history_add(run, running, status, summary)
-        run['failures'] = None
-        run['handoff'] = None
-        run['state'] = 'finished'
-        run['running'] = None
-        run['report'] = data.get('report')
-        run['finished_at'] = iso_now()
-        save(paths, run)
-        return EXIT_OK, closed_lines(run)
-    else:
-        nxt = data['next']
-        target = nxt['episode']
-        if target not in NEXT_ALLOWED.get(episode, ()):
-            return fail(paths, run, running, f'{episode} -> {target} is not allowed', 'invalid', summary)
-        # 差し戻しの build は、送った出番 (test か review) にしか返せない (finish も通さない)
-        if episode == 'build' and running.get('sent_by') and target != running.get('sent_by'):
-            return fail(paths, run, running,
-                        f"build sent by {running.get('sent_by')} -> {target} is not allowed "
-                        f"(end with next {running.get('sent_by')})", 'invalid', summary)
-        needs = nxt.get('needs_designer')
-        escalated = None
-        if episode in LEAD_EPISODES and target == episode:
-            # 担当を持つ出番から同じ出番へは、担当が設計者に渡す (needs_designer) か、設計者が担当に戻すときだけ
-            if running.get('escalated'):
-                if needs:
-                    return fail(paths, run, running, f'{episode} was already passed to the designer; decide it '
-                                '(needs_designer is for the lead)', 'invalid', summary)
-            elif not needs:
-                return fail(paths, run, running, f'{episode} -> {episode} needs needs_designer with the reason',
-                            'invalid', summary)
-            else:
-                escalated = needs
-        elif needs:
-            return fail(paths, run, running, f'needs_designer goes with next {episode}', 'invalid', summary)
-        wave = nxt.get('wave')
-        if wave is None:
-            wave = running.get('wave')  # 無い・null は今の波を受け継ぐ
-        elif isinstance(wave, bool) or not isinstance(wave, int):
-            return fail(paths, run, running, f'next.wave {wave!r} is not an integer', 'invalid', summary)
-        if target == 'build' and role_results.wave_pbis(paths.base, wave) is None:
-            return fail(paths, run, running, f"wave {wave} is not in {(paths.base / 'waves.json').as_posix()}",
-                        'invalid', summary)
-        history_add(run, running, status, summary)
-        run['failures'] = None
-        run['handoff'] = None
-        # 差し戻し (pbis 付きの build) は、送った出番を残して依頼文と done の照合に使う
-        sent_by = episode if target == 'build' and nxt.get('pbis') and episode in ('test', 'review') else None
-        run['pending'] = {'episode': target, 'wave': wave, 'pbis': nxt.get('pbis') or None,
-                          'continue_from': None, 'answer': None, 'conductor_answer': None, 'sent_by': sent_by,
-                          'escalated': escalated}
-    run['state'] = 'ready'
-    run['running'] = None
-    save(paths, run)
-    return EXIT_OK, ready_lines(run)
-
-
-# ? が 3 つ以上続くか U+FFFD がある文は、書くときに日本語などが失われたものとみなす (Windows PowerShell の管)
-GARBLED = re.compile('\\?{3,}|\ufffd')
-GARBLED_KEEP = 3  # run.json に残す化けの warn の数 (出す行は 8 行まで)
-
-
-def garbled_warnings(data: dict) -> list:
-    """結果の要約と、問い・状態のファイルに文字化けがあれば warn の行を返す。読めないファイルは見ない。"""
-    question = data.get('question') if isinstance(data.get('question'), dict) else {}
-    texts = [('summary', '\n'.join(str(line) for line in data.get('summary') or [])),
-             ('question.summary', str(question.get('summary') or ''))]
-    for path in (question.get('path'), data.get('state')):
-        if isinstance(path, str) and path:
-            try:
-                texts.append((path, Path(path).read_text(encoding='utf-8', errors='replace')))
-            except OSError:
-                pass
-    places = [name for name, text in texts if GARBLED.search(text)]
-    if not places:
-        return []
-    return [f"warn garbled: '???' in {', '.join(places)}; non-ASCII text was lost when it was written "
-            '(Windows PowerShell pipe). Have the designer rewrite them']
-
-
-def cmd_done(args, paths: Paths) -> int:
-    if no_run(paths):
-        return none_exit(['state: none'])
-    with Lock(paths):
-        run = load_run(paths)
-        if run is None:
-            return none_exit(['state: none'])
-        if headless_busy(run):
-            # headless の出番は runner の settle_episode だけが片付ける。設計者が動いている間は片付けない
-            emit(['state: running', episode_line(run.get('running') or {}),
-                  'error: the headless designer is still running; its runner settles the episode',
-                  'then: ' + command('wait', '--timeout', '300')])
-            return EXIT_USAGE
-        seq = _int_or_none((run.get('running') or {}).get('seq'))
-        code, lines = process_done(paths, run)
-    settle_after(paths, seq)
-    emit(lines)
-    return code
-
-
-def headless_busy(run: dict) -> bool:
-    """headless の出番の設計者か runner が、まだ動いている (生きていて自分の子) か。"""
-    running = run.get('running') or {}
-    if run.get('state') != 'running' or running.get('launcher') != 'headless':
-        return False
-    launched_at = running.get('launched_at') or run.get('created_at')
-    for holder, key, pid in pid_slots(run):
-        if key not in PID_KEYS:
-            continue  # stuck_pids は前の出番の残り
-        if pid != os.getpid() and pid_alive(pid) and pid_is_ours(holder, key, pid, launched_at):
-            return True
-    return False
-
-
-# ---- answer ----
-
-def parse_choices(text):
-    choices = {}
-    if not text:
-        return choices
-    for item in text.split(','):
-        number, sep, value = item.partition('=')
-        if not sep or not number.strip().isdigit() or not value.strip():
-            raise Refused(f'--choices: {item!r} is not N=choice')
-        choices[int(number.strip())] = value.strip()
-    return choices
-
-
-def approve_reply(draft_path: str, choices: dict) -> str:
-    """問いの下書きの reply-meta- 行と choices から、check-reply が読む形の返信を組む (末尾に am-reply-meta の囲み)。"""
-    try:
-        draft = Path(draft_path).read_bytes().decode('utf-8-sig', errors='replace')
-    except OSError as error:
-        raise Refused(f'{draft_path}: {error}')
-    lines = draft.replace('\r\n', '\n').replace('\r', '\n').split('\n')
-    meta = {}
-    for line in lines:
-        if line.startswith(META_PREFIX) and ':' in line:
-            name, _, value = line.partition(':')
-            meta[name[len(META_PREFIX):].strip()] = value.strip()
-    body = []
-    numbers = set()
-    for index, line in enumerate(lines):
-        match = DECISION.match(line)
-        if not match:
-            continue
-        number = int(match.group(1))
-        numbers.add(number)
-        given = ANSWER_LINE.match(lines[index + 1]) if index + 1 < len(lines) else None
-        old = given.group(1).split(' _(')[0].strip() if given else ''
-        if number in choices:
-            picked = f'**{choices[number]}**'
-        elif old and old != UNANSWERED:
-            picked = old
-        else:
-            picked = UNANSWERED
-        body += [line, f'   → {picked}', '']
-    # 下書きの ```ask の囲みも、決定の行の番号の続きで 1 つずつ決定にする (選ばなかった問いは未回答)
-    for number, ask in enumerate(design_record.draft_asks(draft), start=max(numbers, default=0) + 1):
-        numbers.add(number)
-        picked = f'**{choices[number]}**' if number in choices else UNANSWERED
-        body += [f"{number}. [ask] {ask['question']}", f'   → {picked}', '']
-    unknown = sorted(set(choices) - numbers)
-    if unknown:
-        raise Refused(f"--choices: no decision {', '.join(map(str, unknown))} in {draft_path}")
-    text = '\n'.join(body)
-    if meta:
-        text += f'{FENCE_OPEN}\n{json.dumps(meta, ensure_ascii=False)}\n```\n'
-    return text
-
-
-def check_reply(paths: Paths, answer: Path, draft: str):
-    proc = subprocess.run([sys.executable, str(SKILL / 'design_record.py'), 'check-reply', '--reply', str(answer),
-                           '--draft', draft, '--dir', str(paths.base)],
-                          capture_output=True, text=True, encoding='utf-8', errors='replace',
-                          env={**os.environ, 'ATELIER_EVENTS_QUIET': '1'},
-                          creationflags=NO_WINDOW)
-    out = (proc.stdout + proc.stderr).strip().splitlines()
-    return proc.returncode, out[-1] if out else ''
-
-
-def approvals_size(paths: Paths) -> int:
-    try:
-        return (paths.base / 'design-approvals.jsonl').stat().st_size
-    except OSError:
+        _emit(handlers[args.command](args))
         return 0
-
-
-def reply_draft(paths: Paths, run: dict, q: dict) -> str:
-    """答えの下書き: present が残した今の run の原稿があればそれ、無ければ問いのパス。"""
-    saved = present.saved_draft(paths.base, q.get('seq'), q.get('kind'), run_id=run.get('run_id'))
-    return str(saved) if saved is not None else str(q['path'])
-
-
-def reply_meta(text: str):
-    """返事の末尾の am-reply-meta の囲みの中の JSON。囲みが無い・JSON のオブジェクトでないなら None。"""
-    _, raw = design_record.split_reply(text)
-    if raw is None:
-        return None
-    try:
-        meta = json.loads(raw)
-    except ValueError:
-        return None
-    return meta if isinstance(meta, dict) else None
-
-
-def meta_mismatches(paths: Paths, run: dict, q: dict, meta: dict) -> list:
-    """approve 以外の返事の照合情報で、今の問いと合わない項目の名前 (run_id・seq・kind・draft_hash の順)。
-
-    期待値は run.json の run_id (無ければ none)・問いの seq・kind・present の原稿の reply-meta-draft_hash。
-    原稿が無い・hash の行が無ければ draft_hash は不一致。
-    """
-    expected_hash = None
-    saved = present.saved_draft(paths.base, q.get('seq'), q.get('kind'), run_id=run.get('run_id'))
-    if saved is not None:
-        try:
-            found = DRAFT_HASH.search(design_record.normalize(saved.read_text(encoding='utf-8-sig', errors='replace')))
-        except OSError:
-            found = None
-        expected_hash = found.group(1) if found else None
-    run_id = run.get('run_id')
-    expected = {'run_id': 'none' if run_id is None else str(run_id), 'seq': str(q.get('seq')),
-                'kind': str(q.get('kind')), 'draft_hash': expected_hash}
-    return [name for name, value in expected.items() if value is None or meta.get(name) != value]
-
-
-def checked_reply(paths: Paths, run: dict, q: dict, answer: Path, draft=None):
-    """check-reply を呼ぶ。0 なら design-approvals.jsonl に 1 行足される。
-
-    呼ぶ前に、答えの中身のハッシュと approvals の大きさを run.json に残す。前の answer が check-reply の
-    あとの保存で失敗していれば (同じ答えで、approvals がそのときより伸びている)、呼び直さずに通ったとみなす
-    (同じ行を 2 度足さない)。
-    """
-    digest = hashlib.sha256(answer.read_bytes()).hexdigest()
-    mark = q.get('checking') or {}
-    if mark.get('sha256') == digest and approvals_size(paths) > int(mark.get('approvals_size') or 0):
-        return 0, 'already recorded in design-approvals.jsonl'
-    q['checking'] = {'sha256': digest, 'approvals_size': approvals_size(paths)}
-    save(paths, run)
-    return check_reply(paths, answer, draft or q['path'])
-
-
-def full_run_token(paths: Paths) -> Path:
-    """通しへの持ち主の「はい」。verify.py --final はこれが無ければ流さず、流し始めに消す。"""
-    return paths.base / 'full-run.approved.json'
-
-
-def cmd_answer(args, paths: Paths) -> int:
-    given = [x is not None for x in (args.reply, args.text, args.full_run)]
-    if args.approve:
-        if any(given) or args.revise:
-            raise Refused('--approve takes no --reply, --text or --revise')
-    elif sum(given) != 1:
-        raise Refused('give one of --reply, --text or --full-run (or --approve)')
-    if args.choices is not None and not args.approve:
-        raise Refused('--choices goes with --approve')
-    choices = parse_choices(args.choices)
-    if no_run(paths):
-        return none_exit(['state: none'])
-    with Lock(paths):
-        run = load_run(paths)
-        if run is None:
-            return none_exit(['state: none'])
-        q = run.get('question')
-        if run.get('state') != 'question' or not q:
-            raise Refused(f"no question to answer (state {run.get('state')})")
-        kind = q['kind']
-        if (args.approve or args.revise) and kind != 'approve':
-            raise Refused(f'--approve and --revise answer only an approve question (this one is {kind})')
-        if (args.full_run is not None) != (kind == 'full-run'):
-            raise Refused('--full-run answers only a full-run question, and a full-run question takes only '
-                          f'--full-run (this one is {kind})')
-        if not confirm_off() and not present.shown(paths.base, run.get('run_id'), q['seq'], kind=kind):
-            # 見せていない問いへの答えは受けない。state 行は付けない (Refused を使わない)
-            emit([f"error: not shown: run python {quoted(SKILL / 'present.py')} {quoted(str(q.get('path')))} "
-                  f'--kind {kind} first'])
-            return EXIT_USAGE
-        draft = reply_draft(paths, run, q)
-        answer = paths.answers / f"{q['seq']}-{kind}.md"
-        answer.parent.mkdir(parents=True, exist_ok=True)
-        check = 'none'
-        if args.approve:
-            reply_text = approve_reply(draft, choices)
-            answer.write_text(reply_text, encoding='utf-8', newline='\n')
-        elif args.reply is not None:
-            try:
-                # 1 度だけ読み、確かめた中身と同じバイト列を答えに書く (読んだあとに差し替えられても混ざらない)
-                reply_bytes = Path(args.reply).read_bytes()
-            except OSError as error:
-                raise Refused(f'{args.reply}: {error}')
-            reply_text = reply_bytes.decode('utf-8-sig', errors='replace')
-            if kind != 'approve':
-                # approve 以外は、返事の照合情報を今の問いと present の原稿に照らす。囲みが無ければ --text と同じ
-                meta = reply_meta(reply_text)
-                if meta is not None:
-                    problems = meta_mismatches(paths, run, q, meta)
-                    if problems:
-                        answer.unlink(missing_ok=True)  # 古いページ・別の問いへの返事は答えにしない
-                        present.log_answered(paths.base, run.get('run_id'), q['seq'], kind, reply_text, 'mismatch')
-                        emit([f"check: mismatch {', '.join(problems)}"])
-                        return design_record.EXIT_MISMATCH
-                    check = 'ok'
-            answer.write_bytes(reply_bytes)
-        elif args.full_run is not None:
-            reply_text = f'full-run: {args.full_run}\n'
-            answer.write_text(reply_text, encoding='utf-8', newline='\n')
-            # 「はい」は 1 回の通しで使い切る: verify.py --final が読んで消す。「いいえ」は前の「はい」も消す
-            token = full_run_token(paths)
-            if args.full_run == 'yes':
-                token.write_text(json.dumps({'seq': q['seq'], 'at': iso_now()}) + '\n', encoding='utf-8')
-            else:
-                token.unlink(missing_ok=True)
-        else:
-            reply_text = args.text
-            answer.write_text(reply_text if reply_text.endswith('\n') else reply_text + '\n',
-                              encoding='utf-8', newline='\n')
-        if kind == 'approve' and q.get('check') == 'design-record' and not args.revise:
-            code, last = checked_reply(paths, run, q, answer, draft)
-            if code in (3, 4, 5):
-                emit(['state: question', f'check-reply exit {code}', f'detail: {last[:300]}',
-                      'approve: ' + command('answer', '--approve', '[--choices 1=a,2=b]'),
-                      'revise: ' + command('answer', '--revise', '--text', '"..."')])
-                return EXIT_ASK
-            if code != 0:
-                raise Refused(f'check-reply exit {code}: {last[:300]}')
-            check = 'ok'
-        episode = 'design' if args.revise else q['episode']
-        continue_from = q.get('state') if kind != 'approve' else None
-        # 前の出番の state が無い conductor の問いの答えは、承認の答えと取り違えないよう別の行の名前で渡す
-        conductor_answer = answer.as_posix() if continue_from is None and kind != 'approve' else None
-        run['pending'] = {'episode': episode, 'wave': q.get('wave'), 'pbis': q.get('pbis'),
-                          'continue_from': continue_from,
-                          'answer': None if conductor_answer else answer.as_posix(),
-                          'conductor_answer': conductor_answer, 'sent_by': q.get('sent_by'),
-                          'escalated': None if args.revise else q.get('escalated'),
-                          'fix_tablet': q.get('fix_tablet') if continue_from else None}
-        topic = q.get('topic') if q.get('topic') != _question_topic(kind) else None  # 結果が付けた topic だけ
-        run.setdefault('answers', []).append({'seq': q['seq'], 'kind': kind, 'topic': topic, 'path': answer.as_posix(),
-                                              'revise': bool(args.revise), 'at': iso_now()})
-        run['question'] = None
-        run.pop('garbled', None)  # 答えに書き直しの頼みを載せたので、化けの warn は消す
-        run['failures'] = None  # どの答えのあとも数を 0 に戻す
-        if run.get('handoff'):
-            run['handoff']['count'] = 0
-        run['state'] = 'ready'
-        save(paths, run)
-        try:
-            present.log_answered(paths.base, run.get('run_id'), q['seq'], kind, reply_text, check)
-            log_warns = []
-        except OSError as error:
-            # 答えは保存済み。記録の失敗で答えを無かったことにはしない
-            log_warns = [f'warn presentations.jsonl: answered row not written ({error})']
-    # check-reply が 3・4・5 で問いを残した道はここに来ない (question.answered を出さない)
-    _emit_question_answered(paths, run, q, choices, bool(args.revise))
-    emit([*ready_lines(run)[:2], *log_warns, f'answer: {answer.as_posix()}', 'then: ' + command('next')])
-    return EXIT_OK
-
-
-# ---- status・abort ----
-
-def cost_line(run: dict) -> str:
-    """history の cost_usd の合計。1 つも無ければ unmeasured (agent で起こした出番は測れない)。"""
-    costs = [row['cost_usd'] for row in run.get('history') or []
-             if isinstance(row, dict) and isinstance(row.get('cost_usd'), (int, float))
-             and not isinstance(row.get('cost_usd'), bool)]
-    return f'cost: ${sum(costs):.2f}' if costs else 'cost: unmeasured'
-
-
-def stale_running(run: dict) -> bool:
-    """state が running なのに、runner_pid も child_pid も生きていない (pid_alive が False) か。"""
-    slots = pid_slots(run)  # pid が 1 つも無い (agent 起動) 出番は生きているものとして扱う
-    return run.get('state') == 'running' and bool(slots) and not any(pid_alive(pid) for _holder, _key, pid in slots)
-
-
-def status_lines(run: dict, base=None) -> list:
-    """status と wait が同じ形で出す行 (1 行目は state、全部で 8 行以内)。"""
-    state = run.get('state')
-    lines = [f'state: {state}']
-    if state == 'running':
-        running = run.get('running') or {}
-        lines += [episode_line(running), f"since: {running.get('launched_at')}",
-                  alive_line(Path(running['alive'])) if running.get('alive') else 'alive: none']
-        if stale_running(run):
-            lines += ['stale: no live runner', 'relaunch: ' + command('next', '--relaunch')]
-    elif state == 'question':
-        q = run.get('question') or {}
-        lines += [episode_line(q), f"question: {q.get('kind')} {q.get('path')}", present_line(q, base)]
-    elif state in ('ready', 'retry'):
-        pending = run.get('pending') or {}
-        lines.append(episode_line(dict(pending, seq=int(run.get('seq') or 0) + 1)))
-    else:
-        lines += closed_lines(run)[1:]
-    lines += [f"episodes: {int(run.get('seq') or 0)}", cost_line(run)]
-    return with_warnings(lines, run.get('garbled') or [])
-
-
-def status_none_lines(paths: Paths) -> list:
-    """run.json が無いときの status の行 (v5 の引き継ぎが在れば 1 行足す)。"""
-    lines = ['state: none']
-    if (paths.base / 'HANDOFF.md').is_file():
-        lines.append('inline: v5 run (follow designer.md)')
-    return lines
-
-
-def cmd_status(args, paths: Paths) -> int:
-    # ロックを取らない。書き手の置き換えの間の読めなさは load_run が短く取り直す
-    run = None if no_run(paths) else load_run(paths)
-    if run is None:
-        emit(status_none_lines(paths))
-        return EXIT_OK
-    emit(status_lines(run, paths.base))
-    return EXIT_OK
-
-
-def close_run(paths: Paths, run: dict, reason: str) -> None:
-    """走っている出番を aborted で history に残し、run を aborted に閉じる。
-
-    cmd_abort と start --force (退ける run) が同じ手順を使う。episode.ended は once 付きで 1 度だけ、
-    呼び出し側は state が閉じていないことを確かめてから呼ぶ (閉じた run に run.ended を足さない)。
-    """
-    before = len(run.get('history') or [])
-    if run.get('running'):
-        history_add(run, run['running'], 'aborted', None)
-        _emit_episode_ended(paths, run, run['running'], before)
-    run['state'] = 'aborted'
-    run['running'] = None
-    run['reason'] = reason
-    run['aborted_at'] = iso_now()
-    save(paths, run)
-    # 閉じた run の通しの「はい」は、次の run の答えではない
-    full_run_token(paths).unlink(missing_ok=True)
-    _emit_run_ended(paths, run, 'aborted')
-
-
-def cmd_abort(args, paths: Paths) -> int:
-    if no_run(paths):
-        return none_exit(['state: none'])
-    with Lock(paths):
-        run = load_run(paths)
-        if run is None:
-            return none_exit(['state: none'])
-        if run.get('state') in CLOSED:
-            if not run.get('stuck_pids'):
-                raise Refused(f"the run is already {run.get('state')}")
-            # 閉じた run に残った止められなかった pid を、もう一度止めにいく
-            warns, stuck = stop_children(run)
-            if stuck:
-                warns.append(stuck_line(entry['pid'] for entry in run.get('stuck_pids') or []))
-            save(paths, run)
-            emit([*closed_lines(run), *warns])
-            return EXIT_OK
-        warns, stuck = stop_children(run)
-        if stuck:
-            # 止められなかった子は、running を None にしても stuck_pids に残す (次の abort・start --force が止める)
-            move_stuck(run, run.get('running') or {})
-            move_stuck(run, run)
-            warns.append(stuck_line(entry['pid'] for entry in run.get('stuck_pids') or []))
-        close_run(paths, run, args.reason or 'aborted')
-        seq = _int_or_none(run.get('seq'))
-    settle_after(paths, seq)
-    emit([*closed_lines(run), *warns])
-    return EXIT_OK
-
-
-# ---- run・wait ----
-
-def merge_warnings(old, new) -> list:
-    """warn の行を足す (同じ行は 1 度だけ)。"""
-    merged = list(old)
-    for line in new:
-        if line not in merged:
-            merged.append(line)
-    return merged
-
-
-def warnings_in(lines) -> list:
-    return [line for line in lines if str(line).startswith('warn ')]
-
-
-def with_warnings(lines, warns) -> list:
-    """出す行の 1 行目 (state) のあとに warn を置く。state は 1 行目から動かさない。"""
-    lines = list(lines)
-    extra = [line for line in warns if line not in lines]
-    return [lines[0], *extra, *lines[1:]] if lines else extra
-
-
-def running_resumable(running: dict) -> bool:
-    """run --detach の親が書いた、まだ起こしていない headless の出番か (running の案内で止まらない)。"""
-    return (running.get('launcher') == 'headless' and not running.get('child_pid')
-            and bool(running.get('prompt')))
-
-
-def designer_command(runner: str = 'agent'):
-    """設計者を起こすコマンドの先頭と、見つからないときの理由 (見つかれば理由は None)。
-
-    ATELIER_DESIGNER_CMD (JSON の文字列の配列) があれば、実行先によらずそれ。無ければ codex と claude は
-    runner_cli.find_command (start の検査と同じ探し方)、agent は claude_run.claude_command()。
-    ただし claude_command は見つからないと終了するので、先に場所を確かめて、無ければ理由を返す。
-    """
-    given = os.environ.get('ATELIER_DESIGNER_CMD')
-    if given:
-        try:
-            words = json.loads(given)
-        except ValueError:
-            words = None
-        if isinstance(words, list) and words and all(isinstance(word, str) and word.strip() for word in words):
-            return list(words), None
-        return None, 'ATELIER_DESIGNER_CMD is not a JSON array of strings'
-    if runner in ('codex', 'claude'):
-        # start が確かめたのと同じ場所 (agents.json の path を含む) から探す
-        return runner_cli.find_command(runner)
-    configured = os.environ.get('PBI_CLAUDE_BIN')
-    found = configured or shutil.which('claude')
-    if not found or not Path(found).is_file():
-        return None, 'claude not found (install Claude Code and put it on PATH, or set PBI_CLAUDE_BIN)'
-    try:
-        return claude_run.claude_command(), None
-    except SystemExit as error:
-        return None, f'claude not found (claude_command exits {error.code})'
-
-
-def agent_definition_json(name: str = AGENT_ROLE) -> dict:
-    """スキルの agents/<name>.md から、--agents に渡す JSON を組む (frontmatter と本文)。"""
-    meta, body = setup_agents.read_definition(AGENTS_DIR / f'{name}.md')
-    spec = {'description': meta.get('description', ''), 'prompt': body.strip(),
-            'tools': [tool.strip() for tool in meta.get('tools', '').split(',') if tool.strip()]}
-    if meta.get('model'):
-        spec['model'] = meta['model']
-    return {name: spec}
-
-
-def designer_argv(launcher: list, running: dict, designer: dict, last_path=None) -> list:
-    """claude -p の引数。--agent は running の定義の名前。その定義のファイルが置き場に無いか、先に読まれる方が
-    同梱の版より古ければ、同梱の定義を --agents で --agent の前に足す
-    (新しく起こす claude は、置き場にある定義をそのとき読み込む)。
-
-    codex の設計者は codex exec の引数 (runner_cli.codex_args)。サンドボックスは permission_mode から取る。
-    """
-    if designer.get('runner') == 'codex':
-        return [*launcher, *runner_cli.codex_args(designer['model'], designer.get('effort'),
-                                                  runner_cli.codex_sandbox(designer.get('permission_mode')),
-                                                  last_path)]
-    name = running.get('definition') or AGENT_ROLE
-    argv = [*launcher, '-p', '--output-format', 'json']
-    if setup_agents.current_definition(f'{name}.md', os.environ, Path.cwd()) is None:
-        argv += ['--agents', json.dumps(agent_definition_json(name))]
-    argv += ['--agent', name, '--model', designer['model']]
-    if designer.get('effort'):
-        argv += ['--effort', designer['effort']]
-    argv += ['--permission-mode', designer['permission_mode'], '--permission-prompts', 'none',
-             '--session-id', str(running.get('session_id') or uuid.uuid4())]
-    return argv
-
-
-def run_input(prompt_path, definition=None) -> bytes:
-    """標準入力に渡す文: 依頼文のパスを読む指示と、依頼文の本文。
-
-    definition (定義のファイルのパス。--agent の無い codex) があれば、先頭にその定義を読む行を付ける。
-    """
-    text = Path(prompt_path).read_text(encoding='utf-8', errors='replace')
-    head = f'{Path(prompt_path).as_posix()} を読み、その指示どおりに作業してください。\n\n'
-    if definition:
-        head = f'Read {Path(definition).as_posix()} and follow it as your instructions.\n' + head
-    return (head + text).encode('utf-8')
-
-
-def output_json(path):
-    """claude -p --output-format json の出力。読めなければ None (全体、だめなら最後の行)。"""
-    try:
-        text = Path(path).read_text(encoding='utf-8', errors='replace').strip()
-    except OSError:
-        return None
-    for candidate in (text, text.splitlines()[-1] if text else ''):
-        if not candidate:
-            continue
-        try:
-            data = json.loads(candidate)
-        except ValueError:
-            continue
-        if isinstance(data, dict):
-            return data
-    return None
-
-
-def launch_problem(code, data, out_json) -> str:
-    """起動の失敗の理由。失敗でなければ空。is_error は subtype によらず失敗 (課金の失敗が success で返る)。"""
-    if isinstance(data, dict) and data.get('is_error'):
-        return f"designer is_error: {fold(data.get('result') or data.get('subtype') or 'is_error', 200)}"
-    if code != 0:
-        return f'designer exit {code}'
-    if not isinstance(data, dict):
-        return f'designer output is not JSON: {Path(out_json).as_posix()}'
-    return ''
-
-
-def attach_cost(run: dict, running: dict, data) -> bool:
-    """history のその seq の行に session_id と cost_usd を足す。足したら True。"""
-    if not isinstance(data, dict):
-        return False
-    session = data.get('session_id')
-    cost = data.get('total_cost_usd')
-    changed = False
-    for row in reversed(run.get('history') or []):
-        if not isinstance(row, dict) or row.get('seq') != running.get('seq'):
-            continue
-        if isinstance(session, str) and session:
-            row['session_id'] = session
-            changed = True
-        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
-            row['cost_usd'] = cost
-            changed = True
-        break
-    return changed
-
-
-def codex_problem(code, events: dict) -> str:
-    """codex の設計者の起動の失敗の理由。失敗でなければ空。turn.failed・error のイベントは終了コードより先に見る。"""
-    if events.get('failed'):
-        return f"designer codex failed: {fold(events['failed'], 200)}"
-    if code != 0:
-        return f'designer exit {code}'
-    return ''
-
-
-def attach_tokens(run: dict, running: dict, events: dict) -> bool:
-    """history のその seq の行に、codex の thread_id (session_id) とトークン数を足す。費用は足さない。"""
-    for row in reversed(run.get('history') or []):
-        if not isinstance(row, dict) or row.get('seq') != running.get('seq'):
-            continue
-        changed = False
-        if events.get('session_id'):
-            row['session_id'] = events['session_id']
-            changed = True
-        if events.get('tokens'):
-            row['tokens'] = events['tokens']
-            changed = True
-        return changed
-    return False
-
-
-def runner_argv(args, run: dict) -> list:
-    """run --detach が切り離して起こす、--detach を除いた同じ run。親が running にした run_id と seq を渡す。"""
-    argv = [sys.executable, str(SKILL / 'conductor.py'), 'run']
-    if args.max_episodes is not None:
-        argv += ['--max-episodes', str(args.max_episodes)]
-    if args.launch:
-        argv += ['--launch', args.launch]
-    argv += ['--run-id', str(run.get('run_id')), '--seq', str(int((run.get('running') or {}).get('seq') or 0))]
-    argv += ['--dir', str(args.dir)]
-    return argv
-
-
-def spawn_detached(argv, log):
-    """自分を切り離して起こす (Windows は新しいプロセスグループ、POSIX は新しいセッション)。起こした Popen を返す。"""
-    extra = {}
-    if os.name == 'nt':
-        extra['creationflags'] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        extra['start_new_session'] = True
-    return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log, cwd=str(Path.cwd()), **extra)
-
-
-def record_runner(paths: Paths, run_id, seq: int, pid: int) -> None:
-    """run --detach の親が、起こした runner の pid を runner_pid に記録する (start --force・abort が止められるように)。
-
-    親が running にした出番のままで、runner_pid がまだ親の pid のときだけ書く (runner が先に自分を書いていれば書かない)。
-    """
-    try:
-        with Lock(paths):
-            run = load_run(paths)
-            if (run is None or run.get('run_id') != run_id or run.get('state') != 'running'
-                    or (run.get('running') or {}).get('seq') != seq or run.get('runner_pid') != os.getpid()):
-                return
-            record_pid(run, 'runner_pid', pid)
-            save(paths, run)
-    except (Refused, OSError):
-        pass
-
-
-def clear_runner_pid(paths: Paths) -> None:
-    """run --detach の子が終わるときに runner_pid を消す (自分の pid のときだけ)。"""
-    if no_run(paths):
-        return
-    try:
-        with Lock(paths):
-            run = load_run(paths)
-            if run is None or run.get('runner_pid') != os.getpid():
-                return
-            run.pop('runner_pid', None)
-            run.pop('runner_pid_started', None)
-            save(paths, run)
-    except (Refused, OSError):
-        pass
-
-
-def state_exit(state) -> int:
-    """wait の終了コード: question 10、retry 12、ほかは 0。"""
-    if state == 'question':
-        return EXIT_ASK
-    if state == 'retry':
-        return EXIT_FAIL
-    return EXIT_OK
-
-
-def wait_lock_gone(paths: Paths) -> None:
-    """状態を書いた側がロックを消すのを待つ (返った直後の answer がロックに当たらないように)。"""
-    deadline = time.monotonic() + WAIT_LOCK_WAIT
-    while paths.lock.exists() and time.monotonic() < deadline:
-        time.sleep(0.05)
-
-
-def cmd_run(args, paths: Paths) -> int:
-    if args.max_episodes is not None and args.max_episodes < 1:
-        raise Refused('--max-episodes is 1 or more')
-    if no_run(paths):
-        return none_exit(['state: none', 'then: ' + command('start', '--goal', '"..."')])
-    if args.detach:
-        return cmd_run_detach(args, paths)
-    return cmd_run_loop(args, paths)
-
-
-def cmd_run_detach(args, paths: Paths) -> int:
-    """依頼文を書いて running にし、runner_pid を残してロックを放ち、切り離した run を起こしてすぐ返る。"""
-    warns = []
-    runner = None
-    log = None
-    with Lock(paths):
-        run = load_run(paths)
-        if run is None:
-            return none_exit(['state: none', 'then: ' + command('start', '--goal', '"..."')])
-        if args.launch and run.get('launch') != args.launch:
-            run['launch'] = args.launch
-            save(paths, run)
-        state = run.get('state')
-        if state in CLOSED:
-            emit(closed_lines(run))
-            return EXIT_OK
-        if state == 'question' and not relaunch_question(run, args.launch):
-            emit(question_lines(run, paths.base))
-            return EXIT_ASK
-        state = run.get('state')
-        if state == 'running':
-            if not running_resumable(run.get('running') or {}):
-                emit(running_lines(run))
-                return EXIT_OK
-        elif state in ('ready', 'retry'):
-            warns = merge_warnings(warns, warnings_in(launch(paths, run, 'headless')))
-            save(paths, run)
-        else:
-            raise Refused(f'unknown state {state!r} in run.json')
-        record_pid(run, 'runner_pid', os.getpid())
-        save(paths, run)
-        runner = runner_argv(args, run)
-        claimed = (run.get('run_id'), int((run.get('running') or {}).get('seq') or 0))
-        try:
-            log = open(paths.conductor / 'run.log', 'ab')
-        except OSError as error:
-            # 起こせない: 失敗として数え、retry に戻して runner_pid を消す
-            code, lines = fail(paths, run, run.get('running') or {},
-                               f'cannot open the run log: {error}', 'launch-failed')
-            run.pop('runner_pid', None)
-            run.pop('runner_pid_started', None)
-            save(paths, run)
-            emit(with_warnings(lines, warns))
-            return code
-    # ロックを放してから起こす (切り離した子は同じ引数の run。--detach は付けない)
-    try:
-        child = spawn_detached(runner, log)
-    except OSError as error:
-        with Lock(paths):
-            run = load_run(paths)
-            if run is not None and run.get('state') == 'running':
-                code, lines = fail(paths, run, run.get('running') or {},
-                                   f'cannot start the runner: {error}', 'launch-failed')
-                run.pop('runner_pid', None)
-                run.pop('runner_pid_started', None)
-                save(paths, run)
-                emit(with_warnings(lines, warns))
-                return code
-            emit(status_lines(run, paths.base) if run is not None else status_none_lines(paths))
-            return EXIT_OK
-    finally:
-        if log is not None:
-            log.close()
-    record_runner(paths, claimed[0], claimed[1], child.pid)
-    emit(['state: running', *warns, 'then: ' + command('wait', '--timeout', '300')])
-    return EXIT_OK
-
-
-def cmd_run_loop(args, paths: Paths) -> int:
-    try:
-        return run_episodes(args, paths)
-    finally:
-        clear_runner_pid(paths)
-
-
-def launch_designer(paths: Paths, run: dict, running: dict, warns: list) -> tuple:
-    """設計者を起こし、子の pid を run.json に記録して保存する。(child, 終了コード, 出す行) を返す。
-
-    起動できなければ child は None で、出す行は失敗の行 (成功なら空)。
-    標準入力にまだ書いていない依頼文は child.task に、書けなかったときの .err のパスは child.err_path に入れる
-    (依頼文を書くのはロックを放してから。大きい依頼文でも、待つ間の abort・next --relaunch を止めない)。
-    """
-    seq = int(running.get('seq') or 0)
-    episode = str(running.get('episode') or 'design')
-    out_json = paths.episode_file(seq, episode, '.json')
-    err_path = paths.episode_file(seq, episode, '.err')
-    # next が running に残した値で起こす (next と run の間に roles.json が変わっても、出した行と同じ値)
-    if episode in SCRIPT_EPISODES:
-        return launch_script(paths, run, running, warns, out_json, err_path)
-    roles = roles_from_record(running.get('roles'))
-    if roles is None:
-        roles, _, role_warns = load_roles(paths, run)
-        warns[:] = merge_warnings(warns, role_warns)
-    part = running.get('designer_part') or 'designer'
-    runner = designer_runner(roles, part)
-    launcher, problem = designer_command(runner)
-    if problem:
-        code, lines = launch_failed(paths, run, running, runner, problem)
-        return None, code, with_warnings(lines, warns)
-    try:
-        argv = designer_argv(launcher, running, designer_of(roles, part), paths.episode_file(seq, episode, '.last.md'))
-        definition = AGENTS_DIR / f"{running.get('definition') or AGENT_ROLE}.md"
-        task = run_input(running.get('prompt') or '', definition=definition if runner == 'codex' else None)
-    except OSError as error:
-        code, lines = launch_failed(paths, run, running, runner,
-                                    f'cannot read the prompt or the agent definition: {error}')
-        return None, code, with_warnings(lines, warns)
-    env = claude_run.build_env()
-    # フックが Atelier の出番を見分けられるように (<run_id の先頭 8 文字>.<seq>)
-    env['ATELIER_EPISODE'] = f"{str(run.get('run_id') or '')[:8]}.{seq}"
-    try:
-        with open(out_json, 'wb') as out, open(err_path, 'wb') as err:
-            child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=out, stderr=err,
-                                     env=env, cwd=str(Path.cwd()), creationflags=NO_WINDOW)
-    except OSError as error:
-        code, lines = launch_failed(paths, run, running, runner, f'cannot start the designer: {error}')
-        return None, code, with_warnings(lines, warns)
-    child.task = task
-    child.err_path = err_path
-    record_pid(run['running'], 'child_pid', child.pid)
-    save(paths, run)
-    return child, EXIT_OK, []
-
-
-def launch_failed(paths: Paths, run: dict, running: dict, runner: str, reason: str) -> tuple:
-    """子のプロセスが始まる前の起動の失敗。claude -p の設計者 (codex 以外) なら、終わった子の失敗と同じく
-    headless_failures に数えてから fail する。(終了コード, 出す行) を返す。"""
-    if runner != 'codex':
-        count_headless(run, True)
-    return fail(paths, run, running, reason, 'launch-failed')
-
-
-def count_headless(run: dict, failed: bool) -> None:
-    """続けて失敗した headless の起動の数 (agent_launch_mode が FAIL_LIMIT で代わりの起動に戻す)。成功で 0 に戻す。"""
-    run['headless_failures'] = int(run.get('headless_failures') or 0) + 1 if failed else 0
-
-
-def script_argv(paths: Paths, run: dict, running: dict) -> list:
-    """スクリプトの出番の引数。ATELIER_E2E_CMD (JSON の文字列の配列) があれば、その後ろに同じ引数を付ける。"""
-    head = [sys.executable, str(E2E_SCRIPT)]
-    given = os.environ.get('ATELIER_E2E_CMD')
-    if given:
-        try:
-            words = json.loads(given)
-        except ValueError:
-            words = None
-        if isinstance(words, list) and words and all(isinstance(word, str) and word.strip() for word in words):
-            head = list(words)
-    argv = [*head, '--dir', str(paths.base), '--result', str(running.get('result')),
-            '--seq', str(int(running.get('seq') or 0))]
-    if isinstance(run, dict) and run.get('run_id'):
-        argv += ['--run', str(run['run_id'])]
-    if not reviewed(run):
-        # この形より前に始めた run の途中 (build -> e2e): 今までどおり e2e のあとに test を流す
-        argv.append('--before-review')
-    return argv
-
-
-def reviewed(run) -> bool:
-    """最後の見直しの出番 (review) が履歴にあるか。"""
-    history = (run or {}).get('history') if isinstance(run, dict) else None
-    return any(isinstance(row, dict) and row.get('episode') == 'review' for row in history or [])
-
-
-def launch_script(paths: Paths, run: dict, running: dict, warns: list, out_json, err_path) -> tuple:
-    """スクリプトの出番 (e2e) を起こす。標準入力に渡すものは無い。(child, 終了コード, 出す行) を返す。"""
-    try:
-        with open(out_json, 'wb') as out, open(err_path, 'wb') as err:
-            child = subprocess.Popen(script_argv(paths, run, running), stdin=subprocess.PIPE, stdout=out, stderr=err,
-                                     cwd=str(Path.cwd()), creationflags=NO_WINDOW)
-    except OSError as error:
-        code, lines = fail(paths, run, running, f"cannot start the {running.get('episode')} script: {error}",
-                           'launch-failed')
-        return None, code, with_warnings(lines, warns)
-    child.task = b''
-    child.err_path = err_path
-    record_pid(run['running'], 'child_pid', child.pid)
-    save(paths, run)
-    return child, EXIT_OK, []
-
-
-def note_prompt_error(err_path, error) -> None:
-    """依頼文を書けなかったことを .err に 1 行残す (書けなくても止めない: 終了コードと結果のファイルが決める)。"""
-    try:
-        with open(err_path, 'a', encoding='utf-8') as err:
-            err.write(f'conductor: cannot write the prompt to the designer: {error}\n')
-    except OSError:
-        pass
-
-
-def write_prompt(child) -> None:
-    """子の標準入力に依頼文を書いて閉じる (ロックを放してから。止められていれば OSError になる)。"""
-    try:
-        child.stdin.write(child.task)
-    except OSError as error:
-        note_prompt_error(child.err_path, error)
-    finally:
-        try:
-            child.stdin.close()
-        except OSError as error:
-            note_prompt_error(child.err_path, error)
-
-
-def adopt_runner(paths: Paths, run: dict) -> None:
-    """run --detach の子が、自分の pid を runner_pid に書き換える (既に自分なら書かない)。"""
-    if run.get('runner_pid') != os.getpid():
-        record_pid(run, 'runner_pid', os.getpid())
-        save(paths, run)
-
-
-def settle_episode(paths: Paths, run: dict, code: int, out_json) -> tuple:
-    """待ち終えた出番の結果を、done と同じに処理する。(終了コード, 出す行, 止まるか) を返す。"""
-    active = run.get('running') or {}
-    active.pop('child_pid', None)
-    active.pop('child_pid_started', None)
-    roles = roles_from_record(active.get('roles'))
-    script = active.get('episode') in SCRIPT_EPISODES
-    codex = not script and roles is not None and designer_runner(roles, active.get('designer_part') or 'designer') == 'codex'
-    if script:
-        events, data = {}, None
-        problem = None if code == 0 else (f"{active.get('episode')} script exited {code} "
-                                          f"(see {paths.episode_file(active.get('seq'), active.get('episode'), '.err').as_posix()})")
-    elif codex:
-        events = runner_cli.codex_events(out_json)
-        problem = codex_problem(code, events)
-    else:
-        data = output_json(out_json)
-        problem = launch_problem(code, data, out_json)
-        count_headless(run, bool(problem))
-    if problem:
-        done_code, lines = fail(paths, run, active, problem, 'launch-failed')
-    else:
-        done_code, lines = process_done(paths, run)
-    if not script and (attach_tokens(run, active, events) if codex else attach_cost(run, active, data)):
-        save(paths, run)
-    stopping = done_code != EXIT_OK or not lines or not str(lines[0]).startswith('state: ready')
-    if stopping and run.get('runner_pid') == os.getpid():
-        # 状態を書いたのと同じロックの中で runner_pid も消す (wait が古い pid を残して返らないように)
-        run.pop('runner_pid', None)
-        run.pop('runner_pid_started', None)
-        save(paths, run)
-    return done_code, lines, stopping
-
-
-def claimed_by_parent(args, run: dict) -> bool:
-    """run --detach の子が最初にロックを取ったとき、親が running にした run_id と seq の出番がまだ running か。
-
-    --run-id の無い (ふつうの) run は常に True。
-    """
-    if getattr(args, 'run_id', None) is None:
-        return True
-    running = run.get('running') or {}
-    return (run.get('run_id') == args.run_id and run.get('state') == 'running'
-            and running.get('seq') == getattr(args, 'seq', None))
-
-
-def run_episodes(args, paths: Paths) -> int:
-    """依頼文 → claude -p → done を、問い・終わり・失敗まで回す。ロックは状態の読み書きの間だけ持つ。"""
-    warns = []
-    episodes = 0
-    while True:
-        not_started = None
-        with Lock(paths):
-            run = load_run(paths)
-            if run is None:
-                return none_exit(['state: none', 'then: ' + command('start', '--goal', '"..."')])
-            if episodes == 0 and not claimed_by_parent(args, run):
-                # run --detach の親が running にした出番がもう無い (start --force・abort・next --relaunch のあと): 何もしない
-                emit(status_lines(run, paths.base))
-                return EXIT_OK
-            if args.launch and run.get('launch') != args.launch:
-                run['launch'] = args.launch
-                save(paths, run)
-            state = run.get('state')
-            if state in CLOSED:
-                emit(closed_lines(run))
-                return EXIT_OK
-            if state == 'question':
-                if not relaunch_question(run, args.launch):
-                    emit(question_lines(run, paths.base))
-                    return EXIT_ASK
-                save(paths, run)
-            state = run.get('state')
-            # run --detach の子は、親が書いた child_pid の無い headless の出番から続ける
-            if state == 'running' and not running_resumable(run.get('running') or {}):
-                emit(running_lines(run))
-                return EXIT_OK
-            if state == 'running':
-                running = run.get('running') or {}
-                adopt_runner(paths, run)
-            elif state in ('ready', 'retry'):
-                lines = launch(paths, run, 'headless')
-                warns = merge_warnings(warns, warnings_in(lines))
-                save(paths, run)
-                running = run['running']
-            else:
-                raise Refused(f'unknown state {state!r} in run.json')
-            run_id = run.get('run_id')
-            seq = int(running.get('seq') or 0)
-            out_json = paths.episode_file(seq, str(running.get('episode') or 'design'), '.json')
-            child, code, lines = launch_designer(paths, run, running, warns)
-            if child is None:
-                # 設計者を起こせなかった出番も fail が history に閉じる。その出番だけ、ロックを抜けてから settle する
-                ended = any(isinstance(h, dict) and h.get('seq') == seq for h in run.get('history') or [])
-                not_started = (code, lines, seq if ended else None)
-        if not_started is not None:
-            code, lines, settled = not_started
-            settle_after(paths, settled)
-            emit(lines)
-            return code
-        # 依頼文を書くのはロックを放してから (その間の abort・next --relaunch を止めない)
-        write_prompt(child)
-        # 子を待つ間もロックを持たない (その間の abort・next --relaunch が動く)
-        code = child.wait()
-        settled = None
-        with Lock(paths):
-            run = load_run(paths)
-            if run is None:
-                final = (EXIT_OK, ['state: none'])
-            elif (run.get('run_id') != run_id or run.get('state') != 'running'
-                  or (run.get('running') or {}).get('seq') != seq):
-                # 待つ間に abort・next --relaunch・start --force が動いた: この出番の結果は読まない
-                final = (EXIT_OK, status_lines(run, paths.base))
-            else:
-                episodes += 1
-                done_code, lines, stopping = settle_episode(paths, run, code, out_json)
-                warns = merge_warnings(warns, warnings_in(lines))
-                stopping = stopping or (args.max_episodes is not None and episodes >= args.max_episodes)
-                final = (done_code if stopping else EXIT_OK, with_warnings(lines, warns)) if stopping else None
-                settled = seq
-        # 出番の後片付けはロックを抜けてから (settle の子は run.json を読む)
-        settle_after(paths, settled)
-        if final is not None:
-            emit(final[1])
-            return final[0]
-
-
-def cmd_wait(args, paths: Paths) -> int:
-    """状態が running でなくなるか、--timeout 秒たつまで待って、status と同じ行を出す (ロックは取らない)。"""
-    timeout = WAIT_DEFAULT if args.timeout is None else args.timeout
-    deadline = time.monotonic() + max(0.0, float(timeout))
-    while True:
-        try:
-            run = None if no_run(paths) else load_run(paths)
-        except Unusable as error:
-            if time.monotonic() >= deadline:
-                emit([f'state: {UNREADABLE_STATE}', f'error: {error}'])
-                return EXIT_FAIL
-            time.sleep(WAIT_POLL)
-            continue
-        if run is None:
-            emit(status_none_lines(paths))
-            return EXIT_OK
-        if stale_running(run):
-            # 生きている runner がいない: timeout を待たずに、立て直しの行を出して返る
-            emit(status_lines(run, paths.base))
-            return EXIT_OK
-        if run.get('state') != 'running':
-            wait_lock_gone(paths)
-            try:
-                run = load_run(paths) or run
-            except Unusable:
-                pass
-            emit(status_lines(run, paths.base))
-            return state_exit(run.get('state'))
-        if time.monotonic() >= deadline:
-            emit(status_lines(run, paths.base))
-            return EXIT_OK
-        time.sleep(WAIT_POLL)
-
-
-# ---- main ----
-
-def parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description='Atelier の進行役。設計者の出番を 1 つずつ回す。')
-    sub = ap.add_subparsers(dest='command', required=True)
-
-    def add(name, help_text):
-        p = sub.add_parser(name, help=help_text, description=help_text)
-        p.add_argument('--dir', default=DEFAULT_DIR, help='PBI のディレクトリ (既定 docs/pbi)')
-        return p
-
-    p = add('start', 'run を始める (状態 ready、次は design)')
-    p.add_argument('--goal', help='目標の文')
-    p.add_argument('--goal-file', help='目標のファイル')
-    p.add_argument('--workflow', help='ワークフローの名前')
-    p.add_argument('--launch', choices=('agent', 'headless'), default='agent', help='起動のしかた (既定 agent)')
-    p.add_argument('--role', action='append', metavar='ROLE[.KEY]=VALUE',
-                   help='この run だけの役割の値 (designer=opus、reviewer.other.effort=high)。repo と home より強い')
-    p.add_argument('--force', action='store_true', help='今の run.json を run.<日時>.json に退けて始める')
-    p = add('next', '次の出番の依頼文を書き、起動のしかたを出す')
-    p.add_argument('--relaunch', action='store_true', help='running で止まった出番を、子を止めて新しい seq で起こし直す')
-    p.add_argument('--agent-type-missing', action='store_true',
-                   help='--relaunch と一緒に: 呼び手の Agent tool が定義を見つけられなかった (このセッションでは定義に頼らない)')
-    add('done', 'running の出番の結果を読み、状態を進める')
-    p = add('answer', '残っている問いに答える')
-    p.add_argument('--reply', help='答えのファイル')
-    p.add_argument('--text', help='答えの文')
-    p.add_argument('--approve', action='store_true', help='承認の問いを承認する (返信の囲みは進行役が組む)')
-    p.add_argument('--full-run', choices=('yes', 'no'), help='通しを流すかの問いに答える (yes は 1 回の通しで使い切る)')
-    p.add_argument('--choices', help='--approve の選択 (1=a,2=b)')
-    p.add_argument('--revise', action='store_true', help='承認の問いを「直してほしい」として閉じる (--text か --reply)')
-    p = add('run', 'headless で出番を回す (claude -p で設計者を起こし、依頼文→起動→done を繰り返す)')
-    p.add_argument('--max-episodes', type=int, help='この回数だけ出番を起こして ready のまま止める')
-    p.add_argument('--detach', action='store_true', help='runner_pid を残してロックを放ち、切り離して running ですぐ返る')
-    p.add_argument('--launch', choices=('agent', 'headless'), help='起動のしかたを run.json に書き換えてから動く')
-    # 内部の引数: run --detach が切り離した runner に、親が running にした run_id と seq を渡す
-    p.add_argument('--run-id', dest='run_id', help=argparse.SUPPRESS)
-    p.add_argument('--seq', type=int, help=argparse.SUPPRESS)
-    p = add('wait', 'run の状態が running でなくなるか、--timeout 秒たつまで待って status と同じ行を出す')
-    p.add_argument('--timeout', type=float, default=WAIT_DEFAULT, help='待つ秒数 (既定 300)')
-    add('status', '今の状態を出す (ロックを取らない)')
-    p = add('abort', 'run を aborted で閉じる')
-    p.add_argument('--reason', help='止める理由')
-    return ap
-
-
-COMMANDS = {'start': cmd_start, 'next': cmd_next, 'done': cmd_done, 'answer': cmd_answer,
-            'run': cmd_run, 'wait': cmd_wait, 'status': cmd_status, 'abort': cmd_abort}
-
-
-def error_state(paths: Paths, error) -> str:
-    """error の行に添える 1 行目の状態。この処理で最後に読めた状態、無ければロックを取らずに読み直す。
-    run.json が無いときだけ none。在るのに読めない・使えないときは UNREADABLE_STATE。"""
-    if paths.seen in STATES:
-        return paths.seen
-    if not isinstance(error, Unusable):
-        try:
-            run = None if no_run(paths) else load_run(paths)
-        except Unusable:
-            run = False
-        if run is None:
-            return 'none'
-        if run and run.get('state') in STATES:
-            return run['state']
-    return UNREADABLE_STATE if paths.run.exists() else 'none'
-
-
-def main(argv=None) -> int:
-    common.utf8_stdout()
-    args = parser().parse_args(argv)
-    paths = Paths(args.dir)
-    try:
-        return COMMANDS[args.command](args, paths)
-    except Refused as error:
-        emit([f'state: {error_state(paths, error)}', f'error: {error}'])
-        return EXIT_USAGE
-
-
-if __name__ == '__main__':
-    sys.exit(main())
+    except (
+        ConductorError,
+        state.StateError,
+        flow.TransitionError,
+        flow.InvariantError,
+        template.TemplateError,
+        pages.PageError,
+        interview.InterviewError,
+    ) as exc:
+        _emit({"error": str(exc)})
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
