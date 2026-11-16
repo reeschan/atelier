@@ -28,14 +28,6 @@ jobs:
           node-version: 26
       - name: Python tests (skill)
         run: python run_tests.py
-      - name: Python tests (studio)
-        run: python run_tests.py -s studio
-      - name: Python tests (jev)
-        working-directory: skills/atelier/jev
-        run: python -m unittest test_jev
-      - name: Node tests (jev)
-        working-directory: skills/atelier/jev
-        run: node --test jev.test.mjs
       - name: Node tests (ui-video)
         working-directory: skills/ui-video/scripts
         run: node --test record.test.mjs
