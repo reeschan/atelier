@@ -23,7 +23,7 @@ class SurveyTests(unittest.TestCase):
 
     def test_prompt_includes_paths_and_fallback(self):
         with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
+            root = Path(d).resolve()
             path = survey.survey_prompt(root, root / 'goal.txt', None, {'source': 'none', 'folder': None})
             body = path.read_text(encoding='utf-8')
             self.assertIn(str(root / 'goal.txt'), body)
