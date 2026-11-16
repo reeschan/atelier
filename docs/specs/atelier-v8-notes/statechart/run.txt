@@ -1,0 +1,22 @@
+Wrote AtelierV8.tla, AtelierV8.cfg, and AtelierV8.map.mjs from <scratch>/v8.mmd.
+TLC on <scratch>/AtelierV8.tla with <scratch>/AtelierV8.cfg:
+  TypeOK holds.
+  BuildWithoutPlan holds.
+  PlanWithoutSpec holds.
+  TwoAutoFixes holds.
+  SecondReview holds.
+  FixWithoutList holds.
+  FixPastLimit holds.
+  TLC ran 8 times in 6.3 s.
+
+Chart: 155 states and 349 transitions from 155 model states.
+155 work, 0 break a rule.
+
+No state breaks an INVARIANT rule.
+
+The spec does not draw <scratch>/v8.mmd:
+  states the agreed chart's own steps never reach:
+    Review: S32
+  1 difference(s)
+
+Wrote chart.mmd, stories.md, summary.json in <scratch>/AtelierV8-statechart.

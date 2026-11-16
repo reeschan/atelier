@@ -1,4 +1,4 @@
-﻿"""Build Japanese approval drafts and render them with answer-me-with-html."""
+"""Build Japanese approval drafts and render them with answer-me-with-html."""
 from __future__ import annotations
 
 import subprocess
