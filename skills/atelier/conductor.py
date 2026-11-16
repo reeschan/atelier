@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -242,7 +243,10 @@ def _cmd_start(args: argparse.Namespace) -> dict[str, Any]:
 
     switch_obj = _load_json_arg(args.switch, "switch")
     components_obj = _load_json_arg(args.components, "components")
-    selection = template.resolve_template(args.template, switch_obj, agents_path=args.agents)
+    resolved_agents = str(
+        (Path(args.agents).expanduser() if args.agents is not None else Path.home() / ".config" / "atelier" / "agents.json").resolve()
+    )
+    selection = template.resolve_template(args.template, switch_obj, agents_path=resolved_agents)
 
     run = state.new_run_state(
         root,
@@ -250,7 +254,7 @@ def _cmd_start(args: argparse.Namespace) -> dict[str, Any]:
         spec_file,
         template_path=args.template,
         switch=switch_obj,
-        agents_path=args.agents,
+        agents_path=resolved_agents,
         active_template=selection["template"],
         components=components_obj,
         base_commit=_git_head(root),
@@ -651,6 +655,7 @@ def _raise_guard_question(
     violations: list[dict[str, str]],
     unusable_reason: str | None = None,
     pending_destructive: list[dict[str, str]] | None = None,
+    pending_garbled: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     parts: list[str] = []
     if unusable_reason:
@@ -671,6 +676,7 @@ def _raise_guard_question(
         "unusable_reason": unusable_reason,
         "violations": violations,
         "pending_destructive": list(pending_destructive or []),
+        "pending_garbled": list(pending_garbled or []),
         "detail": "; ".join(parts),
     }
     flow.apply_event(run, "guard_violation")
@@ -752,9 +758,10 @@ def _collect_post_launch_violations(
     run: dict[str, Any],
     pending: dict[str, Any],
     before: dict[str, Any] | None,
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
     violations = guards.compare(root, before) if before is not None else []
     pending_destructive: list[dict[str, str]] = []
+    pending_garbled: list[dict[str, str]] = []
 
     if before is None:
         rpath = Path(pending["result"])
@@ -775,6 +782,17 @@ def _collect_post_launch_violations(
                     violations.append({"rule": "G5", "detail": detail})
 
         base = run.get("base_commit") or (before.get("head") if before else None)
+        if before is not None and _is_git_repo(root):
+            approved_g = {(pair[0], pair[1]) for pair in (run.get("approved_garbled") or []) if len(pair) == 2}
+            for finding in guards.garbled_changes(root, before, base=base):
+                digest = hashlib.sha256(finding["text"].encode("utf-8", "replace")).hexdigest()
+                if (finding["path"], digest) not in approved_g:
+                    pending_garbled.append({"path": finding["path"], "digest": digest})
+                    violations.append({
+                        "rule": "G14",
+                        "detail": f"garbled text ({finding['reason']}) at {finding['path']}:{finding['line']}",
+                    })
+
         if _is_git_repo(root) and base:
             try:
                 destructive = guards.destructive_changes(root, base)
@@ -787,7 +805,7 @@ def _collect_post_launch_violations(
                         pending_destructive.append(finding)
                         violations.append({"rule": "G12", "detail": f"{finding['kind']}: {finding['path']}"})
 
-    return violations, pending_destructive
+    return violations, pending_destructive, pending_garbled
 
 
 def _cmd_done(args: argparse.Namespace) -> dict[str, Any]:
@@ -803,7 +821,7 @@ def _cmd_done(args: argparse.Namespace) -> dict[str, Any]:
     if pending["action"] == "launch" and pending.get("runner") == "agent":
         before = run.get("pending_snapshot")
         if before is not None:
-            violations, pending_destructive = _collect_post_launch_violations(root, run, pending, before)
+            violations, pending_destructive, pending_garbled = _collect_post_launch_violations(root, run, pending, before)
             if violations:
                 if result_obj is not None:
                     secret_hits = _record_result_usage(root, run, pending, result_obj)
@@ -816,6 +834,7 @@ def _cmd_done(args: argparse.Namespace) -> dict[str, Any]:
                     pending,
                     violations=violations,
                     pending_destructive=pending_destructive,
+                    pending_garbled=pending_garbled,
                 )
 
     if result_obj is None:
@@ -868,7 +887,7 @@ def _cmd_run(args: argparse.Namespace) -> dict[str, Any]:
             _record_guard_check(root, run, pending, violations)
             return _raise_guard_question(root, run, pending, violations=violations)
 
-    spec = runners.launch_spec(pending["role"], step, pending["prompt"], pending["result"], root)
+    spec = runners.launch_spec(pending["role"], step, pending["prompt"], pending["result"], root, agents_path=run.get("agents_path"))
     blocked = actions._forbidden_args_for_launch(run, pending["role"], step, spec)
     if blocked:
         violations = [{"rule": "G11", "detail": f"forbidden args: {', '.join(blocked)}"}]
@@ -895,7 +914,7 @@ def _cmd_run(args: argparse.Namespace) -> dict[str, Any]:
         cost=ext["cost"],
     )
     secret_hits = _record_launch_event(root, run, pending, tokens=ext["tokens"], cost=ext["cost"])
-    violations, pending_destructive = _collect_post_launch_violations(root, run, pending, before)
+    violations, pending_destructive, pending_garbled = _collect_post_launch_violations(root, run, pending, before)
     if secret_hits:
         violations.extend({"rule": "G4", "detail": f"secret ({h['kind']}) in record line {h['line']}"} for h in secret_hits)
     _record_guard_check(root, run, pending, violations)
@@ -908,6 +927,7 @@ def _cmd_run(args: argparse.Namespace) -> dict[str, Any]:
             violations=violations,
             unusable_reason=ext.get("unusable_reason"),
             pending_destructive=pending_destructive,
+            pending_garbled=pending_garbled,
         )
 
     result_obj = _read_result(Path(pending["result"]))
@@ -1177,6 +1197,12 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
                     pair = [f["kind"], f["path"]]
                     if pair not in approved:
                         approved.append(pair)
+            if issue.get("pending_garbled"):
+                approved_g = run.setdefault("approved_garbled", [])
+                for item in issue["pending_garbled"]:
+                    pair = [item["path"], item["digest"]]
+                    if pair not in approved_g:
+                        approved_g.append(pair)
             run["guard_issue"] = None
             flow.apply_event(run, "resume")
         elif choice == "next_step":

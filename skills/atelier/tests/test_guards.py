@@ -54,3 +54,30 @@ class GuardTests(unittest.TestCase):
             self.assertIn({'kind': 'schema', 'path': 'db.sql'}, findings)
             with self.assertRaises(RuntimeError):
                 guards.destructive_changes(root, 'invalid-ref')
+
+    def test_garbled_changes_detects_fffd_q_runs_and_cjk_split_ignoring_base_binary_and_fakes(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            def git(*args):
+                return subprocess.run(['git', '-C', d, *args], check=True, capture_output=True).stdout.decode().strip()
+            git('init'); git('config', 'user.email', 'test@example.com'); git('config', 'user.name', 'Test')
+            (root / 'README.md').write_text('# 見出し\n調べる → 詰める\n', encoding='utf-8')
+            (root / 'base_q.txt').write_text('keep = "???"\nok = 1\n', encoding='utf-8')
+            (root / 'bin.dat').write_bytes(b'\x00\x01\x02')
+            git('add', '.'); git('commit', '-m', 'base')
+            base = git('rev-parse', 'HEAD')
+            before = guards.snapshot(root)
+
+            (root / 'README.md').write_text('# ??????\n調べる?詰める\n', encoding='utf-8')
+            (root / 'added.txt').write_text('壊れ\ufffd文字\n', encoding='utf-8')
+            (root / 'base_q.txt').write_text('keep = "???"  # unchanged run\nok = 2\n', encoding='utf-8')
+            (root / 'bin.dat').write_bytes(b'\x00???\xef\xbf\xbd')
+            (root / 'tests' / 'fakes').mkdir(parents=True)
+            (root / 'tests' / 'fakes' / 'fake.txt').write_text('## ??????\nあ?い\n\ufffd\n', encoding='utf-8')
+
+            findings = guards.garbled_changes(root, before, base=base)
+            by_path = {(f['path'], f['line']): f for f in findings}
+            self.assertIn(('README.md', 1), by_path)
+            self.assertIn(('README.md', 2), by_path)
+            self.assertIn(('added.txt', 1), by_path)
+            self.assertTrue(all(f['path'] not in ('base_q.txt', 'bin.dat', 'tests/fakes/fake.txt') for f in findings))

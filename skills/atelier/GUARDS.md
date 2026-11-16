@@ -17,5 +17,5 @@
 | G11 禁止引数を渡さない | 部品起動前 | ① | `forbidden_args` と部品設定。起動処理への結合は未実装 | `tests/test_guards.py::test_component_forbidden_arguments` |
 | G12 削除・外部変更の前に聞く | 差分検査・判断 | ③④ | `destructive_changes` が削除・migration・schema を列挙。検出後に承認を求める結合とルート外監視は未実装 | `tests/test_guards.py::test_diff_deletions_migrations_and_schema` |
 | G13 拒否の回避禁止 | 役の起動 | ④① | 役への指示とランナー権限設定。回避全般の機械的検証は未実装 | `tests/test_plan.py::test_worker_prompt_has_only_g12_and_g13_rules`（指示の検査） |
-| G14 途中で止まらない | 役の完了 | ③ | 指定 PID と非空の結果を `compare` で検査。子孫の自動発見は未実装 | `tests/test_runners.py::test_guard_detects_changed_existing_untracked_and_lock`（結果欠落） |
+| G14 途中で止まらない | 役の完了 | ③ | 指定 PID・非空の結果を `compare` で検査し、実装役の後は `garbled_changes` で文字化け（`U+FFFD`・新規 `???`・`CJK?CJK`）を検出。子孫の自動発見は未実装 | `tests/test_runners.py::test_guard_detects_changed_existing_untracked_and_lock`（結果欠落）、`tests/test_guards.py::test_garbled_changes_detects_fffd_q_runs_and_cjk_split_ignoring_base_binary_and_fakes`、`tests/test_integration.py::test_worker_garbled_text_raises_guard_question` |
 

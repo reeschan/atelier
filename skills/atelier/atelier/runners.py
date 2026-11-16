@@ -12,7 +12,18 @@ class Command(list):
     """An argv list carrying the execution context for run_external."""
 
 
-def launch_spec(role, step, prompt_path, result_path, root):
+def _registered_command(runner, agents_path=None):
+    path = Path(agents_path).expanduser() if agents_path is not None else Path.home() / '.config' / 'atelier' / 'agents.json'
+    try:
+        data = json.loads(path.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError, UnicodeError):
+        return None
+    entry = (data.get('runners') or {}).get(runner) if isinstance(data, dict) else None
+    cli = entry.get('path') if isinstance(entry, dict) else None
+    return [cli] if isinstance(cli, str) and cli.strip() else None
+
+
+def launch_spec(role, step, prompt_path, result_path, root, agents_path=None):
     runner = step['runner']
     prompt, result, root = map(lambda p: str(Path(p).resolve()), (prompt_path, result_path, root))
     model, effort = step.get('model', ''), step.get('effort')
@@ -22,7 +33,7 @@ def launch_spec(role, step, prompt_path, result_path, root):
     if runner not in ('codex', 'opencode', 'agy', 'dsh', 'claude'):
         raise ValueError('unknown runner: ' + runner)
     configured = os.environ.get('ATELIER_' + runner.upper() + '_CMD')
-    command = json.loads(configured) if configured else [runner]
+    command = json.loads(configured) if configured else (_registered_command(runner, agents_path) or [runner])
     if not isinstance(command, list) or not command or not all(isinstance(x, str) for x in command):
         raise ValueError('runner command must be a nonempty JSON string array')
     task = f'Read {prompt} and follow its instructions. Write the result to {result}.'
