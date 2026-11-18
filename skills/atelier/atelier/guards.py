@@ -27,23 +27,44 @@ def _git(root, *args):
     return p.stdout.decode('utf-8', 'surrogateescape')
 
 
+def _digest(p):
+    if p.is_symlink():
+        return 'link:' + os.readlink(p)
+    if p.is_file():
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    return None
+
+
 def _files(root):
     names = _git(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard').split('\0')
     files = {}
     for name in names:
         if not name:
             continue
-        p = root / name
         try:
-            if p.is_symlink():
-                files[name] = 'link:' + os.readlink(p)
-            elif p.is_file():
-                files[name] = hashlib.sha256(p.read_bytes()).hexdigest()
-            else:
-                files[name] = None
+            files[name] = _digest(root / name)
         except OSError as exc:
             raise RuntimeError(f'cannot inspect {name}: {exc}') from exc
     return files
+
+
+def approved_edit(root, path):
+    """Return the work-root-relative name and current digest of a file the user approved changing.
+
+    compare() lets that file differ from the snapshot without a G1 violation while its content still matches the digest.
+    """
+    root = Path(root).resolve()
+    p = Path(path)
+    p = Path(os.path.normpath(p if p.is_absolute() else root / p))
+    # Resolve only the parent so that a symlink keeps its own entry and link digest, as in snapshot().
+    p = p.parent.resolve() / p.name
+    try:
+        name = p.relative_to(root).as_posix()
+    except ValueError:
+        raise ValueError(f'outside the work root: {path}') from None
+    if not (p.is_symlink() or p.is_file()):
+        raise ValueError(f'not a file: {path}')
+    return {'path': name, 'digest': _digest(p)}
 
 
 def snapshot(root, allowed_paths=None, report_path=None, child_pids=None):
@@ -74,8 +95,16 @@ def _alive(pid):
         return True
 
 
-def compare(root, before):
+def compare(root, before, approved_edits=None, launch_id=None):
+    """Compare the work root with a snapshot taken before a launch.
+
+    approved_edits lets a changed file outside the allowed paths pass while it still has the approved digest.
+    An approval registered during launch_id is checked even if the file ends where it started, so a role
+    that writes back the content it read before the approval does not undo the approved edit unseen.
+    """
     root = Path(root).resolve()
+    approved = {e['path']: e['digest'] for e in approved_edits or []}
+    during = {e['path']: e['digest'] for e in approved_edits or [] if launch_id is not None and e.get('launch_id') == launch_id}
     if str(root) != before['root']:
         raise ValueError('snapshot belongs to another root')
     after = snapshot(root)
@@ -85,10 +114,15 @@ def compare(root, before):
             violations.append({'rule': 'G2', 'detail': key + ' changed'})
     changed = {p for p in before['files'].keys() | after['files'].keys() if before['files'].get(p) != after['files'].get(p)}
     for name in sorted(changed):
-        if before['allowed_paths'] is not None and not _allowed(name, before['allowed_paths']):
+        user_approved = name in approved and after['files'].get(name) == approved[name]
+        if before['allowed_paths'] is not None and not _allowed(name, before['allowed_paths']) and not user_approved:
             violations.append({'rule': 'G1', 'detail': 'changed outside allowed paths: ' + name})
         if Path(name).name in LOCKS | MANIFESTS:
             violations.append({'rule': 'G5', 'detail': 'dependency file changed: ' + name})
+    for name, digest in sorted(during.items()):
+        outside = before['allowed_paths'] is not None and not _allowed(name, before['allowed_paths'])
+        if outside and name not in changed and after['files'].get(name) != digest:
+            violations.append({'rule': 'G1', 'detail': 'approved edit overwritten: ' + name})
     for pid in before['child_pids']:
         if _alive(pid):
             violations.append({'rule': 'G14', 'detail': f'child process still running: {pid}'})

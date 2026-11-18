@@ -20,6 +20,10 @@ Repeat using the returned action (from `start`'s `next`, or `python conductor.py
 - `ask`: show `page` (and `attachments`, if any) using the file-send tool; when `page` is null (answer-me-with-html is not installed), send `draft` instead, and write `summary` lines in chat (or the contents of the `question` file when `summary` is absent). Pass the user's reply to `python conductor.py answer --root <work-root> --choice <id>` (from `choices`), `--text <reply>` (for `interview_round`), or `--reply <file>`.
 - `done`: hand over `report` (`REPORT.md`) and stop.
 
+For `fix_approval`, findings the user decides to fix (including ones held back by confidence or skipped by triage) go in a reply file: `{"choice": "approve", "include_ids": [...]}`.
+
+When the user approves a change to the spec, glossary or another file and you make it while a run is open, run `python conductor.py approve-edit --root <work-root> --path <file> --reason <what the user approved>` right after the edit; otherwise G1 stops the role that is running.
+
 G12: Before deleting data or changing anything outside the repository, stop and ask the user.
 G13: Never route around a refusal.
 

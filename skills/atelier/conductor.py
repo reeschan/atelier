@@ -633,7 +633,8 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
             run["fix_list"] = []
             run["triage_ask_items"] = []
             flow.apply_event(run, "triaged")
-            flow.apply_event(run, "nothing_to_fix")
+            if not dropped:
+                flow.apply_event(run, "nothing_to_fix")
     elif s == "triaging":
         finding_by_id = {f["id"]: f for f in run.get("findings", [])}
         fix_items: list[dict[str, Any]] = []
@@ -819,7 +820,7 @@ def _collect_post_launch_violations(
     pending: dict[str, Any],
     before: dict[str, Any] | None,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
-    violations = guards.compare(root, before) if before is not None else []
+    violations = guards.compare(root, before, _load_approved_edits(root), pending.get("launch_id")) if before is not None else []
     pending_destructive: list[dict[str, str]] = []
     pending_garbled: list[dict[str, str]] = []
 
@@ -1226,6 +1227,8 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
                 or reply_obj.get("fix_ids")
                 or []
             )
+            if approved_ask_ids and choice != "approve":
+                raise ConductorError("include_ids needs choice 'approve'")
             if approved_ask_ids:
                 existing_ids = {f.get("id") for f in run.get("fix_list", [])}
                 pool = [
@@ -1340,6 +1343,49 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
     return _advance_and_save(root, run)
 
 
+def _approved_edits_path(root: Path) -> Path:
+    return state.run_dir(root) / "approved_edits.jsonl"
+
+
+def _load_approved_edits(root: Path) -> list[dict[str, Any]]:
+    """The approvals approve-edit appended, the latest one per path."""
+    path = _approved_edits_path(root)
+    if not path.is_file():
+        return []
+    latest: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            entry = json.loads(line)
+            latest[entry["path"]] = entry
+    return list(latest.values())
+
+
+def _cmd_approve_edit(args: argparse.Namespace) -> dict[str, Any]:
+    """Record files the caller changed with the user's approval, so G1 does not stop the role running meanwhile.
+
+    Approvals are appended to their own file, not to run.json, because they are recorded while other
+    commands may be saving the run state.
+    """
+    root = Path(args.root)
+    run = state.load_state(root)
+    if not args.reason.strip():
+        raise ConductorError("--reason must say what the user approved")
+    pending = run.get("pending_action") or {}
+    launch_id = pending.get("launch_id") if pending.get("action") == "launch" else None
+    entries = []
+    for path in args.path:
+        try:
+            entry = guards.approved_edit(root, path)
+        except ValueError as exc:
+            raise ConductorError(str(exc)) from exc
+        entries.append({**entry, "reason": args.reason, "launch_id": launch_id})
+    target = _approved_edits_path(root)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as fh:
+        fh.write("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries))
+    return {"approved_edits": [e["path"] for e in entries]}
+
+
 def _cmd_status(args: argparse.Namespace) -> dict[str, Any]:
     run = state.load_state(Path(args.root))
     return {
@@ -1389,6 +1435,11 @@ def _build_parser() -> _JsonArgumentParser:
     p_ans.add_argument("--reply")
     p_ans.add_argument("--choice")
 
+    p_ae = sub.add_parser("approve-edit")
+    p_ae.add_argument("--root", required=True)
+    p_ae.add_argument("--path", required=True, action="append")
+    p_ae.add_argument("--reason", required=True)
+
     p_st = sub.add_parser("status")
     p_st.add_argument("--root", required=True)
 
@@ -1405,6 +1456,7 @@ def main(argv: list[str] | None = None) -> int:
             "run": _cmd_run,
             "done": _cmd_done,
             "answer": _cmd_answer,
+            "approve-edit": _cmd_approve_edit,
             "status": _cmd_status,
         }
         _emit(handlers[args.command](args))
