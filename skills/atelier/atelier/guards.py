@@ -55,12 +55,14 @@ def approved_edit(root, path):
     """
     root = Path(root).resolve()
     p = Path(path)
-    p = (p if p.is_absolute() else root / p).resolve()
+    p = Path(os.path.normpath(p if p.is_absolute() else root / p))
+    # Resolve only the parent so that a symlink keeps its own entry and link digest, as in snapshot().
+    p = p.parent.resolve() / p.name
     try:
         name = p.relative_to(root).as_posix()
     except ValueError:
         raise ValueError(f'outside the work root: {path}') from None
-    if not p.is_file():
+    if not (p.is_symlink() or p.is_file()):
         raise ValueError(f'not a file: {path}')
     return {'path': name, 'digest': _digest(p)}
 

@@ -910,6 +910,8 @@ def _cmd_run(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     ext = runners.run_external(spec, args.timeout)
+    # approve-edit may have been run while the external role was running.
+    run["approved_edits"] = state.load_state(root).get("approved_edits") or []
     state.record_usage(
         run,
         launch_id=pending["launch_id"],

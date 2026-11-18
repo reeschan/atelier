@@ -726,7 +726,10 @@ def _build_presentation(run: dict[str, Any], page_kind: str) -> tuple[dict[str, 
             for item in run.get("triage_ask_items") or []
         ]
         decisions += [
-            {"question": f"{item.get('id', '')}（仕分けで見送り）: {item.get('reason', '')}", "options": options}
+            {
+                "question": f"{item.get('id', '')}（仕分けで見送り: {item.get('reason', '')}）: {item.get('why', '')}",
+                "options": options,
+            }
             for item in run.get("triage_skip_items") or []
         ]
         decisions += [
