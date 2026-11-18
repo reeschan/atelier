@@ -9,7 +9,9 @@ EXPECTED = Path(__file__).parent / 'expected'
 RUN = {
  'conclusion': '注文を確認できるようにします。', 'before': '注文を受ける', 'after': '注文を確認する',
  'template': {'name': '標準', 'roles': {'planner': {'runner': 'agent', 'model': 'opus', 'effort': None}}, 'routes': {'L2': [{'runner': 'codex', 'model': 'モデルA', 'effort': 'high'}]}, 'limits': {'auto_fix': 1, 'e2e_rounds': 2, 'budget_tokens': None, 'budget_usd': 5}},
- 'pbis': [{'id': 'PBI-1', 'title': '確認画面', 'level': 'L2', 'level_reason': '画面を追加', 'sensitive_reason': '個人情報を扱う'}],
+ 'pbis': [{'id': 'PBI-1', 'title': '確認画面', 'level': 'L2', 'level_reason': '画面を追加', 'sensitive_reason': '個人情報を扱う', 'data_needs': [{'source': 'D:/data/order.bin', 'dest': 'tests/fixtures/order.bin', 'why': '実データで確かめる'}]}],
+ 'plan_checks': ['npm run type-check'], 'plan_e2e': [], 'final_review': {'skill': 'repo-review', 'args': 'full'},
+ 'candidates': [{'id': '指摘-2', 'kind': '確信度が 80 未満', 'title': '名前を直す', 'reason': 'minor・確信度 55・読みにくい'}],
  'estimate': '約 2 時間', 'decisions': [{'question': '通知しますか', 'options': [{'label': '通知する', 'note': '結果を知らせる', 'recommended': True}, {'label': '通知しない', 'note': '画面で確認する'}]}],
  'spec': '注文の内容を確認します。', 'fix_list': [{'id': '修正-1', 'title': '表示を直す', 'reason': '金額が読みにくい'}]
 }

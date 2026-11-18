@@ -8,7 +8,7 @@ from atelier import survey
 
 class SurveyTests(unittest.TestCase):
     def facts(self):
-        return {'schema': 'atelier.facts/1', **{k: [] for k in ('modules', 'layers', 'likely_files', 'tests', 'conventions')}}
+        return {'schema': 'atelier.facts/1', **{k: [] for k in survey.FIELDS}}
 
     def test_validation_checks_shape_and_sources(self):
         obj = self.facts()
@@ -33,7 +33,7 @@ class SurveyTests(unittest.TestCase):
 
     def test_missing_tools_or_cache_returns_none(self):
         with tempfile.TemporaryDirectory() as d, patch.object(survey, '_cache_script', return_value=None):
-            self.assertEqual({'source': 'none', 'folder': None}, survey.omm_context(d, Path(d) / 'cache'))
+            self.assertEqual({'source': 'none', 'folder': None, 'reason': 'tools'}, survey.omm_context(d, Path(d) / 'cache'))
 
     def test_hit_and_near_paths_with_spaces(self):
         with tempfile.TemporaryDirectory() as d:
@@ -56,5 +56,9 @@ class SurveyTests(unittest.TestCase):
     def test_rejects_cache_inside_worktree(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
-            self.assertEqual({'source': 'none', 'folder': None}, survey.omm_context(root, root / 'cache'))
+            script = root / 'cache.mjs'
+            script.touch()
+            with patch.object(survey, '_cache_script', return_value=script), patch.object(survey.shutil, 'which', return_value='tool'), patch.object(survey, '_run') as run:
+                self.assertEqual({'source': 'none', 'folder': None, 'reason': 'cache-inside-repo'}, survey.omm_context(root, root / 'cache'))
+                run.assert_not_called()
 

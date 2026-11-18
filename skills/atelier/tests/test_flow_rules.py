@@ -27,6 +27,9 @@ VALID_FACTS: dict = {
     "likely_files": [{"id": "f1", "text": "target file", "source": "src/app.py:10"}],
     "tests": [{"id": "t1", "text": "unit test", "source": "tests/test_app.py:1"}],
     "conventions": [],
+    "rule_docs": [],
+    "commands": [],
+    "review_skills": [],
 }
 
 
