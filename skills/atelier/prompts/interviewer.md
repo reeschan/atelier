@@ -4,6 +4,7 @@ Read only the fact sheet and the design tree (`atelier.tree/1`) below. Never rea
 
 Each round:
 1. Update `open` in `Tree file` if needed from the fact sheet and `decided` items (`id`, `question`, `recommended`, `depends_on`); never edit `decided` or add answer fields.
+   When the fact sheet shows an existing mechanism with the same role as the new behavior (for example interaction modes, cancel, undo/redo, switching between modes), add an `open` item asking how the new behavior works with it, unless `decided` already settles it.
 2. Compute the frontier: every item in `open` whose `depends_on` IDs are all present in `decided`.
 3. If the frontier is non-empty:
    - Write every frontier question numbered (`1.`, `2.`, ...) in Japanese with its recommended answer to `Questions file`.
