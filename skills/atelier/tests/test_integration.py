@@ -59,6 +59,8 @@ def make_pbi(
         "checks": ["python run_tests.py"],
         "facts": ["m1"],
         "acceptance": [f"{pid} passes checks"],
+        "evidence": ["app.py:1"],
+        "data_needs": [],
     }
 
 
@@ -66,6 +68,9 @@ def make_plan(pbis: list[dict] | None = None, open_questions: list[str] | None =
     return {
         "schema": "atelier.plan/1",
         "pbis": pbis or [make_pbi()],
+        "checks": ["python -m unittest"],
+        "e2e": ["python e2e.py"],
+        "final_review": None,
         "open_questions": list(open_questions or []),
     }
 

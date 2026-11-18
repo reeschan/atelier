@@ -24,6 +24,8 @@ def _valid_pbi(pbi_id: str = "PBI-1", *, depends_on: list[str] | None = None, se
         "checks": ["python run_tests.py"],
         "facts": ["F1"],
         "acceptance": [f"{pbi_id} passes tests"],
+        "evidence": [f"src/{pbi_id.lower()}.py:1"],
+        "data_needs": [],
     }
 
 
@@ -31,6 +33,9 @@ def _valid_plan() -> dict:
     return {
         "schema": "atelier.plan/1",
         "pbis": [_valid_pbi("PBI-1"), _valid_pbi("PBI-2", depends_on=["PBI-1"])],
+        "checks": ["python -m unittest"],
+        "e2e": [],
+        "final_review": None,
         "open_questions": [],
     }
 
