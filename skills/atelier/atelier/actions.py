@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import tempfile
@@ -68,10 +67,19 @@ ASK_CHOICES: dict[str, tuple[str, list[dict[str, str]], str]] = {
     "asking_plan_broken": (
         "plan_broken",
         [
-            {"id": "resume", "label": "続ける"},
+            {"id": "replan", "label": "計画を組み直す"},
+            {"id": "resume", "label": "同じ PBI をやり直す"},
             {"id": "stop", "label": "止めて報告する"},
         ],
-        "計画の前提が崩れました。続けるか止めるかを選んでください。",
+        "計画の前提が崩れました。計画を組み直すか、同じ PBI をやり直すか、止めるかを選んでください。",
+    ),
+    "asking_omm": (
+        "omm",
+        [
+            {"id": "scan", "label": "全体を走査してキャッシュを作る"},
+            {"id": "skip", "label": "OMM なしで調べる"},
+        ],
+        "この commit で使える OMM の走査がキャッシュにありません。全体を走査してキャッシュを作ってから調べるか、OMM なしで調べるかを選んでください。",
     ),
     "asking_sensitive": (
         "sensitive",
@@ -102,6 +110,41 @@ def active_template(run: dict[str, Any]) -> dict[str, Any]:
     run["limits"] = dict(loaded["limits"])
     run["counters"]["e2e_limit"] = loaded["limits"].get("e2e_rounds", 2)
     return loaded
+
+
+def facts_file_path(run_root: Path, run: dict[str, Any]) -> Path:
+    return Path(run.get("facts_file") or (state.run_dir(run_root) / "results" / "survey.json"))
+
+
+def load_facts(run_root: Path, run: dict[str, Any]) -> dict[str, Any]:
+    path = facts_file_path(run_root, run)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, UnicodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def rule_docs_for(run_root: Path, run: dict[str, Any], tmpl: dict[str, Any]) -> list[str]:
+    """Rule documents from the fact sheet, unless the template turns section.rule_docs off."""
+    if not template.should_read(tmpl, "section.rule_docs"):
+        return []
+    return survey.rule_doc_paths(load_facts(run_root, run))
+
+
+def check_commands(run: dict[str, Any], kind: str) -> list[str]:
+    """Commands for a check: the wave's PBIs, the fixed files' PBIs, or the plan's E2E."""
+    pbis = run.get("pbis", [])
+    plan_checks = list(run.get("plan_checks") or [])
+    if kind == "e2e":
+        return list(run.get("plan_e2e") or [])
+    if kind == "fixcheck":
+        files = [f for group in (run.get("fix_groups") or []) for f in _group_files(group)]
+        return plan.fix_commands(pbis, plan_checks, files)
+    checked = [p for p in pbis if p.get("status") in ("built", "failed")]
+    return plan.wave_commands(checked, plan_checks)
 
 
 def _group_files(items: list[dict[str, Any]]) -> list[str]:
@@ -197,8 +240,15 @@ def _write_report(run_root: Path, run: dict[str, Any]) -> Path:
         f"- 自動修正回数: {run['counters']['auto_fix_count']}",
         f"- 見直し回数: {run['counters']['review_count']}",
         f"- E2E 失敗回数: {run['counters']['e2e_failures']}",
-        "",
     ]
+    omm = run.get("omm") or {}
+    if omm.get("source") == "none" and omm.get("reason") == "tools":
+        header.append("- OMM: 道具（node・omm・omm-pr-scan v1.2）が無いため、OMM なしで調べた")
+    elif omm.get("source"):
+        header.append(f"- OMM: {omm['source']}")
+    if run.get("e2e_skipped"):
+        header.append("- E2E: E2E のコマンドが無いため流していない")
+    header.append("")
     report_path.write_text("\n".join(header) + summary_md, encoding="utf-8")
     return report_path
 
@@ -317,14 +367,14 @@ def _compose_prompt_parts(
 ) -> tuple[str, dict[str, int], list[Path]]:
     """Build staged prompt text, filtered token read map, and referenced files."""
     s = run["state"]
-    facts_path = Path(run.get("facts_file") or (state.run_dir(run_root) / "results" / "survey.json"))
+    facts_path = facts_file_path(run_root, run)
     spec_path = Path(run.get("spec_file") or run["goal_file"])
     referenced: list[Path] = []
+    rule_docs = rule_docs_for(run_root, run, tmpl) if s != "surveying" else []
+    rule_docs_text = "\n".join(rule_docs)
 
     if s == "surveying":
-        cache_env = os.environ.get("OMM_CACHE_DIR")
-        cache_dir = Path(cache_env) if cache_env else run_root.resolve().parent / ".omm-cache"
-        omm = survey.omm_context(run_root, cache_dir)
+        omm = run.get("omm") or survey.omm_context(run_root, run.get("omm_cache_dir"))
         survey_path = survey.survey_prompt(run_root, run["goal_file"], run.get("spec_file"), omm)
         prompt_text = survey_path.read_text(encoding="utf-8")
         surveyor_md = (_PROMPTS_DIR / "surveyor.md").read_text(encoding="utf-8")
@@ -391,6 +441,8 @@ def _compose_prompt_parts(
             findings_path=findings_path if mode == "triage" else None,
             levels=template.load_levels() if mode in ("plan", "revise") else None,
             out_path=staged_prompt,
+            rule_docs=rule_docs,
+            passed_pbis=[p["id"] for p in run.get("pbis", []) if p.get("status") == "passed"],
         )
         prompt_text = staged_prompt.read_text(encoding="utf-8")
         planner_md = (_PROMPTS_DIR / "planner.md").read_text(encoding="utf-8")
@@ -398,6 +450,7 @@ def _compose_prompt_parts(
             "role.planner": planner_md,
             "section.spec": spec_path.read_text(encoding="utf-8-sig") if spec_path.is_file() else "",
             "section.facts": facts_path.read_text(encoding="utf-8-sig") if facts_path.is_file() else "",
+            "section.rule_docs": rule_docs_text,
         }
         if mode == "revise":
             parts_by_id["section.request"] = run.get("plan_revision_request", "")
@@ -439,6 +492,8 @@ def _compose_prompt_parts(
             }
             if "targets" not in ticket and pbi.get("files"):
                 ticket["targets"] = list(pbi["files"])
+            if pbi.get("data_needs"):
+                ticket["data"] = [{"path": need["dest"], "why": need["why"]} for need in pbi["data_needs"]]
         elif s == "auto_fixing":
             mode = "auto_fix"
             pbi = state.get_pbi(run, pbi_id or "") or {}
@@ -446,7 +501,7 @@ def _compose_prompt_parts(
                 "id": pbi.get("id", pbi_id or "auto_fix"),
                 "targets": list(pbi.get("targets") or pbi.get("files") or []),
                 "do_not_touch": list(pbi.get("do_not_touch") or []),
-                "checks": list(pbi.get("checks") or ["python run_tests.py"]),
+                "checks": plan.wave_commands([pbi], run.get("plan_checks") or []),
             }
             failure_output = run.get("last_check_failure") or "(no failure output)"
             diff_text = _git_diff_text(run_root)
@@ -460,13 +515,13 @@ def _compose_prompt_parts(
                     "id": f"FIX-{idx + 1}",
                     "items": group,
                     "files": _group_files(group),
-                    "checks": ["python run_tests.py"],
+                    "checks": plan.fix_commands(run.get("pbis", []), run.get("plan_checks") or [], _group_files(group)),
                 }
             else:
                 ticket = {
                     "id": "FIX-E2E",
                     "failure": run.get("last_e2e_failure") or run.get("last_check_failure") or "",
-                    "checks": ["python run_tests.py"],
+                    "checks": check_commands(run, "fixcheck") + list(run.get("plan_e2e") or []),
                 }
 
         plan.worker_prompt(
@@ -477,6 +532,7 @@ def _compose_prompt_parts(
             failure_output=failure_output,
             diff_text=diff_text,
             out_path=staged_prompt,
+            rule_docs=rule_docs,
         )
         prompt_text = staged_prompt.read_text(encoding="utf-8")
         worker_md = (_PROMPTS_DIR / "worker.md").read_text(encoding="utf-8")
@@ -488,6 +544,7 @@ def _compose_prompt_parts(
             "G12": g12_line,
             "G13": g13_line,
             "section.ticket": json.dumps(ticket, ensure_ascii=False, indent=2),
+            "section.rule_docs": rule_docs_text,
         }
         if mode == "pbi":
             facts_map = _load_facts_map(facts_path)
@@ -515,6 +572,7 @@ def _compose_prompt_parts(
             base_ref=base_ref,
             diff_stat=diff_stat,
             out_path=staged_prompt,
+            rule_docs=rule_docs,
         )
         prompt_text = staged_prompt.read_text(encoding="utf-8")
         reviewer_md = (_PROMPTS_DIR / "reviewer.md").read_text(encoding="utf-8")
@@ -522,6 +580,7 @@ def _compose_prompt_parts(
             "role.reviewer": reviewer_md,
             "section.spec": spec_path.read_text(encoding="utf-8-sig") if spec_path.is_file() else "",
             "section.diff_stat": diff_stat or "",
+            "section.rule_docs": rule_docs_text,
         }
         if spec_path.is_file():
             referenced.append(spec_path)
@@ -614,10 +673,12 @@ def _raise_prelaunch_guard(
 
 
 def _make_check(run_root: Path, run: dict[str, Any], kind: str) -> dict[str, Any]:
-    commands = ["python run_tests.py"]
+    commands = check_commands(run, kind)
+    if not commands:
+        raise state.StateError(f"no check commands for {kind}: the plan and its PBIs name none")
     comp = (run.get("components") or {}).get("check")
     if isinstance(comp, dict) and "forbidden_args" in comp:
-        blocked = guards.forbidden_args(comp, commands[0].split())
+        blocked = [arg for cmd in commands for arg in guards.forbidden_args(comp, cmd.split())]
         if blocked:
             return _raise_prelaunch_guard(
                 run_root,
@@ -639,6 +700,62 @@ def _make_check(run_root: Path, run: dict[str, Any], kind: str) -> dict[str, Any
         "result": str(result_path.resolve()),
         "launch_id": launch_id,
     }
+
+
+REVIEW_SKILL_INSTRUCTIONS = (
+    "Run the skill with the Skill tool on the diff from base to the working tree, with args. "
+    "Write its findings to result as atelier.findings/1: id, file, line, severity (critical|major|minor), "
+    "confidence (0-100), kind (correctness|spec|rule|style), why, fix; rule (where the rule is written) for kind rule. "
+    "When the skill gives no confidence, use 90 for a finding you verified in the code and 50 for one you could not. "
+    "Then run conductor.py done."
+)
+
+
+def _make_caller_action(run: dict[str, Any], run_root: Path, action: str, prefix: str, **fields: Any) -> dict[str, Any]:
+    launch_id = state.next_launch_id(run, prefix)
+    result_path = state.run_dir(run_root) / "results" / f"{launch_id}.json"
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    return {"action": action, **fields, "result": str(result_path.resolve()), "launch_id": launch_id}
+
+
+def _data_copies(run_root: Path, run: dict[str, Any]) -> list[dict[str, str]]:
+    root = run_root.resolve()
+    copies: list[dict[str, str]] = []
+    for pbi in run.get("pbis", []):
+        if pbi.get("status") == "passed":
+            continue
+        for need in pbi.get("data_needs") or []:
+            copies.append({
+                "pbi": pbi["id"],
+                "source": need["source"],
+                "dest": str((root / need["dest"]).resolve()),
+                "why": need["why"],
+            })
+    return copies
+
+
+def missing_data(run_root: Path, run: dict[str, Any]) -> list[str]:
+    """Destinations of approved data that are not in place yet."""
+    return [c["dest"] for c in _data_copies(run_root, run) if not Path(c["dest"]).exists()]
+
+
+def _review_skill_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]:
+    review = run["final_review"]
+    tmpl = active_template(run)
+    return _make_caller_action(
+        run,
+        run_root,
+        "review_skill",
+        "reviewer",
+        role="reviewer",
+        skill=review["skill"],
+        args=review.get("args", ""),
+        base=run.get("base_commit") or "HEAD",
+        repository=str(run_root.resolve()),
+        spec=str(Path(run.get("spec_file") or run["goal_file"]).resolve()),
+        rule_docs=[str((run_root / d).resolve()) for d in rule_docs_for(run_root, run, tmpl)],
+        instructions=REVIEW_SKILL_INSTRUCTIONS,
+    )
 
 
 def _make_ask(run_root: Path, kind: str, choices: list[dict[str, str]], body: str) -> dict[str, Any]:
@@ -702,6 +819,9 @@ def _build_presentation(run: dict[str, Any], page_kind: str) -> tuple[dict[str, 
         if plan_file.is_file():
             attachments.append(str(plan_file.resolve()))
         presentation.update({
+            "plan_checks": list(run.get("plan_checks") or []),
+            "plan_e2e": list(run.get("plan_e2e") or []),
+            "final_review": run.get("final_review"),
             "conclusion": f"PBI {len(pbis)} 件の計画を作成しました。",
             "before": "仕様の承認",
             "after": "wave ごとの実装 → 機械の検査 → 最後の見直し → E2E → 報告",
@@ -717,32 +837,37 @@ def _build_presentation(run: dict[str, Any], page_kind: str) -> tuple[dict[str, 
             }
             for f in raw_fixes
         ]
-        options = [
-            {"label": "修正に含める", "note": "今回直す（返答の include_ids に ID を入れる）"},
-            {"label": "見送る", "note": "今回は直さない", "recommended": True},
-        ]
+        ask_items = run.get("triage_ask_items") or []
         decisions = [
-            {"question": f"{item.get('id', '')}: {item.get('reason', '')}", "options": options}
-            for item in run.get("triage_ask_items") or []
-        ]
-        decisions += [
             {
-                "question": f"{item.get('id', '')}（仕分けで見送り: {item.get('reason', '')}）: {item.get('why', '')}",
-                "options": options,
+                "question": f"{item.get('id', '')}: {item.get('reason', '')}",
+                "options": [
+                    {"label": "修正に含める", "note": "今回直す"},
+                    {"label": "見送る", "note": "今回は直さない", "recommended": True},
+                ],
             }
-            for item in run.get("triage_skip_items") or []
+            for item in ask_items
         ]
-        decisions += [
+        labels = {"skip": "見送ると仕分けた", "confidence": "確信度が 80 未満", "style": "書き方だけの指摘"}
+        candidates = [
             {
-                "question": (
-                    f"{item.get('id', '')}（{item.get('severity', '')}・確度 {item.get('confidence', '')}、"
-                    f"確度か種類で仕分けの前に外した）: {item.get('why', '')}"
-                ),
-                "options": options,
+                "id": f.get("id", ""),
+                "kind": labels["skip"],
+                "title": f.get("fix") or f.get("why") or f.get("id", ""),
+                "reason": f.get("reason") or "",
             }
-            for item in run.get("findings_held") or []
+            for f in run.get("triage_skipped") or []
+        ] + [
+            {
+                "id": f.get("id", ""),
+                "kind": labels.get(f.get("dropped_by"), f.get("dropped_by", "")),
+                "title": f.get("fix") or f.get("why") or f.get("id", ""),
+                "reason": f"{f.get('severity', '')}・確信度 {f.get('confidence', '')}・{f.get('why', '')}",
+            }
+            for f in run.get("findings_dropped") or []
         ]
         presentation.update({
+            "candidates": candidates,
             "conclusion": f"修正対象 {len(fixes)} 件を確認してください。" if fixes else "修正対象の指摘はありません。",
             "before": "最後の見直し → 指摘の仕分け",
             "after": "修正の実装と検査 → E2E → 報告" if fixes else "E2E → 報告",
@@ -927,7 +1052,19 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
     sub = run.get("subphase")
 
     if s == "surveying":
+        if run.get("omm") is None:
+            run["omm"] = survey.omm_context(run_root, run.get("omm_cache_dir"))
+        if run["omm"].get("source") == "miss" and not run.get("omm_asked"):
+            run["omm_asked"] = True
+            flow.apply_event(run, "omm_missing")
+            return ensure_pending_action(run_root, run)
         action = _launch_for_state(run_root, run, "surveyor")
+    elif s == "scanning_omm":
+        action = _make_caller_action(
+            run, run_root, "omm_scan", "omm", **survey.omm_scan_steps(run_root, run.get("omm_cache_dir"))
+        )
+    elif s == "preparing_data":
+        action = _make_caller_action(run, run_root, "prepare", "prepare", copies=_data_copies(run_root, run))
     elif s == "asking_interview":
         q = interview.entry_question(run.get("spec_file"))
         action = _make_ask(run_root, q["kind"], q["choices"], q["question"])
@@ -990,7 +1127,10 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
             raise state.StateError(f"G8: refusing to auto-fix passed PBI {target['id']}")
         action = _launch_for_state(run_root, run, "worker", pbi_id=target["id"])
     elif s == "reviewing":
-        action = _launch_for_state(run_root, run, "reviewer")
+        if run.get("final_review"):
+            action = _review_skill_action(run_root, run)
+        else:
+            action = _launch_for_state(run_root, run, "reviewer")
     elif s == "triaging":
         action = _launch_for_state(run_root, run, "planner")
     elif s == "awaiting_fix_approval":
@@ -1002,9 +1142,28 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
         else:
             action = _launch_for_state(run_root, run, "worker")
     elif s == "running_e2e":
+        if not run.get("plan_e2e"):
+            run["e2e_skipped"] = True
+            flow.apply_event(run, "e2e_skipped")
+            return ensure_pending_action(run_root, run)
         action = _make_check(run_root, run, "e2e")
     elif s == "asking_guard":
         action = _guard_ask(run_root, run)
+    elif s == "asking_plan_broken":
+        kind, choices, body = ASK_CHOICES[s]
+        if run.get("return_state") not in flow.REPLAN_FROM:
+            choices = [c for c in choices if c["id"] != "replan"]
+        change = run.get("pending_plan_change") or {}
+        detail = "\n".join(
+            line
+            for line in (
+                body,
+                f"理由: {change['reason']}" if change.get("reason") else "",
+                f"触る必要があったファイル: {', '.join(change['needed_files'])}" if change.get("needed_files") else "",
+            )
+            if line
+        )
+        action = _make_ask(run_root, kind, choices, detail)
     elif s in ASK_CHOICES:
         kind, choices, body = ASK_CHOICES[s]
         action = _make_ask(run_root, kind, choices, body)

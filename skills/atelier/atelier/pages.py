@@ -85,6 +85,16 @@ def draft(kind, run):
         lines += _table(['PBI', '理由'], candidates) if candidates else ['候補なし']
         lines += ['慎重に扱うと決めた部分は作業から外します。依存する作業は保留し、別の作業への引き継ぎを提案します。', '', '## 外部へ送る PBI {span=2}']
         lines += _table(['PBI', '内容', '送信先'], external) if external else ['なし']
+        review = run.get('final_review')
+        lines += ['', '## 検査と最後の見直し {span=2}']
+        lines += _table(['項目', '値'], [
+            ('波と直しのあとの検査', '、'.join(run.get('plan_checks') or []) or 'なし（PBI ごとの検査だけ）'),
+            ('E2E', '、'.join(run.get('plan_e2e') or []) or 'なし（E2E を飛ばす）'),
+            ('最後の見直し', (review.get('skill', '') + ' ' + review.get('args', '')).strip() + '（呼び出し側がスキルで流す）' if review else '見直し役'),
+        ])
+        needs = [(pbi.get('id'), need.get('source'), need.get('dest'), need.get('why')) for pbi in pbis for need in (pbi.get('data_needs') or [])]
+        lines += ['', '## 外のデータ {span=2}']
+        lines += _table(['PBI', '元（リポジトリの外）', '置き先（リポジトリの中）', '使い道'], needs) + ['', '承認すると、作る前に呼び出し側がこのファイルを置き先へ写します。'] if needs else ['なし']
         lines += ['', '## 役・モデル・テンプレート {span=2}', 'テンプレート: ' + _cell(template.get('name'))]
         labels = {'surveyor': '調べる役', 'interviewer': '仕様を詰める役', 'planner': '計画を決める役', 'reviewer': '見直す役', 'worker_fix': '修正する役'}
         lines += _table(['役', '実行先とモデル'], [(labels.get(k, k), _route([v])) for k, v in roles.items()])
@@ -98,6 +108,9 @@ def draft(kind, run):
         lines += ['', '## 直す一覧 {span=2}']
         fixes = run.get('fix_list') or []
         lines += _table(['項目', '内容', '理由'], [(f.get('id'), f.get('title'), f.get('reason')) for f in fixes]) if fixes else ['直す項目はありません。']
+        candidates = run.get('candidates') or []
+        lines += ['', '## 見送りの候補 {span=2}']
+        lines += _table(['項目', '種類', '内容', '理由'], [(c.get('id'), c.get('kind'), c.get('title'), c.get('reason')) for c in candidates]) + ['', '直したい項目があれば、ID を指定して直す一覧に足せます。'] if candidates else ['なし']
         lines += ['', '一覧を承認するか、変更を指定してください。']
     summaries.append('決めること: ' + ('、'.join(_cell(d.get('question')) for d in decisions) if decisions else '承認するか、修正するか'))
     return {'text': '\n'.join(lines) + '\n', 'summary': summaries}

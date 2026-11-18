@@ -45,6 +45,18 @@ _Avoid_: grill log, transcript
 What the surveyor found about the repository, each item with its source.
 _Avoid_: context dump, notes
 
+**Rule document (規約の文書)**:
+A document the target repository says to read before implementing or reviewing. The surveyor cites it, and the planner, workers and reviewer read it whole.
+_Avoid_: guideline, conventions file
+
+**Review skill (レビューのスキル)**:
+The target repository's own review skill. When the plan names one, the caller runs it as the final review instead of the reviewer.
+_Avoid_: external reviewer
+
+**Data need (外のデータ)**:
+A file outside the repository that a PBI's checks need, with where it goes inside the repository. The user approves it with the plan, and the caller copies it before the worker starts.
+_Avoid_: fixture request, asset
+
 **PBI**:
 One small unit of work a worker can build from its ticket alone.
 _Avoid_: task, ticket
@@ -84,7 +96,7 @@ A PBI the planner flags as needing care. Only the user decides it is sensitive, 
 ## Flow
 
 **Stage (工程)**:
-One fixed step of a run: survey, grill, plan, approve, build, check, review, fix, e2e, report.
+One fixed step of a run: OMM scan, survey, grill, plan, approve, data preparation, build, check, review, fix, e2e, report.
 _Avoid_: 段, phase, episode
 
 **Round (巡)**:

@@ -4,7 +4,7 @@
 
 | 規則 | 工程 | 止め方 | 機械での形・現状 | 検査（skills/atelier からのパス） |
 |---|---|---|---|---|
-| G1 作業ルート外に書かない | 役の起動・完了 | ①③ | ランナーの設定と `snapshot` / `compare`。`approve-edit` で登録した、ユーザー承認済みの変更（登録した中身のまま）は通す；ルート外と無視ファイルの完全な監視は未実装 | `tests/test_runners.py::test_guard_detects_changed_existing_untracked_and_lock`（許可外パスのみ）、`tests/test_user_decisions.py::ApprovedEditTests` |
+| G1 作業ルート外に書かない | 役の起動・完了 | ①②③ | ランナーの設定と `snapshot` / `compare`。外のデータの置き先（`data_needs.dest`）は計画の検査でリポジトリの中だけに限る。`approve-edit` で登録した、ユーザー承認済みの変更（登録した中身のまま）は通す；ルート外と無視ファイルの完全な監視は未実装 | `tests/test_runners.py::test_guard_detects_changed_existing_untracked_and_lock`（許可外パスのみ）、`tests/test_review_loops.py::test_dest_outside_the_repository_is_refused`（外のデータの置き先）、`tests/test_user_decisions.py::ApprovedEditTests` |
 | G2 履歴操作・投稿をしない | 役の起動・完了 | ①③ | deny 設定と HEAD・branch・stash の比較。push・投稿の事後検出は未実装 | `tests/test_flow_rules.py::test_agent_launch_snapshot_at_next_compare_at_done`（変更検出の経路） |
 | G3 承認外への送信禁止 | 外部役の起動前 | ② | `sends_approved` と承認時に固定した PBI → runner 表。進行役への結合は未実装 | `tests/test_guards.py::test_sends_require_approved_pbi_runner_pair` |
 | G4 秘密の送信・記録禁止 | 送信・記録前 | ③ | `scan_secrets` の型と行番号。検出は近似で、進行役への結合は未実装 | `tests/test_guards.py::test_secrets_are_detected_without_values` |

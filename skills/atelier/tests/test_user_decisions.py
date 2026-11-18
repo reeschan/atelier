@@ -13,7 +13,7 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent
 if str(SKILLS_DIR) not in sys.path:
     sys.path.insert(0, str(SKILLS_DIR))
 
-from atelier import guards, plan, state  # noqa: E402
+from atelier import guards, state  # noqa: E402
 from tests.test_conductor import make_finding, reach_reviewing, run_cli, write_json, write_result_for  # noqa: E402
 from tests.test_flow_rules import init_git_repo, reach_building_with, write_agents_and_template  # noqa: E402
 
@@ -29,63 +29,19 @@ def review_and_triage(tmp: Path, findings: list[dict], triage: list[dict] | None
     return act
 
 
-class SplitFindingsTests(unittest.TestCase):
-    def test_held_findings_are_the_complement_of_kept(self) -> None:
-        findings = [
-            make_finding("R1", confidence=90),
-            make_finding("R2", confidence=75),
-            make_finding("R3", confidence=95, kind="style"),
-        ]
-        kept, held = plan.split_findings(findings)
-        self.assertEqual([f["id"] for f in kept], ["R1"])
-        self.assertEqual([f["id"] for f in held], ["R2", "R3"])
-        self.assertEqual(plan.filter_findings(findings), kept)
-
-
 class FixApprovalIncludesUserDecisionsTests(unittest.TestCase):
-    def test_low_confidence_finding_the_user_includes_is_fixed(self) -> None:
+    def test_only_dropped_findings_still_reach_fix_approval(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            act = review_and_triage(
-                tmp,
-                [make_finding("R1", confidence=90, files=["a.py"]), make_finding("R2", confidence=75, files=["b.py"])],
-                [{"id": "R1", "decision": "fix", "reason": "spec"}],
-            )
+            act = review_and_triage(tmp, [make_finding("R2", confidence=75, files=["b.py"])], None)
             self.assertEqual(act["kind"], "fix_approval")
-            self.assertTrue(any("R2" in line and "確度 75" in line for line in act["summary"]), act["summary"])
-
+            self.assertIn("| R2 |", Path(act["draft"]).read_text(encoding="utf-8"))
             reply = write_json(tmp / "reply.json", {"choice": "approve", "include_ids": ["R2"]})
-            code, act = run_cli("answer", "--root", str(tmp), "--reply", str(reply))
-            self.assertEqual(code, 0, act)
+            code, out = run_cli("answer", "--root", str(tmp), "--reply", str(reply))
+            self.assertEqual(code, 0, out)
             run = state.load_state(tmp)
-            self.assertEqual([f["id"] for f in run["fix_list"]], ["R1", "R2"])
-            r2 = run["fix_list"][1]
-            self.assertEqual((r2["decision"], r2["file"]), ("fix", "b.py"))
             self.assertEqual(run["state"], "fixing")
-
-    def test_finding_triage_skipped_can_be_included(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            act = review_and_triage(
-                tmp,
-                [make_finding("R1", confidence=90)],
-                [{"id": "R1", "decision": "skip", "reason": "acceptable"}],
-            )
-            self.assertTrue(any("R1（仕分けで見送り: acceptable）: why R1" in line for line in act["summary"]), act["summary"])
-            reply = write_json(tmp / "reply.json", {"choice": "approve", "include_ids": ["R1"]})
-            run_cli("answer", "--root", str(tmp), "--reply", str(reply))
-            run = state.load_state(tmp)
-            self.assertEqual([f["id"] for f in run["fix_list"]], ["R1"])
-            self.assertEqual(run["state"], "fixing")
-
-    def test_only_held_findings_still_reach_fix_approval(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            act = review_and_triage(tmp, [make_finding("R2", confidence=75)], None)
-            self.assertEqual(act["kind"], "fix_approval")
-            reply = write_json(tmp / "reply.json", {"choice": "approve", "include_ids": ["R2"]})
-            run_cli("answer", "--root", str(tmp), "--reply", str(reply))
-            self.assertEqual(state.load_state(tmp)["state"], "fixing")
+            self.assertEqual([(f["id"], f["file"]) for f in run["fix_list"]], [("R2", "b.py")])
 
     def test_unknown_or_contradicting_include_ids_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as td:

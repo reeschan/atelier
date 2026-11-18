@@ -15,12 +15,15 @@ class InvariantError(Exception):
 
 
 STATES: tuple[str, ...] = (
+    "asking_omm",
+    "scanning_omm",
     "surveying",
     "asking_interview",
     "interviewing",
     "awaiting_spec_approval",
     "planning",
     "awaiting_plan_approval",
+    "preparing_data",
     "building",
     "checking",
     "auto_fixing",
@@ -69,6 +72,8 @@ def check_invariants(run: dict[str, Any]) -> None:
 
     if s == "building" and not approvals["plan"]:
         raise InvariantError("never BuildWithoutPlan: entered building without approved plan")
+    if s == "building" and needs_data(run) and not run.get("data_ready"):
+        raise InvariantError("never BuildBeforeData: entered building before the approved data was in place")
     if s == "planning" and not approvals["spec"]:
         raise InvariantError("never PlanWithoutSpec: entered planning without approved spec")
     if s == "auto_fixing":
@@ -101,8 +106,30 @@ def _clear_spec_approval(run: dict[str, Any]) -> None:
     run["approvals"]["spec"] = False
 
 
+def needs_data(run: dict[str, Any]) -> bool:
+    """True when a PBI that has not passed needs files copied in from outside the repository."""
+    return any(p.get("data_needs") and p.get("status") != "passed" for p in run.get("pbis", []))
+
+
 def _approve_plan(run: dict[str, Any]) -> None:
     run["approvals"]["plan"] = True
+
+
+def _approve_plan_before_data(run: dict[str, Any]) -> None:
+    run["approvals"]["plan"] = True
+    run["data_ready"] = False
+
+
+def _data_in_place(run: dict[str, Any]) -> None:
+    run["data_ready"] = True
+
+
+def _start_replan(run: dict[str, Any]) -> None:
+    _clear_plan_approval(run)
+    run["data_ready"] = False
+    run["auto_fix_pbi"] = None
+    run["return_state"] = None
+    run.pop("return_subphase", None)
 
 
 def _clear_plan_approval(run: dict[str, Any]) -> None:
@@ -186,6 +213,11 @@ def _e2e_exceeded(run: dict[str, Any]) -> bool:
 
 
 TRANSITIONS: tuple[Transition, ...] = (
+    # OMM cache: ask to scan when no usable scan exists
+    Transition("surveying", "omm_missing", "asking_omm"),
+    Transition("asking_omm", "omm_scan", "scanning_omm"),
+    Transition("asking_omm", "omm_skip", "surveying"),
+    Transition("scanning_omm", "omm_scanned", "surveying"),
     # Survey -> Interview / Plan
     Transition("surveying", "survey_done", "asking_interview"),
     Transition("asking_interview", "start_interview", "interviewing"),
@@ -204,7 +236,15 @@ TRANSITIONS: tuple[Transition, ...] = (
         guard=lambda r: r["approvals"]["spec"],
         effect=_clear_plan_approval,
     ),
-    Transition("awaiting_plan_approval", "plan_approved", "building", effect=_approve_plan),
+    Transition("awaiting_plan_approval", "plan_approved", "building", guard=lambda r: not needs_data(r), effect=_approve_plan),
+    Transition(
+        "awaiting_plan_approval",
+        "plan_approved",
+        "preparing_data",
+        guard=needs_data,
+        effect=_approve_plan_before_data,
+    ),
+    Transition("preparing_data", "data_ready", "building", guard=lambda r: r["approvals"]["plan"], effect=_data_in_place),
     # Building & Checking & Auto-fix & Rebuild
     Transition("building", "worker_returned", "building", guard=lambda r: r["approvals"]["plan"]),
     Transition("building", "wave_built", "checking", guard=lambda r: r["approvals"]["plan"]),
@@ -273,6 +313,7 @@ TRANSITIONS: tuple[Transition, ...] = (
     ),
     # E2E & E2E limit
     Transition("running_e2e", "e2e_passed", "reporting"),
+    Transition("running_e2e", "e2e_skipped", "reporting"),
     Transition(
         "running_e2e",
         "e2e_failed",
@@ -296,6 +337,13 @@ TRANSITIONS: tuple[Transition, ...] = (
     Transition("asking_budget", "stop", "reporting"),
     Transition("asking_plan_broken", "resume", "$return_state"),
     Transition("asking_plan_broken", "stop", "reporting"),
+    Transition(
+        "asking_plan_broken",
+        "replan",
+        "planning",
+        guard=lambda r: r["approvals"]["spec"] and r.get("return_state") in REPLAN_FROM,
+        effect=_start_replan,
+    ),
     Transition("asking_sensitive", "resume", "$return_state"),
     Transition("asking_sensitive", "stop", "reporting"),
     Transition("asking_template_switch", "resume", "$return_state"),
@@ -303,6 +351,9 @@ TRANSITIONS: tuple[Transition, ...] = (
     Transition("asking_guard", "resume", "$return_state"),
     Transition("asking_guard", "stop", "reporting"),
 )
+
+# States a broken plan can be rebuilt from: before the final review, while PBIs are still being built.
+REPLAN_FROM: frozenset[str] = frozenset({"building", "checking", "auto_fixing"})
 
 CROSS_CUTTING_EVENTS: dict[str, str] = {
     "budget_exceeded": "asking_budget",

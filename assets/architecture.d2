@@ -105,9 +105,13 @@ tools: "Skills used when installed" {
   am: "answer-me-with-html\napproval pages" {
     shape: hexagon
   }
-  omm: "omm-pr-scan --cache\nOMM map, updated by diff" {
+  omm: "omm-pr-scan --cache · omm-scan\nOMM map: delta, or a full scan" {
     shape: hexagon
   }
+}
+
+outdata: "Outside data\n(real data, samples)" {
+  shape: page
 }
 
 ommcache: ".omm-cache (outside the repository)" {
@@ -118,8 +122,12 @@ repo: Target repository {
   class: zone
   icon: https://cdn.simpleicons.org/git
 
-  code: "Source code\nchanged by workers" {
+  code: "Source code and rule documents\nrules read by every role" {
     class: svc
+  }
+  review: "Review skill of the repository\nthe final review" {
+    class: svc
+    icon: https://cdn.simpleicons.org/claude
   }
   pbi: "docs/pbi/\nrun.json, facts, design tree, PBIs,\nrecord.jsonl, REPORT.md" {
     class: svc
@@ -131,7 +139,9 @@ dev <-> cc.caller: "task, answers, approvals"
 cc.caller <-> conductor.flow: "start · next · done · answer · run"
 cc.caller -> cc.roles: "launch with prompt file"
 cc.roles -> repo.pbi: "results"
-cc.roles -> repo.code: "builds"
+cc.roles -> repo.code: "read rules, build"
+cc.caller -> repo.review: "runs once at the end"
+outdata -> repo.code: "copied in by the caller after approval" {style.stroke-dash: 4}
 conductor.flow -> runners: "run external roles" {style.stroke-dash: 4}
 runners -> repo.code {style.stroke-dash: 4}
 conductor.flow -> conductor.template
@@ -142,4 +152,5 @@ conductor.flow <-> repo.pbi: "state and checks"
 conductor.record -> repo.pbi: "record.jsonl, REPORT.md"
 conductor.flow -> tools.am: "approval pages" {style.stroke-dash: 4}
 cc.roles -> tools.omm: "surveyor" {style.stroke-dash: 4}
+cc.caller -> tools.omm: "full scan when asked" {style.stroke-dash: 4}
 tools.omm <-> ommcache: "nearest cache, delta"

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+from .survey import inside_repo
 
 SCHEMA_PLAN = "atelier.plan/1"
 SCHEMA_FINDINGS = "atelier.findings/1"
@@ -13,7 +16,10 @@ SCHEMA_TRIAGE = "atelier.triage/1"
 
 LEVELS = ("L1", "L2", "L3", "L4", "L5")
 SEVERITIES = ("critical", "major", "minor")
-FINDING_KINDS = ("correctness", "spec", "style")
+FINDING_KINDS = ("correctness", "spec", "rule", "style")
+EVIDENCE_PATTERN = re.compile(r".+:[1-9][0-9]*")
+# Fields a re-planned PBI that already passed must keep unchanged.
+FROZEN_FIELDS = ("id", "goal", "targets", "checks")
 TRIAGE_DECISIONS = ("fix", "skip", "ask")
 MIN_CONFIDENCE = 80
 
@@ -53,6 +59,40 @@ def _validate_str_list(
         else:
             out.append(elem)
     return out
+
+
+def _validate_data_needs(value: Any, label: str, errors: list[str]) -> None:
+    if not isinstance(value, list):
+        errors.append(f"{label} は配列にしてください（無ければ []）。")
+        return
+    for idx, need in enumerate(value):
+        item = f"{label}[{idx}]"
+        if not isinstance(need, dict):
+            errors.append(f"{item} はオブジェクトにしてください。")
+            continue
+        for key in ("source", "dest", "why"):
+            if not _is_nonempty_str(need.get(key)):
+                errors.append(f"{item} の {key} は空でない文字列にしてください。")
+        if _is_nonempty_str(need.get("dest")) and not inside_repo(need["dest"]):
+            errors.append(f"{item} の dest はリポジトリの中の相対パスにしてください（.. と絶対パスは使えません）。")
+
+
+def frozen_changes(old_pbis: list[dict[str, Any]], new_plan: dict[str, Any], passed_ids: Iterable[str]) -> list[str]:
+    """Japanese errors for passed PBIs that a re-plan dropped or changed."""
+    new_by_id = {p.get("id"): p for p in new_plan.get("pbis") or [] if isinstance(p, dict)}
+    errors: list[str] = []
+    for old in old_pbis:
+        pid = old.get("id")
+        if pid not in set(passed_ids):
+            continue
+        new = new_by_id.get(pid)
+        if new is None:
+            errors.append(f"合格済みの {pid} が組み直した計画にありません。")
+            continue
+        changed = [f for f in FROZEN_FIELDS if new.get(f) != old.get(f)]
+        if changed:
+            errors.append(f"合格済みの {pid} の {', '.join(changed)} が変わっています。")
+    return errors
 
 
 def _compute_waves(pbis: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -102,6 +142,18 @@ def validate_plan(obj: Any) -> list[str]:
         errors.append(f"schema は {SCHEMA_PLAN} にしてください。")
 
     _validate_str_list(obj.get("open_questions"), "open_questions", errors)
+    _validate_str_list(obj.get("checks"), "checks", errors)
+    _validate_str_list(obj.get("e2e"), "e2e", errors)
+    if "final_review" not in obj:
+        errors.append("final_review を指定してください（スキルを使わないときは null）。")
+    else:
+        review = obj["final_review"]
+        if review is not None and (
+            not isinstance(review, dict)
+            or not _is_nonempty_str(review.get("skill"))
+            or not isinstance(review.get("args", ""), str)
+        ):
+            errors.append("final_review は null か {\"skill\": 名前, \"args\": 文字列} にしてください。")
 
     pbis = obj.get("pbis")
     if not isinstance(pbis, list) or not pbis:
@@ -153,6 +205,11 @@ def validate_plan(obj: Any) -> list[str]:
         _validate_str_list(pbi.get("checks"), f"{label}.checks", errors, require_nonempty_list=True)
         _validate_str_list(pbi.get("facts"), f"{label}.facts", errors)
         _validate_str_list(pbi.get("acceptance"), f"{label}.acceptance", errors, require_nonempty_list=True)
+        evidence = _validate_str_list(pbi.get("evidence"), f"{label}.evidence", errors, require_nonempty_list=True)
+        for place in evidence or []:
+            if not EVIDENCE_PATTERN.fullmatch(place.strip()):
+                errors.append(f"{label}.evidence の {place!r} は path:行番号 にしてください。")
+        _validate_data_needs(pbi.get("data_needs"), f"{label}.data_needs", errors)
 
         if _is_nonempty_str(pid):
             valid_pbi_items.append(pbi)
@@ -241,29 +298,58 @@ def validate_findings(obj: Any) -> list[str]:
 
         if item.get("kind") not in FINDING_KINDS:
             errors.append(f"{label} の kind は {', '.join(FINDING_KINDS)} のいずれかにしてください。")
+        elif item.get("kind") == "rule" and not _is_nonempty_str(item.get("rule")):
+            errors.append(f"{label} は kind が rule なので、rule（根拠の規約の場所）を書いてください。")
 
     return errors
 
 
 def split_findings(findings: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Split findings into those sent to triage and those held back (confidence < 80 or kind == 'style').
+    """Split findings into those triage sees and those it does not.
 
-    Held-back findings skip triage but are still shown at fix approval, where the user can include them.
+    Kept: confidence >= 80 and kind is not 'style'. Each dropped finding gets 'dropped_by'
+    ('confidence' or 'style') so the fix approval page can still show it.
     """
     kept: list[dict[str, Any]] = []
-    held: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
     for item in findings:
         conf = item.get("confidence", 0)
-        if not _is_int(conf) or conf < MIN_CONFIDENCE or item.get("kind") == "style":
-            held.append(item)
+        if not _is_int(conf) or conf < MIN_CONFIDENCE:
+            dropped.append({**item, "dropped_by": "confidence"})
+        elif item.get("kind") == "style":
+            dropped.append({**item, "dropped_by": "style"})
         else:
             kept.append(item)
-    return kept, held
+    return kept, dropped
 
 
 def filter_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drop findings with confidence < 80 or kind == 'style'."""
     return split_findings(findings)[0]
+
+
+def wave_commands(pbis: Iterable[dict[str, Any]], plan_checks: Iterable[str]) -> list[str]:
+    """The given PBIs' checks, then the plan's checks, each command once."""
+    out: list[str] = []
+    for pbi in pbis:
+        for cmd in pbi.get("checks") or []:
+            if cmd not in out:
+                out.append(cmd)
+    for cmd in plan_checks:
+        if cmd not in out:
+            out.append(cmd)
+    return out
+
+
+def fix_commands(pbis: list[dict[str, Any]], plan_checks: list[str], files: Iterable[str]) -> list[str]:
+    """The plan's checks and the checks of PBIs that own a fixed file.
+
+    With neither, every PBI's checks, so a fix never goes unchecked.
+    """
+    fixed = {_norm_path(f) for f in files if _is_nonempty_str(f)}
+    owners = [p for p in pbis if fixed & {_norm_path(t) for t in (p.get("targets") or []) if _is_nonempty_str(t)}]
+    commands = wave_commands(owners, plan_checks)
+    return commands or wave_commands(pbis, [])
 
 
 def validate_triage(obj: Any, expected_ids: Iterable[str] | None = None) -> list[str]:
@@ -374,6 +460,14 @@ def _load_levels_json() -> list[dict[str, Any]]:
         return []
 
 
+def rule_docs_lines(root: Path, rule_docs: Iterable[str] | None) -> list[str]:
+    """Prompt lines naming the rule documents every role reads in full before it starts."""
+    docs = [d for d in (rule_docs or []) if _is_nonempty_str(d)]
+    if not docs:
+        return ["Rule documents: none"]
+    return ["Rule documents (read each in full before you start):"] + [f"- {(root / d).resolve()}" for d in docs]
+
+
 def planner_prompt(
     root: str | Path,
     mode: str,
@@ -386,6 +480,8 @@ def planner_prompt(
     findings_path: str | Path | None = None,
     levels: list[dict[str, Any]] | None = None,
     out_path: str | Path | None = None,
+    rule_docs: Iterable[str] | None = None,
+    passed_pbis: Iterable[str] | None = None,
 ) -> Path:
     """Write a planner prompt for mode ('plan', 'revise', or 'triage') using only approved spec and facts."""
     if mode not in ("plan", "revise", "triage"):
@@ -404,6 +500,7 @@ def planner_prompt(
         f"Repository: {root_p}",
         f"Approved spec: {Path(spec_path).resolve()}",
         f"Fact sheet: {Path(facts_path).resolve()}",
+        *rule_docs_lines(root_p, rule_docs),
     ]
     if mode in ("plan", "revise"):
         lvl_data = levels if levels is not None else _load_levels_json()
@@ -412,6 +509,7 @@ def planner_prompt(
         if plan_path is not None:
             lines.append(f"Current plan: {Path(plan_path).resolve()}")
         lines.append(f"User revision request: {request_text or ''}")
+        lines.append(f"Passed PBIs: {', '.join(passed_pbis or []) or 'none'}")
     if mode == "triage":
         if findings_path is not None:
             lines.append(f"Findings: {Path(findings_path).resolve()}")
@@ -430,6 +528,7 @@ def worker_prompt(
     failure_output: str | None = None,
     diff_text: str | None = None,
     out_path: str | Path | None = None,
+    rule_docs: Iterable[str] | None = None,
 ) -> Path:
     """Write a worker prompt for mode ('pbi', 'auto_fix', or 'fix') from its ticket alone."""
     if mode not in ("pbi", "auto_fix", "fix"):
@@ -448,6 +547,7 @@ def worker_prompt(
         f"Mode: {mode}",
         f"Repository: {root_p}",
         f"Result: {result_p}",
+        *rule_docs_lines(root_p, rule_docs),
         "",
         "## Ticket",
         "```json",
@@ -469,6 +569,7 @@ def reviewer_prompt(
     base_ref: str = "HEAD",
     diff_stat: str | None = None,
     out_path: str | Path | None = None,
+    rule_docs: Iterable[str] | None = None,
 ) -> Path:
     """Write a reviewer prompt for the single whole-diff review against the approved spec."""
     root_p = Path(root).resolve()
@@ -483,6 +584,7 @@ def reviewer_prompt(
         f"Repository: {root_p}",
         f"Approved spec: {Path(spec_path).resolve()}",
         f"Base: {base_ref}",
+        *rule_docs_lines(root_p, rule_docs),
     ]
     if diff_stat:
         lines.extend(["Diff stat:", diff_stat])

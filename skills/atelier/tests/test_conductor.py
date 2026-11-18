@@ -67,6 +67,9 @@ VALID_FACTS = {
     "likely_files": [],
     "tests": [],
     "conventions": [],
+    "rule_docs": [],
+    "commands": [],
+    "review_skills": [],
 }
 
 TO_SPEC_BODY = (
@@ -101,8 +104,17 @@ def make_valid_plan(pbis: list[dict] | None = None) -> dict:
             "checks": list(item.get("checks") or ["python run_tests.py"]),
             "facts": list(item.get("facts") or ["m1"]),
             "acceptance": list(item.get("acceptance") or [f"{pid} passes checks"]),
+            "evidence": list(item.get("evidence") or ["app.py:1"]),
+            "data_needs": list(item.get("data_needs") or []),
         })
-    return {"schema": "atelier.plan/1", "pbis": normalized, "open_questions": []}
+    return {
+        "schema": "atelier.plan/1",
+        "pbis": normalized,
+        "checks": ["python -m unittest"],
+        "e2e": ["python e2e.py"],
+        "final_review": None,
+        "open_questions": [],
+    }
 
 
 def make_finding(

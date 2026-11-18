@@ -258,6 +258,7 @@ def _cmd_start(args: argparse.Namespace) -> dict[str, Any]:
         active_template=selection["template"],
         components=components_obj,
         base_commit=_git_head(root),
+        omm_cache_dir=str(Path(args.omm_cache_dir).expanduser().resolve()) if args.omm_cache_dir else None,
     )
     if selection["ask"]:
         flow.apply_event(run, "switch_expired")
@@ -432,13 +433,21 @@ def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) 
         raise ConductorError(f"unexpected check completion in state {s}")
 
 
+KEPT_STATUSES = ("passed", "sensitive")
+
+
 def _build_pbis_from_plan(run: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
+    """PBIs of a new plan; a re-plan keeps the PBIs that already passed (or left the run) as they were."""
     wave_list = plan.waves(result)
     tmpl = actions.active_template(run)
+    kept = {p["id"]: p for p in run.get("pbis", []) if p.get("status") in KEPT_STATUSES}
     built: list[dict[str, Any]] = []
     for wave_idx, wave_items in enumerate(wave_list):
         for item in wave_items:
             pid = item["id"]
+            if pid in kept:
+                built.append({**kept[pid], "wave": wave_idx})
+                continue
             level = item["level"]
             level_reason = item["level_reason"]
             targets = list(item.get("targets") or [])
@@ -456,6 +465,8 @@ def _build_pbis_from_plan(run: dict[str, Any], result: dict[str, Any]) -> list[d
                 "checks": list(item.get("checks") or []),
                 "facts": list(item.get("facts") or []),
                 "acceptance": list(item.get("acceptance") or []),
+                "evidence": list(item.get("evidence") or []),
+                "data_needs": [dict(need) for need in item.get("data_needs") or []],
                 "sensitive_candidate": bool(item.get("sensitive_candidate", False)),
                 "sensitive_reason": item.get("sensitive_reason") or "",
                 "wave": wave_idx,
@@ -485,7 +496,7 @@ def _validate_completion_before_accept(
 
     s = run["state"]
     if s == "surveying":
-        errors = survey.validate_facts(result)
+        errors = survey.validate_facts(result, root)
         if errors:
             raise ConductorError(" ".join(errors))
     elif s == "interviewing":
@@ -503,6 +514,14 @@ def _validate_completion_before_accept(
                 raise ConductorError(f"spec missing required to-spec sections: {', '.join(missing)}")
     elif s == "planning":
         errors = plan.validate_plan(result)
+        review = result.get("final_review")
+        if not errors and review:
+            names = survey.review_skill_names(actions.load_facts(root, run))
+            if review["skill"] not in names:
+                errors.append(f"final_review のスキル {review['skill']!r} が事実の束の review_skills にありません。")
+        passed = [p["id"] for p in run.get("pbis", []) if p.get("status") == "passed"]
+        if not errors and passed:
+            errors = plan.frozen_changes(run.get("pbis", []), result, passed)
         if errors:
             raise ConductorError(" ".join(errors))
         try:
@@ -534,8 +553,10 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
                     pbi["status"] = "pending"
             if flag == "plan_broken":
                 run["pending_plan_change"] = {
+                    "pbi": pending.get("pbi"),
                     "changed_pbis": list(result.get("changed_pbis") or []),
                     "reason": result.get("reason", ""),
+                    "needed_files": [str(f) for f in result.get("needed_files") or []],
                 }
             flow.apply_event(run, event)
             return
@@ -572,6 +593,9 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
     elif s == "planning":
         run["pbis"] = _build_pbis_from_plan(run, result)
         run["open_questions"] = list(result.get("open_questions") or [])
+        run["plan_checks"] = list(result.get("checks") or [])
+        run["plan_e2e"] = list(result.get("e2e") or [])
+        run["final_review"] = result.get("final_review")
         plan_file = state.run_dir(root) / "plan.json"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -595,9 +619,9 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
                 raise ConductorError(f"G4: secret detected in fix record ({hits[0]['kind']})")
         flow.apply_event(run, "auto_fix_returned")
     elif s == "reviewing":
-        kept, held = plan.split_findings(list(result.get("findings") or []))
+        kept, dropped = plan.split_findings(list(result.get("findings") or []))
         run["findings"] = kept
-        run["findings_held"] = held
+        run["findings_dropped"] = dropped
         kept_path = state.run_dir(root) / "results" / "findings_kept.json"
         kept_path.parent.mkdir(parents=True, exist_ok=True)
         kept_path.write_text(
@@ -608,15 +632,14 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
         if not kept:
             run["fix_list"] = []
             run["triage_ask_items"] = []
-            run["triage_skip_items"] = []
             flow.apply_event(run, "triaged")
-            if not held:
+            if not dropped:
                 flow.apply_event(run, "nothing_to_fix")
     elif s == "triaging":
         finding_by_id = {f["id"]: f for f in run.get("findings", [])}
         fix_items: list[dict[str, Any]] = []
         ask_items: list[dict[str, Any]] = []
-        skip_items: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
         for item in result.get("items") or []:
             fid = item["id"]
             base = dict(finding_by_id.get(fid, {"id": fid}))
@@ -632,10 +655,10 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
             elif item["decision"] == "ask":
                 ask_items.append(merged)
             else:
-                skip_items.append(merged)
+                skipped.append(merged)
         run["fix_list"] = fix_items
         run["triage_ask_items"] = ask_items
-        run["triage_skip_items"] = skip_items
+        run["triage_skipped"] = skipped
         flow.apply_event(run, "triaged")
     elif s == "fixing":
         fixed_rules = [str(r) for r in (result.get("fixed_rules") or ["review" if run.get("approvals", {}).get("fix_list") else "e2e"])]
@@ -743,8 +766,39 @@ def _finalize_completion(
     return _advance_and_save(root, run)
 
 
+CALLER_ACTIONS = ("omm_scan", "prepare", "review_skill")
+
+
+def _done_caller_action(root: Path, run: dict[str, Any], pending: dict[str, Any]) -> dict[str, Any]:
+    """Finish work the caller did itself: an OMM scan, copying approved data, or a review skill."""
+    kind = pending["action"]
+    if kind == "omm_scan":
+        run["omm"] = None
+        flow.apply_event(run, "omm_scanned")
+    elif kind == "prepare":
+        missing = actions.missing_data(root, run)
+        if missing:
+            raise ConductorError(f"approved data is not in place yet: {', '.join(missing)}")
+        flow.apply_event(run, "data_ready")
+    else:
+        result = _read_result(Path(pending["result"]))
+        errors = plan.validate_findings(result)
+        if errors:
+            raise ConductorError(" ".join(errors))
+        hits = _record_result_usage(root, run, {**pending, "runner": "caller", "model": f"skill:{pending['skill']}", "effort": None}, result)
+        if hits:
+            raise ConductorError(f"G4: secret detected in review record ({hits[0]['kind']})")
+        _handle_launch_done(root, run, {**pending, "action": "launch"}, result)
+    run.setdefault("completed_launches", []).append(pending["launch_id"])
+    return _advance_and_save(root, run)
+
+
 def _validate_pending_launch(run: dict[str, Any], launch_id: str | None, *, require_launch: bool = False) -> dict[str, Any]:
     pending = run.get("pending_action")
+    if pending and pending.get("action") in CALLER_ACTIONS and not require_launch:
+        if launch_id and launch_id != pending.get("launch_id"):
+            raise ConductorError(f"launch_id mismatch: expected {pending.get('launch_id')}, got {launch_id}")
+        return pending
     if not pending or pending.get("action") not in ("launch", "check"):
         raise ConductorError(f"no pending launch or check in state {run['state']}")
     if require_launch and pending.get("action") != "launch":
@@ -819,6 +873,8 @@ def _cmd_done(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.root)
     run = state.load_state(root)
     pending = _validate_pending_launch(run, args.launch_id)
+    if pending["action"] in CALLER_ACTIONS:
+        return _done_caller_action(root, run, pending)
 
     result_path = Path(pending["result"])
     result_obj: dict[str, Any] | None = None
@@ -1010,33 +1066,6 @@ def _parse_interview_answers(
     return parsed
 
 
-def _include_user_fixes(run: dict[str, Any], include_ids: list[str]) -> None:
-    """Add the findings the user decided to fix, whatever triage or the confidence filter decided."""
-    candidates: dict[str, dict[str, Any]] = {}
-    for item in run.get("findings_held") or []:
-        candidates.setdefault(item["id"], dict(item))
-    for item in run.get("findings") or []:
-        candidates[item["id"]] = dict(item)
-    for item in (run.get("triage_skip_items") or []) + (run.get("triage_ask_items") or []):
-        candidates[item["id"]] = dict(item)
-    unknown = [fid for fid in include_ids if fid not in candidates]
-    if unknown:
-        raise ConductorError(f"unknown finding ids in include_ids: {', '.join(unknown)}")
-    fix_list = run.setdefault("fix_list", [])
-    existing_ids = {f.get("id") for f in fix_list}
-    for fid in include_ids:
-        if fid in existing_ids:
-            continue
-        item = candidates[fid]
-        fix_list.append({
-            **item,
-            "decision": "fix",
-            "reason": "ユーザーが直すと決めた",
-            "title": item.get("title") or item.get("fix") or item.get("why") or fid,
-        })
-        existing_ids.add(fid)
-
-
 def _apply_level_changes(run: dict[str, Any], reply_obj: dict[str, Any] | None) -> None:
     if not reply_obj:
         return
@@ -1088,7 +1117,29 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     s = run["state"]
-    if s == "asking_interview":
+    if s == "asking_omm":
+        if choice == "scan":
+            flow.apply_event(run, "omm_scan")
+        elif choice == "skip":
+            flow.apply_event(run, "omm_skip")
+        else:
+            raise ConductorError(f"invalid choice '{choice}' for {s}")
+    elif s == "asking_plan_broken" and choice == "replan":
+        change = run.pop("pending_plan_change", None) or {}
+        lines = [f"The worker on {change.get('pbi') or 'a PBI'} reported that the plan's assumptions failed."]
+        if change.get("reason"):
+            lines.append(f"Reason: {change['reason']}")
+        if change.get("needed_files"):
+            lines.append(f"Files the PBI must change outside its targets: {', '.join(change['needed_files'])}")
+        if text:
+            lines.append(f"User note: {text}")
+        lines.append("Rebuild the PBIs that have not passed so that their targets cover what the code needs.")
+        run["planner_mode"] = "revise"
+        run["plan_revision_request"] = "\n".join(lines)
+        run["pending_plan_sends"] = None
+        state.append_approval_revision(run, action="replan", changed_pbis=[change["pbi"]] if change.get("pbi") else [], summary=change.get("reason", ""))
+        flow.apply_event(run, "replan")
+    elif s == "asking_interview":
         if choice == "skip":
             spec_file = run.get("spec_file")
             if not spec_file or not Path(spec_file).is_file():
@@ -1171,19 +1222,30 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
         else:
             raise ConductorError(f"invalid choice '{choice}' for {s}")
     elif s == "awaiting_fix_approval":
-        include_ids = [
-            str(fid)
-            for fid in (
-                (reply_obj or {}).get("approved_ask_ids")
-                or (reply_obj or {}).get("include_ids")
-                or (reply_obj or {}).get("fix_ids")
+        if reply_obj:
+            approved_ask_ids = set(
+                reply_obj.get("approved_ask_ids")
+                or reply_obj.get("include_ids")
+                or reply_obj.get("fix_ids")
                 or []
             )
-        ]
-        if include_ids:
-            if choice != "approve":
+            if approved_ask_ids and choice != "approve":
                 raise ConductorError("include_ids needs choice 'approve'")
-            _include_user_fixes(run, include_ids)
+            if approved_ask_ids:
+                existing_ids = {f.get("id") for f in run.get("fix_list", [])}
+                pool = [
+                    *(run.get("triage_ask_items") or []),
+                    *(run.get("triage_skipped") or []),
+                    *(run.get("findings_dropped") or []),
+                ]
+                known = {item.get("id") for item in pool} | existing_ids
+                unknown = sorted(str(i) for i in approved_ask_ids - known)
+                if unknown:
+                    raise ConductorError(f"unknown finding ids: {', '.join(unknown)}")
+                for item in pool:
+                    if item.get("id") in approved_ask_ids and item.get("id") not in existing_ids:
+                        run.setdefault("fix_list", []).append(item)
+                        existing_ids.add(item.get("id"))
         if choice == "approve" and run.get("fix_list"):
             run["fix_groups"] = plan.fix_groups(run["fix_list"], max_workers=3)
             run["fix_group_index"] = 0
@@ -1332,6 +1394,7 @@ def _build_parser() -> _JsonArgumentParser:
     p_start.add_argument("--switch")
     p_start.add_argument("--agents")
     p_start.add_argument("--components")
+    p_start.add_argument("--omm-cache-dir")
     p_start.add_argument("--force", action="store_true")
 
     p_next = sub.add_parser("next")
