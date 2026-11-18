@@ -717,16 +717,27 @@ def _build_presentation(run: dict[str, Any], page_kind: str) -> tuple[dict[str, 
             }
             for f in raw_fixes
         ]
-        ask_items = run.get("triage_ask_items") or []
+        options = [
+            {"label": "修正に含める", "note": "今回直す（返答の include_ids に ID を入れる）"},
+            {"label": "見送る", "note": "今回は直さない", "recommended": True},
+        ]
         decisions = [
+            {"question": f"{item.get('id', '')}: {item.get('reason', '')}", "options": options}
+            for item in run.get("triage_ask_items") or []
+        ]
+        decisions += [
+            {"question": f"{item.get('id', '')}（仕分けで見送り）: {item.get('reason', '')}", "options": options}
+            for item in run.get("triage_skip_items") or []
+        ]
+        decisions += [
             {
-                "question": f"{item.get('id', '')}: {item.get('reason', '')}",
-                "options": [
-                    {"label": "修正に含める", "note": "今回直す"},
-                    {"label": "見送る", "note": "今回は直さない", "recommended": True},
-                ],
+                "question": (
+                    f"{item.get('id', '')}（{item.get('severity', '')}・確度 {item.get('confidence', '')}、"
+                    f"確度か種類で仕分けの前に外した）: {item.get('why', '')}"
+                ),
+                "options": options,
             }
-            for item in ask_items
+            for item in run.get("findings_held") or []
         ]
         presentation.update({
             "conclusion": f"修正対象 {len(fixes)} 件を確認してください。" if fixes else "修正対象の指摘はありません。",

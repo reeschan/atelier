@@ -245,17 +245,25 @@ def validate_findings(obj: Any) -> list[str]:
     return errors
 
 
-def filter_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop findings with confidence < 80 or kind == 'style'."""
+def split_findings(findings: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split findings into those sent to triage and those held back (confidence < 80 or kind == 'style').
+
+    Held-back findings skip triage but are still shown at fix approval, where the user can include them.
+    """
     kept: list[dict[str, Any]] = []
+    held: list[dict[str, Any]] = []
     for item in findings:
         conf = item.get("confidence", 0)
-        if not _is_int(conf) or conf < MIN_CONFIDENCE:
-            continue
-        if item.get("kind") == "style":
-            continue
-        kept.append(item)
-    return kept
+        if not _is_int(conf) or conf < MIN_CONFIDENCE or item.get("kind") == "style":
+            held.append(item)
+        else:
+            kept.append(item)
+    return kept, held
+
+
+def filter_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop findings with confidence < 80 or kind == 'style'."""
+    return split_findings(findings)[0]
 
 
 def validate_triage(obj: Any, expected_ids: Iterable[str] | None = None) -> list[str]:

@@ -595,8 +595,9 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
                 raise ConductorError(f"G4: secret detected in fix record ({hits[0]['kind']})")
         flow.apply_event(run, "auto_fix_returned")
     elif s == "reviewing":
-        kept = plan.filter_findings(list(result.get("findings") or []))
+        kept, held = plan.split_findings(list(result.get("findings") or []))
         run["findings"] = kept
+        run["findings_held"] = held
         kept_path = state.run_dir(root) / "results" / "findings_kept.json"
         kept_path.parent.mkdir(parents=True, exist_ok=True)
         kept_path.write_text(
@@ -607,12 +608,15 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
         if not kept:
             run["fix_list"] = []
             run["triage_ask_items"] = []
+            run["triage_skip_items"] = []
             flow.apply_event(run, "triaged")
-            flow.apply_event(run, "nothing_to_fix")
+            if not held:
+                flow.apply_event(run, "nothing_to_fix")
     elif s == "triaging":
         finding_by_id = {f["id"]: f for f in run.get("findings", [])}
         fix_items: list[dict[str, Any]] = []
         ask_items: list[dict[str, Any]] = []
+        skip_items: list[dict[str, Any]] = []
         for item in result.get("items") or []:
             fid = item["id"]
             base = dict(finding_by_id.get(fid, {"id": fid}))
@@ -627,8 +631,11 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
                 fix_items.append(merged)
             elif item["decision"] == "ask":
                 ask_items.append(merged)
+            else:
+                skip_items.append(merged)
         run["fix_list"] = fix_items
         run["triage_ask_items"] = ask_items
+        run["triage_skip_items"] = skip_items
         flow.apply_event(run, "triaged")
     elif s == "fixing":
         fixed_rules = [str(r) for r in (result.get("fixed_rules") or ["review" if run.get("approvals", {}).get("fix_list") else "e2e"])]
@@ -759,7 +766,7 @@ def _collect_post_launch_violations(
     pending: dict[str, Any],
     before: dict[str, Any] | None,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
-    violations = guards.compare(root, before) if before is not None else []
+    violations = guards.compare(root, before, run.get("approved_edits")) if before is not None else []
     pending_destructive: list[dict[str, str]] = []
     pending_garbled: list[dict[str, str]] = []
 
@@ -1001,6 +1008,33 @@ def _parse_interview_answers(
     return parsed
 
 
+def _include_user_fixes(run: dict[str, Any], include_ids: list[str]) -> None:
+    """Add the findings the user decided to fix, whatever triage or the confidence filter decided."""
+    candidates: dict[str, dict[str, Any]] = {}
+    for item in run.get("findings_held") or []:
+        candidates.setdefault(item["id"], dict(item))
+    for item in run.get("findings") or []:
+        candidates[item["id"]] = dict(item)
+    for item in (run.get("triage_skip_items") or []) + (run.get("triage_ask_items") or []):
+        candidates[item["id"]] = dict(item)
+    unknown = [fid for fid in include_ids if fid not in candidates]
+    if unknown:
+        raise ConductorError(f"unknown finding ids in include_ids: {', '.join(unknown)}")
+    fix_list = run.setdefault("fix_list", [])
+    existing_ids = {f.get("id") for f in fix_list}
+    for fid in include_ids:
+        if fid in existing_ids:
+            continue
+        item = candidates[fid]
+        fix_list.append({
+            **item,
+            "decision": "fix",
+            "reason": "ユーザーが直すと決めた",
+            "title": item.get("title") or item.get("fix") or item.get("why") or fid,
+        })
+        existing_ids.add(fid)
+
+
 def _apply_level_changes(run: dict[str, Any], reply_obj: dict[str, Any] | None) -> None:
     if not reply_obj:
         return
@@ -1135,18 +1169,19 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
         else:
             raise ConductorError(f"invalid choice '{choice}' for {s}")
     elif s == "awaiting_fix_approval":
-        if reply_obj:
-            approved_ask_ids = set(
-                reply_obj.get("approved_ask_ids")
-                or reply_obj.get("include_ids")
-                or reply_obj.get("fix_ids")
+        include_ids = [
+            str(fid)
+            for fid in (
+                (reply_obj or {}).get("approved_ask_ids")
+                or (reply_obj or {}).get("include_ids")
+                or (reply_obj or {}).get("fix_ids")
                 or []
             )
-            if approved_ask_ids:
-                existing_ids = {f.get("id") for f in run.get("fix_list", [])}
-                for item in run.get("triage_ask_items") or []:
-                    if item.get("id") in approved_ask_ids and item.get("id") not in existing_ids:
-                        run.setdefault("fix_list", []).append(item)
+        ]
+        if include_ids:
+            if choice != "approve":
+                raise ConductorError("include_ids needs choice 'approve'")
+            _include_user_fixes(run, include_ids)
         if choice == "approve" and run.get("fix_list"):
             run["fix_groups"] = plan.fix_groups(run["fix_list"], max_workers=3)
             run["fix_group_index"] = 0
@@ -1246,6 +1281,27 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
     return _advance_and_save(root, run)
 
 
+def _cmd_approve_edit(args: argparse.Namespace) -> dict[str, Any]:
+    """Record files the caller changed with the user's approval, so G1 does not stop the role running meanwhile."""
+    root = Path(args.root)
+    run = state.load_state(root)
+    if not args.reason.strip():
+        raise ConductorError("--reason must say what the user approved")
+    approved = run.setdefault("approved_edits", [])
+    recorded = []
+    for path in args.path:
+        try:
+            entry = guards.approved_edit(root, path)
+        except ValueError as exc:
+            raise ConductorError(str(exc)) from exc
+        entry["reason"] = args.reason
+        approved[:] = [e for e in approved if e["path"] != entry["path"]]
+        approved.append(entry)
+        recorded.append(entry["path"])
+    state.save_state(root, run)
+    return {"approved_edits": recorded}
+
+
 def _cmd_status(args: argparse.Namespace) -> dict[str, Any]:
     run = state.load_state(Path(args.root))
     return {
@@ -1294,6 +1350,11 @@ def _build_parser() -> _JsonArgumentParser:
     p_ans.add_argument("--reply")
     p_ans.add_argument("--choice")
 
+    p_ae = sub.add_parser("approve-edit")
+    p_ae.add_argument("--root", required=True)
+    p_ae.add_argument("--path", required=True, action="append")
+    p_ae.add_argument("--reason", required=True)
+
     p_st = sub.add_parser("status")
     p_st.add_argument("--root", required=True)
 
@@ -1310,6 +1371,7 @@ def main(argv: list[str] | None = None) -> int:
             "run": _cmd_run,
             "done": _cmd_done,
             "answer": _cmd_answer,
+            "approve-edit": _cmd_approve_edit,
             "status": _cmd_status,
         }
         _emit(handlers[args.command](args))
