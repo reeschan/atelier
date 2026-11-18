@@ -820,7 +820,7 @@ def _collect_post_launch_violations(
     pending: dict[str, Any],
     before: dict[str, Any] | None,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
-    violations = guards.compare(root, before, run.get("approved_edits")) if before is not None else []
+    violations = guards.compare(root, before, _load_approved_edits(root), pending.get("launch_id")) if before is not None else []
     pending_destructive: list[dict[str, str]] = []
     pending_garbled: list[dict[str, str]] = []
 
@@ -966,8 +966,6 @@ def _cmd_run(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     ext = runners.run_external(spec, args.timeout)
-    # approve-edit may have been run while the external role was running.
-    run["approved_edits"] = state.load_state(root).get("approved_edits") or []
     state.record_usage(
         run,
         launch_id=pending["launch_id"],
@@ -1345,25 +1343,47 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
     return _advance_and_save(root, run)
 
 
+def _approved_edits_path(root: Path) -> Path:
+    return state.run_dir(root) / "approved_edits.jsonl"
+
+
+def _load_approved_edits(root: Path) -> list[dict[str, Any]]:
+    """The approvals approve-edit appended, the latest one per path."""
+    path = _approved_edits_path(root)
+    if not path.is_file():
+        return []
+    latest: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            entry = json.loads(line)
+            latest[entry["path"]] = entry
+    return list(latest.values())
+
+
 def _cmd_approve_edit(args: argparse.Namespace) -> dict[str, Any]:
-    """Record files the caller changed with the user's approval, so G1 does not stop the role running meanwhile."""
+    """Record files the caller changed with the user's approval, so G1 does not stop the role running meanwhile.
+
+    Approvals are appended to their own file, not to run.json, because they are recorded while other
+    commands may be saving the run state.
+    """
     root = Path(args.root)
     run = state.load_state(root)
     if not args.reason.strip():
         raise ConductorError("--reason must say what the user approved")
-    approved = run.setdefault("approved_edits", [])
-    recorded = []
+    pending = run.get("pending_action") or {}
+    launch_id = pending.get("launch_id") if pending.get("action") == "launch" else None
+    entries = []
     for path in args.path:
         try:
             entry = guards.approved_edit(root, path)
         except ValueError as exc:
             raise ConductorError(str(exc)) from exc
-        entry["reason"] = args.reason
-        approved[:] = [e for e in approved if e["path"] != entry["path"]]
-        approved.append(entry)
-        recorded.append(entry["path"])
-    state.save_state(root, run)
-    return {"approved_edits": recorded}
+        entries.append({**entry, "reason": args.reason, "launch_id": launch_id})
+    target = _approved_edits_path(root)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as fh:
+        fh.write("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries))
+    return {"approved_edits": [e["path"] for e in entries]}
 
 
 def _cmd_status(args: argparse.Namespace) -> dict[str, Any]:

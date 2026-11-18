@@ -13,7 +13,9 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent
 if str(SKILLS_DIR) not in sys.path:
     sys.path.insert(0, str(SKILLS_DIR))
 
+import conductor  # noqa: E402
 from atelier import guards, state  # noqa: E402
+from atelier.state import state_path  # noqa: E402
 from tests.test_conductor import make_finding, reach_reviewing, run_cli, write_json, write_result_for  # noqa: E402
 from tests.test_flow_rules import init_git_repo, reach_building_with, write_agents_and_template  # noqa: E402
 
@@ -85,6 +87,26 @@ class ApprovedEditTests(unittest.TestCase):
             (root / "docs" / "spec.md").write_text("changed again by the role", encoding="utf-8")
             self.assertTrue([v for v in guards.compare(root, before, approved) if v["rule"] == "G1"])
 
+    def test_approved_edit_written_back_during_the_launch_stops(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = self._repo(td)
+            before = guards.snapshot(root, allowed_paths=["docs/pbi/"])
+            (root / "docs" / "spec.md").write_text("approved", encoding="utf-8")
+            approved = [{**guards.approved_edit(root, "docs/spec.md"), "launch_id": "planner-0001"}]
+            (root / "docs" / "spec.md").write_text("old", encoding="utf-8")
+            g1 = [v for v in guards.compare(root, before, approved, "planner-0001") if v["rule"] == "G1"]
+            self.assertEqual([v["detail"] for v in g1], ["approved edit overwritten: docs/spec.md"])
+
+            (root / "docs" / "spec.md").write_text("approved", encoding="utf-8")
+            self.assertFalse([v for v in guards.compare(root, before, approved, "planner-0001") if v["rule"] == "G1"])
+
+    def test_approval_from_an_earlier_launch_does_not_pin_the_file(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = self._repo(td)
+            approved = [{"path": "docs/spec.md", "digest": "0" * 64, "launch_id": "planner-0001"}]
+            before = guards.snapshot(root, allowed_paths=["docs/pbi/"])
+            self.assertFalse([v for v in guards.compare(root, before, approved, "worker-0002") if v["rule"] == "G1"])
+
     def test_unapproved_edit_still_stops(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = self._repo(td)
@@ -137,7 +159,8 @@ class ApprovedEditTests(unittest.TestCase):
                 code, out = run_cli("run", "--root", str(root), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0, out)
             self.assertNotEqual(out.get("kind"), "guard", out)
-            self.assertEqual([e["path"] for e in state.load_state(root)["approved_edits"]], ["glossary.md"])
+            edits = conductor._load_approved_edits(root)
+            self.assertEqual([(e["path"], e["launch_id"]) for e in edits], [("glossary.md", act["launch_id"])])
 
     def test_approve_edit_command_records_and_refuses_outside_root(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -145,13 +168,15 @@ class ApprovedEditTests(unittest.TestCase):
             del act
             root = Path(td)
             (root / "glossary.md").write_text("term", encoding="utf-8")
+            state_before = state_path(root).read_bytes()
             code, out = run_cli(
                 "approve-edit", "--root", str(root), "--path", "spec.md", "--path", str(root / "glossary.md"),
                 "--reason", "ユーザーが R4 を仕様に合わせると決めた",
             )
             self.assertEqual(code, 0, out)
             self.assertEqual(out["approved_edits"], ["spec.md", "glossary.md"])
-            edits = state.load_state(root)["approved_edits"]
+            self.assertEqual(state_path(root).read_bytes(), state_before)
+            edits = conductor._load_approved_edits(root)
             self.assertEqual({e["path"] for e in edits}, {"spec.md", "glossary.md"})
             self.assertTrue(all(e["reason"] and e["digest"] for e in edits))
 
