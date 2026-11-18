@@ -1,0 +1,23 @@
+node <pstack>/skills/statechart/scripts/statechart.mjs from-chart v8-fewer.mmd --module AtelierFewer --out <scratch>/out
+(2026-11-18、TLC 1.7.4 / Temurin 25)
+
+TLC on AtelierFewer.tla with AtelierFewer.cfg:
+  TypeOK holds.
+  BuildWithoutPlan holds.
+  PlanWithoutSpec holds.
+  TwoAutoFixes holds.
+  SecondReview holds.
+  FixWithoutList holds.
+  FixPastLimit holds.
+  DataNotReady holds.
+  ReplanWithoutApproval holds.
+  TLC ran 10 times in 8.7 s.
+
+Chart: 334 states and 742 transitions from 334 model states.
+334 work, 0 break a rule.
+
+The spec does not draw v8-fewer.mmd:
+  states the agreed chart's own steps never reach:
+    Review: S32
+  1 difference(s)
+(v8 と同じ差。S32 は「見直し 2 回目」で、どこからも届かないのが正しい)
