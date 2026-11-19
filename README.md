@@ -27,13 +27,13 @@ The diagram source is `assets/architecture.d2` (rendered with [D2](https://d2lan
 5. **Build in waves.** If you approved outside data, the caller copies it into the repository first. Workers read the rule documents and build the PBIs whose dependencies are done. Each wave gets machine checks only (the wave's PBI checks and the plan's checks); exit codes decide. A PBI that fails gets one automatic fix with the failure output and the diff; after that you choose: same route again, one level up, or hold. When a worker reports that the plan's assumptions failed, you choose: re-plan (passed PBIs stay, and you approve again), retry the same PBI, or stop.
 6. **One final review.** The caller runs the repository's review skill when it has one; otherwise a reviewer checks the change against the rule documents. Either way the whole change is reviewed once. Findings carry severity and confidence; the planner sorts the confident ones into fix, skip or ask. The fix-list page also shows skipped, low-confidence and style-only findings as candidates, and you can add any of them to the fix list.
 7. **Fix and E2E.** Workers fix the approved list in groups that share no file. E2E runs the plan's E2E commands with no model (or is skipped, and the report says so, when there are none); failures go back to fixing up to the template's limit, then you are asked.
-8. **Report.** `docs/pbi/REPORT.md` lists tokens and cost by PBI, role and model, every guard rule's counts, and the first-pass rate by level and model.
+8. **Report and hand-off.** `docs/pbi/REPORT.md` lists tokens and cost by PBI, role and model, every guard rule's counts, and the first-pass rate by level and model. `docs/pbi/HANDOFF.md` names the work root, branch, base commit, goal, spec and report, so a new conversation can take the change to a pull request without the long run in its context; the caller asks whether to start one.
 
 The agreed state diagram and its TLC check are in [docs/specs/atelier-v8.md](docs/specs/atelier-v8.md). The version with rule documents, check commands, re-planning, outside data and the OMM question is [docs/specs/fewer-review-loops.md](docs/specs/fewer-review-loops.md).
 
 ## Two layers
 
-- **Caller**: your session. It runs the conductor's commands, launches the model roles it is told to, shows pages and passes your answers back. It designs nothing.
+- **Caller**: your session. It runs the conductor's commands, launches the model roles it is told to, shows pages and passes your answers back. It designs nothing. It leaves the steps that need no model (checks, external runners, copying approved data) to `conductor.py drive` in the background, and comes back only when a model role, a skill or your answer is needed.
 - **Conductor** (`conductor.py`): a script with no model. It keeps the run state in `docs/pbi/run.json` and returns one next action at a time. It counts retries, checks the budget, runs external runners with before/after checks, and turns anything it cannot decide by rule into a question for you.
 
 The planner is called at four fixed points only: writing the PBIs, revising them when you ask at approval, re-planning when a worker reports a broken plan, and sorting the final review's findings.
@@ -85,7 +85,7 @@ In Claude Code, ask for the work and invoke `/atelier`. The caller writes your g
 python skills/atelier/conductor.py start --root <work root> --goal-file <file> [--spec <spec file>]
 ```
 
-then follows the actions of `next`, `done`, `answer` and `run` as [SKILL.md](skills/atelier/SKILL.md) says. The run's files are in `<work root>/docs/pbi/`.
+then follows the actions of `drive`, `answer` and `start` as [SKILL.md](skills/atelier/SKILL.md) says. `drive` does every action that needs no model and stops at the first one that needs the caller; `drive --done <launch id>` first completes a subagent launch. The lower-level `next`, `done` and `run` remain for one step at a time. The run's files are in `<work root>/docs/pbi/`.
 
 ## Tests
 
