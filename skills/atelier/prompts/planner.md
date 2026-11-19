@@ -14,6 +14,8 @@ Put every file that must change into `targets`, including those tests. If such a
 
 Every PBI must pass the plan's `checks` and its own `checks` on its own, after its wave. Repository-wide checks such as unused-code or unused-export detection run on each wave, so keep an addition and its first use in the same PBI: do not plan one PBI that only adds a function, type, constant, export or file and a later PBI that first uses it, because the earlier PBI would fail those checks by design.
 
+PBIs of the same wave whose `targets` do not overlap are built at the same time; PBIs whose `targets` overlap are built one after another. Keep the `targets` of PBIs that do not depend on each other apart when the design allows it.
+
 Output schema `atelier.plan/1`:
 - `pbis`: array of objects, each with:
   - `id` (`PBI-1`, ...), `title`, `goal`

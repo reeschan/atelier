@@ -85,7 +85,7 @@ Claude Code で作業を頼み、`/atelier` を呼びます。呼び出し側が
 python skills/atelier/conductor.py start --root <作業ルート> --goal-file <ファイル> [--spec <仕様のファイル>]
 ```
 
-そのあとは、[SKILL.md](skills/atelier/SKILL.md) のとおりに `drive`・`answer`・`start` の返す次の 1 手に従います。`drive` はモデルの要らない手をすべて済ませ、呼び出し側の出番の手で止まります。`drive --done <launch id>` は、先にサブエージェントの起動を終わらせます。1 手ずつ進める `next`・`done`・`run` も残しています。run のファイルは `<作業ルート>/docs/pbi/` にあります。
+そのあとは、[SKILL.md](skills/atelier/SKILL.md) のとおりに `drive`・`answer`・`start` の返す次の 1 手に従います。`drive` はモデルの要らない手をすべて済ませ、呼び出し側の出番の手で止まります。`drive --done <launch id>` は、先にサブエージェントの起動を終わらせます。同じ wave で `targets` の重ならない PBI と、修正のグループは、一斉起動（`launches`）としてテンプレートの `limits.parallel`（既定 3）本まで同時に動きます。外部 runner の一斉起動は `drive` が同時に動かし、サブエージェントの一斉起動は、呼び出し側が 1 つのメッセージでまとめて起こし、`drive --done` 1 回で片付けます。1 手ずつ進める `next`・`done`・`run` も残しています。run のファイルは `<作業ルート>/docs/pbi/` にあります。
 
 ## テスト
 
