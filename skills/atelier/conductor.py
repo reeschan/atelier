@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from atelier import actions, flow, guards, interview, pages, plan, record, runners, state, survey, template
+from atelier import actions, eol, flow, guards, interview, pages, plan, record, runners, state, survey, template
 
 
 class ConductorError(Exception):
@@ -295,8 +295,14 @@ def _cmd_next(args: argparse.Namespace) -> dict[str, Any]:
     return act
 
 
-def _append_check_records_for_wave(root: Path, run: dict[str, Any], result: dict[str, Any], exit_code: int) -> None:
-    checked_pbis = [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")]
+def _append_check_records_for_wave(
+    root: Path,
+    run: dict[str, Any],
+    result: dict[str, Any],
+    exit_code: int,
+    rechecked: list[dict[str, Any]],
+) -> None:
+    checked_pbis = [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")] + rechecked
     failed_ids = set(result.get("failed_pbis") or [])
     raw_rules = [str(r) for r in (result.get("rules") or [])]
     first_checked = run.setdefault("first_pass_checked_pbis", [])
@@ -350,13 +356,17 @@ def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) 
 
     s = run["state"]
     if s == "checking":
-        _append_check_records_for_wave(root, run, result, exit_code)
+        rechecked = state.recheck_held_pbis(run)
+        _append_check_records_for_wave(root, run, result, exit_code, rechecked)
         if exit_code == 0:
             run["last_check_failure"] = ""
             run["last_failed_rules"] = []
             for pbi in run.get("pbis", []):
                 if pbi.get("status") in ("built", "failed"):
                     pbi["status"] = "passed"
+            for pbi in rechecked:
+                pbi["status"] = "passed"
+                pbi.pop("held_reason", None)
             if state.any_pending_pbis(run):
                 flow.apply_event(run, "wave_passed_next")
             else:
@@ -762,9 +772,22 @@ def _finalize_completion(
     if pending["action"] == "check":
         _handle_check_done(root, run, result)
     else:
+        if pending.get("role") == "worker":
+            _restore_lf(root, run, pending, result)
         _handle_launch_done(root, run, pending, result)
 
     return _advance_and_save(root, run)
+
+
+def _restore_lf(root: Path, run: dict[str, Any], pending: dict[str, Any], result: dict[str, Any]) -> None:
+    """Put back LF in the worker's files that it saved with CRLF, before the checks run on them."""
+    allowed = actions.allowed_paths_for(run, "worker", pending.get("pbi")) or []
+    changed = [f for f in result.get("changed_files") or [] if isinstance(f, str)]
+    paths = [p for p in [*allowed, *changed] if p != "docs/pbi/"]
+    restored = eol.restore_lf(root, paths)
+    if restored:
+        done = run.setdefault("eol_restored", [])
+        done.extend(p for p in restored if p not in done)
 
 
 CALLER_ACTIONS = ("omm_scan", "prepare", "review_skill")
@@ -1209,14 +1232,8 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
                         pbi["route_template"] = route_choice["template"]
                         pbi["route_index"] = 0
             flow.apply_event(run, "rebuild_retry")
-        elif choice == "hold":
-            for pbi in run.get("pbis", []):
-                if pbi.get("status") == "failed":
-                    pbi["status"] = "held"
-            if not any(p.get("status") == "held" for p in run.get("pbis", [])):
-                for pbi in run.get("pbis", []):
-                    if pbi.get("status") == "built":
-                        pbi["status"] = "held"
+        elif choice in ("hold", "hold_stop"):
+            state.hold_after_rebuild(run, continue_dependents=choice == "hold")
             flow.apply_event(run, "rebuild_hold")
         else:
             raise ConductorError(f"invalid choice '{choice}' for {s}")
