@@ -205,6 +205,20 @@ def fix_groups_left(run: dict[str, Any]) -> list[int]:
     return [i for i in range(len(groups)) if i not in set(done)]
 
 
+def mark_fix_group_done(run: dict[str, Any], group: int) -> None:
+    """Record that a worker finished a fix group.
+
+    A run saved before groups were tracked one by one first gets its old fix_group_index moved over,
+    so the groups it had finished stay finished.
+    """
+    if run.get("fix_groups_done") is None:
+        left = fix_groups_left(run)
+        run["fix_groups_done"] = [i for i in range(len(run.get("fix_groups") or [])) if i not in left]
+        run.pop("fix_group_index", None)
+    if group not in run["fix_groups_done"]:
+        run["fix_groups_done"].append(group)
+
+
 def reset_fix_groups(run: dict[str, Any], groups: list[list[dict[str, Any]]] | None = None) -> None:
     """Start the fix groups over: every group is left to do."""
     if groups is not None:

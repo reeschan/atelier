@@ -353,6 +353,16 @@ class FixStageTests(unittest.TestCase):
             self.assertEqual(load_run(root)["fix_groups_done"], [0, 1, 2])
 
 
+class OldRunTests(unittest.TestCase):
+    def test_a_run_saved_with_fix_group_index_keeps_its_finished_groups(self) -> None:
+        run = {"fix_groups": [[{"id": "F1"}], [{"id": "F2"}], [{"id": "F3"}]], "fix_group_index": 1}
+        self.assertEqual(state.fix_groups_left(run), [1, 2])
+        state.mark_fix_group_done(run, 1)
+        self.assertEqual(state.fix_groups_left(run), [2])
+        self.assertEqual(run["fix_groups_done"], [0, 1])
+        self.assertNotIn("fix_group_index", run)
+
+
 class ReportTests(unittest.TestCase):
     def test_the_report_lists_launch_batches(self) -> None:
         with tempfile.TemporaryDirectory() as td:

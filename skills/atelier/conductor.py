@@ -802,9 +802,8 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
             if group is None:
                 left = state.fix_groups_left(run)
                 group = left[0] if left else None
-            done = run.setdefault("fix_groups_done", [])
-            if group is not None and group not in done:
-                done.append(group)
+            if group is not None:
+                state.mark_fix_group_done(run, group)
             if state.fix_groups_left(run):
                 run["subphase"] = "build"
                 return
