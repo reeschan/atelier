@@ -153,6 +153,9 @@ class TestIntegrationSeam1(unittest.TestCase):
             self.assertEqual(plan_ask["kind"], "plan_approval")
             self.assert_page_or_draft(plan_ask)
             self.assertTrue(plan_ask.get("summary"))
+            self.assertEqual(plan_ask["chat"], [plan_ask["summary"][0], plan_ask["summary"][-1]])
+            self.assertTrue(plan_ask["chat"][0].startswith("結論"))
+            self.assertTrue(plan_ask["chat"][-1].startswith("決めること"))
 
             # Progress to fix_approval -> rendered page
             _, act = run_cli("answer", "--root", str(root), "--choice", "approve")

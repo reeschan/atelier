@@ -911,9 +911,17 @@ def _make_approval_ask(
         "page": str(page_path.resolve()) if page_path else None,
         "draft": str(draft_path.resolve()),
         "summary": summary_lines,
+        "chat": _chat_lines(summary_lines),
         "attachments": all_attachments,
         "choices": choices,
     }
+
+
+def _chat_lines(summary_lines: list[str]) -> list[str]:
+    """Return the lines the caller writes in chat: the conclusion and the decision only."""
+    if len(summary_lines) <= 2:
+        return list(summary_lines)
+    return [summary_lines[0], summary_lines[-1]]
 
 
 def _launch_for_state(run_root: Path, run: dict[str, Any], role: str, pbi_id: str | None = None) -> dict[str, Any]:
