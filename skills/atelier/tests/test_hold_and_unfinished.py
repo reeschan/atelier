@@ -92,6 +92,26 @@ class HoldContinuesDependentsTests(unittest.TestCase):
             statuses = state.pbi_statuses(state.load_state(tmp))
             self.assertEqual((statuses["PBI-1"], statuses["PBI-3"]), ("held", "failed"))
 
+    def test_held_pbis_held_twice_in_a_row_are_checked_again_together(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            fail_first_wave_twice(tmp)
+            _, act = run_cli("answer", "--root", str(tmp), "--choice", "hold")
+            act = done(tmp, act, {"status": "ok"})
+            act = done(tmp, act, {"exit_code": 1, "failed_pbis": ["PBI-3"]})
+            act = done(tmp, act, {"status": "ok"})
+            ask = done(tmp, act, {"exit_code": 1, "failed_pbis": ["PBI-3"]})
+            self.assertEqual(ask["kind"], "rebuild")
+            _, act = run_cli("answer", "--root", str(tmp), "--choice", "hold")
+            self.assertEqual(act["pbi"], "PBI-4")
+
+            act = done(tmp, act, {"status": "ok"})
+            for cmd in ("check-1", "check-2", "check-3", "check-4"):
+                self.assertIn(cmd, act["commands"])
+            done(tmp, act, {"exit_code": 0})
+            statuses = state.pbi_statuses(state.load_state(tmp))
+            self.assertEqual([statuses[f"PBI-{i}"] for i in (1, 2, 3, 4)], ["passed"] * 4)
+
     def test_hold_stop_reports_unfinished_instead_of_done(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

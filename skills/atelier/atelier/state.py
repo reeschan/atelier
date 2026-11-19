@@ -267,15 +267,25 @@ def recheck_held_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
     """PBIs held after a failed check that a PBI now being checked went on without.
 
     Their checks run again with that PBI's, so a PBI that only failed for want of its dependent
-    (for example an export not used yet) passes once the dependent is built.
+    (for example an export not used yet) passes once the dependent is built. A held PBI picked up
+    this way brings in the held PBIs it went on without in turn.
     """
-    checked = [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")]
-    waived = {dep for p in checked for dep in p.get("waived_deps") or []}
-    return [
-        p
-        for p in run.get("pbis", [])
-        if p["id"] in waived and p.get("status") == "held" and p.get("held_reason") == "check_failed"
-    ]
+    pbis = run.get("pbis", [])
+    sources = [p for p in pbis if p.get("status") in ("built", "failed")]
+    picked: list[dict[str, Any]] = []
+    while sources:
+        waived = {dep for p in sources for dep in p.get("waived_deps") or []}
+        sources = [
+            p
+            for p in pbis
+            if p["id"] in waived
+            and p.get("status") == "held"
+            and p.get("held_reason") == "check_failed"
+            and p not in picked
+        ]
+        picked += sources
+    order = [p["id"] for p in pbis]
+    return sorted(picked, key=lambda p: order.index(p["id"]))
 
 
 def unfinished_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
