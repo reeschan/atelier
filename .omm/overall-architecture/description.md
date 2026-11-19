@@ -1,1 +1,1 @@
-Atelier v8 の conductor 型の構成。呼び手 (親の会話) は SKILL.md の手順に従って conductor.py の CLI を呼ぶだけで、どの役をいつ起こすかは conductor が決める。conductor は run.json の `pending_action` に「次にやる 1 件」(launch・check・ask・prepare など) を置き、drive がモデルの要らない行動 (検査・外部 runner の launch・データの写し) を自分で片付け、呼び手が要る行動で止まる。
+Atelier v8 の conductor 型の構成。呼び手（親の会話）は SKILL.md の手順に従って conductor.py の CLI を呼ぶだけで、どの役をいつ起こすかは進行役が決める。進行役は run.json の `pending_action` に次の行動（1 本の起動・1 つの一斉起動・検査・問い・prepare など）を置き、drive がモデルの要らない行動（検査・外部 runner の起動と一斉起動・データの写し）を自分で片付け、呼び手が要る行動で止まる。同じ wave の PBI と修正のグループのうち、変えるファイルの重ならないものは一斉起動で同時に動く。

@@ -9,7 +9,7 @@ graph LR
     running-e2e["running_e2e\nflow.py"]
     asking-guard["asking_guard\nflow.py"]
 
-    building -->|"worker_returned: 次の PBI を 1 本"| building
+    building -->|"worker_returned: 次の起動か一斉起動"| building
     building -->|"wave_built"| checking
     checking -->|"wave_passed_next・carried_next"| building
     checking -->|"all_pbis_passed・carried_last"| reviewing
@@ -23,6 +23,3 @@ graph LR
     running-e2e -->|"e2e_failed"| fixing
     building -->|"guard_violation"| asking-guard
     asking-guard -->|"resume で戻る"| building
-
-    classDef concern fill:#f38ba8,stroke:#f38ba8,color:#1e1e2e
-    class building,fixing concern

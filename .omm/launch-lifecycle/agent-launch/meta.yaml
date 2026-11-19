@@ -1,7 +1,7 @@
 created: 2026-11-19T21:00:55.786Z
-updated: 2026-11-19T21:01:05.337Z
-update_count: 2
-last_field: description
+updated: 2026-11-19T22:34:05.694Z
+update_count: 4
+last_field: diagram
 kind: nested-class
 title: agent-launch
 children:
@@ -11,3 +11,18 @@ children:
   - done-compare
   - pending-snapshot
 parentPath: []
+prev_diagram: |
+  graph LR
+      pending-snapshot["launch を出すときの snapshot\nconductor.py _ensure_snapshot"]
+      caller-subagent["呼び手がサブエージェントを 1 本起こす\nSKILL.md The loop"]
+      done-call["終わりの知らせで drive --done\nconductor.py _cmd_drive"]
+      done-compare["pending_snapshot と比べる\nconductor.py _cmd_done"]
+      done-accept["結果の検証と使用量の記録\n_validate_completion_before_accept"]
+
+      pending-snapshot -->|"drive は next で止まる"| caller-subagent
+      caller-subagent -->|"裏で動き、終わると親が起きる"| done-call
+      done-call -->|"launch id を確かめる (G8)"| done-compare
+      done-compare -->|"違反なし"| done-accept
+
+      classDef concern fill:#f38ba8,stroke:#f38ba8,color:#1e1e2e
+      class caller-subagent concern

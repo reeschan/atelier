@@ -1,1 +1,1 @@
-状態ごとに次の行動を 1 件組む (skills/atelier/atelier/actions.py)。`ensure_pending_action` は `pending_action` が空のときだけ作り、`run["pending_action"]` に入れて返す (冪等)。行動の種類は launch (役を起こす)・check (コマンドを流す)・ask (ユーザーに聞く)・prepare・omm_scan・review_skill・done。
+状態ごとに次の行動を組む（skills/atelier/atelier/actions.py）。`ensure_pending_action` は `pending_action` が空のときだけ作り、`run["pending_action"]` に入れて返す（冪等）。行動の種類は launch（1 本の起動）・launches（一斉起動）・check（コマンドを流す）・ask（ユーザーに聞く）・prepare・omm_scan・review_skill・done。

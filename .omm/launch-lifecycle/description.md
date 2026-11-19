@@ -1,1 +1,1 @@
-今の (v8.4 の) launch から check までの処理の流れ。すべての行動は run.json の `pending_action` の 1 件を通る。drive はその 1 件を片付け、`_finalize_completion` → `_advance_and_save` で次の 1 件を作る、を繰り返す。agent の launch と ask で drive は止まり、呼び手に返る。
+起動から検査までの処理の流れ（一斉起動を入れた後）。すべての次の行動は run.json の `pending_action` を通る。次の行動は、1 本の起動（`launch`）か、1 つの一斉起動（`launches`）か、検査・問いなど。drive は次の行動を片付け、`_advance_and_save` で次を作る、を繰り返す。一斉起動は、同じ wave（または修正の段）で変えるファイルの重ならない起動を `limits.parallel` 本まで束ね、全部が終わってから `_finish_batch` でまとめて受け入れる。wave の検査は今までどおり wave ごとに 1 回。仕様は docs/specs/parallel-launch-batches.md。

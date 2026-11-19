@@ -1,0 +1,1 @@
+`_pick_together`。候補を順に見て、先頭を入れ、そのあと先頭と同じ種類の runner（外部 runner か agent か）で、変えるファイルが入れたものと重ならない候補を `limits.parallel` 本まで足す。変えるファイルの分からない候補は単独。`_pick_building` は依存の通った PBI（`state.buildable_pbis`）を、`_pick_fixing` は残りの修正のグループ（`state.fix_groups_left`）を渡す。重なりの判定は `plan.targets_overlap`。

@@ -1,1 +1,1 @@
-flow.py の遷移表のうち、作る段から E2E までの部分 (計画の承認より前と reporting・done は省く)。building と fixing は、今は中で launch を 1 本ずつ回す。並べて動かす変更は、この 2 つの状態の「中の回り方」だけを変え、状態と事象の表は変えない見込み (building で作り終えたら `wave_built`、fixing で全グループが終わったら subphase を check にする、は同じ)。
+flow.py の遷移表のうち、作る段から E2E までの部分（計画の承認より前と reporting・done は省く）。一斉起動を入れても、状態と事象の表は変えていない。変わったのは building と fixing の「中で何本を同時に起こすか」で、building は作り終えたら `wave_built`、fixing は全グループが終わったら subphase を check にする、は今までと同じ。一斉起動の状態の図（9 つの規則を TLC で確かめた）は docs/specs/parallel-launch-batches.md にある。

@@ -1,1 +1,1 @@
-runner が agent の launch。conductor は起こさず、呼び手が起こす。drive は launch を `next` に返して止まり、呼び手は裏でサブエージェントを起こしてターンを終え、終わりの知らせで起きて `drive --done <launch_id>` を裏で流す。1 本ごとに親の会話が 3 回起きる。
+runner が agent の起動と一斉起動。進行役は起こさず、呼び手が起こす。drive は次の行動を `next` に返して止まり、呼び手はサブエージェントを前景で（一斉起動なら全員を同時に）起こして待ち、終わったら `drive --done <番号>` を裏で流す。一斉起動の比べ方と受け入れは `_finish_batch`。

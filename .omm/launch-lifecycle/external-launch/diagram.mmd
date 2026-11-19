@@ -1,14 +1,11 @@
 graph LR
-    recheck["G3・G4・G11 を確かめ直す\n_cmd_run"]
+    recheck["G3・G4・G11 を確かめ直す\n_recheck_before_run"]
     snapshot-before["作業木の snapshot\nguards.snapshot"]
-    run-sync["1 本を同期して動かす\nrunners.run_external"]
-    usage["使用量と launch の記録\nstate.record_usage・_record_launch_event"]
-    compare-after["前後を比べる\n_collect_post_launch_violations"]
+    run-sync["全員を起こして全員を待つ\nrunners.start_external・finish_external"]
+    usage["使用量と起動の記録\nstate.record_usage・_record_launch_event"]
+    compare-after["前後を比べる\n_collect_post_launch_violations・_batch_violations"]
 
-    recheck -->|"通れば"| snapshot-before
-    snapshot-before -->|"allowed_paths はこの launch の場所"| run-sync
-    run-sync -->|"終わるまで待つ"| usage
+    recheck -->|"通った起動だけ"| snapshot-before
+    snapshot-before -->|"一斉起動では 1 つを全員で使う"| run-sync
+    run-sync -->|"時間は起動ごとに始まりから数える"| usage
     usage -->|"G1・G2・G5・G12・G14"| compare-after
-
-    classDef concern fill:#f38ba8,stroke:#f38ba8,color:#1e1e2e
-    class run-sync,snapshot-before concern

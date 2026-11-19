@@ -1,1 +1,1 @@
-run.json の `pending_action` (待つ行動) と `pending_snapshot` (agent の launch の前の作業木)。どちらも 1 件だけ。`done` は launch id がこれと合うかを確かめ、`answer` は ask のときだけ受け、`approve-edit` は待っている launch の id を添える。`status` はこれをそのまま見せる。
+run.json の `pending_action`（次の行動）と `pending_snapshot`（agent の起動の前の作業木）。次の行動は 1 つで、1 本の起動か、1 つの一斉起動（`launches`。中に起動を並べ、一斉起動の番号 `batch-NNNN` を持つ）。agent の一斉起動の `pending_snapshot` は、仲間全員に共通の作業木 1 つ。`done`・`run` は次の行動の番号（一斉起動なら一斉起動の番号）が合うかを確かめ、`approve-edit` はその番号を添える。

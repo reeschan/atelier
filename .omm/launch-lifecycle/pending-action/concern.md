@@ -1,1 +1,0 @@
-並べて動かすには、ここに複数の launch を持てるようにする必要がある。参照している所: actions.ensure_pending_action、conductor の _ensure_snapshot・_advance_and_save・_validate_pending_launch・_cmd_done・_cmd_run・_cmd_answer・_cmd_approve_edit・_cmd_status・_cmd_next、SKILL.md の手順、テスト。

@@ -1,0 +1,1 @@
+`_launch_batch`。選んだのが 1 本なら今までどおり `_launch_for_state` の `launch` を返す。2 本以上なら、起動ごとに `_launch_for_state` を予算を見ずに呼び（チケットに仲間のファイルを `running_alongside` として入れる）、1 本でも事前の検査で違反したら組みかけた起動を取り消して（`_drop_launches`）その問いを返す。全員の指示の見積もりを足して予算を 1 回だけ見て、一斉起動の番号を振り、`launches`（`launch_id`・`runner`・`launches`）を返す。

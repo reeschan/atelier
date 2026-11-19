@@ -17,11 +17,11 @@ graph TD
 
     caller -->|"start・drive・done・answer を呼ぶ"| conductor
     caller -->|"runner が agent の launch を起こす"| agent-subagents
-    conductor -->|"ensure_pending_action で次の 1 件を作らせる"| actions
+    conductor -->|"ensure_pending_action で次の行動を作らせる"| actions
     conductor -->|"結果を受けて事象を当てる"| flow
     conductor -->|"run.json を読み書き"| state
     conductor -->|"launch 前後の snapshot と compare"| guards
-    conductor -->|"run_external で同期して動かす"| runners
+    conductor -->|"start_external で起こし finish_external で待つ"| runners
     conductor -->|"launch と check の記録を足す"| record
     actions -->|"状態ごとに launch・check・ask を組む"| state
     actions -->|"役の指示を組み立てる"| prompts

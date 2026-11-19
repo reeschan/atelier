@@ -1,1 +1,1 @@
-wave の PBI を作る状態。`ready_wave_pbis` (依存が通った未完の PBI) のうち pending・building・failed の先頭を 1 本ずつ起こす。作業者が返るたびに PBI を built にし、まだあれば `worker_returned`、無ければ `wave_built`。「wave」は計画の wave 番号ではなく、その時点で依存が満たされた PBI の集まり (依存の無い PBI は最初の wave にまとめて入る)。修正の PBI (CO-n-FIX) は残りの PBI の前に入る。
+wave の PBI を作る状態。`buildable_pbis`（依存が通った未完の PBI のうち、未着手・作っている途中・落ちた）から、先頭と同じ種類の runner で `targets` が重ならないものを `limits.parallel` 本まで一斉起動にする（1 本なら今までの起動）。起動が返るたびに PBI を built にし、まだ作る PBI があれば `worker_returned`、無ければ `wave_built`。「wave」は計画の wave 番号ではなく、その時点で依存が満たされた PBI の集まり。修正の PBI（CO-n-FIX）は残りの PBI の前に入る。

@@ -1,4 +1,2 @@
-- run が待つ行動は `pending_action` の 1 件だけ。同じ wave の PBI も、修正のグループも、1 本ずつ起こされる。
-- 外部 runner は `runners.run_external` が `subprocess.run` で同期して動かすので、drive の中でも直列になる。
-- runner が agent のときは、launch 1 件ごとに親の会話が 3 回起こされる (サブエージェントを起こす・終わりの知らせ・drive --done)。
-- G1 の検査は launch ごとの snapshot と作業木全体の比較なので、同じ作業木で 2 つの作業者が同時に書くと、互いの変更が相手の違反に見える。
+- 同じ wave の PBI と修正のグループは、一斉起動で同時に動く（docs/specs/parallel-launch-batches.md）。同じ作業木で動くので、一斉起動の仲間が変えるファイルへの書き込みは見抜けない（指示で避け、wave の検査で受け止める）。
+- 外部 runner と agent の起動は同時には動かない（外部の一斉起動が先）。

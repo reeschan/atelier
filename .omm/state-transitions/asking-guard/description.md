@@ -1,1 +1,1 @@
-横断の問い。launch の前後の検査 (G1〜G14) の違反か、runner が使えなかったときに入る。`guard_issue` は 1 件の launch。retry (G3 なら送り先を承認、G12・G14 なら見つかった変更を承認してから) か next_step で `return_state` に戻り、stop で reporting へ。
+横断の問い。起動の前後の検査（G1〜G14）の違反か、runner が使えなかったときに入る。`guard_issue` は 1 本の起動か、一斉起動で違反した起動のまとまり（`launches`）。retry（G3 なら送り先を承認、G12・G14 なら見つかった変更を承認してから）か next_step（違反した起動が 1 本のとき）で `return_state` に戻り、stop で reporting へ。retry では違反した起動だけがもう一度起動される。

@@ -1,14 +1,11 @@
 graph LR
-    pending-snapshot["launch を出すときの snapshot\nconductor.py _ensure_snapshot"]
-    caller-subagent["呼び手がサブエージェントを 1 本起こす\nSKILL.md The loop"]
-    done-call["終わりの知らせで drive --done\nconductor.py _cmd_drive"]
-    done-compare["pending_snapshot と比べる\nconductor.py _cmd_done"]
+    pending-snapshot["次の行動を出すときの snapshot\nconductor.py _ensure_snapshot"]
+    caller-subagent["呼び手が全員を前景で同時に起こして待つ\nSKILL.md The loop"]
+    done-call["全員が終わったら drive --done\nconductor.py _cmd_drive"]
+    done-compare["起動ごとに比べる\nconductor.py _cmd_done・_finish_batch"]
     done-accept["結果の検証と使用量の記録\n_validate_completion_before_accept"]
 
     pending-snapshot -->|"drive は next で止まる"| caller-subagent
-    caller-subagent -->|"裏で動き、終わると親が起きる"| done-call
-    done-call -->|"launch id を確かめる (G8)"| done-compare
-    done-compare -->|"違反なし"| done-accept
-
-    classDef concern fill:#f38ba8,stroke:#f38ba8,color:#1e1e2e
-    class caller-subagent concern
+    caller-subagent -->|"ターンを終えずに待つ"| done-call
+    done-call -->|"番号を確かめる (G8)"| done-compare
+    done-compare -->|"違反の無い起動"| done-accept

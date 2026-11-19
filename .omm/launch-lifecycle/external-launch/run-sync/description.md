@@ -1,1 +1,1 @@
-`runners.run_external(spec, timeout)`。stdout と stderr を results/<id>.json.stdout・.stderr に書き、codex と claude には指示 1 行を stdin で渡す。timeout (drive の --timeout、既定 600 秒) を過ぎると止める。終わったら使用量と使えない理由を返す。
+`runners.start_external(spec)` は 1 本を `Popen` で起こして戻り（codex と claude には指示 1 行を stdin で渡す）、`finish_external(started, timeout)` が待って stdout から使用量と使えない理由を読む。制限時間（drive の --timeout、既定 600 秒）は起動ごとに、その起動が始まった時点から数え、過ぎた起動だけを止める。`run_external` は 1 本をこの 2 つで動かす。
