@@ -6,7 +6,8 @@ name: lens-review
 #
 # Starts when such a pull request is opened, reopened or marked ready for
 # review, and when the owner writes a comment starting with `/lens-review` on
-# its conversation. Pushes to the pull request do not start it.
+# its conversation. Pushes to the pull request do not start it, and neither
+# does opening it as a draft: it starts when the draft is marked ready.
 #
 # Runs only when the pull request's author is `reeschan` and its branch lives in
 # this repository. Pull requests from other authors or from forks, and comments
@@ -25,6 +26,7 @@ jobs:
     if: >-
       (github.event_name == 'pull_request' &&
        github.event.pull_request.user.login == 'reeschan' &&
+       github.event.pull_request.draft == false &&
        github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
