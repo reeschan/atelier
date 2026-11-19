@@ -109,7 +109,8 @@ def new_run_state(
         "fix_list": [],
         "triage_ask_items": [],
         "fix_groups": [],
-        "fix_group_index": 0,
+        "fix_groups_done": [],
+        "batches": [],
         "launch_reads": {},
         "pbi_launches": {},
         "first_pass_checked_pbis": [],
@@ -181,12 +182,35 @@ def ready_wave_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
     return ready
 
 
+def buildable_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """The PBIs of the current wave that need building, in plan order."""
+    return [p for p in ready_wave_pbis(run) if p.get("status", "pending") in ("pending", "building", "failed")]
+
+
 def next_buildable_pbi(run: dict[str, Any]) -> dict[str, Any] | None:
     """Return the next PBI in the current wave that needs building."""
-    for pbi in ready_wave_pbis(run):
-        if pbi.get("status", "pending") in ("pending", "building", "failed"):
-            return pbi
-    return None
+    pbis = buildable_pbis(run)
+    return pbis[0] if pbis else None
+
+
+def fix_groups_left(run: dict[str, Any]) -> list[int]:
+    """Indexes of the fix groups that no worker has finished yet, in order.
+
+    A run saved before groups were tracked one by one counts the groups before its old fix_group_index as done.
+    """
+    groups = run.get("fix_groups") or []
+    done = run.get("fix_groups_done")
+    if done is None:
+        done = list(range(min(run.get("fix_group_index", 0), len(groups))))
+    return [i for i in range(len(groups)) if i not in set(done)]
+
+
+def reset_fix_groups(run: dict[str, Any], groups: list[list[dict[str, Any]]] | None = None) -> None:
+    """Start the fix groups over: every group is left to do."""
+    if groups is not None:
+        run["fix_groups"] = groups
+    run["fix_groups_done"] = []
+    run.pop("fix_group_index", None)
 
 
 def get_pbi(run: dict[str, Any], pbi_id: str) -> dict[str, Any] | None:

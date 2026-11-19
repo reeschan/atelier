@@ -39,6 +39,38 @@ def _norm_path(path: str) -> str:
     return PurePosixPath(path.strip().replace("\\", "/")).as_posix().removeprefix("./")
 
 
+_GLOB_CHARS = "*?["
+
+
+def _fixed_part(path: str) -> tuple[str, bool]:
+    """The path before its first glob character, and whether it had one."""
+    norm = _norm_path(path).rstrip("/")
+    norm = "" if norm == "." else norm
+    cuts = [norm.index(c) for c in _GLOB_CHARS if c in norm]
+    return (norm[: min(cuts)], True) if cuts else (norm, False)
+
+
+def paths_overlap(a: str, b: str) -> bool:
+    """True when two target paths may name the same file.
+
+    The same path, or a directory and a path inside it, overlap. A glob is compared by its part before the
+    first glob character, as a plain prefix either way, so an unsure case counts as overlapping.
+    """
+    fa, glob_a = _fixed_part(a)
+    fb, glob_b = _fixed_part(b)
+    if glob_a or glob_b:
+        return fa.startswith(fb) or fb.startswith(fa)
+    if not fa or not fb:
+        return True
+    return fa == fb or fa.startswith(fb + "/") or fb.startswith(fa + "/")
+
+
+def targets_overlap(a: Iterable[str], b: Iterable[str]) -> bool:
+    """True when any path of one list may name a file that a path of the other names."""
+    left = [p for p in a if _is_nonempty_str(p)]
+    return any(paths_overlap(x, y) for x in left for y in b if _is_nonempty_str(y))
+
+
 def _validate_str_list(
     value: Any,
     label: str,

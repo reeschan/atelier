@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 
 
 class Command(list):
@@ -117,9 +118,18 @@ def _usage(events, runner):
     return tokens, cost
 
 
-def run_external(spec, timeout):
+class Started:
+    """An external launch that start_external has started; finish_external waits for it and reads its output."""
+
+    def __init__(self, spec, proc, reason, last_before, started_at, out, err):
+        self.spec, self.proc, self.reason, self.last_before = spec, proc, reason, last_before
+        self.started_at, self._out, self._err = started_at, out, err
+
+
+def start_external(spec):
+    """Start one external launch without waiting for it. Its timeout counts from here."""
     if not isinstance(spec, Command):
-        raise TypeError('run_external requires the Command returned by launch_spec')
+        raise TypeError('start_external requires the Command returned by launch_spec')
     result = Path(spec.result)
     result.parent.mkdir(parents=True, exist_ok=True)
     stdout, stderr = Path(str(result) + '.stdout'), Path(str(result) + '.stderr')
@@ -140,19 +150,43 @@ def run_external(spec, timeout):
     if spec.runner == 'claude':
         for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK'):
             env.pop(key, None)
-    reason, code = None, None
     last_before = None
     if spec.runner == 'codex' and Path(spec.last).exists():
         stat = Path(spec.last).stat()
         last_before = (stat.st_mtime_ns, stat.st_size)
+    stdin_prompt = spec.runner in ('codex', 'claude')
+    out = stdout.open('wb')
+    err = stderr.open('wb')
+    proc, reason = None, None
     try:
-        with stdout.open('wb') as out, stderr.open('wb') as err:
-            proc = subprocess.run(spec, cwd=spec.root, input=spec.prompt.encode('utf-8') if spec.runner in ('codex', 'claude') else None,
-                                  stdin=None if spec.runner in ('codex', 'claude') else subprocess.DEVNULL,
-                                  stdout=out, stderr=err, env=env, timeout=timeout, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-            code = proc.returncode
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        proc = subprocess.Popen(spec, cwd=spec.root, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL,
+                                stdout=out, stderr=err, env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if stdin_prompt:
+            try:
+                proc.stdin.write(spec.prompt.encode('utf-8'))
+                proc.stdin.close()
+            except OSError:
+                pass
+    except OSError as exc:
         reason = str(exc)
+    return Started(spec, proc, reason, last_before, time.monotonic(), out, err)
+
+
+def finish_external(started, timeout):
+    """Wait for a started launch until its own timeout (counted from its start), then read its output."""
+    spec, proc, reason, code = started.spec, started.proc, started.reason, None
+    if proc is not None:
+        remaining = None if timeout is None else max(0.0, timeout - (time.monotonic() - started.started_at))
+        try:
+            code = proc.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as exc:
+            proc.kill()
+            proc.wait()
+            reason = str(subprocess.TimeoutExpired(exc.cmd, timeout))
+    started._out.close()
+    started._err.close()
+    result = Path(spec.result)
+    stdout, stderr = Path(str(result) + '.stdout'), Path(str(result) + '.stderr')
     text = stdout.read_text(encoding='utf-8', errors='replace') if stdout.exists() else ''
     errors = stderr.read_text(encoding='utf-8', errors='replace') if stderr.exists() else ''
     events = _events(text)
@@ -167,7 +201,7 @@ def run_external(spec, timeout):
         if spec.runner == 'codex':
             path = Path(spec.last)
             stat = path.stat() if path.is_file() else None
-            present = bool(stat and (stat.st_mtime_ns, stat.st_size) != last_before and path.read_text(encoding='utf-8').strip())
+            present = bool(stat and (stat.st_mtime_ns, stat.st_size) != started.last_before and path.read_text(encoding='utf-8').strip())
         elif spec.runner == 'dsh':
             present = any(e.get('type') == 'final' and (e.get('text') or e.get('message')) for e in events)
         elif spec.runner == 'opencode':
@@ -177,3 +211,10 @@ def run_external(spec, timeout):
         if not present:
             reason = 'missing last message'
     return {'exit_code': code, 'stdout_path': str(stdout), 'stderr_path': str(stderr), 'tokens': tokens, 'cost': cost, 'unusable_reason': reason}
+
+
+def run_external(spec, timeout):
+    """Run one external launch to its end."""
+    if not isinstance(spec, Command):
+        raise TypeError('run_external requires the Command returned by launch_spec')
+    return finish_external(start_external(spec), timeout)

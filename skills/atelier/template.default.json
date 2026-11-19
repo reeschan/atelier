@@ -13,7 +13,7 @@
     "planner": {"runner": "agent", "model": "opus", "effort": null},
     "reviewer": {"runner": "agent", "model": "opus", "effort": null}
   },
-  "limits": {"auto_fix": 1, "e2e_rounds": 2, "budget_tokens": null, "budget_usd": null},
+  "limits": {"auto_fix": 1, "e2e_rounds": 2, "budget_tokens": null, "budget_usd": null, "parallel": 3},
   "parts": {},
   "reading": {}
 }
