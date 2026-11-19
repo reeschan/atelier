@@ -291,6 +291,10 @@ def _unfinished_lines(run: dict[str, Any]) -> list[str]:
             commands = "、".join(co.get("commands") or []) or "（コマンド不明）"
             label = CARRY_STATUS_LABELS.get(co.get("status", "open"), co.get("status", ""))
             lines.append(f"- {co['id']}（{'、'.join(co.get('pbis') or [])}）: {commands} — {label}")
+    passed_notes = [(p, n) for p in run.get("pbis", []) if p.get("status") == "passed" for n in p.get("worker_carry_over") or []]
+    if passed_notes:
+        lines += ["", "## 作業者が直せなかったと返したが、wave の検査は通ったもの", ""]
+        lines += [f"- {p['id']}: {n.get('command', '')} — {n.get('why') or '（理由の記載なし）'}" for p, n in passed_notes]
     edits = run.get("outside_edits") or []
     if edits:
         lines += ["", "## 対象の外で変えたファイル", ""]

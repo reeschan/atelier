@@ -515,7 +515,9 @@ def fix_pbi_for(run: dict[str, Any], co: dict[str, Any]) -> dict[str, Any]:
     checks = list(co["commands"])
     for pbi in originals:
         targets += [t for t in pbi.get("targets") or [] if t not in targets]
-        do_not_touch += [t for t in pbi.get("do_not_touch") or [] if t not in do_not_touch and t not in targets]
+        do_not_touch += [t for t in pbi.get("do_not_touch") or [] if t not in do_not_touch]
+    # A path one failed PBI targets and another keeps untouched stays untouched for the fix PBI.
+    targets = [t for t in targets if t not in do_not_touch]
     levels = [p.get("level", "L2") for p in originals]
     return {
         "id": f"{co['id']}-FIX",

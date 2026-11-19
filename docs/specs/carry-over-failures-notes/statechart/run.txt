@@ -1,4 +1,4 @@
-node statechart.mjs from-chart carry-over-check.mmd --png   (2026-11-19, TLC 2.19)
+node statechart.mjs from-chart carry-over-check.mmd   (2026-11-19, TLC 2.19)
 
 TLC on CarryOver.tla with CarryOver.cfg:
   TypeOK holds.
@@ -7,10 +7,10 @@ TLC on CarryOver.tla with CarryOver.cfg:
   DoneWithDropped holds.
   AskBeforeLimit holds.
   AskBeforeLimit2 holds.
-  TLC ran 7 times in 5.9 s.
+  TLC ran 7 times in 5.3 s.
 
-Chart: 56 states and 80 transitions from 56 model states.
-56 work, 0 break a rule.
+Chart: 36 states and 49 transitions from 36 model states.
+36 work, 0 break a rule.
 
 No state breaks an INVARIANT rule.
 

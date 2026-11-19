@@ -70,6 +70,8 @@ stateDiagram-v2
             %% when Fixing
             CarryOpen --> CarryDropped: 持ち越しを外して承認した [承認の答え]
             %% when AwaitFixList
+            CarryOpen --> CarryNone: 組み直すと答えた [ユーザーの答え]
+            %% when AskBroken
         }
         --
         state FixTries {
@@ -83,8 +85,16 @@ stateDiagram-v2
             %% when Checking
             Fix1 --> Fix0: 通った・残りがある [検査の結果]
             %% when Checking
-            Fix2 --> Fix0: 作り直すと答えた [ユーザーの答え]
-            %% when AskRebuild
+            Fix1 --> Fix0: 通った・最後のwave [検査の結果]
+            %% when Checking
+            Fix2 --> Fix0: 通った・残りがある [検査の結果]
+            %% when Checking
+            Fix2 --> Fix0: 通った・最後のwave [検査の結果]
+            %% when Checking
+            Fix1 --> Fix0: 組み直すと答えた [ユーザーの答え]
+            %% when AskBroken
+            Fix2 --> Fix0: 組み直すと答えた [ユーザーの答え]
+            %% when AskBroken
         }
     }
     %% never BuildWithoutPlan: Building & Plan not approved -- ユーザーが承認していない計画で作り始めない

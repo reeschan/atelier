@@ -170,6 +170,9 @@ def compare(root, before, approved_edits=None, launch_id=None):
         rule = before.get('outside_edits') or {}
         if rule.get('no_tests') and is_test_file(name) and not user_approved:
             violations.append({'rule': 'G1', 'detail': 'test file changed by a fix PBI: ' + name})
+        elif _allowed(name, rule.get('blocked') or []) and not user_approved:
+            # do_not_touch holds even when a target directory covers the file.
+            violations.append({'rule': 'G1', 'detail': 'do_not_touch changed: ' + name})
         elif (before['allowed_paths'] is not None and not _allowed(name, before['allowed_paths'])
               and not user_approved and (name in approved or not _open_outside(name, before, after))):
             # A file with a registered approval keeps that content: the outside allowance does not reopen it.

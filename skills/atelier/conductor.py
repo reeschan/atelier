@@ -432,6 +432,10 @@ def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) 
     s = run["state"]
     if s == "checking":
         rechecked = state.recheck_held_pbis(run)
+        if exit_code != 0 and not result.get("failed_pbis"):
+            derived = _failed_pbis_from_commands(run, result)
+            if derived:
+                result = {**result, "failed_pbis": sorted(derived)}
         _append_check_records_for_wave(root, run, result, exit_code, rechecked)
         if exit_code == 0:
             run["last_check_failure"] = ""
@@ -455,7 +459,7 @@ def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) 
                 or json.dumps(result, ensure_ascii=False)
             )
             run["last_failed_rules"] = [str(r) for r in (result.get("rules") or ["G9"])]
-            failed_ids = set(result.get("failed_pbis") or []) or _failed_pbis_from_commands(run, result)
+            failed_ids = set(result.get("failed_pbis") or [])
             if failed_ids:
                 for pbi in run.get("pbis", []):
                     if pbi.get("status") in ("built", "failed"):

@@ -179,6 +179,35 @@ class ReviewFindingTests(unittest.TestCase):
             self.assertIn('"no_test_edits": true', ticket)
             self.assertIn('"keep.py"', ticket)
 
+    def test_a_fix_pbi_keeps_a_path_one_original_protects_and_another_targets(self) -> None:
+        run = {"pbis": [
+            {"id": "PBI-A", "targets": ["protected.py", "a.py"], "do_not_touch": [], "level": "L2"},
+            {"id": "PBI-B", "targets": ["b.py"], "do_not_touch": ["protected.py"], "level": "L1"},
+        ]}
+        co = state.record_carry_over(run, run["pbis"], ["check"], "E")
+        fix = state.fix_pbi_for(run, co)
+        self.assertEqual((["a.py", "b.py"], ["protected.py"]), (fix["targets"], fix["do_not_touch"]))
+
+    def test_check_records_use_the_derived_failed_pbis(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            self.first_wave_failed_by_commands(tmp)
+            records = [json.loads(line) for line in (tmp / "docs" / "pbi" / "record.jsonl").read_text(encoding="utf-8").splitlines()]
+            checks = {r["pbi"]: r["result"] for r in records if r.get("type") == "check"}
+            self.assertEqual(("fail", "pass"), (checks["PBI-1"], checks["PBI-2"]))
+
+    def test_a_worker_carry_over_the_wave_passed_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            act = reach_building(tmp, pbis=self.PLAN)
+            act = done(tmp, act, {"status": "ok", "carry_over": [{"command": "lint a.py", "output": "W1", "why": "two tries"}]})
+            while act["action"] == "launch":
+                act = done(tmp, act, {"status": "ok"})
+            act = done(tmp, act, {"exit_code": 0})
+            run = state.load_state(tmp)
+            self.assertEqual([], run["carry_overs"])
+            self.assertIn("- PBI-1: lint a.py — two tries", actions._unfinished_lines(run))
+
     def test_replanning_closes_the_open_carry_overs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -320,6 +349,13 @@ class OutsideEditTests(unittest.TestCase):
             before = guards.snapshot(root, allowed_paths=["app.py"])
             (root / "lib.py").write_text("y = 2\n", encoding="utf-8")
             self.assertEqual(["changed outside allowed paths: lib.py"], self.g1(guards.compare(root, before)))
+
+    def test_do_not_touch_holds_inside_a_target_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = self.repo(td)
+            before = guards.snapshot(root, allowed_paths=["tests/"], outside_edits={"blocked": ["tests/test_app.py"]})
+            (root / "tests" / "test_app.py").write_text("assert 2\n", encoding="utf-8")
+            self.assertEqual(["do_not_touch changed: tests/test_app.py"], self.g1(guards.compare(root, before)))
 
     def test_an_approved_edit_keeps_its_content_outside_the_targets(self) -> None:
         with tempfile.TemporaryDirectory() as td:
