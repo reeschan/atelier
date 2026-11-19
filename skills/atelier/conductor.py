@@ -73,17 +73,23 @@ def _git_head(root: Path) -> str | None:
     return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
 
 
+def _launch_snapshot(root: Path, run: dict[str, Any], act: dict[str, Any]) -> dict[str, Any]:
+    """The work root before a launch. A worker may also update existing test files outside its paths."""
+    return guards.snapshot(
+        root,
+        allowed_paths=actions.allowed_paths_for(run, act["role"], act.get("pbi")),
+        report_path=act["result"],
+        allow_test_edits=act["role"] == "worker",
+    )
+
+
 def _ensure_snapshot(root: Path, run: dict[str, Any], act: dict[str, Any]) -> None:
     if act.get("action") == "launch" and act.get("runner") == "agent":
         existing = run.get("pending_snapshot")
         if existing is not None and existing.get("launch_id") == act.get("launch_id"):
             return
         if _is_git_repo(root):
-            snap = guards.snapshot(
-                root,
-                allowed_paths=actions.allowed_paths_for(run, act["role"], act.get("pbi")),
-                report_path=act["result"],
-            )
+            snap = _launch_snapshot(root, run, act)
             snap["launch_id"] = act["launch_id"]
             run["pending_snapshot"] = snap
         else:
@@ -550,7 +556,30 @@ def _validate_completion_before_accept(
             raise ConductorError(" ".join(errors))
 
 
+def _record_test_edits(run: dict[str, Any], pending: dict[str, Any], result: dict[str, Any]) -> None:
+    """Keep the test files a worker updated outside its paths, with the reason it gave, for the report."""
+    why_by_file: dict[str, str] = {}
+    for item in result.get("test_updates") or []:
+        if isinstance(item, dict) and isinstance(item.get("file"), str):
+            why_by_file[item["file"].strip().replace("\\", "/").removeprefix("./")] = str(item.get("why") or "")
+    if pending.get("pbi"):
+        owner = pending["pbi"]
+    elif run.get("fix_groups"):
+        owner = f"FIX-{run.get('fix_group_index', 0) + 1}"
+    else:
+        owner = "FIX-E2E"
+    edits = run.setdefault("test_edits", [])
+    for name in pending.get("test_edits") or []:
+        entry = next((e for e in edits if (e["by"], e["file"]) == (owner, name)), None)
+        if entry is None:
+            entry = {"by": owner, "file": name, "why": ""}
+            edits.append(entry)
+        entry["why"] = why_by_file.get(name) or entry["why"]
+
+
 def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any], result: dict[str, Any]) -> None:
+    if pending.get("role") == "worker":
+        _record_test_edits(run, pending, result)
     # Cross-cutting flags reported by a role
     for flag, event in (
         ("plan_broken", "plan_broken"),
@@ -859,6 +888,7 @@ def _collect_post_launch_violations(
 
     if pending.get("role") == "worker":
         if before is not None and _is_git_repo(root):
+            pending["test_edits"] = guards.outside_test_edits(root, before)
             after = guards.snapshot(root)
             existing_g5 = {v["detail"] for v in violations if v.get("rule") == "G5"}
             for dep_path in guards.install_attempts(before, after):
@@ -983,11 +1013,7 @@ def _cmd_run(args: argparse.Namespace) -> dict[str, Any]:
 
     before = None
     if _is_git_repo(root):
-        before = guards.snapshot(
-            root,
-            allowed_paths=actions.allowed_paths_for(run, pending["role"], pending.get("pbi")),
-            report_path=pending["result"],
-        )
+        before = _launch_snapshot(root, run, pending)
 
     ext = runners.run_external(spec, args.timeout)
     state.record_usage(
@@ -1146,6 +1172,18 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
             flow.apply_event(run, "omm_skip")
         else:
             raise ConductorError(f"invalid choice '{choice}' for {s}")
+    elif s == "asking_plan_broken" and choice == "add_tests":
+        found = actions.test_only_plan_change(run)
+        if found is None:
+            raise ConductorError("add_tests needs a broken PBI whose needed files are all test files")
+        pbi, files = found
+        change = run.pop("pending_plan_change", None) or {}
+        added = [f for f in files if f not in pbi.get("targets", [])]
+        pbi["targets"] = [*pbi.get("targets", []), *added]
+        pbi["files"] = list(pbi["targets"])
+        summary = f"テストのファイルを対象に足した: {', '.join(added)}" + (f"（{change['reason']}）" if change.get("reason") else "")
+        state.append_approval_revision(run, action="add_tests", changed_pbis=[pbi["id"]], summary=summary)
+        flow.apply_event(run, "resume")
     elif s == "asking_plan_broken" and choice == "replan":
         change = run.pop("pending_plan_change", None) or {}
         lines = [f"The worker on {change.get('pbi') or 'a PBI'} reported that the plan's assumptions failed."]

@@ -8,8 +8,9 @@ Break the approved spec into small, dependency-ordered PBIs (in `revise`, update
 Before you fix a PBI's `targets`, read the code it changes and look for:
 - the callers of each type, function or constant it changes;
 - exhaustive tables and branches over a type it extends (for example a `Record<Union, ...>` or a `switch` that must list every value), which fail the type check when a value is added;
-- an existing mechanism with the same role (for example a manager of interaction modes) that the PBI must use instead of adding a second one.
-Put every file that must change into `targets`. If such a file is in `do_not_touch` of the plan, split the PBIs differently. List the places you read in `evidence`.
+- an existing mechanism with the same role (for example a manager of interaction modes) that the PBI must use instead of adding a second one;
+- the existing tests (unit tests and the like) that exercise what the PBI changes, when the PBI changes observable behaviour (a value, a size, a message, an output): their expected values go stale by design.
+Put every file that must change into `targets`, including those tests. If such a file is in `do_not_touch` of the plan, split the PBIs differently. List the places you read in `evidence`.
 
 Every PBI must pass the plan's `checks` and its own `checks` on its own, after its wave. Repository-wide checks such as unused-code or unused-export detection run on each wave, so keep an addition and its first use in the same PBI: do not plan one PBI that only adds a function, type, constant, export or file and a later PBI that first uses it, because the earlier PBI would fail those checks by design.
 

@@ -67,13 +67,51 @@ def approved_edit(root, path):
     return {'path': name, 'digest': _digest(p)}
 
 
-def snapshot(root, allowed_paths=None, report_path=None, child_pids=None):
+def snapshot(root, allowed_paths=None, report_path=None, child_pids=None, allow_test_edits=False):
+    """allow_test_edits lets compare() pass edits to existing test files outside allowed_paths (see outside_test_edits)."""
     root = Path(root).resolve()
     return {'root': str(root), 'head': _git(root, 'rev-parse', '--verify', 'HEAD').strip(),
             'branch': _git(root, 'symbolic-ref', '--short', '-q', 'HEAD').strip() if _branch_exists(root) else '',
             'stash': _git(root, 'stash', 'list', '--format=%H'), 'files': _files(root),
             'allowed_paths': list(allowed_paths) if allowed_paths is not None else None,
+            'allow_test_edits': bool(allow_test_edits),
             'report_path': str(report_path) if report_path else None, 'child_pids': list(child_pids or [])}
+
+
+# Directories and file names that hold tests by the usual conventions of common languages.
+_TEST_DIRS = {'test', 'tests', '__tests__', '__snapshots__'}
+_TEST_NAMES = ('test_*.*', '*_test.*', '*.test.*', '*.spec.*', '*_spec.*', '*.cy.*', '*Test.*', '*Tests.*', '*.snap')
+
+
+def is_test_file(name):
+    """True when a work-root-relative path is a test file: under a test directory or named like a test."""
+    parts = PurePosixPath(name.replace('\\', '/').lstrip('./')).parts
+    if not parts:
+        return False
+    if any(part in _TEST_DIRS for part in parts[:-1]):
+        return True
+    return any(fnmatch.fnmatchcase(parts[-1], pattern) for pattern in _TEST_NAMES)
+
+
+def _test_edit(name, before, after):
+    """An existing test file whose content changed; adding, deleting or linking one is not a test edit."""
+    old, new = before['files'].get(name), after['files'].get(name)
+    return (
+        old is not None and new is not None and old != new
+        and not str(old).startswith('link:') and not str(new).startswith('link:')
+        and is_test_file(name)
+    )
+
+
+def outside_test_edits(root, before):
+    """Existing test files changed outside the snapshot's allowed paths, when the snapshot allowed such edits."""
+    if not before.get('allow_test_edits') or before['allowed_paths'] is None:
+        return []
+    after = snapshot(Path(root))
+    return sorted(
+        name for name in before['files'].keys() & after['files'].keys()
+        if not _allowed(name, before['allowed_paths']) and _test_edit(name, before, after)
+    )
 
 
 def _branch_exists(root):
@@ -115,7 +153,8 @@ def compare(root, before, approved_edits=None, launch_id=None):
     changed = {p for p in before['files'].keys() | after['files'].keys() if before['files'].get(p) != after['files'].get(p)}
     for name in sorted(changed):
         user_approved = name in approved and after['files'].get(name) == approved[name]
-        if before['allowed_paths'] is not None and not _allowed(name, before['allowed_paths']) and not user_approved:
+        test_edit = before.get('allow_test_edits') and _test_edit(name, before, after)
+        if before['allowed_paths'] is not None and not _allowed(name, before['allowed_paths']) and not user_approved and not test_edit:
             violations.append({'rule': 'G1', 'detail': 'changed outside allowed paths: ' + name})
         if Path(name).name in LOCKS | MANIFESTS:
             violations.append({'rule': 'G5', 'detail': 'dependency file changed: ' + name})

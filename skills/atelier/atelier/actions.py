@@ -68,6 +68,7 @@ ASK_CHOICES: dict[str, tuple[str, list[dict[str, str]], str]] = {
     "asking_plan_broken": (
         "plan_broken",
         [
+            {"id": "add_tests", "label": "テストのファイルを PBI の対象に足して、同じ PBI をやり直す"},
             {"id": "replan", "label": "計画を組み直す"},
             {"id": "resume", "label": "同じ PBI をやり直す"},
             {"id": "stop", "label": "止めて報告する"},
@@ -155,6 +156,25 @@ def _group_files(items: list[dict[str, Any]]) -> list[str]:
             if isinstance(path, str) and path.strip() and path not in files:
                 files.append(path)
     return files
+
+
+def test_only_plan_change(run: dict[str, Any]) -> tuple[dict[str, Any], list[str]] | None:
+    """The broken PBI and its needed files, when every file it needed outside its targets is a test file.
+
+    Such a break is mended by adding those files to the PBI's targets instead of re-planning; this holds
+    only while PBIs are still being built, for a PBI that has not passed and whose do_not_touch leaves them free.
+    """
+    change = run.get("pending_plan_change") or {}
+    files = [plan._norm_path(f) for f in change.get("needed_files") or [] if isinstance(f, str) and f.strip()]
+    pbi = state.get_pbi(run, change.get("pbi") or "")
+    if not files or pbi is None or pbi.get("status") == "passed" or run.get("return_state") not in flow.REPLAN_FROM:
+        return None
+    if not all(survey.inside_repo(f) and guards.is_test_file(f) for f in files):
+        return None
+    kept = [plan._norm_path(p).rstrip("/") for p in pbi.get("do_not_touch") or [] if isinstance(p, str) and p.strip()]
+    if any(f == k or f.startswith(k + "/") for f in files for k in kept):
+        return None
+    return pbi, files
 
 
 def allowed_paths_for(run: dict[str, Any], role: str, pbi_id: str | None) -> list[str] | None:
@@ -286,6 +306,10 @@ def _unfinished_lines(run: dict[str, Any]) -> list[str]:
     restored = run.get("eol_restored") or []
     if restored:
         lines += ["", "## 改行を LF に戻したファイル", "", *[f"- {path}" for path in restored]]
+    test_edits = run.get("test_edits") or []
+    if test_edits:
+        lines += ["", "## 対象の外で直したテスト", ""]
+        lines += [f"- {e['by']}: {e['file']} — {e['why'] or '（理由の記載なし）'}" for e in test_edits]
     return lines
 
 
@@ -1273,6 +1297,9 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
         kind, choices, body = ASK_CHOICES[s]
         if run.get("return_state") not in flow.REPLAN_FROM:
             choices = [c for c in choices if c["id"] != "replan"]
+        tests_only = test_only_plan_change(run) is not None
+        if not tests_only:
+            choices = [c for c in choices if c["id"] != "add_tests"]
         change = run.get("pending_plan_change") or {}
         detail = "\n".join(
             line
@@ -1280,6 +1307,9 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
                 body,
                 f"理由: {change['reason']}" if change.get("reason") else "",
                 f"触る必要があったファイル: {', '.join(change['needed_files'])}" if change.get("needed_files") else "",
+                "触る必要があったのはテストのファイルだけです。PBI の対象に足せば、計画を組み直さずに同じ PBI をやり直せます。"
+                if tests_only
+                else "",
             )
             if line
         )
