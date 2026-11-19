@@ -1,0 +1,94 @@
+stateDiagram-v2
+    state Whole {
+        state Run {
+            state "Awaiting plan approval" as AwaitPlan
+            state "Building" as Building
+            state "Checking" as Checking
+            state "Asking about a broken plan" as AskBroken
+            state "Asking to rebuild" as AskRebuild
+            state "Reviewing" as Reviewing
+            state "Awaiting fix list approval" as AwaitFixList
+            state "Fixing" as Fixing
+            state "Running E2E" as E2E
+            state "Reporting" as Reporting
+            state "Reported complete" as DoneComplete
+            state "Reported unfinished" as DoneUnfinished
+            [*] --> AwaitPlan
+            AwaitPlan --> Building: 計画を承認した
+            Building --> Checking: waveを作り終えた
+            Building --> AskBroken: 重い修正だと返った
+            AskBroken --> AwaitPlan: 組み直すと答えた
+            AskBroken --> Building: 同じPBIをやり直すと答えた
+            Checking --> Building: 通った・残りがある
+            Checking --> Reviewing: 通った・最後のwave
+            Checking --> Building: 落ちた・残りがある [修正の上限まで]
+            %% when Fix0, Fix1
+            Checking --> Reviewing: 落ちた・最後のwave [修正の上限まで]
+            %% when Fix0, Fix1
+            Checking --> AskRebuild: 上限を超えて落ちた [修正の上限を超えた]
+            %% when Fix2
+            AskRebuild --> Building: 作り直すと答えた
+            AskRebuild --> Reporting: 止めると答えた
+            Reviewing --> AwaitFixList: 仕分けた
+            AwaitFixList --> Fixing: 直す一覧を承認した
+            AwaitFixList --> Fixing: 持ち越しを外して承認した [持ち越しあり]
+            %% when CarryOpen
+            AwaitFixList --> E2E: 直すものがない [持ち越しなし]
+            %% when CarryNone, CarryDropped
+            Fixing --> E2E: 修正が検査を通った
+            E2E --> Reporting: E2Eが通った
+            Reporting --> DoneComplete: 報告を書いた [持ち越しなし]
+            %% when CarryNone
+            Reporting --> DoneUnfinished: 未完了の報告を書いた [持ち越しが残った]
+            %% when CarryOpen, CarryDropped
+        }
+        --
+        state Plan {
+            state "Plan not approved" as PlanOpen
+            state "Plan approved" as PlanApproved
+            [*] --> PlanOpen
+            PlanOpen --> PlanApproved: 計画を承認した [承認の答え]
+            %% when AwaitPlan
+            PlanApproved --> PlanOpen: 組み直すと答えた [ユーザーの答え]
+            %% when AskBroken
+        }
+        --
+        state Carry {
+            state "No carry-over" as CarryNone
+            state "Carry-over open" as CarryOpen
+            state "Carry-over dropped" as CarryDropped
+            [*] --> CarryNone
+            CarryNone --> CarryOpen: 落ちた・残りがある [検査の結果]
+            %% when Checking, Fix0, Fix1
+            CarryNone --> CarryOpen: 落ちた・最後のwave [検査の結果]
+            %% when Checking, Fix0, Fix1
+            CarryOpen --> CarryNone: 通った・残りがある [検査の結果]
+            %% when Checking
+            CarryOpen --> CarryNone: 通った・最後のwave [検査の結果]
+            %% when Checking
+            CarryOpen --> CarryNone: 修正が検査を通った [修正の結果]
+            %% when Fixing
+            CarryOpen --> CarryDropped: 持ち越しを外して承認した [承認の答え]
+            %% when AwaitFixList
+        }
+        --
+        state FixTries {
+            state "Fix PBI 0 times" as Fix0
+            state "Fix PBI 1 time" as Fix1
+            state "Fix PBI 2 times" as Fix2
+            [*] --> Fix0
+            Fix0 --> Fix1: 落ちた・残りがある [検査の結果]
+            %% when Checking
+            Fix1 --> Fix2: 落ちた・残りがある [検査の結果]
+            %% when Checking
+            Fix1 --> Fix0: 通った・残りがある [検査の結果]
+            %% when Checking
+            Fix2 --> Fix0: 作り直すと答えた [ユーザーの答え]
+            %% when AskRebuild
+        }
+    }
+    %% never BuildWithoutPlan: Building & Plan not approved -- ユーザーが承認していない計画で作り始めない
+    %% never DoneWithCarry: Reported complete & Carry-over open -- 持ち越しが残ったまま完了と報告しない
+    %% never DoneWithDropped: Reported complete & Carry-over dropped -- 外した持ち越しがあるのに完了と報告しない
+    %% never AskBeforeLimit: Asking to rebuild & Fix PBI 0 times -- 修正の PBI が上限まで落ちる前に、作り直しの問いで止めない
+    %% never AskBeforeLimit2: Asking to rebuild & Fix PBI 1 time -- 修正の PBI が上限まで落ちる前に、作り直しの問いで止めない

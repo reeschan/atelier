@@ -366,7 +366,7 @@ class TestIntegrationSeam1(unittest.TestCase):
             write_result_for(act, {**VALID_FACTS, "tokens": {"input": 10, "output": 5, "total": 15}, "cost": 0.01})
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             _, act = run_cli("answer", "--root", str(root), "--choice", "skip")
-            write_result_for(act, make_plan([make_pbi("PBI-1")]))
+            write_result_for(act, make_plan([make_pbi("PBI-1"), make_pbi("PBI-2", depends_on=["PBI-1"])]))
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             _, w1 = run_cli("answer", "--root", str(root), "--choice", "approve")
 
@@ -382,7 +382,12 @@ class TestIntegrationSeam1(unittest.TestCase):
             write_result_for(af1, {"status": "ok", "fixed_rules": ["G13"]})
             _, chk2 = run_cli("done", "--root", str(root), "--launch-id", af1["launch_id"])
             write_result_for(chk2, {"exit_code": 0})
-            _, rev = run_cli("done", "--root", str(root), "--launch-id", chk2["launch_id"])
+            _, w2 = run_cli("done", "--root", str(root), "--launch-id", chk2["launch_id"])
+            self.assertEqual(w2["pbi"], "PBI-2")
+            write_result_for(w2, {"status": "ok"})
+            _, chk3 = run_cli("done", "--root", str(root), "--launch-id", w2["launch_id"])
+            write_result_for(chk3, {"exit_code": 0})
+            _, rev = run_cli("done", "--root", str(root), "--launch-id", chk3["launch_id"])
             write_result_for(rev, {"schema": "atelier.findings/1", "findings": []})
             _, e2e = run_cli("done", "--root", str(root), "--launch-id", rev["launch_id"])
             write_result_for(e2e, {"exit_code": 0})
@@ -573,7 +578,8 @@ class TestIntegrationSeam1(unittest.TestCase):
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             _, act = run_cli("answer", "--root", str(root), "--choice", "approve")
 
-            # 7. building (PBI-1) -> 8. checking (fail #1) -> 9. auto_fixing -> checking (fail #2) -> 10. asking_rebuild
+            # 7. building (PBI-1) -> 8. checking (fail #1) -> building (the fix PBI) -> checking (fail #2)
+            #    -> building (the fix PBI, one level up) -> checking (fail #3) -> 9. asking_rebuild
             self.assertEqual(record_state(), "building")
             (root / "app.py").write_text("x = 2\n", encoding="utf-8")
             write_result_for(act, {"status": "ok"})
@@ -582,12 +588,14 @@ class TestIntegrationSeam1(unittest.TestCase):
 
             write_result_for(act, {"exit_code": 1, "failed_pbis": ["PBI-1"], "output": "fail 1"})
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-            self.assertEqual(record_state(), "auto_fixing")
+            self.assertEqual(record_state(), "building")
+            self.assertEqual(act["pbi"], "CO-1-FIX")
 
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-            write_result_for(act, {"exit_code": 1, "failed_pbis": ["PBI-1"], "output": "fail 2"})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
+            for n in (2, 3):
+                write_result_for(act, {"status": "ok"})
+                _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
+                write_result_for(act, {"exit_code": 1, "failed_pbis": ["CO-1-FIX"], "output": f"fail {n}"})
+                _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             self.assertEqual(record_state(), "asking_rebuild")
 
             _, act = run_cli("answer", "--root", str(root), "--choice", "retry_up")
@@ -651,7 +659,7 @@ class TestIntegrationSeam1(unittest.TestCase):
             history_states = {h["from"] for h in final_st["history"]} | {h["to"] for h in final_st["history"]}
             expected_diagram_states = {
                 "surveying", "asking_interview", "interviewing", "awaiting_spec_approval",
-                "planning", "awaiting_plan_approval", "building", "checking", "auto_fixing",
+                "planning", "awaiting_plan_approval", "building", "checking",
                 "asking_rebuild", "reviewing", "triaging", "awaiting_fix_approval", "fixing",
                 "running_e2e", "asking_e2e_limit", "reporting", "done",
             }
@@ -795,7 +803,7 @@ class TestIntegrationSeam1(unittest.TestCase):
             build_checks = 0
             e2e_checks = 0
             saw_interview_round = False
-            saw_auto_fix = False
+            saw_fix_pbi = False
             saw_rebuild = False
             saw_fix_approval = False
             saw_e2e_failure = False
@@ -837,12 +845,15 @@ class TestIntegrationSeam1(unittest.TestCase):
                             })
                         else:
                             write_result_for(act, {
-                                **make_plan([make_pbi("PBI-1", level="L1", targets=["app.py"])]),
+                                **make_plan([
+                                    make_pbi("PBI-1", level="L1", targets=["app.py"]),
+                                    make_pbi("PBI-2", level="L1", depends_on=["PBI-1"], targets=["app.py"]),
+                                ]),
                                 "tokens": {"input": 90, "output": 30, "total": 120},
                             })
                     elif role == "worker":
-                        if "Mode: auto_fix" in prompt_text:
-                            saw_auto_fix = True
+                        if '"failed_commands"' in prompt_text:
+                            saw_fix_pbi = True
                             write_result_for(act, {"status": "ok", "fixed_rules": ["G9"]})
                         elif "Mode: fix" in prompt_text:
                             write_result_for(act, {"status": "ok", "fixed_rules": ["review"]})
@@ -871,8 +882,9 @@ class TestIntegrationSeam1(unittest.TestCase):
                         write_result_for(act, {"exit_code": 0})
                     else:
                         build_checks += 1
-                        if build_checks <= 2:
-                            write_result_for(act, {"exit_code": 1, "failed_pbis": ["PBI-1"], "rules": ["G9"], "output": f"fail {build_checks}"})
+                        if build_checks <= 3:
+                            failed = ["PBI-1"] if build_checks == 1 else ["CO-1-FIX"]
+                            write_result_for(act, {"exit_code": 1, "failed_pbis": failed, "rules": ["G9"], "output": f"fail {build_checks}"})
                         else:
                             write_result_for(act, {"exit_code": 0})
                     # SKILL.md calls `conductor.py done --root <work-root>` for check (without --launch-id)
@@ -904,7 +916,7 @@ class TestIntegrationSeam1(unittest.TestCase):
                     self.fail(f"unexpected action: {act}")
 
             self.assertTrue(saw_interview_round)
-            self.assertTrue(saw_auto_fix)
+            self.assertTrue(saw_fix_pbi)
             self.assertTrue(saw_rebuild)
             self.assertTrue(saw_fix_approval)
             self.assertTrue(saw_e2e_failure)

@@ -109,7 +109,7 @@ def reach_building_with(
 
 
 class TestFlowRulesSeam1(unittest.TestCase):
-    def test_six_never_rules_including_per_pbi_two_auto_fixes(self) -> None:
+    def test_never_rules(self) -> None:
         from atelier import flow, state
 
         # 1. BuildWithoutPlan
@@ -126,30 +126,8 @@ class TestFlowRulesSeam1(unittest.TestCase):
         with self.assertRaises(flow.InvariantError):
             flow.check_invariants(r2)
 
-        # 3. TwoAutoFixes (per PBI!)
-        r3 = state.new_run_state(Path("."), Path("goal.md"), None)
-        r3["state"] = "auto_fixing"
-        r3["approvals"]["spec"] = True
-        r3["approvals"]["plan"] = True
-        r3["pbis"] = [
-            {"id": "PBI-1", "status": "failed", "auto_fix_count": 2},
-            {"id": "PBI-2", "status": "pending", "auto_fix_count": 0},
-        ]
-        r3["auto_fix_pbi"] = "PBI-1"
-        with self.assertRaises(flow.InvariantError):
-            flow.check_invariants(r3)
-
-        # Having PBI-1 already auto-fixed once (and passed) does NOT block PBI-2 from auto_fixing
-        r3_ok = state.new_run_state(Path("."), Path("goal.md"), None)
-        r3_ok["state"] = "auto_fixing"
-        r3_ok["approvals"]["spec"] = True
-        r3_ok["approvals"]["plan"] = True
-        r3_ok["pbis"] = [
-            {"id": "PBI-1", "status": "passed", "auto_fix_count": 1},
-            {"id": "PBI-2", "status": "failed", "auto_fix_count": 1},
-        ]
-        r3_ok["auto_fix_pbi"] = "PBI-2"
-        flow.check_invariants(r3_ok)
+        # 3. No auto-fix: a failed check is carried over, so there is no state that relaunches a worker on it
+        self.assertNotIn("auto_fixing", flow.STATES)
 
         # 4. SecondReview
         r4 = state.new_run_state(Path("."), Path("goal.md"), None)
@@ -175,7 +153,7 @@ class TestFlowRulesSeam1(unittest.TestCase):
         with self.assertRaises(flow.InvariantError):
             flow.check_invariants(r6)
 
-    def test_per_pbi_autofix_prompt_and_same_wave_independent_pbi(self) -> None:
+    def test_fix_pbi_prompt_level_and_route(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             init_git_repo(root)
@@ -183,13 +161,12 @@ class TestFlowRulesSeam1(unittest.TestCase):
             pbis = [
                 {"id": "PBI-1", "title": "First", "depends_on": [], "level": "L1", "reason": "small"},
                 {"id": "PBI-2", "title": "Second", "depends_on": [], "level": "L2", "reason": "clear"},
+                {"id": "PBI-3", "title": "Third", "depends_on": ["PBI-1", "PBI-2"], "level": "L1", "reason": "small"},
             ]
             act = reach_building_with(root, pbis, agents_path=agents, template_path=tmpl)
             self.assertEqual(act["pbi"], "PBI-1")
             self.assertEqual(act["model"], "haiku")
 
-            # Modify tracked file so git diff is non-empty
-            (root / "app.py").write_text("x = 2\n", encoding="utf-8")
             write_result_for(act, {"status": "ok"})
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             self.assertEqual(act["pbi"], "PBI-2")
@@ -199,51 +176,42 @@ class TestFlowRulesSeam1(unittest.TestCase):
             _, chk = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             self.assertEqual(chk["action"], "check")
 
-            # Check #1: PBI-1 and PBI-2 both fail; PBI-1 gets auto-fix with ONLY failure output + diff, same model (haiku)
+            # Check #1: PBI-1 and PBI-2 both fail -> one fix PBI at the higher level (L2: sonnet, low)
             write_result_for(chk, {"exit_code": 1, "failed_pbis": ["PBI-1", "PBI-2"], "output": "AssertionError: expected 1"})
-            code, af1 = run_cli("done", "--root", str(root), "--launch-id", chk["launch_id"])
+            code, fix1 = run_cli("done", "--root", str(root), "--launch-id", chk["launch_id"])
             self.assertEqual(code, 0)
-            self.assertEqual(af1["action"], "launch")
-            self.assertEqual(af1["role"], "worker")
-            self.assertEqual(af1["pbi"], "PBI-1")
-            self.assertEqual(af1["model"], "haiku")
-            self.assertIsNone(af1["effort"])
-            af1_prompt = Path(af1["prompt"]).read_text(encoding="utf-8")
-            self.assertIn("AssertionError: expected 1", af1_prompt)
-            self.assertIn("x = 2", af1_prompt)
-            self.assertNotIn("最小の変更を作る", af1_prompt)  # goal not included
-            self.assertNotIn("受け入れ条件", af1_prompt)  # spec not included
+            self.assertEqual((fix1["action"], fix1["role"], fix1["pbi"]), ("launch", "worker", "CO-1-FIX"))
+            self.assertEqual((fix1["model"], fix1["effort"]), ("sonnet", "low"))
+            prompt = Path(fix1["prompt"]).read_text(encoding="utf-8")
+            self.assertIn("AssertionError: expected 1", prompt)
+            self.assertIn('"title": "First"', prompt)
+            self.assertIn('"title": "Second"', prompt)
 
-            # PBI-1 auto-fix returns -> checking -> PBI-1 now passes, PBI-2 still fails for its first auto-fix
-            write_result_for(af1, {"status": "ok"})
-            _, chk2 = run_cli("done", "--root", str(root), "--launch-id", af1["launch_id"])
-            self.assertEqual(chk2["action"], "check")
-
-            # PBI-1 passed, PBI-2 failed for its first time -> PBI-2 MUST get its own auto-fix (sonnet, low)
-            write_result_for(chk2, {"exit_code": 1, "failed_pbis": ["PBI-2"], "output": "LintError: unused"})
-            code, af2 = run_cli("done", "--root", str(root), "--launch-id", chk2["launch_id"])
+            # The fix PBI fails -> once more one level up (L3: sonnet, high)
+            write_result_for(fix1, {"status": "ok"})
+            _, chk2 = run_cli("done", "--root", str(root), "--launch-id", fix1["launch_id"])
+            write_result_for(chk2, {"exit_code": 1, "failed_pbis": ["CO-1-FIX"], "output": "LintError: unused"})
+            code, fix2 = run_cli("done", "--root", str(root), "--launch-id", chk2["launch_id"])
             self.assertEqual(code, 0)
-            self.assertEqual(af2["action"], "launch")
-            self.assertEqual(af2["pbi"], "PBI-2")
-            self.assertEqual(af2["model"], "sonnet")
-            self.assertEqual(af2["effort"], "low")
+            self.assertEqual((fix2["pbi"], fix2["model"], fix2["effort"]), ("CO-1-FIX", "sonnet", "high"))
+            self.assertIn("LintError: unused", Path(fix2["prompt"]).read_text(encoding="utf-8"))
 
-            # PBI-2 fails a second time -> asking_rebuild with 3 choices
-            write_result_for(af2, {"status": "ok"})
-            _, chk3 = run_cli("done", "--root", str(root), "--launch-id", af2["launch_id"])
-            write_result_for(chk3, {"exit_code": 1, "failed_pbis": ["PBI-2"], "output": "still failing"})
+            # It fails past its tries -> asking_rebuild; PBI-3 waits on it, so both holds are offered
+            write_result_for(fix2, {"status": "ok"})
+            _, chk3 = run_cli("done", "--root", str(root), "--launch-id", fix2["launch_id"])
+            write_result_for(chk3, {"exit_code": 1, "failed_pbis": ["CO-1-FIX"], "output": "still failing"})
             code, ask = run_cli("done", "--root", str(root), "--launch-id", chk3["launch_id"])
             self.assertEqual(code, 0)
             self.assertEqual(ask["action"], "ask")
             self.assertEqual(ask["kind"], "rebuild")
-            self.assertEqual([c["id"] for c in ask["choices"]], ["retry", "retry_up", "hold"])
+            self.assertEqual([c["id"] for c in ask["choices"]], ["retry", "retry_up", "hold", "hold_stop"])
 
-            # Choose retry_up -> PBI-2 promoted from L2 to L3 (sonnet, high)
+            # Choose retry_up -> the fix PBI promoted from L3 to L4 (opus, high)
             code, rebuild = run_cli("answer", "--root", str(root), "--choice", "retry_up")
             self.assertEqual(code, 0)
             self.assertEqual(rebuild["action"], "launch")
-            self.assertEqual(rebuild["pbi"], "PBI-2")
-            self.assertEqual(rebuild["model"], "sonnet")
+            self.assertEqual(rebuild["pbi"], "CO-1-FIX")
+            self.assertEqual(rebuild["model"], "opus")
             self.assertEqual(rebuild["effort"], "high")
 
     def test_template_switch_expired_ask_and_limits(self) -> None:

@@ -1,4 +1,4 @@
-"""Holding a failed PBI lets the PBIs that depend on it go on; a run with unfinished PBIs is not reported as done."""
+"""Holding a fix PBI that failed past its tries lets the PBIs that wait on it go on; a run with unfinished PBIs is not reported as done."""
 
 import subprocess
 import sys
@@ -23,6 +23,7 @@ CHAIN = [
     {"id": "PBI-4", "title": "Wire up", "depends_on": ["PBI-3"], "checks": ["check-4"]},
     {"id": "PBI-5", "title": "Show it", "depends_on": ["PBI-4"], "checks": ["check-5"]},
 ]
+FIX = "CO-1-FIX"
 
 
 def done(tmp: Path, act: dict, payload: dict) -> dict:
@@ -32,16 +33,17 @@ def done(tmp: Path, act: dict, payload: dict) -> dict:
     return nxt
 
 
-def fail_first_wave_twice(tmp: Path) -> dict:
-    """Build the first wave, fail its check, auto-fix once, fail again: the rebuild question."""
+def fail_first_wave_past_fix_tries(tmp: Path) -> dict:
+    """Build the first wave, fail its check, fail its fix PBI twice: the rebuild question."""
     act = reach_building(tmp, pbis=CHAIN)
     act = done(tmp, act, {"status": "ok"})
     act = done(tmp, act, {"status": "ok"})
     assert act["action"] == "check", act
     act = done(tmp, act, {"exit_code": 1, "output": "unused export: helper"})
-    assert act["role"] == "worker", act
-    act = done(tmp, act, {"status": "ok"})
-    act = done(tmp, act, {"exit_code": 1, "output": "unused export: helper"})
+    for _ in range(2):
+        assert act["pbi"] == FIX, act
+        act = done(tmp, act, {"status": "ok"})
+        act = done(tmp, act, {"exit_code": 1, "output": "unused export: helper", "failed_pbis": [FIX]})
     assert act["kind"] == "rebuild", act
     return act
 
@@ -50,24 +52,24 @@ class HoldContinuesDependentsTests(unittest.TestCase):
     def test_question_names_the_failed_and_waiting_pbis(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            ask = fail_first_wave_twice(tmp)
+            ask = fail_first_wave_past_fix_tries(tmp)
             self.assertEqual([c["id"] for c in ask["choices"]], ["retry", "retry_up", "hold", "hold_stop"])
             body = Path(ask["question"]).read_text(encoding="utf-8")
-            self.assertIn("PBI-1（Add helper）", body)
+            self.assertIn(f"{FIX}（修正: Add helper、Add type）", body)
             self.assertIn("PBI-3、PBI-4、PBI-5", body)
             self.assertIn("unused export: helper", body)
 
     def test_hold_builds_the_dependents_and_passes_the_held_pbis_with_them(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            fail_first_wave_twice(tmp)
+            fail_first_wave_past_fix_tries(tmp)
             code, act = run_cli("answer", "--root", str(tmp), "--choice", "hold")
             self.assertEqual(code, 0, act)
             self.assertEqual((act["action"], act["pbi"]), ("launch", "PBI-3"))
             run = state.load_state(tmp)
             by_id = {p["id"]: p for p in run["pbis"]}
-            self.assertEqual(by_id["PBI-1"]["status"], "held")
-            self.assertEqual(by_id["PBI-3"]["waived_deps"], ["PBI-1", "PBI-2"])
+            self.assertEqual(by_id[FIX]["status"], "held")
+            self.assertEqual(by_id["PBI-3"]["waived_deps"], [FIX, "PBI-1", "PBI-2"])
 
             act = done(tmp, act, {"status": "ok"})
             self.assertEqual(act["action"], "check")
@@ -77,7 +79,7 @@ class HoldContinuesDependentsTests(unittest.TestCase):
             act = done(tmp, act, {"exit_code": 0})
             self.assertEqual(act["pbi"], "PBI-4")
             statuses = state.pbi_statuses(state.load_state(tmp))
-            self.assertEqual([statuses[f"PBI-{i}"] for i in (1, 2, 3)], ["passed"] * 3)
+            self.assertEqual([statuses[i] for i in ("PBI-1", "PBI-2", FIX, "PBI-3")], ["passed"] * 4)
 
             act = done(tmp, act, {"status": "ok"})
             self.assertNotIn("check-1", act["commands"])
@@ -85,59 +87,51 @@ class HoldContinuesDependentsTests(unittest.TestCase):
     def test_held_pbis_stay_held_when_the_dependent_check_fails(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            fail_first_wave_twice(tmp)
+            fail_first_wave_past_fix_tries(tmp)
             _, act = run_cli("answer", "--root", str(tmp), "--choice", "hold")
             act = done(tmp, act, {"status": "ok"})
             done(tmp, act, {"exit_code": 1, "failed_pbis": ["PBI-3"]})
             statuses = state.pbi_statuses(state.load_state(tmp))
-            self.assertEqual((statuses["PBI-1"], statuses["PBI-3"]), ("held", "failed"))
-
-    def test_held_pbis_held_twice_in_a_row_are_checked_again_together(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            fail_first_wave_twice(tmp)
-            _, act = run_cli("answer", "--root", str(tmp), "--choice", "hold")
-            act = done(tmp, act, {"status": "ok"})
-            act = done(tmp, act, {"exit_code": 1, "failed_pbis": ["PBI-3"]})
-            act = done(tmp, act, {"status": "ok"})
-            ask = done(tmp, act, {"exit_code": 1, "failed_pbis": ["PBI-3"]})
-            self.assertEqual(ask["kind"], "rebuild")
-            _, act = run_cli("answer", "--root", str(tmp), "--choice", "hold")
-            self.assertEqual(act["pbi"], "PBI-4")
-
-            act = done(tmp, act, {"status": "ok"})
-            for cmd in ("check-1", "check-2", "check-3", "check-4"):
-                self.assertIn(cmd, act["commands"])
-            done(tmp, act, {"exit_code": 0})
-            statuses = state.pbi_statuses(state.load_state(tmp))
-            self.assertEqual([statuses[f"PBI-{i}"] for i in (1, 2, 3, 4)], ["passed"] * 4)
+            self.assertEqual((statuses[FIX], statuses["PBI-3"]), ("held", "carried"))
 
     def test_hold_stop_reports_unfinished_instead_of_done(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            fail_first_wave_twice(tmp)
+            fail_first_wave_past_fix_tries(tmp)
             code, act = run_cli("answer", "--root", str(tmp), "--choice", "hold_stop")
             self.assertEqual(code, 0, act)
             self.assertEqual(act["action"], "done")
             self.assertFalse(act["complete"])
-            self.assertEqual(act["unfinished_pbis"], ["PBI-1", "PBI-2", "PBI-3", "PBI-4", "PBI-5"])
+            self.assertEqual(act["unfinished_pbis"], ["PBI-1", "PBI-2", FIX, "PBI-3", "PBI-4", "PBI-5"])
             report = Path(act["report"]).read_text(encoding="utf-8")
-            self.assertIn("- 状態: 未完了（終わっていない PBI が 5 件ある）", report)
+            self.assertIn("- 状態: 未完了（終わっていない PBI が 6 件ある）", report)
             self.assertNotIn("- 状態: done", report)
-            self.assertIn("- PBI-1（Add helper）: 保留", report)
-            self.assertIn("- PBI-3（Use both）: 未着手（PBI-1、PBI-2 を待っていて始まっていない）", report)
+            self.assertIn("- PBI-1（Add helper）: 検査に落ち、持ち越した", report)
+            self.assertIn(f"- {FIX}（修正: Add helper、Add type）: 保留", report)
+            self.assertIn(f"- PBI-3（Use both）: 未着手（{FIX} を待っていて始まっていない）", report)
+            self.assertIn("- CO-1（PBI-1、PBI-2）: check-1、check-2 — 残っている", report)
             handoff = Path(act["handoff"]).read_text(encoding="utf-8")
-            self.assertIn("- 終わっていない PBI: PBI-1、PBI-2、PBI-3、PBI-4、PBI-5", handoff)
+            self.assertIn(f"- 終わっていない PBI: PBI-1、PBI-2、{FIX}、PBI-3、PBI-4、PBI-5", handoff)
 
     def test_hold_without_dependents_offers_one_hold(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            act = reach_building(tmp)
-            act = done(tmp, act, {"status": "ok"})
-            act = done(tmp, act, {"exit_code": 1})
-            act = done(tmp, act, {"status": "ok"})
-            ask = done(tmp, act, {"exit_code": 1})
-            self.assertEqual([c["id"] for c in ask["choices"]], ["retry", "retry_up", "hold"])
+            pbis = [
+                {"id": "PBI-1", "title": "Alone", "depends_on": []},
+                {"id": "PBI-A", "title": "A", "depends_on": []},
+                {"id": "PBI-B", "title": "B", "depends_on": ["PBI-A"]},
+                {"id": "PBI-C", "title": "C", "depends_on": ["PBI-B"]},
+            ]
+            act = reach_building(tmp, pbis=pbis)
+            while act["action"] == "launch":
+                act = done(tmp, act, {"status": "ok"})
+            act = done(tmp, act, {"exit_code": 1, "failed_pbis": ["PBI-1"]})
+            for _ in range(2):
+                while act["action"] == "launch":
+                    act = done(tmp, act, {"status": "ok"})
+                act = done(tmp, act, {"exit_code": 1, "failed_pbis": [FIX]})
+            self.assertEqual(act["kind"], "rebuild")
+            self.assertEqual([c["id"] for c in act["choices"]], ["retry", "retry_up", "hold"])
 
     def test_passed_and_sensitive_pbis_are_finished(self) -> None:
         run = {"pbis": [{"id": "PBI-1", "status": "passed"}, {"id": "PBI-2", "status": "sensitive"}]}

@@ -100,7 +100,7 @@ def draft(kind, run):
         lines += _table(['役', '実行先とモデル'], [(labels.get(k, k), _route([v])) for k, v in roles.items()])
         limits = template.get('limits') or {}
         lines += ['', '## 上限と見積もり {span=2}']
-        lines += _table(['項目', '値'], [('自動修正の回数', limits.get('auto_fix')), ('E2E の回数', limits.get('e2e_rounds')), ('予算（トークン）', limits.get('budget_tokens') if limits.get('budget_tokens') is not None else '上限なし'), ('予算（米ドル）', limits.get('budget_usd') if limits.get('budget_usd') is not None else '上限なし'), ('見積もり', run.get('estimate'))])
+        lines += _table(['項目', '値'], [('同じ持ち越しの修正の PBI の回数', 2), ('E2E の回数', limits.get('e2e_rounds')), ('予算（トークン）', limits.get('budget_tokens') if limits.get('budget_tokens') is not None else '上限なし'), ('予算（米ドル）', limits.get('budget_usd') if limits.get('budget_usd') is not None else '上限なし'), ('見積もり', run.get('estimate'))])
         lines += ['', '難度の変更や計画の修正を指定できます。外部への送信と慎重に扱う候補も確認してください。']
     elif kind == 'spec':
         lines += ['', '## 仕様 {span=2}', str(run.get('spec') or '未確認'), '', '仕様を承認するか、修正を指定してください。']
@@ -108,6 +108,11 @@ def draft(kind, run):
         lines += ['', '## 直す一覧 {span=2}']
         fixes = run.get('fix_list') or []
         lines += _table(['項目', '内容', '理由'], [(f.get('id'), f.get('title'), f.get('reason')) for f in fixes]) if fixes else ['直す項目はありません。']
+        tests = run.get('outside_tests') or []
+        if tests:
+            lines += ['', '## 対象の外で変えたテスト {span=2}']
+            lines += _table(['PBI', 'ファイル', '理由'], [(e.get('by'), e.get('file'), e.get('why') or '（理由の記載なし）') for e in tests])
+            lines += ['', 'テストの期待値の変更が仕様に合うかを確かめてください。']
         candidates = run.get('candidates') or []
         lines += ['', '## 見送りの候補 {span=2}']
         lines += _table(['項目', '種類', '内容', '理由'], [(c.get('id'), c.get('kind'), c.get('title'), c.get('reason')) for c in candidates]) + ['', '直したい項目があれば、ID を指定して直す一覧に足せます。'] if candidates else ['なし']

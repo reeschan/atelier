@@ -162,6 +162,22 @@ def reach_building(tmp: Path, pbis: list[dict] | None = None) -> dict:
     return act
 
 
+def fail_until_rebuild(tmp: Path, act: dict, failed: list[str] | None = None) -> dict:
+    """Fail a wave check, then its fix PBI twice: the rebuild question."""
+    extra = {"failed_pbis": failed} if failed else {}
+    write_result_for(act, {"exit_code": 1, **extra})
+    code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
+    assert code == 0 and act["pbi"] == "CO-1-FIX", act
+    for _ in range(2):
+        write_result_for(act, {"status": "ok"})
+        code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
+        assert code == 0 and act["action"] == "check", act
+        write_result_for(act, {"exit_code": 1, "failed_pbis": ["CO-1-FIX"]})
+        code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
+        assert code == 0, act
+    return act
+
+
 def reach_reviewing(tmp: Path) -> dict:
     """Drive through 1-PBI build and passing check to reviewing."""
     act = reach_building(tmp)
@@ -374,7 +390,7 @@ class TestConductorSeam1(unittest.TestCase):
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(act["kind"], "plan_approval")
 
-    def test_multi_wave_autofix_and_rebuild_retry(self) -> None:
+    def test_multi_wave_carry_over_and_rebuild_retry(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             pbis = [
@@ -398,48 +414,26 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(act["action"], "check")
 
-            # Check fail #1 -> auto_fixing
-            write_result_for(act, {"exit_code": 1})
-            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "launch")
-            self.assertEqual(act["role"], "worker")
-
-            # Auto-fix returns -> checking
-            write_result_for(act, {"status": "ok"})
-            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "check")
-
-            # Check fail #2 -> asking_rebuild (NOT auto_fixing)
-            write_result_for(act, {"exit_code": 1})
-            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "ask")
+            # The check fails, the fix PBI fails twice -> asking_rebuild
+            act = fail_until_rebuild(tmp, act)
             self.assertEqual(act["kind"], "rebuild")
 
-            # retry -> building (wave 1)
+            # retry -> the fix PBI again
             code, act = run_cli("answer", "--root", str(tmp), "--choice", "retry")
             self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "launch")
-            self.assertEqual(act["role"], "worker")
-            self.assertEqual(act["pbi"], "PBI-1")
+            self.assertEqual((act["action"], act["role"], act["pbi"]), ("launch", "worker", "CO-1-FIX"))
 
-            # Build wave 1 again and pass check -> wave 2 (PBI-3)
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(act["pbi"], "PBI-2")
+            # The fix PBI passes -> wave 2 (PBI-3)
             write_result_for(act, {"status": "ok"})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(act["action"], "check")
-
             write_result_for(act, {"exit_code": 0})
             code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0)
             self.assertEqual(act["action"], "launch")
             self.assertEqual(act["pbi"], "PBI-3")
 
-    def test_rebuild_hold_moves_to_next_wave(self) -> None:
+    def test_an_independent_pbi_shares_the_wave_of_a_fix_pbi(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             pbis = [
@@ -456,25 +450,23 @@ class TestConductorSeam1(unittest.TestCase):
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(act["action"], "check")
 
-            # Check fails on PBI-1 only -> PBI-2 passes (G8), PBI-1 auto-fixes
+            # The check fails on PBI-1 only -> PBI-2 passes (G8); the fix PBI goes first in the next wave
             write_result_for(act, {"exit_code": 1, "failed_pbis": ["PBI-1"]})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(act["action"], "launch")
-            self.assertEqual(act["pbi"], "PBI-1")
+            self.assertEqual(act["pbi"], "CO-1-FIX")
+            write_result_for(act, {"status": "ok"})
+            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
+            self.assertEqual(act["pbi"], "PBI-3")
             write_result_for(act, {"status": "ok"})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(act["action"], "check")
-
-            # Fails again -> asking_rebuild
-            write_result_for(act, {"exit_code": 1, "failed_pbis": ["PBI-1"]})
+            write_result_for(act, {"exit_code": 0})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(act["kind"], "rebuild")
+            self.assertEqual(act["role"], "reviewer")
+            from atelier import state
 
-            # Hold PBI-1 -> moves to Wave 2 (PBI-3), never relaunches PBI-1 or PBI-2
-            code, act = run_cli("answer", "--root", str(tmp), "--choice", "hold")
-            self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "launch")
-            self.assertEqual(act["pbi"], "PBI-3")
+            statuses = state.pbi_statuses(state.load_state(tmp))
+            self.assertEqual({"PBI-1", "PBI-2", "PBI-3", "CO-1-FIX"}, {k for k, v in statuses.items() if v == "passed"})
 
     def test_review_triage_fix_and_e2e_limit_continue_stop(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -695,18 +687,17 @@ class TestConductorSeam1(unittest.TestCase):
         with self.assertRaises(flow.InvariantError):
             flow.check_invariants(r3)
 
-        # 3. TwoAutoFixes
+        # 3. A failed check goes on as a carry-over, and asks only past the fix PBI's tries
         r4 = state.new_run_state(Path("."), Path("goal.md"), None)
         r4["state"] = "checking"
         r4["approvals"]["spec"] = True
         r4["approvals"]["plan"] = True
-        r4["counters"]["auto_fix_count"] = 1
+        flow.apply_event(r4, "carried_next")
+        self.assertEqual(r4["state"], "building")
+        r4["state"] = "checking"
         flow.apply_event(r4, "check_failed")
         self.assertEqual(r4["state"], "asking_rebuild")
-        r4_bad = dict(r4, state="auto_fixing")
-        r4_bad["counters"] = dict(r4["counters"], auto_fix_count=2)
-        with self.assertRaises(flow.InvariantError):
-            flow.check_invariants(r4_bad)
+        self.assertNotIn("auto_fixing", flow.STATES)
 
         # 4. SecondReview
         r5 = state.new_run_state(Path("."), Path("goal.md"), None)
@@ -760,24 +751,18 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertIn("error", err)
 
     def test_no_buildable_pbis_paths_and_fix_check_retry(self) -> None:
-        # 1. All PBIs held (0 passed) -> reporting -> done
+        # 1. The only PBI fails -> the carry-over goes to the final review and the fix stage
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             act = reach_building(tmp)
             write_result_for(act, {"status": "ok"})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             write_result_for(act, {"exit_code": 1})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            write_result_for(act, {"exit_code": 1})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(act["kind"], "rebuild")
-            code, act = run_cli("answer", "--root", str(tmp), "--choice", "hold")
+            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "done")
+            self.assertEqual((act["action"], act["role"]), ("launch", "reviewer"))
 
-        # 2. Wave 1 passed, Wave 2 held -> reviewing
+        # 2. Wave 1 passed, Wave 2 failed -> reviewing
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             pbis = [
@@ -794,12 +779,7 @@ class TestConductorSeam1(unittest.TestCase):
             write_result_for(act, {"status": "ok"})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             write_result_for(act, {"exit_code": 1})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            write_result_for(act, {"exit_code": 1})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            code, act = run_cli("answer", "--root", str(tmp), "--choice", "hold")
+            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0)
             self.assertEqual(act["action"], "launch")
             self.assertEqual(act["role"], "reviewer")
