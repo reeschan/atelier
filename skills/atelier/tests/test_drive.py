@@ -106,7 +106,7 @@ class DriveTests(unittest.TestCase):
             self.assertEqual(nxt["runner"], "agent")
             self.assertEqual(nxt["role"], "reviewer")
 
-    def test_drive_writes_failed_check_output_and_stops_at_ask(self) -> None:
+    def test_drive_writes_failed_check_output_and_stops_at_the_caller(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             start_external_run(root, check_command(root, "fail", 3, "check-failed-marker"))
@@ -120,7 +120,8 @@ class DriveTests(unittest.TestCase):
             result = json.loads((state.run_dir(root) / "results" / f"{checks[0]['launch_id']}.json").read_text(encoding="utf-8"))
             self.assertEqual(result["exit_code"], 3)
             self.assertIn("check-failed-marker", result["output"])
-            self.assertEqual(out["next"]["action"], "ask")
+            # The only PBI's failure is carried over to the final review, which needs the caller.
+            self.assertEqual((out["next"]["action"], out["next"]["role"]), ("launch", "reviewer"))
 
     def test_drive_done_completes_an_agent_launch_first(self) -> None:
         with tempfile.TemporaryDirectory() as td:

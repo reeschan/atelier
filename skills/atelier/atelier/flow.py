@@ -1,4 +1,4 @@
-"""State machine transitions, guards, and the six never invariants."""
+"""State machine transitions, guards, and the never invariants."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ class TransitionError(Exception):
 
 
 class InvariantError(Exception):
-    """Raised when a state violates one of the six never rules."""
+    """Raised when a state violates one of the never rules."""
 
 
 STATES: tuple[str, ...] = (
@@ -26,7 +26,6 @@ STATES: tuple[str, ...] = (
     "preparing_data",
     "building",
     "checking",
-    "auto_fixing",
     "asking_rebuild",
     "reviewing",
     "triaging",
@@ -65,7 +64,7 @@ class Transition:
 
 
 def check_invariants(run: dict[str, Any]) -> None:
-    """Enforce the six never rules from the Atelier v8 state diagram."""
+    """Enforce the never rules from the Atelier v8 state diagram."""
     s = run["state"]
     approvals = run["approvals"]
     c = run["counters"]
@@ -76,20 +75,6 @@ def check_invariants(run: dict[str, Any]) -> None:
         raise InvariantError("never BuildBeforeData: entered building before the approved data was in place")
     if s == "planning" and not approvals["spec"]:
         raise InvariantError("never PlanWithoutSpec: entered planning without approved spec")
-    if s == "auto_fixing":
-        pbis = run.get("pbis", [])
-        if pbis:
-            active_id = run.get("auto_fix_pbi")
-            if active_id:
-                target = next((p for p in pbis if p.get("id") == active_id), None)
-                if target is not None and target.get("auto_fix_count", 0) >= 2:
-                    raise InvariantError(
-                        f"never TwoAutoFixes: {active_id} entered auto_fixing with auto_fix_count >= 2"
-                    )
-            elif any(p.get("status") == "failed" and p.get("auto_fix_count", 0) >= 2 for p in pbis):
-                raise InvariantError("never TwoAutoFixes: failed PBI entered auto_fixing with auto_fix_count >= 2")
-        elif c["auto_fix_count"] >= 2:
-            raise InvariantError("never TwoAutoFixes: entered auto_fixing with auto_fix_count >= 2")
     if s == "reviewing" and c["review_count"] >= 1:
         raise InvariantError("never SecondReview: entered reviewing with review_count >= 1")
     if s == "fixing" and not approvals["fix_list"] and c["e2e_failures"] == 0:
@@ -127,7 +112,6 @@ def _data_in_place(run: dict[str, Any]) -> None:
 def _start_replan(run: dict[str, Any]) -> None:
     _clear_plan_approval(run)
     run["data_ready"] = False
-    run["auto_fix_pbi"] = None
     run["return_state"] = None
     run.pop("return_subphase", None)
 
@@ -139,45 +123,6 @@ def _clear_plan_approval(run: dict[str, Any]) -> None:
 
 def _approve_fix_list(run: dict[str, Any]) -> None:
     run["approvals"]["fix_list"] = True
-
-
-def _failed_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
-    return [p for p in run.get("pbis", []) if p.get("status") == "failed"]
-
-
-def _can_auto_fix(run: dict[str, Any]) -> bool:
-    failed = _failed_pbis(run)
-    if run.get("pbis") and failed:
-        return all(p.get("auto_fix_count", 0) == 0 for p in failed)
-    return run["counters"]["auto_fix_count"] == 0
-
-
-def _needs_rebuild_ask(run: dict[str, Any]) -> bool:
-    return not _can_auto_fix(run)
-
-
-def _reset_auto_fix(run: dict[str, Any]) -> None:
-    run["auto_fix_pbi"] = None
-    if not run.get("pbis"):
-        run["counters"]["auto_fix_count"] = 0
-
-
-def _clear_active_auto_fix(run: dict[str, Any]) -> None:
-    run["auto_fix_pbi"] = None
-
-
-def _inc_auto_fix(run: dict[str, Any]) -> None:
-    failed = _failed_pbis(run)
-    if failed:
-        target = failed[0]
-        target["auto_fix_count"] = target.get("auto_fix_count", 0) + 1
-        run["auto_fix_pbi"] = target["id"]
-    run["counters"]["auto_fix_count"] += 1
-
-
-def _inc_rebuild_fail(run: dict[str, Any]) -> None:
-    if not _failed_pbis(run):
-        run["counters"]["auto_fix_count"] += 1
 
 
 def _inc_review(run: dict[str, Any]) -> None:
@@ -250,49 +195,15 @@ TRANSITIONS: tuple[Transition, ...] = (
     Transition("building", "wave_built", "checking", guard=lambda r: r["approvals"]["plan"]),
     Transition("building", "no_buildable_pbis_review", "reviewing", guard=lambda r: r["counters"]["review_count"] == 0),
     Transition("building", "no_buildable_pbis_report", "reporting"),
-    Transition(
-        "checking",
-        "check_failed",
-        "auto_fixing",
-        guard=_can_auto_fix,
-        effect=_inc_auto_fix,
-    ),
-    Transition(
-        "checking",
-        "check_failed",
-        "asking_rebuild",
-        guard=_needs_rebuild_ask,
-        effect=_inc_rebuild_fail,
-    ),
-    Transition("auto_fixing", "auto_fix_returned", "checking", effect=_clear_active_auto_fix),
-    Transition(
-        "asking_rebuild",
-        "rebuild_retry",
-        "building",
-        guard=lambda r: r["approvals"]["plan"],
-        effect=_reset_auto_fix,
-    ),
-    Transition(
-        "asking_rebuild",
-        "rebuild_hold",
-        "building",
-        guard=lambda r: r["approvals"]["plan"],
-        effect=_reset_auto_fix,
-    ),
-    Transition(
-        "checking",
-        "wave_passed_next",
-        "building",
-        guard=lambda r: r["approvals"]["plan"],
-        effect=_reset_auto_fix,
-    ),
-    Transition(
-        "checking",
-        "all_pbis_passed",
-        "reviewing",
-        guard=lambda r: r["counters"]["review_count"] == 0,
-        effect=_reset_auto_fix,
-    ),
+    # A failed check is carried over: a fix PBI goes before the PBIs left, or, after the last wave,
+    # the fix stage fixes it. Only a fix PBI that failed past its tries asks the user.
+    Transition("checking", "carried_next", "building", guard=lambda r: r["approvals"]["plan"]),
+    Transition("checking", "carried_last", "reviewing", guard=lambda r: r["counters"]["review_count"] == 0),
+    Transition("checking", "check_failed", "asking_rebuild"),
+    Transition("asking_rebuild", "rebuild_retry", "building", guard=lambda r: r["approvals"]["plan"]),
+    Transition("asking_rebuild", "rebuild_hold", "building", guard=lambda r: r["approvals"]["plan"]),
+    Transition("checking", "wave_passed_next", "building", guard=lambda r: r["approvals"]["plan"]),
+    Transition("checking", "all_pbis_passed", "reviewing", guard=lambda r: r["counters"]["review_count"] == 0),
     # Final review (once) & Triage & Fix approval & Fixing
     Transition(
         "reviewing",
@@ -353,7 +264,7 @@ TRANSITIONS: tuple[Transition, ...] = (
 )
 
 # States a broken plan can be rebuilt from: before the final review, while PBIs are still being built.
-REPLAN_FROM: frozenset[str] = frozenset({"building", "checking", "auto_fixing"})
+REPLAN_FROM: frozenset[str] = frozenset({"building", "checking"})
 
 CROSS_CUTTING_EVENTS: dict[str, str] = {
     "budget_exceeded": "asking_budget",

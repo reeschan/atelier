@@ -525,13 +525,11 @@ def worker_prompt(
     mode: str,
     ticket: dict[str, Any],
     result_path: str | Path,
-    failure_output: str | None = None,
-    diff_text: str | None = None,
     out_path: str | Path | None = None,
     rule_docs: Iterable[str] | None = None,
 ) -> Path:
-    """Write a worker prompt for mode ('pbi', 'auto_fix', or 'fix') from its ticket alone."""
-    if mode not in ("pbi", "auto_fix", "fix"):
+    """Write a worker prompt for mode ('pbi' or 'fix') from its ticket alone."""
+    if mode not in ("pbi", "fix"):
         raise ValueError(f"unsupported worker mode: {mode}")
 
     root_p = Path(root).resolve()
@@ -554,8 +552,6 @@ def worker_prompt(
         json.dumps(ticket, ensure_ascii=False, indent=2),
         "```",
     ]
-    if mode == "auto_fix":
-        parts.extend(["", "## Failure output", failure_output or "", "", "## Diff", diff_text or ""])
 
     prompt.write_text("\n".join(parts) + "\n", encoding="utf-8")
     return prompt

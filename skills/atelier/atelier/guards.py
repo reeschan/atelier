@@ -67,13 +67,65 @@ def approved_edit(root, path):
     return {'path': name, 'digest': _digest(p)}
 
 
-def snapshot(root, allowed_paths=None, report_path=None, child_pids=None):
+def snapshot(root, allowed_paths=None, report_path=None, child_pids=None, outside_edits=None):
+    """The work root before a launch.
+
+    outside_edits lets compare() pass a change to an existing file outside allowed_paths. It is a dict:
+    "blocked" lists the paths that stay closed (a PBI's do_not_touch), and "no_tests" closes every test
+    file, inside allowed_paths too (a fix PBI must not rewrite the tests it is meant to make pass).
+    """
     root = Path(root).resolve()
     return {'root': str(root), 'head': _git(root, 'rev-parse', '--verify', 'HEAD').strip(),
             'branch': _git(root, 'symbolic-ref', '--short', '-q', 'HEAD').strip() if _branch_exists(root) else '',
             'stash': _git(root, 'stash', 'list', '--format=%H'), 'files': _files(root),
             'allowed_paths': list(allowed_paths) if allowed_paths is not None else None,
+            'outside_edits': dict(outside_edits) if outside_edits is not None else None,
             'report_path': str(report_path) if report_path else None, 'child_pids': list(child_pids or [])}
+
+
+# Directories and file names that hold tests by the usual conventions of common languages.
+_TEST_DIRS = {'test', 'tests', '__tests__', '__snapshots__', 'spec', 'e2e', 'testdata', 'test_data'}
+_TEST_NAMES = ('test_*', 'conftest.py', '*_test.*', '*.test.*', '*.spec.*', '*_spec.*', '*.cy.*', '*Test.*', '*Tests.*', '*.snap')
+
+
+def is_test_file(name):
+    """True when a work-root-relative path is a test file: under a test directory or named like a test."""
+    parts = PurePosixPath(name.replace('\\', '/').removeprefix('./')).parts
+    if not parts:
+        return False
+    if any(part.lower() in _TEST_DIRS for part in parts[:-1]):
+        return True
+    return any(fnmatch.fnmatchcase(parts[-1], pattern) for pattern in _TEST_NAMES)
+
+
+def _edit_of_existing(name, before, after):
+    """An existing file whose content changed; adding, deleting or linking a file is not such an edit."""
+    old, new = before['files'].get(name), after['files'].get(name)
+    return (
+        old is not None and new is not None and old != new
+        and not str(old).startswith('link:') and not str(new).startswith('link:')
+    )
+
+
+def _open_outside(name, before, after):
+    """True when the snapshot lets this change outside allowed_paths through."""
+    rule = before.get('outside_edits')
+    if rule is None or not _edit_of_existing(name, before, after):
+        return False
+    if _allowed(name, rule.get('blocked') or []):
+        return False
+    return not (rule.get('no_tests') and is_test_file(name))
+
+
+def outside_edits(root, before):
+    """Existing files changed outside the snapshot's allowed paths that the snapshot let through."""
+    if before.get('outside_edits') is None or before['allowed_paths'] is None:
+        return []
+    after = snapshot(Path(root))
+    return sorted(
+        name for name in before['files'].keys() & after['files'].keys()
+        if not _allowed(name, before['allowed_paths']) and _open_outside(name, before, after)
+    )
 
 
 def _branch_exists(root):
@@ -115,7 +167,15 @@ def compare(root, before, approved_edits=None, launch_id=None):
     changed = {p for p in before['files'].keys() | after['files'].keys() if before['files'].get(p) != after['files'].get(p)}
     for name in sorted(changed):
         user_approved = name in approved and after['files'].get(name) == approved[name]
-        if before['allowed_paths'] is not None and not _allowed(name, before['allowed_paths']) and not user_approved:
+        rule = before.get('outside_edits') or {}
+        if rule.get('no_tests') and is_test_file(name) and not user_approved:
+            violations.append({'rule': 'G1', 'detail': 'test file changed by a fix PBI: ' + name})
+        elif _allowed(name, rule.get('blocked') or []) and not user_approved:
+            # do_not_touch holds even when a target directory covers the file.
+            violations.append({'rule': 'G1', 'detail': 'do_not_touch changed: ' + name})
+        elif (before['allowed_paths'] is not None and not _allowed(name, before['allowed_paths'])
+              and not user_approved and (name in approved or not _open_outside(name, before, after))):
+            # A file with a registered approval keeps that content: the outside allowance does not reopen it.
             violations.append({'rule': 'G1', 'detail': 'changed outside allowed paths: ' + name})
         if Path(name).name in LOCKS | MANIFESTS:
             violations.append({'rule': 'G5', 'detail': 'dependency file changed: ' + name})

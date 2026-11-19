@@ -68,6 +68,14 @@ The final review's findings the user approved to fix.
 One line per launch, check and fix: role, model, tokens, rules read and rules fired.
 _Avoid_: events, metrics log
 
+**Carry-over (持ち越し)**:
+A failed check that the run records and goes on past instead of stopping. It is fixed by a fix PBI, or in the fix stage; while one is open, the run is not complete.
+_Avoid_: TODO, deferred failure, hold
+
+**Fix PBI (修正の PBI)**:
+A PBI the conductor writes from a carry-over and puts before the PBIs that depend on the failed one. The planner does not write it.
+_Avoid_: rework PBI, auto-fix
+
 ## Routing
 
 **Level (難度)**:

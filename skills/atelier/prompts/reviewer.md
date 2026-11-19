@@ -2,7 +2,7 @@
 
 Review the whole diff against the approved spec and the rule documents once. Read every file under `Rule documents` in full first. Report only: never edit files, write patches, or modify git state.
 
-Report verifiable `correctness` and `spec` issues, and `rule` issues: code that breaks a rule written in a rule document. Skip taste remarks that no rule document backs.
+Report verifiable `correctness` and `spec` issues, and `rule` issues: code that breaks a rule written in a rule document. Skip taste remarks that no rule document backs. Workers may update existing tests' expected values for an intended behaviour change; report a test change as `spec` when its new expectation contradicts the spec, or when it deletes, skips or loosens a test.
 
 Write one JSON object to `Result` with schema `atelier.findings/1`:
 - `findings`: array of `{ "id", "file", "line", "severity": "critical" | "major" | "minor", "confidence": 0..100, "kind": "correctness" | "spec" | "rule" | "style", "why", "fix" }`, plus `rule` for `kind: "rule"`.

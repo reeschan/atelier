@@ -115,7 +115,8 @@ def new_run_state(
         "first_pass_checked_pbis": [],
         "approved_destructive": [],
         "approved_garbled": [],
-        "auto_fix_pbi": None,
+        "carry_overs": [],
+        "outside_edits": [],
         "last_check_failure": "",
         "last_failed_rules": [],
         "last_e2e_failure": "",
@@ -165,13 +166,13 @@ def pbi_statuses(run: dict[str, Any]) -> dict[str, str]:
 def ready_wave_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
     """Return non-terminal PBIs whose dependencies have all passed or been waived.
 
-    Never includes PBIs with status 'passed', 'held', or 'sensitive' (G8).
+    Never includes PBIs with status 'passed', 'held', 'sensitive' or 'carried' (G8).
     """
     pbis = run.get("pbis", [])
     statuses = pbi_statuses(run)
     ready: list[dict[str, Any]] = []
     for pbi in pbis:
-        if pbi.get("status", "pending") in ("passed", "held", "sensitive"):
+        if pbi.get("status", "pending") in ("passed", "held", "sensitive", "carried"):
             continue
         deps = pbi.get("depends_on") or []
         waived = set(pbi.get("waived_deps") or [])
@@ -213,6 +214,7 @@ STATUS_LABELS = {
     "built": "検査の前",
     "failed": "検査に落ちた",
     "held": "保留",
+    "carried": "検査に落ち、持ち越した",
 }
 
 
@@ -469,3 +471,141 @@ def record_usage(
             "cost": cost,
         }
     )
+
+
+# A carry-over gets a fix PBI at its PBI's level, then one at the next level; after that the user is asked.
+FIX_PBI_TRIES = 2
+
+
+def open_carry_overs(run: dict[str, Any]) -> list[dict[str, Any]]:
+    return [c for c in run.get("carry_overs") or [] if c.get("status") == "open"]
+
+
+def carry_over_of(run: dict[str, Any], co_id: str) -> dict[str, Any] | None:
+    return next((c for c in run.get("carry_overs") or [] if c["id"] == co_id), None)
+
+
+def record_carry_over(run: dict[str, Any], pbis: list[dict[str, Any]], commands: list[str], output: str) -> dict[str, Any]:
+    """Record a failed check of these PBIs that the run goes on past; the PBIs wait for it as carried."""
+    carry_overs = run.setdefault("carry_overs", [])
+    notes = [note for p in pbis for note in p.get("worker_carry_over") or []]
+    if not commands:
+        commands = list(dict.fromkeys(c for p in pbis for c in p.get("checks") or []))
+    co = {
+        "id": f"CO-{len(carry_overs) + 1}",
+        "pbis": [p["id"] for p in pbis],
+        "commands": list(commands),
+        "output": output,
+        "worker_notes": notes,
+        "status": "open",
+        "tries": 0,
+        "fix_pbi": None,
+    }
+    carry_overs.append(co)
+    for pbi in pbis:
+        pbi["status"] = "carried"
+    return co
+
+
+def fix_pbi_for(run: dict[str, Any], co: dict[str, Any]) -> dict[str, Any]:
+    """The fix PBI of a carry-over: the failed checks to pass, on the failed PBIs' targets and level."""
+    originals = [p for p in (get_pbi(run, pid) for pid in co["pbis"]) if p is not None]
+    targets: list[str] = []
+    do_not_touch: list[str] = []
+    checks = list(co["commands"])
+    for pbi in originals:
+        targets += [t for t in pbi.get("targets") or [] if t not in targets]
+        do_not_touch += [t for t in pbi.get("do_not_touch") or [] if t not in do_not_touch]
+    # A path one failed PBI targets and another keeps untouched stays untouched for the fix PBI.
+    targets = [t for t in targets if t not in do_not_touch]
+    levels = [p.get("level", "L2") for p in originals]
+    return {
+        "id": f"{co['id']}-FIX",
+        "kind": "fix",
+        "carry_over": co["id"],
+        "title": "修正: " + "、".join(p.get("title") or p["id"] for p in originals),
+        "goal": f"持ち越し {co['id']} の落ちた検査を通す。元の PBI（{'、'.join(co['pbis'])}）の目的は変えない。",
+        "depends_on": [],
+        "level": max(levels) if levels else "L2",
+        "level_reason": f"持ち越し {co['id']} の元の PBI の難度",
+        "targets": targets,
+        "files": list(targets),
+        "do_not_touch": do_not_touch,
+        "checks": checks,
+        "facts": [],
+        "acceptance": [f"落ちた検査が通る: {'、'.join(checks)}"],
+        "evidence": [],
+        "data_needs": [],
+        "sensitive_candidate": False,
+        "sensitive_reason": "",
+        "status": "pending",
+        "route_index": 0,
+    }
+
+
+def insert_fix_pbi(run: dict[str, Any], co: dict[str, Any], fix: dict[str, Any]) -> None:
+    """Put the fix PBI before the PBIs left, and make the PBIs that need the carried ones wait for it."""
+    pbis = run.setdefault("pbis", [])
+    at = next((i for i, p in enumerate(pbis) if p.get("status", "pending") == "pending"), len(pbis))
+    pbis.insert(at, fix)
+    co["fix_pbi"] = fix["id"]
+    carried = set(co["pbis"])
+    for pbi in pbis:
+        if pbi is fix or pbi.get("status", "pending") != "pending":
+            continue
+        needed = [dep for dep in pbi.get("depends_on") or [] if dep in carried]
+        if needed:
+            pbi["depends_on"] = [*pbi["depends_on"], fix["id"]]
+            pbi["waived_deps"] = sorted(set(pbi.get("waived_deps") or []) | set(needed))
+
+
+def settle_carry_over(run: dict[str, Any], co: dict[str, Any], status: str) -> None:
+    """Close a carry-over that its fix PBI or the fix stage fixed: its PBIs pass with it."""
+    co["status"] = status
+    for pid in [*co["pbis"], co.get("fix_pbi")]:
+        pbi = get_pbi(run, pid) if pid else None
+        if pbi is not None:
+            pbi["status"] = "passed"
+            pbi.pop("held_reason", None)
+
+
+def settle_passed_fix_pbis(run: dict[str, Any]) -> None:
+    for co in open_carry_overs(run):
+        fix = get_pbi(run, co.get("fix_pbi") or "")
+        if fix is not None and fix.get("status") == "passed":
+            settle_carry_over(run, co, "fixed_by_pbi")
+
+
+def carry_over_ticket(run: dict[str, Any], fix: dict[str, Any]) -> dict[str, Any]:
+    """What the worker of a fix PBI needs: the failed checks, their output and the original PBIs' goals."""
+    co = carry_over_of(run, fix.get("carry_over") or "") or {}
+    originals = [p for p in (get_pbi(run, pid) for pid in co.get("pbis") or []) if p is not None]
+    return {
+        "id": co.get("id"),
+        "failed_commands": list(co.get("commands") or []),
+        "output": co.get("output", ""),
+        "worker_notes": list(co.get("worker_notes") or []),
+        "original_pbis": [{"id": p["id"], "title": p.get("title", ""), "goal": p.get("goal", "")} for p in originals],
+        "no_test_edits": True,
+    }
+
+
+def carry_over_fix_items(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """The open carry-overs as items of the fix list; they skip triage."""
+    items = []
+    for co in open_carry_overs(run):
+        files: list[str] = []
+        for pid in co["pbis"]:
+            pbi = get_pbi(run, pid) or {}
+            files += [t for t in pbi.get("targets") or [] if t not in files]
+        commands = "、".join(co["commands"]) or "PBI の検査"
+        items.append({
+            "id": co["id"],
+            "kind": "carry_over",
+            "title": f"落ちた検査を通す: {commands}",
+            "reason": f"持ち越し（{'、'.join(co['pbis'])}）",
+            "why": co.get("output", ""),
+            "fix": f"{commands} を通す。元の PBI の目的は変えない。",
+            "files": files,
+        })
+    return items

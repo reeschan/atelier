@@ -73,17 +73,23 @@ def _git_head(root: Path) -> str | None:
     return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
 
 
+def _launch_snapshot(root: Path, run: dict[str, Any], act: dict[str, Any]) -> dict[str, Any]:
+    """The work root before a launch. A worker may also change existing files outside its paths."""
+    return guards.snapshot(
+        root,
+        allowed_paths=actions.allowed_paths_for(run, act["role"], act.get("pbi")),
+        report_path=act["result"],
+        outside_edits=actions.outside_edit_rule(run, act["role"], act.get("pbi")),
+    )
+
+
 def _ensure_snapshot(root: Path, run: dict[str, Any], act: dict[str, Any]) -> None:
     if act.get("action") == "launch" and act.get("runner") == "agent":
         existing = run.get("pending_snapshot")
         if existing is not None and existing.get("launch_id") == act.get("launch_id"):
             return
         if _is_git_repo(root):
-            snap = guards.snapshot(
-                root,
-                allowed_paths=actions.allowed_paths_for(run, act["role"], act.get("pbi")),
-                report_path=act["result"],
-            )
+            snap = _launch_snapshot(root, run, act)
             snap["launch_id"] = act["launch_id"]
             run["pending_snapshot"] = snap
         else:
@@ -328,7 +334,8 @@ def _append_check_records_for_wave(
     for pbi in checked_pbis:
         pid = pbi["id"]
         passed = exit_code == 0 or (bool(failed_ids) and pid not in failed_ids)
-        is_first = pid not in first_checked
+        # A fix PBI's check is a second try at its carried PBIs' check, never a first pass.
+        is_first = pid not in first_checked and pbi.get("kind") != "fix"
         if is_first:
             first_checked.append(pid)
         rules = [] if passed else (raw_rules or ["G9"])
@@ -349,6 +356,74 @@ def _append_check_records_for_wave(
             raise ConductorError(f"G4: secret detected in check record ({hits[0]['kind']})")
 
 
+def _failed_pbis_from_commands(run: dict[str, Any], result: dict[str, Any]) -> set[str]:
+    """The PBIs a failed wave check is laid on, from each command's exit code.
+
+    A PBI fails when one of its own checks failed. A failed command no PBI of the wave owns (a plan check)
+    is laid on every PBI of the wave except fix PBIs, which pass or fail on their own checks only.
+    Empty when the result has no per-command exit codes.
+    """
+    failing = {str(c.get("command")) for c in result.get("commands") or [] if isinstance(c, dict) and c.get("exit_code")}
+    if not failing:
+        return set()
+    checked = [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")]
+    owned = {cmd for p in checked for cmd in p.get("checks") or []}
+    ids = {p["id"] for p in checked if failing & set(p.get("checks") or [])}
+    if failing - owned:
+        ids |= {p["id"] for p in checked if p.get("kind") != "fix"}
+    return ids
+
+
+def _carry_failed_check(run: dict[str, Any], failed_commands: list[str]) -> str:
+    """Carry a failed wave check over instead of stopping, and name the event that follows.
+
+    The failed PBIs become a carry-over. While PBIs are left, a fix PBI goes before them (a failed fix PBI
+    is tried once more one level up); after the last wave the carry-over waits for the fix stage. A fix PBI
+    that failed past its tries is left failed, and the user is asked.
+    """
+    output = run.get("last_check_failure") or ""
+    failed = [p for p in run.get("pbis", []) if p.get("status") == "failed"]
+    left = state.any_pending_pbis(run)
+    exceeded = False
+    tmpl = actions.active_template(run)
+    for fix in [p for p in failed if p.get("kind") == "fix"]:
+        co = state.carry_over_of(run, fix["carry_over"])
+        if co is None:
+            continue
+        co["output"] = output
+        co["commands"] = failed_commands or co["commands"]
+        if co["tries"] >= state.FIX_PBI_TRIES:
+            exceeded = True
+        elif not left:
+            fix["status"] = "carried"
+        else:
+            co["tries"] += 1
+            fix["status"] = "pending"
+            fix["checks"] = list(co["commands"]) or fix["checks"]
+            fix["level"] = _next_level(fix.get("level", "L2"))
+            _reroute(tmpl, fix)
+    originals = [p for p in failed if p.get("kind") != "fix"]
+    if originals:
+        co = state.record_carry_over(run, originals, failed_commands, output)
+        if left:
+            fix = state.fix_pbi_for(run, co)
+            _reroute(tmpl, fix)
+            state.insert_fix_pbi(run, co, fix)
+            co["tries"] = 1
+    if exceeded:
+        return "check_failed"
+    return "carried_next" if state.any_pending_pbis(run) else "carried_last"
+
+
+def _reroute(tmpl: dict[str, Any], pbi: dict[str, Any]) -> None:
+    route_choice = template.choose_route(tmpl, pbi)
+    pbi["route"] = route_choice["route"]
+    pbi["route_rule"] = route_choice["rule"]
+    pbi["route_inputs"] = route_choice["inputs"]
+    pbi["route_template"] = route_choice["template"]
+    pbi["route_index"] = 0
+
+
 def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) -> None:
     exit_code = result.get("exit_code")
     if not isinstance(exit_code, int) or isinstance(exit_code, bool):
@@ -357,6 +432,10 @@ def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) 
     s = run["state"]
     if s == "checking":
         rechecked = state.recheck_held_pbis(run)
+        if exit_code != 0 and not result.get("failed_pbis"):
+            derived = _failed_pbis_from_commands(run, result)
+            if derived:
+                result = {**result, "failed_pbis": sorted(derived)}
         _append_check_records_for_wave(root, run, result, exit_code, rechecked)
         if exit_code == 0:
             run["last_check_failure"] = ""
@@ -367,6 +446,7 @@ def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) 
             for pbi in rechecked:
                 pbi["status"] = "passed"
                 pbi.pop("held_reason", None)
+            state.settle_passed_fix_pbis(run)
             if state.any_pending_pbis(run):
                 flow.apply_event(run, "wave_passed_next")
             else:
@@ -388,7 +468,12 @@ def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) 
                 for pbi in run.get("pbis", []):
                     if pbi.get("status") == "built":
                         pbi["status"] = "failed"
-            flow.apply_event(run, "check_failed")
+            failed_commands = [
+                str(c["command"]) for c in result.get("commands") or [] if isinstance(c, dict) and c.get("exit_code")
+            ]
+            # A fix PBI that passed in a failed wave still settles its carry-over.
+            state.settle_passed_fix_pbis(run)
+            flow.apply_event(run, _carry_failed_check(run, failed_commands))
     elif s == "fixing":
         rules = [str(r) for r in (result.get("rules") or ([] if exit_code == 0 else ["G9"]))]
         hits = _try_append_record(root, {
@@ -405,6 +490,10 @@ def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) 
         if hits:
             raise ConductorError(f"G4: secret detected in fix check record ({hits[0]['kind']})")
         if exit_code == 0:
+            fixed = {item["id"] for item in run.get("fix_list") or [] if item.get("kind") == "carry_over"}
+            for co in state.open_carry_overs(run):
+                if co["id"] in fixed:
+                    state.settle_carry_over(run, co, "fixed")
             run["last_fix_launch_ids"] = []
             run["fix_groups"] = []
             run["fix_group_index"] = 0
@@ -482,7 +571,6 @@ def _build_pbis_from_plan(run: dict[str, Any], result: dict[str, Any]) -> list[d
                 "sensitive_reason": item.get("sensitive_reason") or "",
                 "wave": wave_idx,
                 "status": "pending",
-                "auto_fix_count": 0,
                 "route_index": 0,
             }
             choice = template.choose_route(tmpl, pbi)
@@ -550,7 +638,30 @@ def _validate_completion_before_accept(
             raise ConductorError(" ".join(errors))
 
 
+def _record_outside_edits(run: dict[str, Any], pending: dict[str, Any], result: dict[str, Any]) -> None:
+    """Keep the files a worker changed outside its paths, with the reason it gave, for the report."""
+    why_by_file: dict[str, str] = {}
+    for item in result.get("outside_edits") or []:
+        if isinstance(item, dict) and isinstance(item.get("file"), str):
+            why_by_file[item["file"].strip().replace("\\", "/").removeprefix("./")] = str(item.get("why") or "")
+    if pending.get("pbi"):
+        owner = pending["pbi"]
+    elif run.get("fix_groups"):
+        owner = f"FIX-{run.get('fix_group_index', 0) + 1}"
+    else:
+        owner = "FIX-E2E"
+    edits = run.setdefault("outside_edits", [])
+    for name in pending.get("outside_edits") or []:
+        entry = next((e for e in edits if (e["by"], e["file"]) == (owner, name)), None)
+        if entry is None:
+            entry = {"by": owner, "file": name, "why": ""}
+            edits.append(entry)
+        entry["why"] = why_by_file.get(name) or entry["why"]
+
+
 def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any], result: dict[str, Any]) -> None:
+    if pending.get("role") == "worker":
+        _record_outside_edits(run, pending, result)
     # Cross-cutting flags reported by a role
     for flag, event in (
         ("plan_broken", "plan_broken"),
@@ -615,20 +726,20 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
         pbi_id = pending.get("pbi")
         if pbi_id:
             state.mark_pbi_status(run, pbi_id, "built")
+            notes = [n for n in result.get("carry_over") or [] if isinstance(n, dict)]
+            pbi = state.get_pbi(run, pbi_id)
+            if notes and pbi is not None:
+                pbi["worker_carry_over"] = notes
+            if pbi is not None and pbi.get("kind") == "fix":
+                fixed_rules = [str(r) for r in (result.get("fixed_rules") or run.get("last_failed_rules") or ["G9"])]
+                for rule_id in fixed_rules:
+                    hits = _try_append_record(root, {"type": "fix", "rule": rule_id, "method": "auto"})
+                    if hits:
+                        raise ConductorError(f"G4: secret detected in fix record ({hits[0]['kind']})")
         if state.next_buildable_pbi(run) is not None:
             flow.apply_event(run, "worker_returned")
         else:
             flow.apply_event(run, "wave_built")
-    elif s == "auto_fixing":
-        pbi_id = pending.get("pbi")
-        if pbi_id:
-            state.mark_pbi_status(run, pbi_id, "built")
-        fixed_rules = [str(r) for r in (result.get("fixed_rules") or run.get("last_failed_rules") or ["G9"])]
-        for rule_id in fixed_rules:
-            hits = _try_append_record(root, {"type": "fix", "rule": rule_id, "method": "auto"})
-            if hits:
-                raise ConductorError(f"G4: secret detected in fix record ({hits[0]['kind']})")
-        flow.apply_event(run, "auto_fix_returned")
     elif s == "reviewing":
         kept, dropped = plan.split_findings(list(result.get("findings") or []))
         run["findings"] = kept
@@ -641,10 +752,10 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
         )
         flow.apply_event(run, "review_returned")
         if not kept:
-            run["fix_list"] = []
+            run["fix_list"] = state.carry_over_fix_items(run)
             run["triage_ask_items"] = []
             flow.apply_event(run, "triaged")
-            if not dropped:
+            if not dropped and not run["fix_list"]:
                 flow.apply_event(run, "nothing_to_fix")
     elif s == "triaging":
         finding_by_id = {f["id"]: f for f in run.get("findings", [])}
@@ -667,7 +778,7 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
                 ask_items.append(merged)
             else:
                 skipped.append(merged)
-        run["fix_list"] = fix_items
+        run["fix_list"] = state.carry_over_fix_items(run) + fix_items
         run["triage_ask_items"] = ask_items
         run["triage_skipped"] = skipped
         flow.apply_event(run, "triaged")
@@ -702,6 +813,9 @@ def _raise_guard_question(
     if unusable_reason:
         parts.append(f"runner unusable: {unusable_reason}")
     parts.extend(f"{v['rule']}: {v['detail']}" for v in violations)
+    if pending.get("role") == "worker":
+        # The edits stay in the work tree; a retry's snapshot would no longer see them as changes.
+        _record_outside_edits(run, pending, {})
     if pending.get("launch_id"):
         run.setdefault("completed_launches", []).append(pending["launch_id"])
     pbi_id = pending.get("pbi")
@@ -859,6 +973,7 @@ def _collect_post_launch_violations(
 
     if pending.get("role") == "worker":
         if before is not None and _is_git_repo(root):
+            pending["outside_edits"] = guards.outside_edits(root, before)
             after = guards.snapshot(root)
             existing_g5 = {v["detail"] for v in violations if v.get("rule") == "G5"}
             for dep_path in guards.install_attempts(before, after):
@@ -983,11 +1098,7 @@ def _cmd_run(args: argparse.Namespace) -> dict[str, Any]:
 
     before = None
     if _is_git_repo(root):
-        before = guards.snapshot(
-            root,
-            allowed_paths=actions.allowed_paths_for(run, pending["role"], pending.get("pbi")),
-            report_path=pending["result"],
-        )
+        before = _launch_snapshot(root, run, pending)
 
     ext = runners.run_external(spec, args.timeout)
     state.record_usage(
@@ -1156,6 +1267,8 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
         if text:
             lines.append(f"User note: {text}")
         lines.append("Rebuild the PBIs that have not passed so that their targets cover what the code needs.")
+        for co in state.open_carry_overs(run):
+            co["status"] = "replanned"
         run["planner_mode"] = "revise"
         run["plan_revision_request"] = "\n".join(lines)
         run["pending_plan_sends"] = None
@@ -1222,15 +1335,9 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
             for pbi in run.get("pbis", []):
                 if pbi.get("status") in ("failed", "built"):
                     pbi["status"] = "pending"
-                    pbi["auto_fix_count"] = 0
                     if choice == "retry_up":
                         pbi["level"] = _next_level(pbi.get("level", "L2"))
-                        route_choice = template.choose_route(tmpl, pbi)
-                        pbi["route"] = route_choice["route"]
-                        pbi["route_rule"] = route_choice["rule"]
-                        pbi["route_inputs"] = route_choice["inputs"]
-                        pbi["route_template"] = route_choice["template"]
-                        pbi["route_index"] = 0
+                        _reroute(tmpl, pbi)
             flow.apply_event(run, "rebuild_retry")
         elif choice in ("hold", "hold_stop"):
             state.hold_after_rebuild(run, continue_dependents=choice == "hold")
@@ -1262,6 +1369,15 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
                     if item.get("id") in approved_ask_ids and item.get("id") not in existing_ids:
                         run.setdefault("fix_list", []).append(item)
                         existing_ids.add(item.get("id"))
+        excluded = set((reply_obj or {}).get("exclude_ids") or [])
+        if excluded:
+            unknown = sorted(str(i) for i in excluded - {f.get("id") for f in run.get("fix_list") or []})
+            if unknown:
+                raise ConductorError(f"unknown fix list ids: {', '.join(unknown)}")
+            run["fix_list"] = [f for f in run.get("fix_list") or [] if f.get("id") not in excluded]
+            for co in state.open_carry_overs(run):
+                if co["id"] in excluded:
+                    co["status"] = "dropped"
         if choice == "approve" and run.get("fix_list"):
             run["fix_groups"] = plan.fix_groups(run["fix_list"], max_workers=3)
             run["fix_group_index"] = 0
@@ -1411,10 +1527,29 @@ def _tail(text: str, limit: int = CHECK_OUTPUT_TAIL) -> str:
     return text if len(text) <= limit else "…" + text[-limit:]
 
 
+def _check_output(outputs: list[tuple[str, int, str]]) -> str:
+    """The check's output: the end of each failed command's output, sharing the limit; a passing command's name only.
+
+    With no failure, the end of every command's output, as before.
+    """
+    failed = [(cmd, out) for cmd, code, out in outputs if code != 0]
+    if not failed:
+        return _tail("\n".join(f"$ {cmd}\n{_tail(out)}" for cmd, _, out in outputs))
+    share = max(CHECK_OUTPUT_TAIL // len(failed), 200)
+    lines = [f"$ {cmd}\n{_tail(out, share)}" for cmd, out in failed]
+    lines += [f"$ {cmd} (ok)" for cmd, code, _ in outputs if code == 0]
+    return "\n".join(lines)
+
+
 def _run_check(root: Path, act: dict[str, Any], shell: str | None, timeout: int | None) -> int:
-    """Run a check's commands in order, stop at the first failure, and write the result file."""
+    """Run every command of a check, even after a failure, and write the result file.
+
+    The exit code is the first failing command's; each command's own exit code is in "commands", so a
+    carry-over names every check that failed, not only the first.
+    """
     exit_code = 0
-    parts: list[str] = []
+    outputs: list[tuple[str, int, str]] = []
+    codes: list[dict[str, Any]] = []
     for cmd in act["commands"]:
         argv: str | list[str] = [shell, "-c", cmd] if shell else cmd
         try:
@@ -1433,14 +1568,14 @@ def _run_check(root: Path, act: dict[str, Any], shell: str | None, timeout: int 
             code, out = 124, f"timed out after {timeout}s"
         except OSError as exc:
             code, out = 127, str(exc)
-        parts.append(f"$ {cmd}\n{_tail(out)}")
-        if code != 0:
+        outputs.append((cmd, code, out))
+        codes.append({"command": cmd, "exit_code": code})
+        if code != 0 and exit_code == 0:
             exit_code = code
-            break
     result_path = Path(act["result"])
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(
-        json.dumps({"exit_code": exit_code, "output": _tail("\n".join(parts))}, ensure_ascii=False),
+        json.dumps({"exit_code": exit_code, "output": _check_output(outputs), "commands": codes}, ensure_ascii=False),
         encoding="utf-8",
     )
     return exit_code

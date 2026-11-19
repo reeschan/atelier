@@ -39,7 +39,7 @@ ASK_CHOICES: dict[str, tuple[str, list[dict[str, str]], str]] = {
             {"id": "hold", "label": "保留にして、依存する PBI は続ける"},
             {"id": "hold_stop", "label": "保留にして、依存する PBI も止める"},
         ],
-        "1 回自動修正しても検査に落ちました。次の対応を選んでください。",
+        "同じ持ち越しの修正の PBI を 2 回作っても検査に落ちました。次の対応を選んでください。",
     ),
     "awaiting_fix_approval": (
         "fix_approval",
@@ -157,6 +157,19 @@ def _group_files(items: list[dict[str, Any]]) -> list[str]:
     return files
 
 
+def outside_edit_rule(run: dict[str, Any], role: str, pbi_id: str | None) -> dict[str, Any] | None:
+    """What a worker may change outside its paths: existing files, except its do_not_touch (G1).
+
+    A fix PBI may not change test files at all, so it cannot pass its checks by rewriting their expectations.
+    """
+    if role != "worker":
+        return None
+    pbi = state.get_pbi(run, pbi_id) if pbi_id else None
+    if pbi is None:
+        return {"blocked": [], "no_tests": False}
+    return {"blocked": list(pbi.get("do_not_touch") or []), "no_tests": pbi.get("kind") == "fix"}
+
+
 def allowed_paths_for(run: dict[str, Any], role: str, pbi_id: str | None) -> list[str] | None:
     if pbi_id:
         pbi = state.get_pbi(run, pbi_id)
@@ -176,30 +189,6 @@ def allowed_paths_for(run: dict[str, Any], role: str, pbi_id: str | None) -> lis
     if role in ("surveyor", "interviewer", "reviewer", "planner"):
         return ["docs/pbi/"]
     return None
-
-
-def _git_diff_text(run_root: Path) -> str:
-    check = subprocess.run(
-        ["git", "-C", str(run_root), "rev-parse", "--is-inside-work-tree"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    if check.returncode != 0:
-        return "(no git repository)"
-    has_head = subprocess.run(
-        ["git", "-C", str(run_root), "rev-parse", "--verify", "HEAD"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode == 0
-    cmd = ["git", "-C", str(run_root), "diff"]
-    if has_head:
-        cmd.append("HEAD")
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
-    diff = res.stdout.strip()
-    return diff if diff else "(empty diff)"
 
 
 def _git_diff_stat(run_root: Path, base_ref: str) -> str | None:
@@ -260,6 +249,15 @@ def _rebuild_detail(run: dict[str, Any], body: str) -> tuple[str, bool]:
     return "\n".join(lines), bool(dependents)
 
 
+CARRY_STATUS_LABELS = {
+    "open": "残っている",
+    "fixed_by_pbi": "修正の PBI で直った",
+    "fixed": "修正の段で直った",
+    "dropped": "直す一覧から外した",
+    "replanned": "計画の組み直しに含めた",
+}
+
+
 def _unfinished_lines(run: dict[str, Any]) -> list[str]:
     """Report lines for PBIs that did not pass, and for held PBIs that dependents went on without."""
     lines: list[str] = []
@@ -286,6 +284,21 @@ def _unfinished_lines(run: dict[str, Any]) -> list[str]:
     restored = run.get("eol_restored") or []
     if restored:
         lines += ["", "## 改行を LF に戻したファイル", "", *[f"- {path}" for path in restored]]
+    carry_overs = run.get("carry_overs") or []
+    if carry_overs:
+        lines += ["", "## 持ち越し", ""]
+        for co in carry_overs:
+            commands = "、".join(co.get("commands") or []) or "（コマンド不明）"
+            label = CARRY_STATUS_LABELS.get(co.get("status", "open"), co.get("status", ""))
+            lines.append(f"- {co['id']}（{'、'.join(co.get('pbis') or [])}）: {commands} — {label}")
+    passed_notes = [(p, n) for p in run.get("pbis", []) if p.get("status") == "passed" for n in p.get("worker_carry_over") or []]
+    if passed_notes:
+        lines += ["", "## 作業者が直せなかったと返したが、wave の検査は通ったもの", ""]
+        lines += [f"- {p['id']}: {n.get('command', '')} — {n.get('why') or '（理由の記載なし）'}" for p, n in passed_notes]
+    edits = run.get("outside_edits") or []
+    if edits:
+        lines += ["", "## 対象の外で変えたファイル", ""]
+        lines += [f"- {e['by']}: {e['file']} — {e['why'] or '（理由の記載なし）'}" for e in edits]
     return lines
 
 
@@ -300,7 +313,7 @@ def _write_report(run_root: Path, run: dict[str, Any]) -> Path:
         "",
         f"- 状態: {status}",
         f"- PBI 数: {len(run.get('pbis', []))}",
-        f"- 自動修正回数: {run['counters']['auto_fix_count']}",
+        f"- 持ち越し: {len(run.get('carry_overs') or [])} 件（残り {len(state.open_carry_overs(run))} 件）",
         f"- 見直し回数: {run['counters']['review_count']}",
         f"- E2E 失敗回数: {run['counters']['e2e_failures']}",
     ]
@@ -403,15 +416,6 @@ def _step_for_launch(run: dict[str, Any], tmpl: dict[str, Any], role: str, pbi_i
         step = dict(pbi["route"][idx])
         pbi["last_step"] = step
         return step
-    if s == "auto_fixing" and pbi_id:
-        pbi = state.get_pbi(run, pbi_id)
-        if pbi is not None:
-            if pbi.get("last_step"):
-                return dict(pbi["last_step"])
-            if pbi.get("route"):
-                return dict(pbi["route"][pbi.get("route_index", 0)])
-            choice = template.choose_route(tmpl, pbi)
-            return dict(choice["route"][0])
     if s == "fixing":
         if "worker_fix" in tmpl.get("roles", {}):
             step = template.role_for(tmpl, "worker_fix")
@@ -578,10 +582,8 @@ def _compose_prompt_parts(
         kept = record.filter_parts(tmpl, parts_by_id)
         return prompt_text, record.measure_read(kept), referenced
 
-    if s in ("building", "auto_fixing", "fixing"):
+    if s in ("building", "fixing"):
         staged_prompt = stage_dir / f"worker-{s}.md"
-        failure_output: str | None = None
-        diff_text: str | None = None
         if s == "building":
             mode = "pbi"
             pbi = state.get_pbi(run, pbi_id or "") or {}
@@ -606,17 +608,8 @@ def _compose_prompt_parts(
                 ticket["targets"] = list(pbi["files"])
             if pbi.get("data_needs"):
                 ticket["data"] = [{"path": need["dest"], "why": need["why"]} for need in pbi["data_needs"]]
-        elif s == "auto_fixing":
-            mode = "auto_fix"
-            pbi = state.get_pbi(run, pbi_id or "") or {}
-            ticket = {
-                "id": pbi.get("id", pbi_id or "auto_fix"),
-                "targets": list(pbi.get("targets") or pbi.get("files") or []),
-                "do_not_touch": list(pbi.get("do_not_touch") or []),
-                "checks": plan.wave_commands([pbi], run.get("plan_checks") or []),
-            }
-            failure_output = run.get("last_check_failure") or "(no failure output)"
-            diff_text = _git_diff_text(run_root)
+            if pbi.get("kind") == "fix":
+                ticket["carry_over"] = state.carry_over_ticket(run, pbi)
         else:
             mode = "fix"
             groups = run.get("fix_groups") or []
@@ -641,8 +634,6 @@ def _compose_prompt_parts(
             mode=mode,
             ticket=ticket,
             result_path=result_path,
-            failure_output=failure_output,
-            diff_text=diff_text,
             out_path=staged_prompt,
             rule_docs=rule_docs,
         )
@@ -662,9 +653,6 @@ def _compose_prompt_parts(
             facts_map = _load_facts_map(facts_path)
             for fid in ticket.get("facts") or []:
                 parts_by_id[str(fid)] = facts_map.get(str(fid), str(fid))
-        if mode == "auto_fix":
-            parts_by_id["section.failure_output"] = failure_output or ""
-            parts_by_id["section.diff"] = diff_text or ""
 
         kept = record.filter_parts(tmpl, parts_by_id)
         if "G12" not in kept:
@@ -985,6 +973,7 @@ def _build_presentation(run: dict[str, Any], page_kind: str) -> tuple[dict[str, 
             "after": "修正の実装と検査 → E2E → 報告" if fixes else "E2E → 報告",
             "decisions": decisions,
             "fix_list": fixes,
+            "outside_tests": [e for e in run.get("outside_edits") or [] if guards.is_test_file(e["file"])],
         })
     return presentation, attachments
 
@@ -1232,20 +1221,6 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
             pbi["status"] = "building"
     elif s == "checking":
         action = _make_check(run_root, run, "check")
-    elif s == "auto_fixing":
-        target = None
-        if run.get("auto_fix_pbi"):
-            target = state.get_pbi(run, run["auto_fix_pbi"])
-        if target is None:
-            failed = [p for p in run.get("pbis", []) if p.get("status") == "failed"]
-            if not failed:
-                failed = [p for p in run.get("pbis", []) if p.get("status") == "built"]
-            if not failed:
-                raise state.StateError("no failed PBI found for auto_fixing")
-            target = failed[0]
-        if target.get("status") == "passed":
-            raise state.StateError(f"G8: refusing to auto-fix passed PBI {target['id']}")
-        action = _launch_for_state(run_root, run, "worker", pbi_id=target["id"])
     elif s == "reviewing":
         if run.get("final_review"):
             action = _review_skill_action(run_root, run)
