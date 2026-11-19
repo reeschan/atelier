@@ -1,0 +1,1 @@
+役の指示の本文。surveyor.md・interviewer.md・planner.md・worker.md・reviewer.md。actions が状態に応じて、チケット (PBI の targets・do_not_touch・checks・carry_over など) や規約の文書と組み合わせ、docs/pbi/prompts/<launch_id>.md に書く。planner.md は「同じ wave の PBI はそれぞれ単独で検査に通ること」を求めるが、wave の中での `targets` の重なりには触れていない。

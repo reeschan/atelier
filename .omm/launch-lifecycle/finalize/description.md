@@ -1,0 +1,1 @@
+`_finalize_completion` → `_handle_launch_done` か `_handle_check_done` → `_advance_and_save`。building の worker の launch なら PBI を built にし、次の作れる PBI があれば `worker_returned` (building のまま)、無ければ `wave_built`。fixing なら `fix_group_index` を進め、残りのグループがあれば subphase を build、無ければ check。最後に `pending_action` を空にして次の 1 件を作り、run.json を保存する。

@@ -1,0 +1,15 @@
+created: 2026-11-19T21:00:15.955Z
+updated: 2026-11-19T21:00:19.189Z
+update_count: 3
+last_field: concern
+git_commit: c5fec69
+git_branch: claude/atelier-parallel-waves
+children:
+  - agent-launch
+  - drive-loop
+  - external-launch
+  - finalize
+  - guard-question
+  - next-action
+  - pending-action
+  - wave-check

@@ -1,0 +1,15 @@
+created: 2026-11-19T20:59:05.930Z
+updated: 2026-11-19T20:59:21.553Z
+update_count: 3
+last_field: concern
+kind: nested-class
+title: actions
+children:
+  - asks
+  - compose-prompt
+  - ensure-pending-action
+  - launch-for-state
+  - make-check
+  - paths
+  - prelaunch-guards
+parentPath: []

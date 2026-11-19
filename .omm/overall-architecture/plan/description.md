@@ -1,0 +1,1 @@
+計画 (atelier.plan/1) の検証、wave の分け方 (`waves`)、wave の検査のコマンド (`wave_commands`)、修正の検査のコマンド (`fix_commands`)、最後の見直しの指摘を重ならないファイルで最大 3 つに分ける `fix_groups`、役の指示の組み立て (`worker_prompt`・`reviewer_prompt`)。PBI の `targets` は空でない配列が必須で、`do_not_touch` と重なると計画の誤りになる。同じ wave の PBI どうしの `targets` の重なりは今は検査していない。

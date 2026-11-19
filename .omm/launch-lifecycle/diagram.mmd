@@ -1,0 +1,28 @@
+graph TD
+    drive-loop["drive の輪\nconductor.py _cmd_drive"]
+    next-action["次の 1 件を作る\nactions.ensure_pending_action"]
+    external-launch["外部 runner の launch\nconductor.py _cmd_run"]
+    agent-launch["agent の launch\nSKILL.md と conductor.py _cmd_done"]
+    wave-check["wave の検査\nconductor.py _run_check・_handle_check_done"]
+    finalize["受け入れて次へ\nconductor.py _finalize_completion"]
+    guard-question["guard の問い\nconductor.py _raise_guard_question"]
+    pending-action["待つ行動 1 件\nrun.json pending_action"]
+
+    drive-loop -->|"pending_action が無ければ"| next-action
+    next-action -->|"1 件を置く"| pending-action
+    pending-action -->|"runner が外部"| external-launch
+    pending-action -->|"runner が agent: drive は止まって呼び手に返す"| agent-launch
+    pending-action -->|"action が check"| wave-check
+    external-launch -->|"違反なし"| finalize
+    external-launch -->|"違反か使えない"| guard-question
+    agent-launch -->|"違反なし"| finalize
+    agent-launch -->|"違反"| guard-question
+    wave-check -->|"結果を状態に当てる"| finalize
+    finalize -->|"pending_action を空にして次を作る"| next-action
+    guard-question -->|"ask を置いて drive は止まる"| pending-action
+
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    classDef store fill:#a6e3a1,stroke:#a6e3a1,color:#1e1e2e
+    classDef concern fill:#f38ba8,stroke:#f38ba8,color:#1e1e2e
+    class drive-loop entry
+    class pending-action concern

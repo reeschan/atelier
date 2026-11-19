@@ -1,0 +1,1 @@
+外部 runner の launch を出す前の検査。G3 は PBI か役への送り先が承認済みか、G4 は指示と参照するファイルに秘密が無いか、G11 は組んだ argv に禁じた引数が無いか。違反なら guard の check を記録し、`guard_issue` を置いて `guard_violation` で asking_guard に移る。予算 (`_budget_would_exceed`) は runner に依らず見て、超えるなら `budget_exceeded` で asking_budget に移る。予算の承認 (`budget_approved_next`) は次の 1 件にだけ効く。

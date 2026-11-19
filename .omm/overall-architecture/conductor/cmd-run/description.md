@@ -1,0 +1,1 @@
+`run --root --launch-id`。外部 runner の launch を 1 本動かす。G3 (送り先の承認)・G4 (指示の秘密)・G11 (禁じた引数) を確かめ直し、snapshot を取り、`runners.run_external` で同期して動かし、使用量と launch の記録を足し、`_collect_post_launch_violations` (G1・G2・G5・G12・G14) で比べる。違反か使えない理由があれば guard の問い、無ければ結果を読んで `_finalize_completion`。

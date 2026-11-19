@@ -1,0 +1,1 @@
+run.json の読み書きと PBI の状態の扱い。`ready_wave_pbis` は依存が通った (または免除された) 未完の PBI を返し、`next_buildable_pbi` はそのうち先頭の 1 件を返す。PBI の status は pending → building → built → passed / failed / carried / held。持ち越し (CO-n) と修正の PBI (CO-n-FIX) の作成と精算もここにある。launch id は `next_launch_id` が `counters.launch_seq` から振る。

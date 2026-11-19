@@ -1,0 +1,9 @@
+created: 2026-11-19T21:01:12.186Z
+updated: 2026-11-19T21:01:12.187Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: done-accept
+children: []
+parentPath:
+  - agent-launch

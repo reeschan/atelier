@@ -1,0 +1,1 @@
+`approve-edit --root --path --reason`。run の途中でユーザーが認めて呼び手が変えたファイルを、approved_edits.jsonl に digest つきで足す。待っている launch の id も添える。G1 はこのファイルの変更を違反にしない。run.json ではなく別のファイルに追記するのは、ほかのコマンドが run.json を保存している最中でも書けるようにするため。

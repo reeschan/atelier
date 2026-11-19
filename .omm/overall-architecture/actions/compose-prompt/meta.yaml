@@ -1,0 +1,9 @@
+created: 2026-11-19T20:59:24.968Z
+updated: 2026-11-19T20:59:24.968Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: compose-prompt
+children: []
+parentPath:
+  - actions

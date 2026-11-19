@@ -1,0 +1,1 @@
+CLI の入口 (skills/atelier/conductor.py)。どのサブコマンドも run.json を読み、`pending_action` を 1 件だけ扱い、片付けたら `_advance_and_save` で `pending_action` と `pending_snapshot` を空にして次の 1 件を作り、保存する。結果の受け入れは `_finalize_completion` に集まり、check なら `_handle_check_done`、launch なら `_handle_launch_done` が状態を進める。

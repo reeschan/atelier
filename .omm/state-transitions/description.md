@@ -1,0 +1,1 @@
+flow.py の遷移表のうち、作る段から E2E までの部分 (計画の承認より前と reporting・done は省く)。building と fixing は、今は中で launch を 1 本ずつ回す。並べて動かす変更は、この 2 つの状態の「中の回り方」だけを変え、状態と事象の表は変えない見込み (building で作り終えたら `wave_built`、fixing で全グループが終わったら subphase を check にする、は同じ)。

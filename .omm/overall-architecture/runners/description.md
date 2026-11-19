@@ -1,0 +1,1 @@
+外部 runner の起動。`launch_spec` は runner ごとの引数 (claude は `-p --output-format json`、codex は `exec --json` など) を組んだ `Command` を返す。runner が agent のときは呼び手に渡す辞書を返す。`run_external` は `subprocess.run` で 1 本を同期して動かし、stdout から使用量 (tokens・cost) と使えない理由 (終了コード・quota・認証・最後の発言が無い) を読む。

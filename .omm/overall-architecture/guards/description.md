@@ -1,0 +1,1 @@
+作業木と Git の状態を launch の前後で比べる。`snapshot` は追跡中と未追跡のファイルの digest・HEAD・branch・stash・allowed_paths・outside_edits の規則を取る。`compare` は G1 (allowed_paths の外・do_not_touch・修正の PBI のテスト)、G2 (HEAD・branch・stash)、G5 (依存のファイル)、G14 (結果のファイルが無い) を返す。ほかに `destructive_changes` (G12)、`garbled_changes` (G14 の文字化け)、`scan_secrets` (G4)、`forbidden_args` (G11)、`sends_approved` (G3)。

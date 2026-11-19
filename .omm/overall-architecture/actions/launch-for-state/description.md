@@ -1,0 +1,1 @@
+`_launch_for_state(run_root, run, role, pbi_id)`。経路から step (runner・model・effort) を選び (`_step_for_launch`。building では PBI の route を初めて決める)、launch id を仮に決めて指示を組み、外部 runner なら事前の検査をし、予算を見て、`next_launch_id` で id を確定し、指示を prompts/<launch_id>.md に書き、`launch_reads` に読んだ部品を残し、`_make_launch` で行動にする。外部 runner の行動は `command` (argv) を持ち、agent の行動は prompt・result・model・effort を持つ。

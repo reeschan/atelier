@@ -1,0 +1,1 @@
+run の置き場 `<root>/docs/pbi/`。run.json (状態・PBI・pending_action・pending_snapshot・counters・usage)、record.jsonl (記録)、prompts/<launch_id>.md (役の指示)、results/<launch_id>.json (役と検査の結果。外部 runner は .stdout・.stderr も)、plan.json、REPORT.md・HANDOFF.md。作業者が書いてよい場所として allowed_paths に必ず `docs/pbi/` が入る。

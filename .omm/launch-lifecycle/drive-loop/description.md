@@ -1,0 +1,1 @@
+`_cmd_drive`。`--done` があれば先に `_cmd_done` で片付け、無ければ `_cmd_next` で今の行動を得る。そこから max_steps (既定 200) まで、check・外部の launch・prepare を片付けては次の行動を受け取る。呼び手が要る行動が来たら `{"drove", "next"}` を返す。ConductorError は「何歩目で止まったか」を添えて投げ直す。

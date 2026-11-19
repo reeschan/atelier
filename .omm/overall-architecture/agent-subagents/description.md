@@ -1,0 +1,1 @@
+runner が `agent` の launch。conductor は起こさず、呼び手が Agent ツールでサブエージェント (atelier-role) を起こす。conductor は launch を出すときに pending_snapshot を取り、`done` で作業木と比べる。今の SKILL.md は裏で 1 本を起こし、終わりの知らせで `drive --done` を流す。

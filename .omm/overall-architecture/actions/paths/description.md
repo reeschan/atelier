@@ -1,0 +1,1 @@
+G1 のための書いてよい場所。`allowed_paths_for`: PBI なら `allowed_paths` か `targets` か `files` と `docs/pbi/`、fixing のグループなら `fix_group_index` のグループのファイルと `docs/pbi/`、ほかの役は `docs/pbi/` だけ、決められなければ None (制限なし)。`outside_edit_rule`: 作業者は既にあるファイルなら外でも変えてよい。ただし do_not_touch は閉じ、修正の PBI はテストのファイルを閉じる。

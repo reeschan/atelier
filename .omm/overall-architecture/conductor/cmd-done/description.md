@@ -1,0 +1,1 @@
+`done --root [--launch-id]`。呼び手がやった行動 (agent の launch・check・omm_scan・prepare・review_skill) を片付ける。`_validate_pending_launch` で launch id が `pending_action` と合うか、もう終わっていないか (G8) を確かめる。agent の launch は `pending_snapshot` と作業木を比べ、違反があれば guard の問い。無ければ結果を検証し (`_validate_completion_before_accept`)、使用量を記録して `_finalize_completion`。

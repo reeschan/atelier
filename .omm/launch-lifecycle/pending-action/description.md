@@ -1,0 +1,1 @@
+run.json の `pending_action` (待つ行動) と `pending_snapshot` (agent の launch の前の作業木)。どちらも 1 件だけ。`done` は launch id がこれと合うかを確かめ、`answer` は ask のときだけ受け、`approve-edit` は待っている launch の id を添える。`status` はこれをそのまま見せる。

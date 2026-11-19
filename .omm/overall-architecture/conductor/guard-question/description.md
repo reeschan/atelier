@@ -1,0 +1,1 @@
+`_raise_guard_question`。違反の詳細を `guard_issue` に入れ (launch_id・role・pbi・runner・violations)、building の PBI を pending に戻し、作業者の外の変更を報告用に残し、`guard_violation` で asking_guard に移って問いを作る。問いの選択は retry・next_step (経路に次の候補があるとき)・stop。`guard_issue` は 1 件の launch しか持てない。

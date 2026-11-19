@@ -1,0 +1,1 @@
+親の会話 (Claude Code など)。SKILL.md の「The loop」に従い、conductor が返した行動を見て動く。`check`・外部 runner の `launch`・`prepare` は drive に任せて裏で回す。runner が `agent` の `launch` は、サブエージェントを 1 本起こし、終わったら `drive --done <launch_id>` を流す。`ask` はページを送って答えを `answer` に渡す。

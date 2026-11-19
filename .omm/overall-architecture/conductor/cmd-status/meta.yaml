@@ -1,0 +1,9 @@
+created: 2026-11-19T20:58:30.091Z
+updated: 2026-11-19T20:58:30.092Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: cmd-status
+children: []
+parentPath:
+  - conductor

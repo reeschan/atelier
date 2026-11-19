@@ -1,0 +1,1 @@
+`_make_check(run_root, run, kind)`。kind は check (wave)・fixcheck・e2e。コマンドは `check_commands`: wave なら built と failed の PBI (と再検査する保留の PBI) の checks と計画の checks、fixcheck ならグループのファイルを targets に持つ PBI の checks と計画の checks。G11 の禁じた引数を見てから check の行動 (commands・result・launch_id) にする。

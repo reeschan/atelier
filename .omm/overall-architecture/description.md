@@ -1,0 +1,1 @@
+Atelier v8 の conductor 型の構成。呼び手 (親の会話) は SKILL.md の手順に従って conductor.py の CLI を呼ぶだけで、どの役をいつ起こすかは conductor が決める。conductor は run.json の `pending_action` に「次にやる 1 件」(launch・check・ask・prepare など) を置き、drive がモデルの要らない行動 (検査・外部 runner の launch・データの写し) を自分で片付け、呼び手が要る行動で止まる。

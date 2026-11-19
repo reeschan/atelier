@@ -1,0 +1,1 @@
+今の (v8.4 の) launch から check までの処理の流れ。すべての行動は run.json の `pending_action` の 1 件を通る。drive はその 1 件を片付け、`_finalize_completion` → `_advance_and_save` で次の 1 件を作る、を繰り返す。agent の launch と ask で drive は止まり、呼び手に返る。

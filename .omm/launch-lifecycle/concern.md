@@ -1,0 +1,3 @@
+- 同じ wave の PBI が 3 本あると、外部 runner でも drive の中で 3 本が順に動く (1 本ずつ subprocess.run)。そのあと wave の検査が 1 回流れる。
+- agent の runner では、3 本それぞれで drive が止まり、呼び手が 3 回起こされる (起こす・終わりの知らせ・drive --done)。
+- 修正の段 (fixing) のグループも、`fix_group_index` を 1 つずつ進めて順に動く。

@@ -1,0 +1,1 @@
+`actions.ensure_pending_action`。building では依存の通った PBI のうち先頭の 1 件 (`state.next_buildable_pbi`) の worker の launch を作り、PBI を building にする。fixing では `fix_group_index` のグループの worker の launch。agent の launch なら、conductor が `_ensure_snapshot` で `pending_snapshot` を取る。

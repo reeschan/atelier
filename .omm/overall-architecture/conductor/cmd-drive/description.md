@@ -1,0 +1,1 @@
+`drive --root [--done <launch_id>] [--shell --timeout --check-timeout --max-steps]`。モデルの要らない行動を順に片付ける輪。check は `_run_check` (コマンドを全部流して結果を書く) の後に `_cmd_done`、外部 runner の launch は `_cmd_run`、prepare は写してから `_cmd_done`。それ以外 (agent の launch・ask・omm_scan・review_skill・done) で `{"drove": [...], "next": <行動>}` を返して止まる。1 回の輪で扱う行動は常に 1 件。

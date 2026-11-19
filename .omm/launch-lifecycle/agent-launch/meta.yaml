@@ -1,0 +1,13 @@
+created: 2026-11-19T21:00:55.786Z
+updated: 2026-11-19T21:01:05.337Z
+update_count: 2
+last_field: description
+kind: nested-class
+title: agent-launch
+children:
+  - caller-subagent
+  - done-accept
+  - done-call
+  - done-compare
+  - pending-snapshot
+parentPath: []

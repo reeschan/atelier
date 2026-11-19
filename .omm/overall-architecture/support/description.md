@@ -1,0 +1,1 @@
+状態の流れの前半と表示を受け持つ補助のモジュール。survey.py (事実の束の検証と OMM の文脈)、interview.py (面談の木と仕様の節)、pages.py (承認と問いのページを answer-me-with-html で組む)、eol.py (作業者が CRLF で書いたファイルを LF に戻す)。並列化の変更では eol.py だけが launch の終わりの処理に関わる。
