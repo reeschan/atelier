@@ -128,6 +128,70 @@ class FixPbiTests(unittest.TestCase):
             self.assertIn("two tries", Path(act["prompt"]).read_text(encoding="utf-8"))
 
 
+class ReviewFindingTests(unittest.TestCase):
+    PLAN = [
+        {"id": "PBI-1", "title": "Flaky", "depends_on": [], "targets": ["a.py"], "do_not_touch": ["keep.py"], "checks": ["check-1"]},
+        {"id": "PBI-2", "title": "Solid", "depends_on": [], "targets": ["b.py"], "checks": ["check-2"]},
+        {"id": "PBI-3", "title": "Next", "depends_on": ["PBI-2"], "targets": ["c.py"], "checks": ["check-3"]},
+    ]
+
+    def first_wave_failed_by_commands(self, tmp: Path) -> dict:
+        act = reach_building(tmp, pbis=self.PLAN)
+        while act["action"] == "launch":
+            act = done(tmp, act, {"status": "ok"})
+        return done(tmp, act, {"exit_code": 1, "output": "E1", "commands": [
+            {"command": "check-1", "exit_code": 1},
+            {"command": "check-2", "exit_code": 0},
+            {"command": "python -m unittest", "exit_code": 0},
+        ]})
+
+    def test_without_failed_pbis_the_failed_commands_decide_which_pbis_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            act = self.first_wave_failed_by_commands(tmp)
+            self.assertEqual("CO-1-FIX", act["pbi"])
+            pbis = pbis_of(tmp)
+            self.assertEqual(("carried", "passed"), (pbis["PBI-1"]["status"], pbis["PBI-2"]["status"]))
+
+    def test_a_fix_pbi_passes_on_its_own_checks_while_another_pbi_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            act = self.first_wave_failed_by_commands(tmp)
+            act = done(tmp, act, {"status": "ok"})
+            self.assertEqual("PBI-3", act["pbi"])
+            act = done(tmp, act, {"status": "ok"})
+            act = done(tmp, act, {"exit_code": 1, "output": "E3", "commands": [
+                {"command": "check-1", "exit_code": 0},
+                {"command": "check-3", "exit_code": 1},
+            ]})
+            self.assertEqual(("launch", "reviewer"), (act["action"], act["role"]))
+            run = state.load_state(tmp)
+            pbis = {p["id"]: p for p in run["pbis"]}
+            self.assertEqual(("passed", "passed", "carried"), (pbis["CO-1-FIX"]["status"], pbis["PBI-1"]["status"], pbis["PBI-3"]["status"]))
+            self.assertEqual([("CO-1", "fixed_by_pbi", 1), ("CO-2", "open", 0)], [(c["id"], c["status"], c["tries"]) for c in run["carry_overs"]])
+
+    def test_the_fix_ticket_keeps_do_not_touch_and_says_no_test_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            act = self.first_wave_failed_by_commands(tmp)
+            self.assertEqual(["keep.py"], pbis_of(tmp)["CO-1-FIX"]["do_not_touch"])
+            ticket = Path(act["prompt"]).read_text(encoding="utf-8")
+            self.assertIn('"no_test_edits": true', ticket)
+            self.assertIn('"keep.py"', ticket)
+
+    def test_replanning_closes_the_open_carry_overs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            act = self.first_wave_failed_by_commands(tmp)
+            ask = done(tmp, act, {"status": "plan_broken", "plan_broken": True, "reason": "needs a new module", "needed_files": ["new.py"]})
+            self.assertEqual("plan_broken", ask["kind"])
+            act = answer(tmp, "--choice", "replan")
+            self.assertEqual("planner", act["role"])
+            run = state.load_state(tmp)
+            self.assertEqual(["replanned"], [c["status"] for c in run["carry_overs"]])
+            self.assertEqual([], state.carry_over_fix_items(run))
+
+
 class LastWaveTests(unittest.TestCase):
     ONE = [{"id": "PBI-1", "title": "Lower the box", "depends_on": [], "targets": ["box.py"], "checks": ["check-1"]}]
 
@@ -186,6 +250,21 @@ class CheckRunsEveryCommandTests(unittest.TestCase):
             result = json.loads((root / "r.json").read_text(encoding="utf-8"))
             self.assertEqual([3, 0], [c["exit_code"] for c in result["commands"]])
             self.assertIn("second ran", result["output"])
+
+    def test_a_long_later_failure_keeps_the_earlier_failure_output(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            py = f'"{sys.executable}"'
+            act = {"commands": [
+                f"{py} -c \"print('FIRST-FAIL'); raise SystemExit(1)\"",
+                f"{py} -c \"print('x' * 20000); raise SystemExit(2)\"",
+                f"{py} -c \"print('quiet pass')\"",
+            ], "result": str(root / "r.json")}
+            conductor._run_check(root, act, None, 60)
+            output = json.loads((root / "r.json").read_text(encoding="utf-8"))["output"]
+            self.assertIn("FIRST-FAIL", output)
+            self.assertIn("(ok)", output)
+            self.assertLessEqual(len(output), conductor.CHECK_OUTPUT_TAIL + 1000)
 
 
 def commit(root: Path, *names: str) -> None:
@@ -254,7 +333,8 @@ class OutsideEditTests(unittest.TestCase):
     def test_test_files_by_directory_and_name(self) -> None:
         for name in ("tests/test_app.py", "src/__tests__/view.tsx", "pkg/store_test.go", "src/view/Outline.test.ts",
                      "spec/models/user_spec.rb", "e2e/select.cy.ts", "src/OutlineTest.java", "src/__snapshots__/v.snap",
-                     "test_status", "./tests/a.py"):
+                     "test_status", "./tests/a.py", "Tests/Foo.cs", "conftest.py", "e2e/login.ts",
+                     "spec/spec_helper.rb", "testdata/x.json"):
             with self.subTest(name=name):
                 self.assertTrue(guards.is_test_file(name))
         for name in ("app.py", "docs/specs/outline.md", "src/Contest.java", "testing.md", ".tests/a.py", ".test/x.py", ""):

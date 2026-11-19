@@ -356,6 +356,24 @@ def _append_check_records_for_wave(
             raise ConductorError(f"G4: secret detected in check record ({hits[0]['kind']})")
 
 
+def _failed_pbis_from_commands(run: dict[str, Any], result: dict[str, Any]) -> set[str]:
+    """The PBIs a failed wave check is laid on, from each command's exit code.
+
+    A PBI fails when one of its own checks failed. A failed command no PBI of the wave owns (a plan check)
+    is laid on every PBI of the wave except fix PBIs, which pass or fail on their own checks only.
+    Empty when the result has no per-command exit codes.
+    """
+    failing = {str(c.get("command")) for c in result.get("commands") or [] if isinstance(c, dict) and c.get("exit_code")}
+    if not failing:
+        return set()
+    checked = [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")]
+    owned = {cmd for p in checked for cmd in p.get("checks") or []}
+    ids = {p["id"] for p in checked if failing & set(p.get("checks") or [])}
+    if failing - owned:
+        ids |= {p["id"] for p in checked if p.get("kind") != "fix"}
+    return ids
+
+
 def _carry_failed_check(run: dict[str, Any], failed_commands: list[str]) -> str:
     """Carry a failed wave check over instead of stopping, and name the event that follows.
 
@@ -437,7 +455,7 @@ def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) 
                 or json.dumps(result, ensure_ascii=False)
             )
             run["last_failed_rules"] = [str(r) for r in (result.get("rules") or ["G9"])]
-            failed_ids = set(result.get("failed_pbis") or [])
+            failed_ids = set(result.get("failed_pbis") or []) or _failed_pbis_from_commands(run, result)
             if failed_ids:
                 for pbi in run.get("pbis", []):
                     if pbi.get("status") in ("built", "failed"):
@@ -449,6 +467,8 @@ def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) 
             failed_commands = [
                 str(c["command"]) for c in result.get("commands") or [] if isinstance(c, dict) and c.get("exit_code")
             ]
+            # A fix PBI that passed in a failed wave still settles its carry-over.
+            state.settle_passed_fix_pbis(run)
             flow.apply_event(run, _carry_failed_check(run, failed_commands))
     elif s == "fixing":
         rules = [str(r) for r in (result.get("rules") or ([] if exit_code == 0 else ["G9"]))]
@@ -1243,6 +1263,8 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
         if text:
             lines.append(f"User note: {text}")
         lines.append("Rebuild the PBIs that have not passed so that their targets cover what the code needs.")
+        for co in state.open_carry_overs(run):
+            co["status"] = "replanned"
         run["planner_mode"] = "revise"
         run["plan_revision_request"] = "\n".join(lines)
         run["pending_plan_sends"] = None
@@ -1501,6 +1523,20 @@ def _tail(text: str, limit: int = CHECK_OUTPUT_TAIL) -> str:
     return text if len(text) <= limit else "…" + text[-limit:]
 
 
+def _check_output(outputs: list[tuple[str, int, str]]) -> str:
+    """The check's output: the end of each failed command's output, sharing the limit; a passing command's name only.
+
+    With no failure, the end of every command's output, as before.
+    """
+    failed = [(cmd, out) for cmd, code, out in outputs if code != 0]
+    if not failed:
+        return _tail("\n".join(f"$ {cmd}\n{_tail(out)}" for cmd, _, out in outputs))
+    share = max(CHECK_OUTPUT_TAIL // len(failed), 200)
+    lines = [f"$ {cmd}\n{_tail(out, share)}" for cmd, out in failed]
+    lines += [f"$ {cmd} (ok)" for cmd, code, _ in outputs if code == 0]
+    return "\n".join(lines)
+
+
 def _run_check(root: Path, act: dict[str, Any], shell: str | None, timeout: int | None) -> int:
     """Run every command of a check, even after a failure, and write the result file.
 
@@ -1508,7 +1544,7 @@ def _run_check(root: Path, act: dict[str, Any], shell: str | None, timeout: int 
     carry-over names every check that failed, not only the first.
     """
     exit_code = 0
-    parts: list[str] = []
+    outputs: list[tuple[str, int, str]] = []
     codes: list[dict[str, Any]] = []
     for cmd in act["commands"]:
         argv: str | list[str] = [shell, "-c", cmd] if shell else cmd
@@ -1528,14 +1564,14 @@ def _run_check(root: Path, act: dict[str, Any], shell: str | None, timeout: int 
             code, out = 124, f"timed out after {timeout}s"
         except OSError as exc:
             code, out = 127, str(exc)
-        parts.append(f"$ {cmd}\n{_tail(out)}")
+        outputs.append((cmd, code, out))
         codes.append({"command": cmd, "exit_code": code})
         if code != 0 and exit_code == 0:
             exit_code = code
     result_path = Path(act["result"])
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(
-        json.dumps({"exit_code": exit_code, "output": _tail("\n".join(parts)), "commands": codes}, ensure_ascii=False),
+        json.dumps({"exit_code": exit_code, "output": _check_output(outputs), "commands": codes}, ensure_ascii=False),
         encoding="utf-8",
     )
     return exit_code

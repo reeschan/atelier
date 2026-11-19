@@ -584,6 +584,7 @@ def carry_over_ticket(run: dict[str, Any], fix: dict[str, Any]) -> dict[str, Any
         "output": co.get("output", ""),
         "worker_notes": list(co.get("worker_notes") or []),
         "original_pbis": [{"id": p["id"], "title": p.get("title", ""), "goal": p.get("goal", "")} for p in originals],
+        "no_test_edits": True,
     }
 
 

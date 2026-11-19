@@ -84,8 +84,8 @@ def snapshot(root, allowed_paths=None, report_path=None, child_pids=None, outsid
 
 
 # Directories and file names that hold tests by the usual conventions of common languages.
-_TEST_DIRS = {'test', 'tests', '__tests__', '__snapshots__'}
-_TEST_NAMES = ('test_*', '*_test.*', '*.test.*', '*.spec.*', '*_spec.*', '*.cy.*', '*Test.*', '*Tests.*', '*.snap')
+_TEST_DIRS = {'test', 'tests', '__tests__', '__snapshots__', 'spec', 'e2e', 'testdata', 'test_data'}
+_TEST_NAMES = ('test_*', 'conftest.py', '*_test.*', '*.test.*', '*.spec.*', '*_spec.*', '*.cy.*', '*Test.*', '*Tests.*', '*.snap')
 
 
 def is_test_file(name):
@@ -93,7 +93,7 @@ def is_test_file(name):
     parts = PurePosixPath(name.replace('\\', '/').removeprefix('./')).parts
     if not parts:
         return False
-    if any(part in _TEST_DIRS for part in parts[:-1]):
+    if any(part.lower() in _TEST_DIRS for part in parts[:-1]):
         return True
     return any(fnmatch.fnmatchcase(parts[-1], pattern) for pattern in _TEST_NAMES)
 

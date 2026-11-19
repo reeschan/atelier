@@ -254,6 +254,7 @@ CARRY_STATUS_LABELS = {
     "fixed_by_pbi": "修正の PBI で直った",
     "fixed": "修正の段で直った",
     "dropped": "直す一覧から外した",
+    "replanned": "計画の組み直しに含めた",
 }
 
 
