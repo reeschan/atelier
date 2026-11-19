@@ -317,6 +317,54 @@ def _write_report(run_root: Path, run: dict[str, Any]) -> Path:
     return report_path
 
 
+def _git_branch(root: Path) -> str | None:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError:
+        return None
+    branch = proc.stdout.strip()
+    return branch if proc.returncode == 0 and branch and branch != "HEAD" else None
+
+
+def _write_handoff(run_root: Path, run: dict[str, Any], report_path: Path) -> Path:
+    """Write the short text a fresh conversation needs to take the finished run to a pull request."""
+    root = run_root.resolve()
+    base = run.get("base_commit")
+    lines = [
+        f"# 引き継ぎ: Atelier の run {run['run_id']} のあと",
+        "",
+        "次の段は仕上げと PR。この文だけで新しい会話を始められる。",
+        "",
+        f"- 作業の場所: {root}",
+        f"- ブランチ: {_git_branch(root) or '（git のブランチなし）'}",
+        f"- 始めたときのコミット: {base or '（なし）'}",
+        f"- 目的: {run['goal_file']}",
+        f"- 仕様: {run.get('spec_file') or '（なし）'}",
+        f"- 報告: {report_path.resolve()}",
+        f"- run の状態: {state.state_path(run_root).resolve()}",
+    ]
+    unfinished = [p["id"] for p in state.unfinished_pbis(run)]
+    if unfinished:
+        lines.append(f"- 終わっていない PBI: {'、'.join(unfinished)}（報告の「終わっていない PBI」に理由がある）")
+    lines += [
+        "",
+        "次にやること:",
+        "1. 報告を読み、終わっていない PBI・残った指摘・E2E の結果を確かめる。",
+        f"2. 差分を見る（`git diff {base}`）。" if base else "2. 差分を見る（`git diff`）。",
+        "3. 手直しが要れば直し、リポジトリの PR の手順（PR のスキルがあればそれ）で PR を作る。",
+        "",
+    ]
+    handoff_path = state.run_dir(run_root) / "HANDOFF.md"
+    handoff_path.write_text("\n".join(lines), encoding="utf-8")
+    return handoff_path
+
+
 def _budget_would_exceed(run: dict[str, Any], prompt_text: str) -> bool:
     if run.pop("budget_approved_next", False):
         return False
@@ -1250,10 +1298,12 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
         if s == "reporting":
             flow.apply_event(run, "report_written")
             report_path = _write_report(run_root, run)
+        handoff_path = _write_handoff(run_root, run, report_path)
         unfinished = [p["id"] for p in state.unfinished_pbis(run)]
         action = {
             "action": "done",
             "report": str(report_path.resolve()),
+            "handoff": str(handoff_path.resolve()),
             "complete": not unfinished,
             "unfinished_pbis": unfinished,
         }

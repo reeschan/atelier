@@ -1,4 +1,4 @@
-"""Atelier v8 conductor CLI: start | next | run | done | answer | status."""
+"""Atelier v8 conductor CLI: start | next | run | done | answer | status | drive."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1403,6 +1404,90 @@ def _cmd_approve_edit(args: argparse.Namespace) -> dict[str, Any]:
     return {"approved_edits": [e["path"] for e in entries]}
 
 
+CHECK_OUTPUT_TAIL = 8000
+
+
+def _tail(text: str, limit: int = CHECK_OUTPUT_TAIL) -> str:
+    return text if len(text) <= limit else "…" + text[-limit:]
+
+
+def _run_check(root: Path, act: dict[str, Any], shell: str | None, timeout: int | None) -> int:
+    """Run a check's commands in order, stop at the first failure, and write the result file."""
+    exit_code = 0
+    parts: list[str] = []
+    for cmd in act["commands"]:
+        argv: str | list[str] = [shell, "-c", cmd] if shell else cmd
+        try:
+            proc = subprocess.run(
+                argv,
+                shell=shell is None,
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            )
+            code, out = proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        except subprocess.TimeoutExpired:
+            code, out = 124, f"timed out after {timeout}s"
+        except OSError as exc:
+            code, out = 127, str(exc)
+        parts.append(f"$ {cmd}\n{_tail(out)}")
+        if code != 0:
+            exit_code = code
+            break
+    result_path = Path(act["result"])
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text(
+        json.dumps({"exit_code": exit_code, "output": _tail("\n".join(parts))}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return exit_code
+
+
+def _copy_approved_data(act: dict[str, Any]) -> None:
+    for copy in act.get("copies") or []:
+        source, dest = Path(copy["source"]).expanduser(), Path(copy["dest"])
+        if not source.exists():
+            raise ConductorError(f"approved data source does not exist: {source}")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, dest, dirs_exist_ok=True)
+        else:
+            shutil.copy2(source, dest)
+
+
+def _cmd_drive(args: argparse.Namespace) -> dict[str, Any]:
+    """Do every action that needs no model, and stop at the first one that needs the caller."""
+    root = Path(args.root)
+    steps: list[dict[str, Any]] = []
+    if args.done:
+        act = _cmd_done(argparse.Namespace(root=args.root, launch_id=args.done))
+        steps.append({"action": "done", "launch_id": args.done})
+    else:
+        act = _cmd_next(argparse.Namespace(root=args.root))
+    try:
+        for _ in range(args.max_steps):
+            kind = act.get("action")
+            if kind == "check":
+                code = _run_check(root, act, args.shell, args.check_timeout)
+                steps.append({"action": "check", "launch_id": act["launch_id"], "exit_code": code})
+                act = _cmd_done(argparse.Namespace(root=args.root, launch_id=act["launch_id"]))
+            elif kind == "launch" and act.get("runner") != "agent":
+                steps.append({k: act.get(k) for k in ("action", "launch_id", "role", "pbi", "runner", "model")})
+                act = _cmd_run(argparse.Namespace(root=args.root, launch_id=act["launch_id"], timeout=args.timeout))
+            elif kind == "prepare":
+                _copy_approved_data(act)
+                steps.append({"action": "prepare", "launch_id": act["launch_id"]})
+                act = _cmd_done(argparse.Namespace(root=args.root, launch_id=act["launch_id"]))
+            else:
+                return {"drove": steps, "next": act}
+    except ConductorError as exc:
+        raise ConductorError(f"drive stopped after {len(steps)} steps: {exc}") from exc
+    raise ConductorError(f"drive stopped after {args.max_steps} steps without needing the caller")
+
+
 def _cmd_status(args: argparse.Namespace) -> dict[str, Any]:
     run = state.load_state(Path(args.root))
     return {
@@ -1460,6 +1545,14 @@ def _build_parser() -> _JsonArgumentParser:
     p_st = sub.add_parser("status")
     p_st.add_argument("--root", required=True)
 
+    p_drive = sub.add_parser("drive")
+    p_drive.add_argument("--root", required=True)
+    p_drive.add_argument("--done", help="launch id of the agent launch to complete before driving")
+    p_drive.add_argument("--shell", help="run each check command as <shell> -c <command> instead of the system shell")
+    p_drive.add_argument("--timeout", type=int, default=600, help="seconds per external launch")
+    p_drive.add_argument("--check-timeout", type=int, default=None, help="seconds per check command")
+    p_drive.add_argument("--max-steps", type=int, default=200)
+
     return parser
 
 
@@ -1475,6 +1568,7 @@ def main(argv: list[str] | None = None) -> int:
             "answer": _cmd_answer,
             "approve-edit": _cmd_approve_edit,
             "status": _cmd_status,
+            "drive": _cmd_drive,
         }
         _emit(handlers[args.command](args))
         return 0

@@ -7,22 +7,38 @@ description: Use for multi-file implementation work; not for a one-file fix. Arg
 
 For a small task such as a one-file fix, say Atelier is not used and stop this skill. For `setup`, run `python setup.py runners`, then `python setup.py models <runner>` for each desired runner; use `--home <config-directory>` or `--<runner> <path>` on `runners` as needed.
 
-For other work, write the user's goal to a UTF-8 file, then run `python conductor.py start --root <work-root> --goal-file <file>`, adding `--spec <file>` when supplied (and `--agents <file>`, `--template <file>`, `--force` as needed). If your memory records where this repository's OMM cache lives, add `--omm-cache-dir <dir>`; otherwise leave it out. Use absolute paths to this skill's scripts when needed.
+For other work, write the user's goal to a UTF-8 file, then run `python conductor.py start --root <work-root> --goal-file <file>`, adding `--spec <file>` when supplied (and `--agents <file>`, `--template <file>`, `--force` as needed). If your memory records where this repository's OMM cache lives, add `--omm-cache-dir <dir>`; otherwise leave it out. Use absolute paths to this skill's scripts when needed. To continue a run that is still open (for example in a new conversation), skip `start` and run `drive` below.
 
-Repeat using the returned action (from `start`'s `next`, or `python conductor.py next --root <work-root>`):
+## Drive in the background
 
-- `launch` with `runner == "agent"`: launch an agent subagent at depth 1 with the `prompt` file, `model`, and `effort`; then run `python conductor.py done --root <work-root> --launch-id <launch_id>`.
-- `launch` with an external `runner`: run `python conductor.py run --root <work-root> --launch-id <launch_id>` and use its returned action.
-- `check`: run `commands`, write a JSON object with integer `exit_code` (and optional `output`) to `result`, then run `python conductor.py done --root <work-root>`.
-- `omm_scan`: run the `omm-scan` skill at `repository`, then `store_command` there; then run `python conductor.py done --root <work-root> --launch-id <launch_id>`.
-- `prepare`: copy each of `copies` from `source` to `dest` (the user approved these with the plan); then run `done` with `--launch-id`.
-- `review_skill`: run `skill` with `args` through the Skill tool on the diff from `base` to the working tree, follow `instructions` to write `result`, then run `done` with `--launch-id`.
+`python conductor.py drive --root <work-root>` does every action that needs no model by itself: it runs `check` commands and writes their result, runs `launch` actions with an external `runner`, and copies `prepare` data. It stops at the first action that needs you and prints `{"drove": [...], "next": <action>}`. Run it in the background where your host can (in Claude Code, the Bash tool with `run_in_background`), then end your turn and wait for its completion notice; where it cannot, run it in the foreground. Add `--shell <path to a POSIX shell>` when the check commands use POSIX syntax and the system shell is not one (Windows `cmd.exe`).
+
+While `drive` or a subagent runs, do not run `status` or `next`, read result files, or poll. If the user asks how it is going, run `status` once.
+
+## The loop
+
+Act on the returned action (from `start`'s `next`, `answer`, or `drive`'s `next`):
+
+- `check`, `launch` with an external `runner`, or `prepare`: do not do it yourself; run `drive` in the background.
+- `launch` with `runner == "agent"`: launch an agent subagent at depth 1, in the background, with the `prompt` file, `model`, and `effort`. When it finishes, run `python conductor.py drive --root <work-root> --done <launch_id>` in the background.
+- `omm_scan`: run the `omm-scan` skill at `repository`, then `store_command` there; then run `drive --done <launch_id>` in the background.
+- `review_skill`: run `skill` with `args` through the Skill tool on the diff from `base` to the working tree, follow `instructions` to write `result`, then run `drive --done <launch_id>` in the background.
 - `ask`: show `page` (and `attachments`, if any) using the file-send tool; when `page` is null (answer-me-with-html is not installed), send `draft` instead. In chat, write only the `chat` lines (the conclusion and the decision) and the `choices`. When `chat` is absent, write the contents of the `question` file and the `choices`. Do not copy the page or `summary` into chat. Pass the user's reply to `python conductor.py answer --root <work-root> --choice <id>` (from `choices`), `--text <reply>` (for `interview_round`), or `--reply <file>`.
-- `done`: send `report` (`REPORT.md`) using the file-send tool, write one line in chat, and stop; do not restate the report in chat. When `complete` is false, that line says the run ended with the PBIs in `unfinished_pbis` not done.
+- `done`: send `report` (`REPORT.md`) and `handoff` (`HANDOFF.md`) using the file-send tool; do not restate them in chat. When `complete` is false, say in one line that the run ended with the PBIs in `unfinished_pbis` not done. Then hand off (below).
 
 For `fix_approval`, findings the user decides to fix (including ones held back by confidence or skipped by triage) go in a reply file: `{"choice": "approve", "include_ids": [...]}`.
 
 When the user approves a change to the spec, glossary or another file and you make it while a run is open, run `python conductor.py approve-edit --root <work-root> --path <file> --reason <what the user approved>` right after the edit; otherwise G1 stops the role that is running.
+
+## Hand off after the run
+
+The next stage (finishing touches and the pull request) does not need this conversation: `HANDOFF.md` names the work root, branch, base commit, goal, spec, report and run state. Ask the user one question:
+
+- **New conversation (recommended)**: where your host can start a new session, start one whose only prompt is the contents of `HANDOFF.md`, and stop here. Otherwise ask the user to run `/clear` and paste `HANDOFF.md` (or its path).
+- **Compact**: ask the user to run `/compact` and keep only what `HANDOFF.md` names.
+- **Continue here**: go on in this conversation.
+
+You cannot clear or compact the conversation yourself; say so when you ask.
 
 G12: Before deleting data or changing anything outside the repository, stop and ask the user.
 G13: Never route around a refusal.

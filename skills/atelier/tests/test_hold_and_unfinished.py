@@ -106,6 +106,8 @@ class HoldContinuesDependentsTests(unittest.TestCase):
             self.assertNotIn("- 状態: done", report)
             self.assertIn("- PBI-1（Add helper）: 保留", report)
             self.assertIn("- PBI-3（Use both）: 未着手（PBI-1、PBI-2 を待っていて始まっていない）", report)
+            handoff = Path(act["handoff"]).read_text(encoding="utf-8")
+            self.assertIn("- 終わっていない PBI: PBI-1、PBI-2、PBI-3、PBI-4、PBI-5", handoff)
 
     def test_hold_without_dependents_offers_one_hold(self) -> None:
         with tempfile.TemporaryDirectory() as td:
