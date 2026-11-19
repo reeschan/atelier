@@ -205,6 +205,90 @@ def any_pending_pbis(run: dict[str, Any]) -> bool:
     return any(p.get("status", "pending") == "pending" for p in run.get("pbis", []))
 
 
+FINISHED_STATUSES = ("passed", "sensitive")
+
+STATUS_LABELS = {
+    "pending": "未着手",
+    "building": "作っている途中",
+    "built": "検査の前",
+    "failed": "検査に落ちた",
+    "held": "保留",
+}
+
+
+def rebuild_hold_targets(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """PBIs that the rebuild question's hold applies to: the failed ones, else the built ones."""
+    pbis = run.get("pbis", [])
+    failed = [p for p in pbis if p.get("status") == "failed"]
+    return failed or [p for p in pbis if p.get("status") == "built"]
+
+
+def dependents_of(run: dict[str, Any], ids: list[str]) -> list[str]:
+    """IDs of unfinished PBIs that depend on any of ids, directly or through another PBI, in plan order."""
+    sources = set(ids)
+    found: list[str] = []
+    added = True
+    while added:
+        added = False
+        for pbi in run.get("pbis", []):
+            pid = pbi["id"]
+            if pid in sources or pbi.get("status") in FINISHED_STATUSES:
+                continue
+            if any(dep in sources for dep in pbi.get("depends_on") or []):
+                sources.add(pid)
+                found.append(pid)
+                added = True
+    order = [p["id"] for p in run.get("pbis", [])]
+    return sorted(found, key=order.index)
+
+
+def hold_after_rebuild(run: dict[str, Any], *, continue_dependents: bool) -> list[str]:
+    """Hold the PBIs the rebuild question was about; optionally let the PBIs that depend on them go on.
+
+    A held PBI keeps its changes in the working tree. With continue_dependents, each pending PBI that
+    depends on a held one waives that dependency, and the held PBI is checked again with it (recheck_held_pbis).
+    """
+    held = [p["id"] for p in rebuild_hold_targets(run)]
+    for pbi in run.get("pbis", []):
+        if pbi["id"] in held:
+            pbi["status"] = "held"
+            pbi["held_reason"] = "check_failed"
+    if continue_dependents:
+        for pbi in run.get("pbis", []):
+            if pbi.get("status", "pending") != "pending":
+                continue
+            waive = [dep for dep in pbi.get("depends_on") or [] if dep in held]
+            if waive:
+                pbi["waived_deps"] = sorted(set(pbi.get("waived_deps") or []) | set(waive))
+    return held
+
+
+def recheck_held_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """PBIs held after a failed check that a PBI now being checked went on without.
+
+    Their checks run again with that PBI's, so a PBI that only failed for want of its dependent
+    (for example an export not used yet) passes once the dependent is built.
+    """
+    checked = [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")]
+    waived = {dep for p in checked for dep in p.get("waived_deps") or []}
+    return [
+        p
+        for p in run.get("pbis", [])
+        if p["id"] in waived and p.get("status") == "held" and p.get("held_reason") == "check_failed"
+    ]
+
+
+def unfinished_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """PBIs that neither passed nor left the run as sensitive."""
+    return [p for p in run.get("pbis", []) if p.get("status", "pending") not in FINISHED_STATUSES]
+
+
+def unmet_deps(run: dict[str, Any], pbi: dict[str, Any]) -> list[str]:
+    statuses = pbi_statuses(run)
+    waived = set(pbi.get("waived_deps") or [])
+    return [d for d in pbi.get("depends_on") or [] if statuses.get(d) != "passed" and d not in waived]
+
+
 def write_sensitive_handoff(root: Path, pbi: dict[str, Any]) -> Path:
     """Write docs/pbi/handoff/<PBI>.md with goal, files, and dependencies."""
     handoff_dir = run_dir(root) / "handoff"

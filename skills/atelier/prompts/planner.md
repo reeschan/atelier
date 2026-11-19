@@ -11,6 +11,8 @@ Before you fix a PBI's `targets`, read the code it changes and look for:
 - an existing mechanism with the same role (for example a manager of interaction modes) that the PBI must use instead of adding a second one.
 Put every file that must change into `targets`. If such a file is in `do_not_touch` of the plan, split the PBIs differently. List the places you read in `evidence`.
 
+Every PBI must pass the plan's `checks` and its own `checks` on its own, after its wave. Repository-wide checks such as unused-code or unused-export detection run on each wave, so keep an addition and its first use in the same PBI: do not plan one PBI that only adds a function, type, constant, export or file and a later PBI that first uses it, because the earlier PBI would fail those checks by design.
+
 Output schema `atelier.plan/1`:
 - `pbis`: array of objects, each with:
   - `id` (`PBI-1`, ...), `title`, `goal`
@@ -19,7 +21,7 @@ Output schema `atelier.plan/1`:
   - `depends_on` (PBI IDs), `targets` (files to change), `do_not_touch` (files/paths to leave unchanged), `checks` (commands whose exit code decides pass/fail, taken from the fact sheet's `commands`), `facts` (fact IDs from the fact sheet), `acceptance` (verifiable criteria)
   - `evidence`: one or more `path:line` places you read to decide `targets` (callers, exhaustive tables, existing mechanisms)
   - `data_needs`: files outside the repository that the PBI's checks need (for example real data files to test against), each `{ "source": "<absolute path outside>", "dest": "<relative path inside the repository>", "why": "..." }`; `[]` if none
-- `checks`: repository-wide fast checks (type, lint, unit) from the fact sheet's `commands`, run after every wave and after fixes
+- `checks`: repository-wide fast checks (type, lint, unit) from the fact sheet's `commands`, run after every wave and after fixes, so each must pass whenever a wave is done
 - `e2e`: E2E commands from the fact sheet's `commands` (`[]` if the repository has none)
 - `final_review`: `{ "skill": "<name from review_skills>", "args": "<arguments, e.g. full>" }` when the repository has a review skill (pick the one a rule document names), else `null`
 - `open_questions`: array of strings for any spec gaps or ambiguous decisions (empty `[]` if none).

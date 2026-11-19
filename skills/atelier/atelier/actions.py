@@ -36,7 +36,8 @@ ASK_CHOICES: dict[str, tuple[str, list[dict[str, str]], str]] = {
         [
             {"id": "retry", "label": "同じ経路でもう 1 回"},
             {"id": "retry_up", "label": "1 難度上の経路で"},
-            {"id": "hold", "label": "保留にして次の wave へ"},
+            {"id": "hold", "label": "保留にして、依存する PBI は続ける"},
+            {"id": "hold_stop", "label": "保留にして、依存する PBI も止める"},
         ],
         "1 回自動修正しても検査に落ちました。次の対応を選んでください。",
     ),
@@ -143,7 +144,7 @@ def check_commands(run: dict[str, Any], kind: str) -> list[str]:
     if kind == "fixcheck":
         files = [f for group in (run.get("fix_groups") or []) for f in _group_files(group)]
         return plan.fix_commands(pbis, plan_checks, files)
-    checked = [p for p in pbis if p.get("status") in ("built", "failed")]
+    checked = [p for p in pbis if p.get("status") in ("built", "failed")] + state.recheck_held_pbis(run)
     return plan.wave_commands(checked, plan_checks)
 
 
@@ -228,14 +229,76 @@ def _write_question(run_root: Path, kind: str, body: str) -> Path:
     return q_path
 
 
+FAILURE_LINES = 20
+
+
+def _pbi_label(pbi: dict[str, Any]) -> str:
+    return f"{pbi['id']}（{pbi.get('title') or pbi['id']}）"
+
+
+def _rebuild_detail(run: dict[str, Any], body: str) -> tuple[str, bool]:
+    """The rebuild question: which PBIs failed, which PBIs wait on them, and the end of the check output."""
+    targets = state.rebuild_hold_targets(run)
+    dependents = state.dependents_of(run, [p["id"] for p in targets])
+    lines = [body, ""]
+    if targets:
+        lines.append("落ちた PBI: " + "、".join(_pbi_label(p) for p in targets))
+    if dependents:
+        lines += [
+            "これに依る PBI（間接を含む）: " + "、".join(dependents),
+            "",
+            "- 依存する PBI は続ける: 落ちた PBI は変更を作業ツリーに残したまま保留にし、依存する PBI を先に作ります。"
+            "依存する PBI の検査で保留した PBI の検査ももう一度流し、通れば通ったとして扱います。",
+            "- 依存する PBI も止める: 依存する PBI は作らずに残し、報告に未完了として載せます。",
+        ]
+    else:
+        lines.append("これに依る PBI はありません。保留にすると、変更は作業ツリーに残したまま次へ進みます。")
+    failure = str(run.get("last_check_failure") or "").strip()
+    if failure:
+        tail = failure.splitlines()[-FAILURE_LINES:]
+        lines += ["", f"検査の出力（最後の {len(tail)} 行）:", "```", *tail, "```"]
+    return "\n".join(lines), bool(dependents)
+
+
+def _unfinished_lines(run: dict[str, Any]) -> list[str]:
+    """Report lines for PBIs that did not pass, and for held PBIs that dependents went on without."""
+    lines: list[str] = []
+    unfinished = state.unfinished_pbis(run)
+    if unfinished:
+        lines += ["", "## 終わっていない PBI", ""]
+        for pbi in unfinished:
+            status = pbi.get("status", "pending")
+            text = f"- {_pbi_label(pbi)}: {state.STATUS_LABELS.get(status, status)}"
+            waiting = state.unmet_deps(run, pbi)
+            if status == "pending" and waiting:
+                text += f"（{'、'.join(waiting)} を待っていて始まっていない）"
+            elif status == "held" and pbi.get("held_reason") == "sensitive_dependency":
+                text += "（sensitive で外した PBI に依る）"
+            elif status == "held" and pbi.get("held_reason") == "stale_dependency":
+                text += "（計画の変更で前提が変わった）"
+            lines.append(text)
+    went_on = sorted({dep for p in run.get("pbis", []) for dep in p.get("waived_deps") or []})
+    if went_on:
+        lines += ["", "## 依存を免除して先へ進めた PBI", ""]
+        for dep in went_on:
+            users = [p["id"] for p in run.get("pbis", []) if dep in (p.get("waived_deps") or [])]
+            lines.append(f"- {dep} を待たずに: {'、'.join(users)}")
+    restored = run.get("eol_restored") or []
+    if restored:
+        lines += ["", "## 改行を LF に戻したファイル", "", *[f"- {path}" for path in restored]]
+    return lines
+
+
 def _write_report(run_root: Path, run: dict[str, Any]) -> Path:
     report_path = state.run_dir(run_root) / "REPORT.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     summary_md, _ = record.report(state.record_path(run_root))
+    unfinished = state.unfinished_pbis(run)
+    status = f"未完了（終わっていない PBI が {len(unfinished)} 件ある）" if unfinished else run["state"]
     header = [
         f"# Atelier v8 報告 ({run['run_id']})",
         "",
-        f"- 状態: {run['state']}",
+        f"- 状態: {status}",
         f"- PBI 数: {len(run.get('pbis', []))}",
         f"- 自動修正回数: {run['counters']['auto_fix_count']}",
         f"- 見直し回数: {run['counters']['review_count']}",
@@ -248,6 +311,7 @@ def _write_report(run_root: Path, run: dict[str, Any]) -> Path:
         header.append(f"- OMM: {omm['source']}")
     if run.get("e2e_skipped"):
         header.append("- E2E: E2E のコマンドが無いため流していない")
+    header += _unfinished_lines(run)
     header.append("")
     report_path.write_text("\n".join(header) + summary_md, encoding="utf-8")
     return report_path
@@ -1172,6 +1236,12 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
             if line
         )
         action = _make_ask(run_root, kind, choices, detail)
+    elif s == "asking_rebuild":
+        kind, choices, body = ASK_CHOICES[s]
+        detail, has_dependents = _rebuild_detail(run, body)
+        if not has_dependents:
+            choices = [c for c in choices if c["id"] != "hold_stop"]
+        action = _make_ask(run_root, kind, choices, detail)
     elif s in ASK_CHOICES:
         kind, choices, body = ASK_CHOICES[s]
         action = _make_ask(run_root, kind, choices, body)
@@ -1180,7 +1250,13 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
         if s == "reporting":
             flow.apply_event(run, "report_written")
             report_path = _write_report(run_root, run)
-        action = {"action": "done", "report": str(report_path.resolve())}
+        unfinished = [p["id"] for p in state.unfinished_pbis(run)]
+        action = {
+            "action": "done",
+            "report": str(report_path.resolve()),
+            "complete": not unfinished,
+            "unfinished_pbis": unfinished,
+        }
     else:
         raise state.StateError(f"unhandled state: {s}")
 

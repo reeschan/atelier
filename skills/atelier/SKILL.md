@@ -18,7 +18,7 @@ Repeat using the returned action (from `start`'s `next`, or `python conductor.py
 - `prepare`: copy each of `copies` from `source` to `dest` (the user approved these with the plan); then run `done` with `--launch-id`.
 - `review_skill`: run `skill` with `args` through the Skill tool on the diff from `base` to the working tree, follow `instructions` to write `result`, then run `done` with `--launch-id`.
 - `ask`: show `page` (and `attachments`, if any) using the file-send tool; when `page` is null (answer-me-with-html is not installed), send `draft` instead. In chat, write only the `chat` lines (the conclusion and the decision) and the `choices`. When `chat` is absent, write the contents of the `question` file and the `choices`. Do not copy the page or `summary` into chat. Pass the user's reply to `python conductor.py answer --root <work-root> --choice <id>` (from `choices`), `--text <reply>` (for `interview_round`), or `--reply <file>`.
-- `done`: send `report` (`REPORT.md`) using the file-send tool, write one line in chat, and stop; do not restate the report in chat.
+- `done`: send `report` (`REPORT.md`) using the file-send tool, write one line in chat, and stop; do not restate the report in chat. When `complete` is false, that line says the run ended with the PBIs in `unfinished_pbis` not done.
 
 For `fix_approval`, findings the user decides to fix (including ones held back by confidence or skipped by triage) go in a reply file: `{"choice": "approve", "include_ids": [...]}`.
 
