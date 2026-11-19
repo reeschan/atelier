@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent
@@ -19,6 +20,18 @@ import conductor  # noqa: E402
 from atelier import actions, guards, state  # noqa: E402
 from tests.test_conductor import reach_building, run_cli, write_result_for  # noqa: E402
 from tests.test_flow_rules import init_git_repo, reach_building_with, write_agents_and_template  # noqa: E402
+
+_ONE_AT_A_TIME = patch("atelier.template.parallel_limit", return_value=1)
+
+
+def setUpModule() -> None:
+    """These tests follow the carry-over step by step, one launch at a time (test_launch_batches covers batches)."""
+    _ONE_AT_A_TIME.start()
+
+
+def tearDownModule() -> None:
+    _ONE_AT_A_TIME.stop()
+
 
 TWO = [
     {"id": "PBI-1", "title": "Lower the box", "depends_on": [], "targets": ["box.py"], "checks": ["check-1"]},
@@ -51,7 +64,7 @@ def pbis_of(tmp: Path) -> dict:
 def fail_first_wave(tmp: Path, plan: list[dict] = TWO) -> dict:
     """Build the first wave (PBI-1, PBI-3) and fail its check on PBI-1."""
     act = reach_building(tmp, pbis=plan)
-    while act["action"] == "launch":
+    while act["action"] in ("launch", "launches"):
         act = done(tmp, act, {"status": "ok"})
     assert act["action"] == "check", act
     return done(tmp, act, {**FAILED, "failed_pbis": ["PBI-1"]})
@@ -137,7 +150,7 @@ class ReviewFindingTests(unittest.TestCase):
 
     def first_wave_failed_by_commands(self, tmp: Path) -> dict:
         act = reach_building(tmp, pbis=self.PLAN)
-        while act["action"] == "launch":
+        while act["action"] in ("launch", "launches"):
             act = done(tmp, act, {"status": "ok"})
         return done(tmp, act, {"exit_code": 1, "output": "E1", "commands": [
             {"command": "check-1", "exit_code": 1},
@@ -201,7 +214,7 @@ class ReviewFindingTests(unittest.TestCase):
             tmp = Path(td)
             act = reach_building(tmp, pbis=self.PLAN)
             act = done(tmp, act, {"status": "ok", "carry_over": [{"command": "lint a.py", "output": "W1", "why": "two tries"}]})
-            while act["action"] == "launch":
+            while act["action"] in ("launch", "launches"):
                 act = done(tmp, act, {"status": "ok"})
             act = done(tmp, act, {"exit_code": 0})
             run = state.load_state(tmp)

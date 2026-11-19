@@ -77,14 +77,20 @@ def _launch_snapshot(root: Path, run: dict[str, Any], act: dict[str, Any]) -> di
     """The work root before a launch. A worker may also change existing files outside its paths."""
     return guards.snapshot(
         root,
-        allowed_paths=actions.allowed_paths_for(run, act["role"], act.get("pbi")),
+        allowed_paths=actions.allowed_paths_for(run, act["role"], act.get("pbi"), act.get("fix_group")),
         report_path=act["result"],
         outside_edits=actions.outside_edit_rule(run, act["role"], act.get("pbi")),
     )
 
 
 def _ensure_snapshot(root: Path, run: dict[str, Any], act: dict[str, Any]) -> None:
-    if act.get("action") == "launch" and act.get("runner") == "agent":
+    if act.get("action") == "launches" and act.get("runner") == "agent":
+        existing = run.get("pending_snapshot")
+        if existing is not None and existing.get("launch_id") == act.get("launch_id"):
+            return
+        # One work root before every launch of the batch; each launch's own paths come in at done.
+        run["pending_snapshot"] = {**guards.snapshot(root), "launch_id": act["launch_id"]} if _is_git_repo(root) else None
+    elif act.get("action") == "launch" and act.get("runner") == "agent":
         existing = run.get("pending_snapshot")
         if existing is not None and existing.get("launch_id") == act.get("launch_id"):
             return
@@ -193,6 +199,8 @@ def _record_launch_event(
         "cost": _normalize_cost(cost),
         "read": read_map,
     }
+    if pending.get("batch"):
+        event["batch"] = pending["batch"]
     hits = _try_append_record(root, event)
     if not hits:
         if pbi_id:
@@ -495,11 +503,10 @@ def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) 
                 if co["id"] in fixed:
                     state.settle_carry_over(run, co, "fixed")
             run["last_fix_launch_ids"] = []
-            run["fix_groups"] = []
-            run["fix_group_index"] = 0
+            state.reset_fix_groups(run, [])
             flow.apply_event(run, "fix_check_passed")
         else:
-            run["fix_group_index"] = 0
+            state.reset_fix_groups(run)
             run["subphase"] = "build"
     elif s == "running_e2e":
         rules = [str(r) for r in (result.get("rules") or ([] if exit_code == 0 else ["G9"]))]
@@ -526,8 +533,7 @@ def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) 
                 or result.get("summary")
                 or json.dumps(result, ensure_ascii=False)
             )
-            run["fix_groups"] = []
-            run["fix_group_index"] = 0
+            state.reset_fix_groups(run, [])
             flow.apply_event(run, "e2e_failed")
     else:
         raise ConductorError(f"unexpected check completion in state {s}")
@@ -647,7 +653,10 @@ def _record_outside_edits(run: dict[str, Any], pending: dict[str, Any], result: 
     if pending.get("pbi"):
         owner = pending["pbi"]
     elif run.get("fix_groups"):
-        owner = f"FIX-{run.get('fix_group_index', 0) + 1}"
+        group = pending.get("fix_group")
+        if group is None:
+            group = (state.fix_groups_left(run) or [0])[0]
+        owner = f"FIX-{group + 1}"
     else:
         owner = "FIX-E2E"
     edits = run.setdefault("outside_edits", [])
@@ -788,10 +797,15 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
             hits = _try_append_record(root, {"type": "fix", "rule": rule_id, "method": "asked"})
             if hits:
                 raise ConductorError(f"G4: secret detected in fix record ({hits[0]['kind']})")
-        groups = run.get("fix_groups") or []
-        if groups:
-            run["fix_group_index"] = run.get("fix_group_index", 0) + 1
-            if run["fix_group_index"] < len(groups):
+        if run.get("fix_groups"):
+            group = pending.get("fix_group")
+            if group is None:
+                left = state.fix_groups_left(run)
+                group = left[0] if left else None
+            done = run.setdefault("fix_groups_done", [])
+            if group is not None and group not in done:
+                done.append(group)
+            if state.fix_groups_left(run):
                 run["subphase"] = "build"
                 return
         run["subphase"] = "check"
@@ -895,7 +909,7 @@ def _finalize_completion(
 
 def _restore_lf(root: Path, run: dict[str, Any], pending: dict[str, Any], result: dict[str, Any]) -> None:
     """Put back LF in the worker's files that it saved with CRLF, before the checks run on them."""
-    allowed = actions.allowed_paths_for(run, "worker", pending.get("pbi")) or []
+    allowed = actions.allowed_paths_for(run, "worker", pending.get("pbi"), pending.get("fix_group")) or []
     changed = [f for f in result.get("changed_files") or [] if isinstance(f, str)]
     paths = [p for p in [*allowed, *changed] if p != "docs/pbi/"]
     restored = eol.restore_lf(root, paths)
@@ -937,14 +951,14 @@ def _validate_pending_launch(run: dict[str, Any], launch_id: str | None, *, requ
         if launch_id and launch_id != pending.get("launch_id"):
             raise ConductorError(f"launch_id mismatch: expected {pending.get('launch_id')}, got {launch_id}")
         return pending
-    if not pending or pending.get("action") not in ("launch", "check"):
+    if not pending or pending.get("action") not in ("launch", "launches", "check"):
         raise ConductorError(f"no pending launch or check in state {run['state']}")
-    if require_launch and pending.get("action") != "launch":
+    if require_launch and pending.get("action") not in ("launch", "launches"):
         raise ConductorError(f"no pending launch in state {run['state']}")
     if launch_id and launch_id in run.get("completed_launches", []):
         raise ConductorError(f"G8: launch '{launch_id}' already completed")
     expected_id = pending.get("launch_id")
-    if pending["action"] == "launch":
+    if pending["action"] in ("launch", "launches"):
         if not launch_id or launch_id != expected_id:
             raise ConductorError(f"launch_id mismatch: expected {expected_id}, got {launch_id}")
     elif launch_id and launch_id != expected_id:
@@ -1014,6 +1028,10 @@ def _cmd_done(args: argparse.Namespace) -> dict[str, Any]:
     pending = _validate_pending_launch(run, args.launch_id)
     if pending["action"] in CALLER_ACTIONS:
         return _done_caller_action(root, run, pending)
+    if pending["action"] == "launches":
+        if pending.get("runner") != "agent":
+            raise ConductorError("an external launch batch is run by run or drive, not completed with done")
+        return _finish_batch(root, run, pending, run.get("pending_snapshot"), None, {})
 
     result_path = Path(pending["result"])
     result_obj: dict[str, Any] | None = None
@@ -1058,14 +1076,273 @@ def _cmd_done(args: argparse.Namespace) -> dict[str, Any]:
     return _finalize_completion(root, run, pending, result_obj)
 
 
-def _cmd_run(args: argparse.Namespace) -> dict[str, Any]:
-    root = Path(args.root)
-    run = state.load_state(root)
-    pending = _validate_pending_launch(run, args.launch_id, require_launch=True)
-    runner = pending.get("runner")
-    if runner == "agent":
-        raise ConductorError("runner 'agent' must be launched by the caller and completed with done")
+STOP_FLAGS = ("plan_broken", "sensitive_detected", "budget_exceeded")
 
+
+def _read_result_or_none(path: Path) -> dict[str, Any] | None:
+    try:
+        return _read_result(path) if path.exists() else None
+    except ConductorError:
+        return None
+
+
+def _member_label(member: dict[str, Any]) -> str:
+    if member.get("pbi"):
+        return member["pbi"]
+    group = member.get("fix_group")
+    return f"FIX-{group + 1}" if group is not None else "FIX-E2E"
+
+
+def _batch_violations(
+    root: Path,
+    run: dict[str, Any],
+    batch: dict[str, Any],
+    before: dict[str, Any] | None,
+    ran: list[dict[str, Any]],
+    results: dict[str, dict[str, Any] | None],
+) -> tuple[dict[str, list[dict[str, str]]], dict[str, list[dict[str, str]]], dict[str, list[dict[str, str]]]]:
+    """Guard violations of each launch of a batch, compared with the one work root taken before the batch.
+
+    Each launch is compared without the files the other launches own: their targets (or fix group files),
+    and the files outside every target that only one other launch reported in outside_edits. A file outside
+    every target that two launches reported is a clash for both. The checks of the whole work root run once:
+    G12 and G14 findings go to the launch that owns the file, or to every launch when no one does.
+    """
+    out: dict[str, list[dict[str, str]]] = {m["launch_id"]: [] for m in ran}
+    destructive: dict[str, list[dict[str, str]]] = {m["launch_id"]: [] for m in ran}
+    garbled: dict[str, list[dict[str, str]]] = {m["launch_id"]: [] for m in ran}
+    if before is None:
+        for m in ran:
+            data = results.get(m["launch_id"])
+            if not isinstance(data, dict) or not data:
+                out[m["launch_id"]].append({"rule": "G14", "detail": f"missing or unfinished report: {m['result']}"})
+        return out, destructive, garbled
+    after = guards.snapshot(root)
+    approved = _load_approved_edits(root)
+    owned = {
+        m["launch_id"]: [
+            p for p in (actions.allowed_paths_for(run, m["role"], m.get("pbi"), m.get("fix_group")) or []) if p != "docs/pbi/"
+        ]
+        for m in ran
+    }
+    changed = {n for n in before["files"].keys() | after["files"].keys() if before["files"].get(n) != after["files"].get(n)}
+
+    def owners_by_target(name: str) -> list[str]:
+        return [lid for lid, paths in owned.items() if guards.covered(name, paths)]
+
+    claimers: dict[str, list[str]] = {}
+    for m in ran:
+        for item in (results.get(m["launch_id"]) or {}).get("outside_edits") or []:
+            name = item.get("file") if isinstance(item, dict) else None
+            if not isinstance(name, str):
+                continue
+            name = name.strip().replace("\\", "/").removeprefix("./")
+            if name in changed and not owners_by_target(name) and m["launch_id"] not in claimers.get(name, []):
+                claimers.setdefault(name, []).append(m["launch_id"])
+
+    for m in ran:
+        lid = m["launch_id"]
+        mine = {
+            **before,
+            "allowed_paths": actions.allowed_paths_for(run, m["role"], m.get("pbi"), m.get("fix_group")),
+            "outside_edits": actions.outside_edit_rule(run, m["role"], m.get("pbi")),
+            "report_path": m["result"],
+        }
+        ignore = [p for other, paths in owned.items() if other != lid for p in paths]
+        ignore += [name for name, ids in claimers.items() if len(ids) == 1 and ids[0] != lid]
+        violations = guards.compare(root, mine, approved, batch["launch_id"], after=after, ignore=ignore)
+        violations += [
+            {"rule": "G1", "detail": f"changed by two launches running together: {name}"}
+            for name, ids in sorted(claimers.items())
+            if len(ids) > 1 and lid in ids
+        ]
+        if m.get("role") == "worker":
+            m["outside_edits"] = guards.outside_edits(root, mine, after=after, ignore=ignore)
+            existing_g5 = {v["detail"] for v in violations if v.get("rule") == "G5"}
+            for dep_path in guards.install_attempts(before, after):
+                detail = f"dependency file changed: {dep_path}"
+                if detail not in existing_g5 and not guards.covered(dep_path, ignore):
+                    violations.append({"rule": "G5", "detail": detail})
+        out[lid] = violations
+
+    def owners(name: str) -> list[str]:
+        return owners_by_target(name) or claimers.get(name) or list(out)
+
+    if not any(m.get("role") == "worker" for m in ran):
+        return out, destructive, garbled
+    base = run.get("base_commit") or before.get("head")
+    approved_g = {(pair[0], pair[1]) for pair in (run.get("approved_garbled") or []) if len(pair) == 2}
+    for finding in guards.garbled_changes(root, before, base=base):
+        digest = hashlib.sha256(finding["text"].encode("utf-8", "replace")).hexdigest()
+        if (finding["path"], digest) in approved_g:
+            continue
+        for lid in owners(finding["path"]):
+            garbled[lid].append({"path": finding["path"], "digest": digest})
+            out[lid].append({"rule": "G14", "detail": f"garbled text ({finding['reason']}) at {finding['path']}:{finding['line']}"})
+    if base:
+        try:
+            found = guards.destructive_changes(root, base)
+        except RuntimeError as exc:
+            for lid in out:
+                out[lid].append({"rule": "G12", "detail": f"git inspection failed: {exc}"})
+        else:
+            approved_d = {(pair[0], pair[1]) for pair in (run.get("approved_destructive") or []) if len(pair) == 2}
+            for finding in found:
+                if (finding["kind"], finding["path"]) in approved_d:
+                    continue
+                for lid in owners(finding["path"]):
+                    destructive[lid].append(finding)
+                    out[lid].append({"rule": "G12", "detail": f"{finding['kind']}: {finding['path']}"})
+    return out, destructive, garbled
+
+
+def _run_batch(root: Path, run: dict[str, Any], batch: dict[str, Any], timeout: int | None) -> dict[str, Any]:
+    """Start every external launch of a batch, wait for them all, then take their results together."""
+    prechecked: dict[str, list[dict[str, str]]] = {}
+    specs: dict[str, Any] = {}
+    for member in batch["launches"]:
+        violations, spec = _recheck_before_run(root, run, member)
+        if violations:
+            prechecked[member["launch_id"]] = violations
+        else:
+            specs[member["launch_id"]] = spec
+    before = guards.snapshot(root) if _is_git_repo(root) else None
+    started = {lid: runners.start_external(spec) for lid, spec in specs.items()}
+    outcomes = {lid: runners.finish_external(handle, timeout) for lid, handle in started.items()}
+    return _finish_batch(root, run, batch, before, outcomes, prechecked)
+
+
+def _finish_batch(
+    root: Path,
+    run: dict[str, Any],
+    batch: dict[str, Any],
+    before: dict[str, Any] | None,
+    outcomes: dict[str, dict[str, Any]] | None,
+    prechecked: dict[str, list[dict[str, str]]],
+) -> dict[str, Any]:
+    """Take the results of every launch of a batch (see the spec's 一斉起動の結果の受け入れ).
+
+    outcomes holds what each external launch returned; it is None for a batch of the caller's subagents,
+    whose usage comes from their result files. Launches in prechecked failed a check before they ran.
+    """
+    members = list(batch["launches"])
+    results = {m["launch_id"]: _read_result_or_none(Path(m["result"])) for m in members}
+    violations = {m["launch_id"]: list(prechecked.get(m["launch_id"], [])) for m in members}
+    unusable: dict[str, str | None] = {}
+    for m in members:
+        lid = m["launch_id"]
+        if lid in prechecked:
+            continue
+        if outcomes is not None:
+            outcome = outcomes[lid]
+            tokens, cost = outcome["tokens"], outcome["cost"]
+            unusable[lid] = outcome.get("unusable_reason")
+        elif results[lid] is not None:
+            tokens = results[lid].get("tokens", results[lid].get("usage", "unknown"))
+            cost = results[lid].get("cost_usd", results[lid].get("cost", "unknown"))
+        else:
+            continue
+        state.record_usage(
+            run, launch_id=lid, role=m["role"], runner=m.get("runner", "agent"), model=m.get("model", ""),
+            pbi_id=m.get("pbi"), tokens=tokens, cost=cost,
+        )
+        hits = _record_launch_event(root, run, m, tokens=tokens, cost=cost)
+        violations[lid] += [{"rule": "G4", "detail": f"secret ({h['kind']}) in record line {h['line']}"} for h in hits]
+    ran = [m for m in members if m["launch_id"] not in prechecked]
+    found, destructive, garbled = _batch_violations(root, run, batch, before, ran, results)
+    for lid, items in found.items():
+        violations[lid] += items
+    for m in members:
+        _record_guard_check(root, run, m, violations[m["launch_id"]])
+
+    bad = [m for m in members if violations[m["launch_id"]] or unusable.get(m["launch_id"])]
+    good = [m for m in members if m not in bad]
+    for m in good:
+        _validate_completion_before_accept(root, run, {**m, "action": "launch"}, results[m["launch_id"]] or {})
+    stopped = [m for m in good if any((results[m["launch_id"]] or {}).get(flag) for flag in STOP_FLAGS)]
+    accepted = [m for m in good if m not in stopped]
+
+    run.setdefault("batches", []).append({"id": batch["launch_id"], "members": [_member_label(m) for m in members]})
+    run.setdefault("completed_launches", []).append(batch["launch_id"])
+    for m in accepted:
+        run.setdefault("completed_launches", []).append(m["launch_id"])
+        if m.get("role") == "worker":
+            _restore_lf(root, run, m, results[m["launch_id"]] or {})
+        _handle_launch_done(root, run, m, results[m["launch_id"]] or {})
+    if bad:
+        return _raise_batch_guard(root, run, batch, bad, violations, unusable, destructive, garbled)
+    if stopped:
+        # One question at a time: the first stop is asked; the PBIs of later stops are built again after it.
+        for m in stopped[1:]:
+            run.setdefault("completed_launches", []).append(m["launch_id"])
+            if m.get("role") == "worker":
+                _record_outside_edits(run, m, results[m["launch_id"]] or {})
+            pbi = state.get_pbi(run, m["pbi"]) if m.get("pbi") else None
+            if pbi is not None and pbi.get("status") == "building":
+                pbi["status"] = "pending"
+        first = stopped[0]
+        run.setdefault("completed_launches", []).append(first["launch_id"])
+        _handle_launch_done(root, run, first, results[first["launch_id"]] or {})
+    return _advance_and_save(root, run)
+
+
+def _raise_batch_guard(
+    root: Path,
+    run: dict[str, Any],
+    batch: dict[str, Any],
+    bad: list[dict[str, Any]],
+    violations: dict[str, list[dict[str, str]]],
+    unusable: dict[str, str | None],
+    destructive: dict[str, list[dict[str, str]]],
+    garbled: dict[str, list[dict[str, str]]],
+) -> dict[str, Any]:
+    """One guard question for every launch of a batch that broke a guard rule or could not run."""
+    entries: list[dict[str, Any]] = []
+    parts: list[str] = []
+    for m in bad:
+        lid = m["launch_id"]
+        if m.get("role") == "worker":
+            _record_outside_edits(run, m, {})
+        run.setdefault("completed_launches", []).append(lid)
+        pbi = state.get_pbi(run, m["pbi"]) if m.get("pbi") else None
+        if pbi is not None and pbi.get("status") == "building":
+            pbi["status"] = "pending"
+        rules = [v.get("rule") for v in violations[lid]]
+        entries.append({
+            "launch_id": lid,
+            "role": m.get("role"),
+            "pbi": m.get("pbi"),
+            "fix_group": m.get("fix_group"),
+            "runner": m.get("runner"),
+            "rule": "G3" if "G3" in rules else None,
+            "unusable_reason": unusable.get(lid),
+            "violations": violations[lid],
+        })
+        details = ([f"runner unusable: {unusable[lid]}"] if unusable.get(lid) else []) + [
+            f"{v['rule']}: {v['detail']}" for v in violations[lid]
+        ]
+        parts.append(f"{_member_label(m)}: " + "; ".join(details))
+    single = entries[0] if len(entries) == 1 else None
+    run["guard_issue"] = {
+        "launch_id": batch["launch_id"],
+        "role": bad[0].get("role"),
+        "pbi": single["pbi"] if single else None,
+        "runner": single["runner"] if single else None,
+        "rule": single["rule"] if single else None,
+        "unusable_reason": single["unusable_reason"] if single else None,
+        "violations": [v for e in entries for v in e["violations"]],
+        "pending_destructive": [f for m in bad for f in destructive.get(m["launch_id"], [])],
+        "pending_garbled": [g for m in bad for g in garbled.get(m["launch_id"], [])],
+        "launches": entries,
+        "detail": " / ".join(parts),
+    }
+    flow.apply_event(run, "guard_violation")
+    return _advance_and_save(root, run)
+
+
+def _recheck_before_run(root: Path, run: dict[str, Any], pending: dict[str, Any]) -> tuple[list[dict[str, str]], Any]:
+    """G3, G4 and G11 again right before an external launch runs, and its command when they pass."""
+    runner = pending.get("runner")
     step = {"runner": runner, "model": pending.get("model", ""), "effort": pending.get("effort")}
     pbi_obj = state.get_pbi(run, pending["pbi"]) if pending.get("pbi") else None
     approved = (
@@ -1077,22 +1354,31 @@ def _cmd_run(args: argparse.Namespace) -> dict[str, Any]:
         )
     )
     if not approved:
-        violations = [{"rule": "G3", "detail": f"external send to {runner} for {pending.get('pbi') or pending['role']} is not approved"}]
-        _record_guard_check(root, run, pending, violations)
-        return _raise_guard_question(root, run, pending, violations=violations)
-
+        return [{"rule": "G3", "detail": f"external send to {runner} for {pending.get('pbi') or pending['role']} is not approved"}], None
     prompt_path = Path(pending["prompt"])
     if prompt_path.is_file():
         secret_hits = guards.scan_secrets(prompt_path.read_text(encoding="utf-8-sig"))
         if secret_hits:
-            violations = [{"rule": "G4", "detail": f"secret ({h['kind']}) detected at line {h['line']}"} for h in secret_hits]
-            _record_guard_check(root, run, pending, violations)
-            return _raise_guard_question(root, run, pending, violations=violations)
-
+            return [{"rule": "G4", "detail": f"secret ({h['kind']}) detected at line {h['line']}"} for h in secret_hits], None
     spec = runners.launch_spec(pending["role"], step, pending["prompt"], pending["result"], root, agents_path=run.get("agents_path"))
     blocked = actions._forbidden_args_for_launch(run, pending["role"], step, spec)
     if blocked:
-        violations = [{"rule": "G11", "detail": f"forbidden args: {', '.join(blocked)}"}]
+        return [{"rule": "G11", "detail": f"forbidden args: {', '.join(blocked)}"}], None
+    return [], spec
+
+
+def _cmd_run(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.root)
+    run = state.load_state(root)
+    pending = _validate_pending_launch(run, args.launch_id, require_launch=True)
+    runner = pending.get("runner")
+    if runner == "agent":
+        raise ConductorError("runner 'agent' must be launched by the caller and completed with done")
+    if pending["action"] == "launches":
+        return _run_batch(root, run, pending, args.timeout)
+
+    violations, spec = _recheck_before_run(root, run, pending)
+    if violations:
         _record_guard_check(root, run, pending, violations)
         return _raise_guard_question(root, run, pending, violations=violations)
 
@@ -1379,12 +1665,10 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
                 if co["id"] in excluded:
                     co["status"] = "dropped"
         if choice == "approve" and run.get("fix_list"):
-            run["fix_groups"] = plan.fix_groups(run["fix_list"], max_workers=3)
-            run["fix_group_index"] = 0
+            state.reset_fix_groups(run, plan.fix_groups(run["fix_list"], max_workers=template.parallel_limit(run)))
             flow.apply_event(run, "fix_list_approved")
         elif choice in ("nothing_to_fix", "approve"):
-            run["fix_groups"] = []
-            run["fix_group_index"] = 0
+            state.reset_fix_groups(run, [])
             flow.apply_event(run, "nothing_to_fix")
         else:
             raise ConductorError(f"invalid choice '{choice}' for {s}")
@@ -1411,17 +1695,19 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
     elif s == "asking_guard":
         issue = run.get("guard_issue") or {}
         if choice in ("retry", "resume"):
-            if issue.get("rule") == "G3" and issue.get("runner"):
-                if issue.get("pbi"):
+            for entry in issue.get("launches") or [issue]:
+                if entry.get("rule") != "G3" or not entry.get("runner"):
+                    continue
+                if entry.get("pbi"):
                     sends = run["approvals"].setdefault("plan_sends", {})
-                    lst = sends.setdefault(issue["pbi"], [])
-                    if issue["runner"] not in lst:
-                        lst.append(issue["runner"])
-                elif issue.get("role"):
+                    lst = sends.setdefault(entry["pbi"], [])
+                    if entry["runner"] not in lst:
+                        lst.append(entry["runner"])
+                elif entry.get("role"):
                     rsends = run["approvals"].setdefault("role_sends", {})
-                    lst = rsends.setdefault(issue["role"], [])
-                    if issue["runner"] not in lst:
-                        lst.append(issue["runner"])
+                    lst = rsends.setdefault(entry["role"], [])
+                    if entry["runner"] not in lst:
+                        lst.append(entry["runner"])
             if issue.get("pending_destructive"):
                 approved = run.setdefault("approved_destructive", [])
                 for f in issue["pending_destructive"]:
@@ -1505,7 +1791,7 @@ def _cmd_approve_edit(args: argparse.Namespace) -> dict[str, Any]:
     if not args.reason.strip():
         raise ConductorError("--reason must say what the user approved")
     pending = run.get("pending_action") or {}
-    launch_id = pending.get("launch_id") if pending.get("action") == "launch" else None
+    launch_id = pending.get("launch_id") if pending.get("action") in ("launch", "launches") else None
     entries = []
     for path in args.path:
         try:
@@ -1611,6 +1897,13 @@ def _cmd_drive(args: argparse.Namespace) -> dict[str, Any]:
                 act = _cmd_done(argparse.Namespace(root=args.root, launch_id=act["launch_id"]))
             elif kind == "launch" and act.get("runner") != "agent":
                 steps.append({k: act.get(k) for k in ("action", "launch_id", "role", "pbi", "runner", "model")})
+                act = _cmd_run(argparse.Namespace(root=args.root, launch_id=act["launch_id"], timeout=args.timeout))
+            elif kind == "launches" and act.get("runner") != "agent":
+                steps.append({
+                    "action": "launches",
+                    "launch_id": act["launch_id"],
+                    "launches": [{k: m.get(k) for k in ("launch_id", "role", "pbi", "runner", "model")} for m in act["launches"]],
+                })
                 act = _cmd_run(argparse.Namespace(root=args.root, launch_id=act["launch_id"], timeout=args.timeout))
             elif kind == "prepare":
                 _copy_approved_data(act)

@@ -129,7 +129,7 @@ class CheckCommandTests(unittest.TestCase):
             plan_obj["e2e"] = ["npm run e2e"]
             drive_to_plan_approval(tmp, VALID_FACTS, plan_obj)
             act = approve(tmp)
-            code, act = done(tmp, act, {"status": "ok"})
+            self.assertEqual("launches", act["action"])  # a.py and b.py do not overlap: one launch batch
             code, act = done(tmp, act, {"status": "ok"})
             self.assertEqual("check", act["action"])
             self.assertEqual(["npm test -- a", "npm test -- b", "npm run type-check"], act["commands"])
