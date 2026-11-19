@@ -4,8 +4,9 @@ name: lens-review
 # plugin (https://github.com/reeschan/claude-plugins-official) and posts the
 # verified findings to the pull request.
 #
-# Starts when such a pull request is opened or updated, and when the owner
-# writes a comment starting with `/lens-review` on its conversation.
+# Starts when such a pull request is opened, reopened or marked ready for
+# review, and when the owner writes a comment starting with `/lens-review` on
+# its conversation. Pushes to the pull request do not start it.
 #
 # Runs only when the pull request's author is `reeschan` and its branch lives in
 # this repository. Pull requests from other authors or from forks, and comments
@@ -15,7 +16,7 @@ name: lens-review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, reopened, ready_for_review]
   issue_comment:
     types: [created]
 
@@ -82,7 +83,7 @@ jobs:
             Base: ${{ steps.pr.outputs.base }}
             Target: ${{ steps.pr.outputs.head }}
 
-            この PR は push のたびと、`/lens-review` のコメントのたびにレビューし直す。まとめのコメントには、1 行目の「## lens-review」の次の行に `head: ${{ steps.pr.outputs.head }}` を書く。
+            この PR は、開いたとき・開き直したとき・Ready にしたときと、`/lens-review` のコメントのたびにレビューする。まとめのコメントには、1 行目の「## lens-review」の次の行に `head: ${{ steps.pr.outputs.head }}` を書く。
             ${{ github.event_name == 'issue_comment' && '今回はコメントで頼まれたやり直しなので、投稿の付録の「「## lens-review」で始まるまとめのコメントがもうある」は当てはめず、まとめのコメントを出す。インラインコメントの印による重複の除き方はそのまま守る。' || format('投稿の付録の「「## lens-review」で始まるまとめのコメントがもうある」は、そのコメントに今の head の SHA ({0}) が書かれているときだけ当てはめる。', steps.pr.outputs.head) }}
           claude_args: >-
             --model sonnet
