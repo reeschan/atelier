@@ -1,0 +1,86 @@
+stateDiagram-v2
+    state Whole {
+        state Run {
+            state "計画の承認を待っている" as AwaitPlan
+            state "次の一斉起動を選んでいる" as Picking
+            state "一斉起動が動いている" as Running
+            state "結果を受け入れている" as Accepting
+            state "守りの違反を聞いている" as AskGuard
+            state "作業者の知らせを聞いている" as AskStop
+            state "waveを検査している" as Checking
+            state "見直している" as Reviewing
+            state "修正の一斉起動が動いている" as FixRunning
+            state "修正の結果を受け入れている" as FixAccepting
+            state "修正の守りの違反を聞いている" as AskGuardFix
+            state "修正を検査している" as FixChecking
+            state "E2Eを流している" as E2E
+            state "報告している" as Reporting
+            state "報告した" as Done
+            [*] --> AwaitPlan
+            AwaitPlan --> Picking: 計画を承認した
+            Picking --> Running: 一斉起動を始めた
+            Running --> Accepting: 全員が終わった
+            Accepting --> Picking: 違反なし・残りがある [申告はぶつかっていない]
+            Accepting --> Checking: 違反なし・waveを作り終えた [申告はぶつかっていない]
+            Accepting --> AskGuard: 違反があった
+            Accepting --> AskStop: 止める知らせがあった [申告はぶつかっていない]
+            AskGuard --> Picking: もう一度と答えた
+            AskGuard --> Reporting: 止めると答えた
+            AskStop --> Picking: 続けると答えた
+            AskStop --> AwaitPlan: 組み直すと答えた
+            AskStop --> Reporting: 作業を止めると答えた
+            Checking --> Picking: 検査が終わった・残りがある
+            Checking --> Reviewing: 検査が終わった・最後のwave
+            Reviewing --> FixRunning: 修正の一斉起動を始めた
+            Reviewing --> E2E: 直すものがない
+            FixRunning --> FixAccepting: 修正の全員が終わった
+            FixAccepting --> FixChecking: 修正に違反なし [申告はぶつかっていない]
+            FixAccepting --> AskGuardFix: 修正に違反があった
+            AskGuardFix --> FixRunning: 修正をもう一度と答えた
+            AskGuardFix --> Reporting: 修正を止めると答えた
+            FixChecking --> E2E: 修正が検査を通った
+            FixChecking --> FixRunning: 修正をやり直す
+            E2E --> Reporting: E2Eが終わった
+            Reporting --> Done: 報告を書いた
+        }
+        --
+        state Launches {
+            state "動いている起動はない" as Idle
+            state "起動が動いている" as Busy
+            [*] --> Idle
+            Idle --> Busy: 一斉起動を始めた
+            Busy --> Idle: 全員が終わった
+            Idle --> Busy: 修正の一斉起動を始めた
+            Idle --> Busy: 修正をもう一度と答えた
+            Idle --> Busy: 修正をやり直す
+            Busy --> Idle: 修正の全員が終わった
+        }
+        --
+        state Claims {
+            state "申告はぶつかっていない" as NoClash
+            state "2本が同じファイルを申告した" as Clash
+            [*] --> NoClash
+            NoClash --> Clash: 2本が同じファイルを申告した
+            Clash --> NoClash: もう一度と答えた
+            Clash --> NoClash: 止めると答えた
+            Clash --> NoClash: 修正をもう一度と答えた
+            Clash --> NoClash: 修正を止めると答えた
+        }
+        --
+        state Plan {
+            state "計画は未承認" as PlanOpen
+            state "計画は承認済み" as PlanApproved
+            [*] --> PlanOpen
+            PlanOpen --> PlanApproved: 計画を承認した
+            PlanApproved --> PlanOpen: 組み直すと答えた
+        }
+    }
+    %% never CheckWhileRunning: waveを検査している & 起動が動いている -- 一斉起動の起動がまだ動いているのに、waveの検査を流さない
+    %% never FixCheckWhileRunning: 修正を検査している & 起動が動いている -- 修正の起動がまだ動いているのに、修正の検査を流さない
+    %% never AskGuardWhileRunning: 守りの違反を聞いている & 起動が動いている -- 起動がまだ動いているのに、守りの違反を聞かない
+    %% never AskGuardFixWhileRunning: 修正の守りの違反を聞いている & 起動が動いている -- 修正の起動がまだ動いているのに、守りの違反を聞かない
+    %% never AskStopWhileRunning: 作業者の知らせを聞いている & 起動が動いている -- 起動がまだ動いているのに、作業者の知らせを聞かない
+    %% never NextBatchAfterClash: 次の一斉起動を選んでいる & 2本が同じファイルを申告した -- 2本が同じファイルを申告したまま、次の一斉起動に進まない
+    %% never CheckAfterClash: waveを検査している & 2本が同じファイルを申告した -- 2本が同じファイルを申告したまま、waveの検査に進まない
+    %% never FixCheckAfterClash: 修正を検査している & 2本が同じファイルを申告した -- 2本が同じファイルを申告したまま、修正の検査に進まない
+    %% never BuildWithoutPlan: 一斉起動が動いている & 計画は未承認 -- 承認していない計画で一斉起動を始めない

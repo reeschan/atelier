@@ -1,0 +1,103 @@
+stateDiagram-v2
+    state Whole {
+        state Run {
+            state "Awaiting plan approval" as AwaitPlan
+            state "Choosing the next launch batch" as Picking
+            state "Launch batch running" as Running
+            state "Taking the results" as Accepting
+            state "Asking about guard violations" as AskGuard
+            state "Asking about a worker's stop" as AskStop
+            state "Checking the wave" as Checking
+            state "Reviewing" as Reviewing
+            state "Fix launch batch running" as FixRunning
+            state "Taking the fix results" as FixAccepting
+            state "Asking about guard violations in fixing" as AskGuardFix
+            state "Checking the fixes" as FixChecking
+            state "Running E2E" as E2E
+            state "Reporting" as Reporting
+            state "Reported" as Done
+            [*] --> AwaitPlan
+            AwaitPlan --> Picking: 計画を承認した
+            Picking --> Running: 一斉起動を始めた
+            Running --> Accepting: 全員が終わった
+            Accepting --> Picking: 違反なし・残りがある [申告はぶつかっていない]
+            %% when NoClash
+            Accepting --> Checking: 違反なし・waveを作り終えた [申告はぶつかっていない]
+            %% when NoClash
+            Accepting --> AskGuard: 違反があった
+            Accepting --> AskStop: 止める知らせがあった [申告はぶつかっていない]
+            %% when NoClash
+            AskGuard --> Picking: もう一度と答えた
+            AskGuard --> Reporting: 止めると答えた
+            AskStop --> Picking: 続けると答えた
+            AskStop --> AwaitPlan: 組み直すと答えた
+            AskStop --> Reporting: 作業を止めると答えた
+            Checking --> Picking: 検査が終わった・残りがある
+            Checking --> Reviewing: 検査が終わった・最後のwave
+            Reviewing --> FixRunning: 修正の一斉起動を始めた
+            Reviewing --> E2E: 直すものがない
+            FixRunning --> FixAccepting: 修正の全員が終わった
+            FixAccepting --> FixChecking: 修正に違反なし [申告はぶつかっていない]
+            %% when NoClash
+            FixAccepting --> AskGuardFix: 修正に違反があった
+            AskGuardFix --> FixRunning: 修正をもう一度と答えた
+            AskGuardFix --> Reporting: 修正を止めると答えた
+            FixChecking --> E2E: 修正が検査を通った
+            FixChecking --> FixRunning: 修正をやり直す
+            E2E --> Reporting: E2Eが終わった
+            Reporting --> Done: 報告を書いた
+        }
+        --
+        state Launches {
+            state "No launch running" as Idle
+            state "Launches running" as Busy
+            [*] --> Idle
+            Idle --> Busy: 一斉起動を始めた [起動の合図]
+            %% when Picking
+            Busy --> Idle: 全員が終わった [起動の終わり]
+            %% when Running
+            Idle --> Busy: 修正の一斉起動を始めた [起動の合図]
+            %% when Reviewing
+            Idle --> Busy: 修正をもう一度と答えた [起動の合図]
+            %% when AskGuardFix
+            Idle --> Busy: 修正をやり直す [起動の合図]
+            %% when FixChecking
+            Busy --> Idle: 修正の全員が終わった [起動の終わり]
+            %% when FixRunning
+        }
+        --
+        state Claims {
+            state "No file claimed twice" as NoClash
+            state "Two launches claimed one file" as Clash
+            [*] --> NoClash
+            NoClash --> Clash: 2本が同じファイルを申告した [起動の途中]
+            %% when Busy
+            Clash --> NoClash: もう一度と答えた [ユーザーの答え]
+            %% when AskGuard
+            Clash --> NoClash: 止めると答えた [ユーザーの答え]
+            %% when AskGuard
+            Clash --> NoClash: 修正をもう一度と答えた [ユーザーの答え]
+            %% when AskGuardFix
+            Clash --> NoClash: 修正を止めると答えた [ユーザーの答え]
+            %% when AskGuardFix
+        }
+        --
+        state Plan {
+            state "Plan not approved" as PlanOpen
+            state "Plan approved" as PlanApproved
+            [*] --> PlanOpen
+            PlanOpen --> PlanApproved: 計画を承認した [承認の答え]
+            %% when AwaitPlan
+            PlanApproved --> PlanOpen: 組み直すと答えた [ユーザーの答え]
+            %% when AskStop
+        }
+    }
+    %% never CheckWhileRunning: Checking the wave & Launches running -- 一斉起動の起動がまだ動いているのに、waveの検査を流さない
+    %% never FixCheckWhileRunning: Checking the fixes & Launches running -- 修正の起動がまだ動いているのに、修正の検査を流さない
+    %% never AskGuardWhileRunning: Asking about guard violations & Launches running -- 起動がまだ動いているのに、守りの違反を聞かない
+    %% never AskGuardFixWhileRunning: Asking about guard violations in fixing & Launches running -- 修正の起動がまだ動いているのに、守りの違反を聞かない
+    %% never AskStopWhileRunning: Asking about a worker's stop & Launches running -- 起動がまだ動いているのに、作業者の知らせを聞かない
+    %% never NextBatchAfterClash: Choosing the next launch batch & Two launches claimed one file -- 2本が同じファイルを申告したまま、次の一斉起動に進まない
+    %% never CheckAfterClash: Checking the wave & Two launches claimed one file -- 2本が同じファイルを申告したまま、waveの検査に進まない
+    %% never FixCheckAfterClash: Checking the fixes & Two launches claimed one file -- 2本が同じファイルを申告したまま、修正の検査に進まない
+    %% never BuildWithoutPlan: Launch batch running & Plan not approved -- 承認していない計画で一斉起動を始めない

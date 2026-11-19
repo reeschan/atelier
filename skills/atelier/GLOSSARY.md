@@ -9,7 +9,7 @@ The session the user talks to. It launches every model role at depth 1 when the 
 _Avoid_: main agent, parent session
 
 **Conductor (進行役)**:
-The script that holds a run's state and gives the next single action. It is not a model.
+The script that holds a run's state and gives the next action. It is not a model.
 _Avoid_: orchestrator, scheduler, dispatcher
 
 **Surveyor (調べる役)**:
@@ -111,7 +111,19 @@ _Avoid_: 段, phase, episode
 One exchange of the grill: a batch of questions and the user's answers.
 
 **Wave (波)**:
-PBIs with no unfinished dependency, built together.
+PBIs with no unfinished dependency, built together in one or more launch batches, then checked once.
+
+**Next action (次の行動)**:
+What the conductor hands to the caller or the drive next: one launch, one launch batch, a check, a question, and so on.
+_Avoid_: pending action, step, task
+
+**Launch (起動)**:
+One run of a model role: one role does one piece of work (a PBI, a fix group, the plan, the review) and writes one result file. Each launch has its own ID, and usage and guard rules are recorded per launch.
+_Avoid_: job, call, invocation
+
+**Launch batch (一斉起動)**:
+Launches started together and awaited together: in the same wave or the same fix stage, with files to change that do not overlap, on the same kind of runner (external CLIs, or the caller's subagents), up to the template's parallel limit.
+_Avoid_: 束, bundle, parallel job
 
 **Check (機械の検査)**:
 A command whose exit code decides pass or fail. No model judges it.
