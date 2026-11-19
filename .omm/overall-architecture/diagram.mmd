@@ -1,0 +1,42 @@
+graph TD
+    caller["呼び手 (親の会話)\nskills/atelier/SKILL.md"]
+    conductor["conductor (CLI)\nskills/atelier/conductor.py"]
+    actions["actions (次の行動を組む)\nskills/atelier/atelier/actions.py"]
+    flow["flow (状態の遷移表)\nskills/atelier/atelier/flow.py"]
+    state["state (run.json と PBI の状態)\nskills/atelier/atelier/state.py"]
+    plan["plan (計画の検証・wave・検査・修正のグループ)\nskills/atelier/atelier/plan.py"]
+    guards["guards (G1〜G14 の検査)\nskills/atelier/atelier/guards.py"]
+    runners["runners (外部 runner の起動)\nskills/atelier/atelier/runners.py"]
+    record["record (使用量と検査の記録)\nskills/atelier/atelier/record.py"]
+    template["template (経路・役の選び方)\nskills/atelier/atelier/template.py"]
+    support["補助 (survey・interview・pages・eol)\nskills/atelier/atelier/"]
+    prompts["prompts (役の指示)\nskills/atelier/prompts/"]
+    run-dir["run の置き場\n<root>/docs/pbi/"]
+    external-runners["外部 runner (claude・codex・agy・opencode・dsh)"]
+    agent-subagents["agent のサブエージェント (Agent ツール)"]
+
+    caller -->|"start・drive・done・answer を呼ぶ"| conductor
+    caller -->|"runner が agent の launch を起こす"| agent-subagents
+    conductor -->|"ensure_pending_action で次の行動を作らせる"| actions
+    conductor -->|"結果を受けて事象を当てる"| flow
+    conductor -->|"run.json を読み書き"| state
+    conductor -->|"launch 前後の snapshot と compare"| guards
+    conductor -->|"start_external で起こし finish_external で待つ"| runners
+    conductor -->|"launch と check の記録を足す"| record
+    actions -->|"状態ごとに launch・check・ask を組む"| state
+    actions -->|"役の指示を組み立てる"| prompts
+    actions -->|"G3・G4・G11 の事前検査"| guards
+    actions -->|"経路から runner とモデルを選ぶ"| template
+    actions -->|"wave の検査と修正の検査のコマンド"| plan
+    actions -->|"OMM・面談・承認のページ"| support
+    runners -->|"subprocess で起動"| external-runners
+    state -->|"run.json・record.jsonl・results/・prompts/"| run-dir
+    agent-subagents -->|"作業木を変え、結果 JSON を書く"| run-dir
+    external-runners -->|"作業木を変え、結果 JSON を書く"| run-dir
+
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    classDef external fill:#585b70,stroke:#585b70,color:#cdd6f4
+    classDef store fill:#a6e3a1,stroke:#a6e3a1,color:#1e1e2e
+    class caller,conductor entry
+    class external-runners,agent-subagents external
+    class run-dir store

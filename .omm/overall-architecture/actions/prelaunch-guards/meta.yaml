@@ -1,0 +1,9 @@
+created: 2026-11-19T20:59:26.047Z
+updated: 2026-11-19T22:35:57.983Z
+update_count: 2
+last_field: description
+kind: nested-class
+title: prelaunch-guards
+children: []
+parentPath:
+  - actions

@@ -1,0 +1,30 @@
+graph TD
+    drive-loop["drive の輪\nconductor.py _cmd_drive"]
+    next-action["次の行動を作る\nactions.ensure_pending_action"]
+    pending-action["次の行動 1 つ\nrun.json pending_action"]
+    external-launch["外部 runner の起動と一斉起動\nconductor.py _cmd_run・_run_batch"]
+    agent-launch["agent の起動と一斉起動\nSKILL.md と conductor.py _cmd_done"]
+    batch-accept["一斉起動の受け入れ\nconductor.py _finish_batch"]
+    wave-check["wave の検査\nconductor.py _run_check・_handle_check_done"]
+    finalize["受け入れて次へ\nconductor.py _finalize_completion"]
+    guard-question["guard の問い\nconductor.py _raise_guard_question・_raise_batch_guard"]
+
+    drive-loop -->|"次の行動が無ければ"| next-action
+    next-action -->|"1 本の起動か、1 つの一斉起動を置く"| pending-action
+    pending-action -->|"runner が外部"| external-launch
+    pending-action -->|"runner が agent: drive は止まって呼び手に返す"| agent-launch
+    pending-action -->|"action が check"| wave-check
+    external-launch -->|"1 本: 違反なし"| finalize
+    external-launch -->|"一斉起動: 全部が終わった"| batch-accept
+    agent-launch -->|"1 本: 違反なし"| finalize
+    agent-launch -->|"一斉起動: drive --done で全部"| batch-accept
+    batch-accept -->|"違反の無い起動を受け入れて次を作る"| next-action
+    batch-accept -->|"違反した起動をまとめて 1 問"| guard-question
+    external-launch -->|"1 本: 違反か使えない"| guard-question
+    agent-launch -->|"1 本: 違反"| guard-question
+    wave-check -->|"結果を状態に当てる"| finalize
+    finalize -->|"次の行動を空にして次を作る"| next-action
+    guard-question -->|"ask を置いて drive は止まる"| pending-action
+
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    class drive-loop entry

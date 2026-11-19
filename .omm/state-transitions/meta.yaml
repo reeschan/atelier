@@ -1,0 +1,45 @@
+created: 2026-11-19T21:01:46.201Z
+updated: 2026-11-19T22:36:22.907Z
+update_count: 4
+last_field: description
+git_commit: 8d7d6fd
+git_branch: claude/atelier-parallel-waves
+children:
+  - asking-guard
+  - asking-rebuild
+  - awaiting-fix-approval
+  - building
+  - checking
+  - fixing
+  - reviewing
+  - running-e2e
+  - triaging
+prev_diagram: |
+  graph LR
+      building["building\nflow.py"]
+      checking["checking\nflow.py"]
+      asking-rebuild["asking_rebuild\nflow.py"]
+      reviewing["reviewing\nflow.py"]
+      triaging["triaging\nflow.py"]
+      awaiting-fix-approval["awaiting_fix_approval\nflow.py"]
+      fixing["fixing\nflow.py"]
+      running-e2e["running_e2e\nflow.py"]
+      asking-guard["asking_guard\nflow.py"]
+
+      building -->|"worker_returned: 次の PBI を 1 本"| building
+      building -->|"wave_built"| checking
+      checking -->|"wave_passed_next・carried_next"| building
+      checking -->|"all_pbis_passed・carried_last"| reviewing
+      checking -->|"check_failed: 修正の PBI が 2 回落ちた"| asking-rebuild
+      asking-rebuild -->|"rebuild_retry・rebuild_hold"| building
+      reviewing -->|"review_returned"| triaging
+      triaging -->|"triaged"| awaiting-fix-approval
+      awaiting-fix-approval -->|"fix_list_approved"| fixing
+      awaiting-fix-approval -->|"nothing_to_fix"| running-e2e
+      fixing -->|"fix_check_passed"| running-e2e
+      running-e2e -->|"e2e_failed"| fixing
+      building -->|"guard_violation"| asking-guard
+      asking-guard -->|"resume で戻る"| building
+
+      classDef concern fill:#f38ba8,stroke:#f38ba8,color:#1e1e2e
+      class building,fixing concern

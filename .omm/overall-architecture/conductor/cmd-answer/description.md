@@ -1,0 +1,1 @@
+`answer --root (--choice | --text | --reply)`。`pending_action` が ask のときだけ受ける。選択を状態ごとの事象に変える (例えば asking_guard の retry・next_step・stop、awaiting_fix_approval の approve で `plan.fix_groups` を作る、asking_rebuild の retry・hold)。

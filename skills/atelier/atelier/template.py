@@ -11,6 +11,8 @@ from typing import Any
 DEFAULT_TEMPLATE = Path(__file__).resolve().parent.parent / 'template.default.json'
 LEVELS = tuple(f'L{i}' for i in range(1, 6))
 ROLES = ('surveyor', 'interviewer', 'planner', 'reviewer')
+# Launches started together at most; 3 matches the fix stage's old group limit and stays clear of most runners' rate limits.
+DEFAULT_PARALLEL = 3
 
 
 class TemplateError(ValueError):
@@ -76,11 +78,14 @@ def validate_template(value: Any, agents_path: Path | str | None = None) -> dict
     for role, step in roles.items():
         _step(step, f'役 {role}', runners)
     limits = value['limits']
-    if not isinstance(limits, dict) or set(limits) - {'auto_fix', 'e2e_rounds', 'budget_tokens', 'budget_usd'} or limits.get('auto_fix') != 1 or type(limits.get('auto_fix')) is not int:
+    if not isinstance(limits, dict) or set(limits) - {'auto_fix', 'e2e_rounds', 'budget_tokens', 'budget_usd', 'parallel'} or limits.get('auto_fix') != 1 or type(limits.get('auto_fix')) is not int:
         _fail('上限の設定が不正です')
     rounds = limits.get('e2e_rounds', 2)
     if type(rounds) is not int or rounds < 0:
         _fail('E2E の上限は 0 以上の整数です')
+    parallel = limits.get('parallel', DEFAULT_PARALLEL)
+    if type(parallel) is not int or parallel < 1:
+        _fail('同時に動かす起動の上限 (parallel) は 1 以上の整数です')
     for key in ('budget_tokens', 'budget_usd'):
         number = limits.get(key)
         if number is not None and (type(number) not in (int, float) or not math.isfinite(number) or number < 0 or (key == 'budget_tokens' and type(number) is not int)):
@@ -93,6 +98,7 @@ def validate_template(value: Any, agents_path: Path | str | None = None) -> dict
     result['limits'].setdefault('e2e_rounds', 2)
     result['limits'].setdefault('budget_tokens', None)
     result['limits'].setdefault('budget_usd', None)
+    result['limits'].setdefault('parallel', DEFAULT_PARALLEL)
     return result
 
 
@@ -137,3 +143,10 @@ def resolve_template(base_path: Path | str | None = None, switch: dict | None = 
     if switch['on_expire'] == 'ask':
         return {'template': None, 'ask': True}
     return {'template': load_template(base_path, agents_path), 'ask': False}
+
+
+def parallel_limit(run_or_limits: dict) -> int:
+    """The most launches to start together for a run (or its limits); runs started before the limit existed get the default."""
+    limits = run_or_limits.get('limits', run_or_limits) if isinstance(run_or_limits, dict) else {}
+    value = (limits or {}).get('parallel', DEFAULT_PARALLEL)
+    return value if type(value) is int and value >= 1 else DEFAULT_PARALLEL

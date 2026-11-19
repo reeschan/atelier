@@ -1,0 +1,1 @@
+`_launch_for_state(run_root, run, role, pbi_id, *, fix_group, alongside, check_budget)`。経路から step（runner・model・effort）を選び（`_step_for_launch`。building では PBI の route を初めて決める）、起動の番号を仮に決めて指示を組み、外部 runner なら事前の検査をし、予算を見て（一斉起動では `_launch_batch` がまとめて見る）、`next_launch_id` で番号を確定し、指示を prompts/<番号>.md に書き、`launch_reads` に読んだ部品を残し、`_make_launch` で行動にする。修正のグループの起動は `fix_group` を持つ。

@@ -11,7 +11,7 @@ For other work, write the user's goal to a UTF-8 file, then run `python conducto
 
 ## Drive in the background
 
-`python conductor.py drive --root <work-root>` does every action that needs no model by itself: it runs `check` commands and writes their result, runs `launch` actions with an external `runner`, and copies `prepare` data. It stops at the first action that needs you and prints `{"drove": [...], "next": <action>}`. Run it in the background where your host can (in Claude Code, the Bash tool with `run_in_background`), then end your turn and wait for its completion notice; where it cannot, run it in the foreground. Add `--shell <path to a POSIX shell>` when the check commands use POSIX syntax and the system shell is not one (Windows `cmd.exe`).
+`python conductor.py drive --root <work-root>` does every action that needs no model by itself: it runs `check` commands and writes their result, runs `launch` and `launches` actions with an external `runner` (the launches of a `launches` action at the same time), and copies `prepare` data. It stops at the first action that needs you and prints `{"drove": [...], "next": <action>}`. Run it in the background where your host can (in Claude Code, the Bash tool with `run_in_background`), then end your turn and wait for its completion notice; where it cannot, run it in the foreground. Add `--shell <path to a POSIX shell>` when the check commands use POSIX syntax and the system shell is not one (Windows `cmd.exe`).
 
 While `drive` or a subagent runs, do not run `status` or `next`, read result files, or poll. If the user asks how it is going, run `status` once.
 
@@ -19,8 +19,8 @@ While `drive` or a subagent runs, do not run `status` or `next`, read result fil
 
 Act on the returned action (from `start`'s `next`, `answer`, or `drive`'s `next`):
 
-- `check`, `launch` with an external `runner`, or `prepare`: do not do it yourself; run `drive` in the background.
-- `launch` with `runner == "agent"`: launch an agent subagent at depth 1, in the background, with the `prompt` file, `model`, and `effort`. When it finishes, run `python conductor.py drive --root <work-root> --done <launch_id>` in the background.
+- `check`, `launch` or `launches` with an external `runner`, or `prepare`: do not do it yourself; run `drive` in the background.
+- `launch` or `launches` with `runner == "agent"`: in one message, launch one agent subagent at depth 1 per launch (a `launch` is one; `launches` lists them under `launches`), each with its `prompt` file, `model`, and `effort`. Launch them in the foreground, so they run at the same time and your turn waits until every one has finished. Then run `python conductor.py drive --root <work-root> --done <launch_id>` in the background, with the action's own `launch_id`, and end your turn.
 - `omm_scan`: run the `omm-scan` skill at `repository`, then `store_command` there; then run `drive --done <launch_id>` in the background.
 - `review_skill`: run `skill` with `args` through the Skill tool on the diff from `base` to the working tree, follow `instructions` to write `result`, then run `drive --done <launch_id>` in the background.
 - `ask`: show `page` (and `attachments`, if any) using the file-send tool; when `page` is null (answer-me-with-html is not installed), send `draft` instead. In chat, write only the `chat` lines (the conclusion and the decision) and the `choices`. When `chat` is absent, write the contents of the `question` file and the `choices`. Do not copy the page or `summary` into chat. Pass the user's reply to `python conductor.py answer --root <work-root> --choice <id>` (from `choices`), `--text <reply>` (for `interview_round`), or `--reply <file>`.

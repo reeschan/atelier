@@ -117,14 +117,17 @@ def _open_outside(name, before, after):
     return not (rule.get('no_tests') and is_test_file(name))
 
 
-def outside_edits(root, before):
-    """Existing files changed outside the snapshot's allowed paths that the snapshot let through."""
+def outside_edits(root, before, after=None, ignore=()):
+    """Existing files changed outside the snapshot's allowed paths that the snapshot let through.
+
+    ignore names paths that belong to other launches of the same launch batch; their changes are theirs.
+    """
     if before.get('outside_edits') is None or before['allowed_paths'] is None:
         return []
-    after = snapshot(Path(root))
+    after = after if after is not None else snapshot(Path(root))
     return sorted(
         name for name in before['files'].keys() & after['files'].keys()
-        if not _allowed(name, before['allowed_paths']) and _open_outside(name, before, after)
+        if not _allowed(name, before['allowed_paths']) and not _allowed(name, ignore) and _open_outside(name, before, after)
     )
 
 
@@ -147,24 +150,27 @@ def _alive(pid):
         return True
 
 
-def compare(root, before, approved_edits=None, launch_id=None):
+def compare(root, before, approved_edits=None, launch_id=None, *, after=None, ignore=()):
     """Compare the work root with a snapshot taken before a launch.
 
     approved_edits lets a changed file outside the allowed paths pass while it still has the approved digest.
     An approval registered during launch_id is checked even if the file ends where it started, so a role
     that writes back the content it read before the approval does not undo the approved edit unseen.
+    In a launch batch, after is the work root once every launch ended, and ignore names the paths that
+    belong to the other launches of the batch: their changes are compared in those launches, not here.
     """
     root = Path(root).resolve()
     approved = {e['path']: e['digest'] for e in approved_edits or []}
     during = {e['path']: e['digest'] for e in approved_edits or [] if launch_id is not None and e.get('launch_id') == launch_id}
     if str(root) != before['root']:
         raise ValueError('snapshot belongs to another root')
-    after = snapshot(root)
+    after = after if after is not None else snapshot(root)
     violations = []
     for key in ('head', 'branch', 'stash'):
         if before[key] != after[key]:
             violations.append({'rule': 'G2', 'detail': key + ' changed'})
-    changed = {p for p in before['files'].keys() | after['files'].keys() if before['files'].get(p) != after['files'].get(p)}
+    changed = {p for p in before['files'].keys() | after['files'].keys()
+               if before['files'].get(p) != after['files'].get(p) and not _allowed(p, ignore)}
     for name in sorted(changed):
         user_approved = name in approved and after['files'].get(name) == approved[name]
         rule = before.get('outside_edits') or {}
@@ -181,7 +187,7 @@ def compare(root, before, approved_edits=None, launch_id=None):
             violations.append({'rule': 'G5', 'detail': 'dependency file changed: ' + name})
     for name, digest in sorted(during.items()):
         outside = before['allowed_paths'] is not None and not _allowed(name, before['allowed_paths'])
-        if outside and name not in changed and after['files'].get(name) != digest:
+        if outside and name not in changed and not _allowed(name, ignore) and after['files'].get(name) != digest:
             violations.append({'rule': 'G1', 'detail': 'approved edit overwritten: ' + name})
     for pid in before['child_pids']:
         if _alive(pid):
@@ -325,3 +331,8 @@ def garbled_changes(root, before, base=None):
                 if reasons:
                     findings.append({'path': name, 'line': j1 + offset + 1, 'text': line, 'reason': ', '.join(reasons)})
     return findings
+
+
+def covered(name, paths):
+    """True when a work-root-relative name is one of paths, inside one of them, or matches one as a glob."""
+    return _allowed(name, paths)

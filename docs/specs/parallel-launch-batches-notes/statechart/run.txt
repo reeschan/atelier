@@ -1,0 +1,21 @@
+node statechart.mjs from-chart launch-batches-check.mmd   (2026-11-20, TLC 2.19)
+
+TLC on LaunchBatchesCheck.tla with LaunchBatchesCheck.cfg:
+  TypeOK holds.
+  CheckWhileRunning holds.
+  FixCheckWhileRunning holds.
+  AskGuardWhileRunning holds.
+  AskGuardFixWhileRunning holds.
+  AskStopWhileRunning holds.
+  NextBatchAfterClash holds.
+  CheckAfterClash holds.
+  FixCheckAfterClash holds.
+  BuildWithoutPlan holds.
+  TLC ran 11 times in 9.2 s.
+
+Chart: 21 states and 35 transitions from 21 model states.
+21 work, 0 break a rule.
+
+No state breaks an INVARIANT rule.
+
+The spec draws launch-batches-check.mmd back unchanged.

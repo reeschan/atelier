@@ -1,0 +1,1 @@
+`run --root --launch-id`。外部 runner の次の行動を動かす。1 本の起動は、`_recheck_before_run`（G3・G4・G11）で確かめ直し、snapshot を取り、`runners.run_external` で動かし、使用量と起動の記録を足し、`_collect_post_launch_violations` で比べて、guard の問いか `_finalize_completion`。一斉起動（番号 `batch-NNNN`）は `_run_batch` が全員を同時に起こして待ち、`_finish_batch` に渡す。

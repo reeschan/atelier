@@ -1,0 +1,1 @@
+`actions.ensure_pending_action`。building では、依存の通った PBI を計画の順に見て、先頭と同じ種類の runner で `targets` が重ならないものを `limits.parallel` 本まで選ぶ（`_pick_building`）。fixing では、残りの修正のグループを同じように選ぶ（`_pick_fixing`。ファイルの無いグループは単独）。選んだのが 1 本なら今までどおりの `launch`、2 本以上なら `_launch_batch` が `launches` にする。起動ごとに G3・G4・G11 を見て、1 本でも違反したら組みかけた一斉起動を取り消してその問いを出す。予算は一斉起動の見積もりの合計で 1 回だけ見る。

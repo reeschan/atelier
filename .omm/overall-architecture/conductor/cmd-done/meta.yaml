@@ -1,0 +1,9 @@
+created: 2026-11-19T20:58:26.888Z
+updated: 2026-11-19T22:35:14.860Z
+update_count: 2
+last_field: description
+kind: nested-class
+title: cmd-done
+children: []
+parentPath:
+  - conductor

@@ -85,7 +85,7 @@ In Claude Code, ask for the work and invoke `/atelier`. The caller writes your g
 python skills/atelier/conductor.py start --root <work root> --goal-file <file> [--spec <spec file>]
 ```
 
-then follows the actions of `drive`, `answer` and `start` as [SKILL.md](skills/atelier/SKILL.md) says. `drive` does every action that needs no model and stops at the first one that needs the caller; `drive --done <launch id>` first completes a subagent launch. The lower-level `next`, `done` and `run` remain for one step at a time. The run's files are in `<work root>/docs/pbi/`.
+then follows the actions of `drive`, `answer` and `start` as [SKILL.md](skills/atelier/SKILL.md) says. `drive` does every action that needs no model and stops at the first one that needs the caller; `drive --done <launch id>` first completes a subagent launch. PBIs of a wave whose `targets` do not overlap, and the fix groups, start together as one launch batch (`launches`), up to the template's `limits.parallel` (3 by default); `drive` runs an external batch at the same time, and the caller starts a batch of subagents in one message and completes it with one `drive --done`. The lower-level `next`, `done` and `run` remain for one step at a time. The run's files are in `<work root>/docs/pbi/`.
 
 ## Tests
 

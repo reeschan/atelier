@@ -1,0 +1,33 @@
+created: 2026-11-19T20:59:05.930Z
+updated: 2026-11-19T22:36:20.700Z
+update_count: 5
+last_field: description
+kind: nested-class
+title: actions
+children:
+  - asks
+  - compose-prompt
+  - ensure-pending-action
+  - launch-batch
+  - launch-for-state
+  - make-check
+  - paths
+  - pick-together
+  - prelaunch-guards
+parentPath: []
+prev_diagram: >
+  graph LR
+      ensure-pending-action["次の 1 件\nensure_pending_action"]
+      launch-for-state["役の launch\n_launch_for_state"]
+      compose-prompt["指示の組み立て\n_compose_prompt_parts"]
+      prelaunch-guards["事前の検査 G3・G4・G11・予算\n_launch_for_state"]
+      make-check["検査の行動\n_make_check"]
+      asks["問いとページ\n_make_ask・_make_approval_ask"]
+      paths["書いてよい場所\nallowed_paths_for・outside_edit_rule"]
+
+      ensure-pending-action -->|"building は next_buildable_pbi の 1 件"| launch-for-state
+      ensure-pending-action -->|"checking・fixing の check・running_e2e"| make-check
+      ensure-pending-action -->|"承認と横断の問い"| asks
+      launch-for-state -->|"状態・役・PBI から"| compose-prompt
+      launch-for-state -->|"外部 runner のときだけ"| prelaunch-guards
+      prelaunch-guards -->|"違反なら asking_guard に移して問いを返す"| asks

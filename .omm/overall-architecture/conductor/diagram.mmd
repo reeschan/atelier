@@ -1,0 +1,28 @@
+graph LR
+    cmd-start["start\n_cmd_start"]
+    cmd-next["next\n_cmd_next"]
+    cmd-drive["drive\n_cmd_drive"]
+    cmd-run["run\n_cmd_run・_run_batch"]
+    cmd-done["done\n_cmd_done"]
+    cmd-answer["answer\n_cmd_answer"]
+    cmd-approve-edit["approve-edit\n_cmd_approve_edit"]
+    cmd-status["status\n_cmd_status"]
+    finalize["1 本の完了の処理\n_finalize_completion"]
+    finish-batch["一斉起動の完了の処理\n_finish_batch"]
+    guard-question["guard の問い\n_raise_guard_question・_raise_batch_guard"]
+
+    cmd-drive -->|"--done があれば先に片付ける"| cmd-done
+    cmd-drive -->|"check は _run_check の後に"| cmd-done
+    cmd-drive -->|"外部 runner の起動と一斉起動"| cmd-run
+    cmd-drive -->|"無ければ次の行動を作る"| cmd-next
+    cmd-run -->|"1 本: 違反が無ければ"| finalize
+    cmd-run -->|"一斉起動: 全員を待って"| finish-batch
+    cmd-run -->|"1 本: G3・G4・G11・G1 など"| guard-question
+    cmd-done -->|"1 本: 違反が無ければ"| finalize
+    cmd-done -->|"agent の一斉起動"| finish-batch
+    cmd-done -->|"1 本: agent の起動の G1 など"| guard-question
+    finish-batch -->|"違反した起動をまとめて"| guard-question
+    cmd-answer -->|"選択を事象にして次へ"| finalize
+
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    class cmd-start,cmd-drive,cmd-done,cmd-answer entry

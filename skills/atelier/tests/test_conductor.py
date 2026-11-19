@@ -35,7 +35,9 @@ def write_json(path: str | Path, data: dict) -> Path:
 
 
 def write_result_for(action: dict, payload: dict) -> None:
-    write_json(action["result"], payload)
+    """Write payload as the result of a launch, or of every launch of a launch batch."""
+    for launch in action["launches"] if action.get("action") == "launches" else [action]:
+        write_json(launch["result"], payload)
 
 
 def init_workspace(tmp: Path, with_spec: bool = True) -> tuple[Path, Path, Path | None]:
@@ -158,7 +160,8 @@ def reach_building(tmp: Path, pbis: list[dict] | None = None) -> dict:
     assert code == 0 and act["action"] == "ask" and act["kind"] == "plan_approval"
 
     code, act = run_cli("answer", "--root", str(tmp), "--choice", "approve")
-    assert code == 0 and act["action"] == "launch" and act["role"] == "worker"
+    assert code == 0 and act["action"] in ("launch", "launches"), act
+    assert all(m["role"] == "worker" for m in (act["launches"] if act["action"] == "launches" else [act])), act
     return act
 
 

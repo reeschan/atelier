@@ -336,20 +336,17 @@ class TestIntegrationSeam1(unittest.TestCase):
             })
             _, fix_ask = run_cli("done", "--root", str(root), "--launch-id", tri["launch_id"])
             self.assertEqual(fix_ask["kind"], "fix_approval")
-            _, fx1 = run_cli("answer", "--root", str(root), "--choice", "approve")
-            self.assertEqual(fx1["action"], "launch")
-            self.assertEqual(fx1["role"], "worker")
-            self.assertIn("Mode: fix", Path(fx1["prompt"]).read_text(encoding="utf-8"))
+            # The 3 fix groups (never more than parallel) start together as one launch batch.
+            _, fixes = run_cli("answer", "--root", str(root), "--choice", "approve")
+            self.assertEqual(fixes["action"], "launches")
+            self.assertEqual(len(fixes["launches"]), 3)
+            for fx in fixes["launches"]:
+                self.assertEqual(fx["role"], "worker")
+                self.assertIn("Mode: fix", Path(fx["prompt"]).read_text(encoding="utf-8"))
 
-            write_result_for(fx1, {"status": "ok"})
-            _, fx2 = run_cli("done", "--root", str(root), "--launch-id", fx1["launch_id"])
-            self.assertEqual(fx2["action"], "launch")
-            write_result_for(fx2, {"status": "ok"})
-            _, fx3 = run_cli("done", "--root", str(root), "--launch-id", fx2["launch_id"])
-            self.assertEqual(fx3["action"], "launch")
-            write_result_for(fx3, {"status": "ok"})
-            # After 3rd worker, must move to fix check (never > 3 workers)
-            _, fix_chk = run_cli("done", "--root", str(root), "--launch-id", fx3["launch_id"])
+            write_result_for(fixes, {"status": "ok"})
+            # After the batch, must move to fix check
+            _, fix_chk = run_cli("done", "--root", str(root), "--launch-id", fixes["launch_id"])
             self.assertEqual(fix_chk["action"], "check")
 
     def test_record_jsonl_and_report_md_with_reading_toggles(self) -> None:

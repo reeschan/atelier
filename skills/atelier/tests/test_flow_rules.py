@@ -481,8 +481,9 @@ class TestFlowRulesSeam1(unittest.TestCase):
             )
             code, act = run_cli("answer", "--root", str(root), "--reply", str(reply))
             self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "launch")
-            self.assertEqual(act["pbi"], "PBI-1")
+            # PBI-4 was allowed to proceed without PBI-2, and its files do not overlap PBI-1's: one launch batch.
+            self.assertEqual(act["action"], "launches")
+            self.assertEqual([m["pbi"] for m in act["launches"]], ["PBI-1", "PBI-4"])
 
             handoff = root / "docs" / "pbi" / "handoff" / "PBI-2.md"
             self.assertTrue(handoff.is_file())
@@ -495,14 +496,13 @@ class TestFlowRulesSeam1(unittest.TestCase):
             by_id = {p["id"]: p for p in st["pbis"]}
             self.assertEqual(by_id["PBI-2"]["status"], "sensitive")
             self.assertEqual(by_id["PBI-3"]["status"], "held")
-            self.assertEqual(by_id["PBI-4"]["status"], "pending")
+            self.assertEqual(by_id["PBI-4"]["status"], "building")
 
-            # Build PBI-1 -> PBI-4 (since PBI-4 was allowed to proceed without PBI-2) -> never PBI-2 or PBI-3
+            # Build PBI-1 and PBI-4 -> the wave check, never PBI-2 or PBI-3
             write_result_for(act, {"status": "ok"})
             code, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "launch")
-            self.assertEqual(act["pbi"], "PBI-4")
+            self.assertEqual(act["action"], "check")
 
     def test_plan_changes_appended_and_staleness_holds_only_dependents(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -1,0 +1,1 @@
+`_compose_prompt_parts`。役ごとの指示を組む。worker は、building ならチケット（PBI の id・goal・targets・do_not_touch・checks・facts・acceptance・data・修正の PBI なら carry_over、一斉起動なら仲間の番号とファイルの `running_alongside`）、fixing ならグループのチケット（FIX-n: items・files・checks、一斉起動なら `running_alongside`）か E2E の修正（FIX-E2E）。規約の文書の一覧と、テンプレートが残すと決めた部品だけを入れる。

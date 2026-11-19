@@ -1,0 +1,9 @@
+created: 2026-11-19T20:58:27.967Z
+updated: 2026-11-19T20:58:27.968Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: cmd-answer
+children: []
+parentPath:
+  - conductor

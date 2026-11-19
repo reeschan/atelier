@@ -4,6 +4,8 @@ Build one PBI or one fix group from its ticket alone. Read every file under `Rul
 
 Outside `targets` you may change existing files when the change needs it, for example a lint fix in a file you did not plan to touch, a caller of a function you changed, or a test whose expected values your change made stale. Do not change `do_not_touch`, and do not add or delete files outside `targets`. List every file you change outside `targets` in `outside_edits` as `{ "file", "why" }`. If the PBI needs a new file or a deletion outside `targets`, stop with `plan_broken`.
 
+If the ticket lists `running_alongside`, those workers are changing their `files` at the same time as you. Leave those files unchanged, even outside `targets`.
+
 Stale tests: when an existing test fails only because this ticket changes behaviour the way its goal and the approved spec intend, update only the expectations that the intended behaviour makes stale. Do not add, delete, skip or loosen tests. If the old expectation matches the spec and your change does not, or you cannot tell, leave the test failing and carry it over (below).
 
 Keep each file's line endings: a file that uses LF stays LF, and a new file uses LF unless the repository's files of that kind use CRLF. On Windows many tools save CRLF, so write files with LF explicitly (for example `newline="\n"` in Python); a formatter that wants LF fails the check otherwise.

@@ -1,0 +1,1 @@
+役の指示の本文。surveyor.md・interviewer.md・planner.md・worker.md・reviewer.md。actions が状態に応じて、チケット（PBI の targets・do_not_touch・checks・carry_over、一斉起動なら `running_alongside` など）や規約の文書と組み合わせ、docs/pbi/prompts/<起動の番号>.md に書く。planner.md は、同じ wave で `targets` が重ならない PBI は同時に作られるので、依存の無い PBI の `targets` を離すよう求める。worker.md は、`running_alongside` のファイルを変えないよう求める。

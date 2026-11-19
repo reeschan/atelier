@@ -1,0 +1,1 @@
+`_cmd_run`。1 本の起動は今までどおり、G3・G4・G11 を確かめ直し、snapshot を取り、`run_external` で動かし、比べて受け入れる。一斉起動は `_run_batch` が、起動ごとに G3・G4・G11 を確かめ直し（違反した起動は動かさずに違反として残す）、作業木の snapshot を 1 つ取り、通った起動を全部 `start_external` で起こしてから `finish_external` で全部を待ち、`_finish_batch` でまとめて受け入れる。

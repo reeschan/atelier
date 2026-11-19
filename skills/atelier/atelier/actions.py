@@ -170,7 +170,9 @@ def outside_edit_rule(run: dict[str, Any], role: str, pbi_id: str | None) -> dic
     return {"blocked": list(pbi.get("do_not_touch") or []), "no_tests": pbi.get("kind") == "fix"}
 
 
-def allowed_paths_for(run: dict[str, Any], role: str, pbi_id: str | None) -> list[str] | None:
+def allowed_paths_for(
+    run: dict[str, Any], role: str, pbi_id: str | None, fix_group: int | None = None
+) -> list[str] | None:
     if pbi_id:
         pbi = state.get_pbi(run, pbi_id)
         if pbi:
@@ -179,10 +181,12 @@ def allowed_paths_for(run: dict[str, Any], role: str, pbi_id: str | None) -> lis
                 return list(files) + ["docs/pbi/"]
         return None
     if run.get("state") == "fixing" and run.get("fix_groups"):
-        idx = run.get("fix_group_index", 0)
         groups = run["fix_groups"]
-        if 0 <= idx < len(groups):
-            group_files = _group_files(groups[idx])
+        if fix_group is None:
+            left = state.fix_groups_left(run)
+            fix_group = left[0] if left else None
+        if fix_group is not None and 0 <= fix_group < len(groups):
+            group_files = _group_files(groups[fix_group])
             if group_files:
                 return group_files + ["docs/pbi/"]
         return None
@@ -299,6 +303,10 @@ def _unfinished_lines(run: dict[str, Any]) -> list[str]:
     if edits:
         lines += ["", "## 対象の外で変えたファイル", ""]
         lines += [f"- {e['by']}: {e['file']} — {e['why'] or '（理由の記載なし）'}" for e in edits]
+    batches = run.get("batches") or []
+    if batches:
+        lines += ["", "## 一斉起動（同時に動いた起動）", ""]
+        lines += [f"- {b['id']}: {'、'.join(b['members'])}" for b in batches]
     return lines
 
 
@@ -378,7 +386,8 @@ def _write_handoff(run_root: Path, run: dict[str, Any], report_path: Path) -> Pa
     return handoff_path
 
 
-def _budget_would_exceed(run: dict[str, Any], prompt_text: str) -> bool:
+def _budget_would_exceed(run: dict[str, Any], prompt_text: str | list[str]) -> bool:
+    """Whether the next action's launches would go past the budget; one approval covers the whole next action."""
     if run.pop("budget_approved_next", False):
         return False
     limits = run.get("limits") or active_template(run).get("limits", {})
@@ -389,7 +398,8 @@ def _budget_would_exceed(run: dict[str, Any], prompt_text: str) -> bool:
     usage = run.get("usage") or {}
     recorded_tokens = usage.get("tokens", 0)
     recorded_cost = usage.get("cost_usd", 0.0)
-    est_tokens = max(500, len(prompt_text) // 4 + 500)
+    texts = [prompt_text] if isinstance(prompt_text, str) else list(prompt_text)
+    est_tokens = sum(max(500, len(text) // 4 + 500) for text in texts)
     est_cost = round(est_tokens * 0.00001, 6)
     if budget_tokens is not None and (recorded_tokens + est_tokens) > budget_tokens:
         return True
@@ -480,8 +490,14 @@ def _compose_prompt_parts(
     pbi_id: str | None,
     result_path: Path,
     stage_dir: Path,
+    *,
+    fix_group: int | None = None,
+    alongside: list[dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, int], list[Path]]:
-    """Build staged prompt text, filtered token read map, and referenced files."""
+    """Build staged prompt text, filtered token read map, and referenced files.
+
+    alongside lists the other launches of the same launch batch and the files they change, for the worker's ticket.
+    """
     s = run["state"]
     facts_path = facts_file_path(run_root, run)
     spec_path = Path(run.get("spec_file") or run["goal_file"])
@@ -610,10 +626,12 @@ def _compose_prompt_parts(
                 ticket["data"] = [{"path": need["dest"], "why": need["why"]} for need in pbi["data_needs"]]
             if pbi.get("kind") == "fix":
                 ticket["carry_over"] = state.carry_over_ticket(run, pbi)
+            if alongside:
+                ticket["running_alongside"] = alongside
         else:
             mode = "fix"
             groups = run.get("fix_groups") or []
-            idx = run.get("fix_group_index", 0)
+            idx = fix_group if fix_group is not None else (state.fix_groups_left(run) or [-1])[0]
             if groups and 0 <= idx < len(groups):
                 group = groups[idx]
                 ticket = {
@@ -622,6 +640,8 @@ def _compose_prompt_parts(
                     "files": _group_files(group),
                     "checks": plan.fix_commands(run.get("pbis", []), run.get("plan_checks") or [], _group_files(group)),
                 }
+                if alongside:
+                    ticket["running_alongside"] = alongside
             else:
                 ticket = {
                     "id": "FIX-E2E",
@@ -722,15 +742,18 @@ def _make_launch(
     result_path: Path,
     pbi_id: str | None = None,
     launch_id: str,
+    fix_group: int | None = None,
 ) -> dict[str, Any]:
     result_path.parent.mkdir(parents=True, exist_ok=True)
     spec = runners.launch_spec(role, step, prompt_path, result_path, run_root, agents_path=run.get("agents_path"))
+    extra = {"fix_group": fix_group} if fix_group is not None else {}
     if step["runner"] == "agent":
         return {
             "action": "launch",
             **spec,
             "pbi": pbi_id,
             "launch_id": launch_id,
+            **extra,
         }
     return {
         "action": "launch",
@@ -743,6 +766,7 @@ def _make_launch(
         "command": list(spec),
         "pbi": pbi_id,
         "launch_id": launch_id,
+        **extra,
     }
 
 
@@ -1025,7 +1049,20 @@ def _chat_lines(summary_lines: list[str]) -> list[str]:
     return [summary_lines[0], summary_lines[-1]]
 
 
-def _launch_for_state(run_root: Path, run: dict[str, Any], role: str, pbi_id: str | None = None) -> dict[str, Any]:
+def _launch_for_state(
+    run_root: Path,
+    run: dict[str, Any],
+    role: str,
+    pbi_id: str | None = None,
+    *,
+    fix_group: int | None = None,
+    alongside: list[dict[str, Any]] | None = None,
+    check_budget: bool = True,
+) -> dict[str, Any]:
+    """One launch of role for the current state, after the checks that come before a launch.
+
+    In a launch batch the caller checks the budget once for all its launches (check_budget False).
+    """
     tmpl = active_template(run)
     step = _step_for_launch(run, tmpl, role, pbi_id)
     pbi_obj = state.get_pbi(run, pbi_id) if pbi_id else None
@@ -1048,7 +1085,7 @@ def _launch_for_state(run_root: Path, run: dict[str, Any], role: str, pbi_id: st
 
     with tempfile.TemporaryDirectory() as td:
         prompt_text, read_map, referenced = _compose_prompt_parts(
-            run_root, run, tmpl, role, pbi_id, result_path, Path(td)
+            run_root, run, tmpl, role, pbi_id, result_path, Path(td), fix_group=fix_group, alongside=alongside
         )
 
     def _cleanup_survey_prompt() -> None:
@@ -1118,7 +1155,7 @@ def _launch_for_state(run_root: Path, run: dict[str, Any], role: str, pbi_id: st
                 violations=[{"rule": "G11", "detail": f"forbidden args: {', '.join(blocked)}"}],
             )
 
-    if _budget_would_exceed(run, prompt_text):
+    if check_budget and _budget_would_exceed(run, prompt_text):
         _cleanup_survey_prompt()
         flow.apply_event(run, "budget_exceeded")
         return ensure_pending_action(run_root, run)
@@ -1137,12 +1174,128 @@ def _launch_for_state(run_root: Path, run: dict[str, Any], role: str, pbi_id: st
         result_path=result_path,
         pbi_id=pbi_id,
         launch_id=launch_id,
+        fix_group=fix_group,
     )
+
+
+def _owned_paths(run: dict[str, Any], pbi: dict[str, Any] | None = None, fix_group: int | None = None) -> list[str]:
+    """The files one launch changes, for the overlap check: a PBI's targets, or a fix group's files."""
+    if pbi is not None:
+        return [p for p in (allowed_paths_for(run, "worker", pbi["id"]) or []) if p != "docs/pbi/"]
+    if fix_group is not None:
+        return _group_files((run.get("fix_groups") or [])[fix_group])
+    return []
+
+
+def _runner_kind(step: dict[str, Any]) -> str:
+    return "agent" if step.get("runner") == "agent" else "external"
+
+
+def _pick_together(candidates: list[Any], owned, kind_of, limit: int) -> list[Any]:
+    """The candidates to start together, in order: the first one, then each later one of the same kind of
+    runner whose files overlap none already picked, up to limit. A candidate with no known files goes alone."""
+    chosen: list[Any] = []
+    kind = None
+    for item in candidates:
+        if len(chosen) >= limit:
+            break
+        item_kind = kind_of(item)
+        if item_kind is None:
+            continue
+        paths = owned(item)
+        if not chosen:
+            chosen.append(item)
+            kind = item_kind
+            if not paths:
+                break
+            continue
+        if item_kind != kind or not paths:
+            continue
+        if any(plan.targets_overlap(paths, owned(other)) for other in chosen):
+            continue
+        chosen.append(item)
+    return chosen
+
+
+def _pick_building(run: dict[str, Any], tmpl: dict[str, Any]) -> list[dict[str, Any]]:
+    """The PBIs of the wave to start together next (see Launch batch in the glossary)."""
+
+    def kind_of(pbi: dict[str, Any]) -> str | None:
+        try:
+            return _runner_kind(_step_for_launch(run, tmpl, "worker", pbi["id"]))
+        except state.StateError:
+            return None
+
+    candidates = state.buildable_pbis(run)
+    picked = _pick_together(candidates, lambda pbi: _owned_paths(run, pbi=pbi), kind_of, template.parallel_limit(run))
+    return picked or candidates[:1]
+
+
+def _pick_fixing(run: dict[str, Any]) -> list[int]:
+    """The fix groups to start together next; every group runs the same worker route."""
+    return _pick_together(
+        state.fix_groups_left(run), lambda idx: _owned_paths(run, fix_group=idx), lambda idx: "worker", template.parallel_limit(run)
+    )
+
+
+def _member_label(run: dict[str, Any], pbi_id: str | None, fix_group: int | None) -> str:
+    return pbi_id if pbi_id else f"FIX-{(fix_group or 0) + 1}"
+
+
+def _drop_launches(run: dict[str, Any], launches: list[dict[str, Any]]) -> None:
+    """Undo launches built for a launch batch that is not given out after all."""
+    for act in launches:
+        (run.get("launch_reads") or {}).pop(act["launch_id"], None)
+        pbi = state.get_pbi(run, act["pbi"]) if act.get("pbi") else None
+        if pbi is not None and pbi.get("status") == "building":
+            pbi["status"] = "pending"
+
+
+def _launch_batch(run_root: Path, run: dict[str, Any], members: list[tuple[str | None, int | None]]) -> dict[str, Any]:
+    """One launch, or a launch batch of worker launches for members (PBI id or fix group index).
+
+    Each launch passes the checks before a launch on its own. When one fails, the batch is undone and that
+    failure's question comes next. The budget is checked once for the whole batch.
+    """
+    if len(members) == 1:
+        pbi_id, group = members[0]
+        return _launch_for_state(run_root, run, "worker", pbi_id, fix_group=group)
+    owned = {
+        _member_label(run, pbi_id, group): _owned_paths(run, pbi=state.get_pbi(run, pbi_id) if pbi_id else None, fix_group=group)
+        for pbi_id, group in members
+    }
+    launches: list[dict[str, Any]] = []
+    for pbi_id, group in members:
+        me = _member_label(run, pbi_id, group)
+        alongside = [{"id": label, "files": files} for label, files in owned.items() if label != me]
+        act = _launch_for_state(run_root, run, "worker", pbi_id, fix_group=group, alongside=alongside, check_budget=False)
+        if act.get("action") != "launch":
+            _drop_launches(run, launches)
+            return act
+        pbi = state.get_pbi(run, pbi_id) if pbi_id else None
+        if pbi is not None:
+            pbi["status"] = "building"
+        launches.append(act)
+    texts = [Path(act["prompt"]).read_text(encoding="utf-8") for act in launches]
+    if _budget_would_exceed(run, texts):
+        _drop_launches(run, launches)
+        flow.apply_event(run, "budget_exceeded")
+        return ensure_pending_action(run_root, run)
+    batch_id = state.next_launch_id(run, "batch")
+    for act in launches:
+        act["batch"] = batch_id
+    return {
+        "action": "launches",
+        "launch_id": batch_id,
+        "runner": _runner_kind(launches[0]),
+        "launches": launches,
+    }
 
 
 def _guard_ask(run_root: Path, run: dict[str, Any]) -> dict[str, Any]:
     issue = run.get("guard_issue") or {}
-    choices = [{"id": "retry", "label": "同じ設定でもう 1 回試す"}]
+    several = len(issue.get("launches") or []) > 1
+    choices = [{"id": "retry", "label": "違反した起動をもう一度試す" if several else "同じ設定でもう 1 回試す"}]
     pbi_id = issue.get("pbi")
     pbi = state.get_pbi(run, pbi_id) if pbi_id else None
     if pbi and pbi.get("route") and (pbi.get("route_index", 0) + 1) < len(pbi["route"]):
@@ -1206,7 +1359,8 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
         kind, choices, _ = ASK_CHOICES[s]
         action = _make_approval_ask(run_root, run, "plan", kind, choices)
     elif s == "building":
-        pbi = state.next_buildable_pbi(run)
+        picked = _pick_building(run, active_template(run))
+        pbi = picked[0] if picked else None
         if pbi is None:
             has_passed = any(p.get("status") == "passed" for p in run.get("pbis", []))
             if has_passed and run["counters"]["review_count"] == 0:
@@ -1214,9 +1368,10 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
             else:
                 flow.apply_event(run, "no_buildable_pbis_report")
             return ensure_pending_action(run_root, run)
-        if pbi.get("status") == "passed":
-            raise state.StateError(f"G8: refusing to launch passed PBI {pbi['id']}")
-        action = _launch_for_state(run_root, run, "worker", pbi_id=pbi["id"])
+        for chosen in picked:
+            if chosen.get("status") == "passed":
+                raise state.StateError(f"G8: refusing to launch passed PBI {chosen['id']}")
+        action = _launch_batch(run_root, run, [(chosen["id"], None) for chosen in picked])
         if action.get("action") == "launch":
             pbi["status"] = "building"
     elif s == "checking":
@@ -1234,6 +1389,12 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
     elif s == "fixing":
         if sub == "check":
             action = _make_check(run_root, run, "fixcheck")
+        elif run.get("fix_groups"):
+            groups = _pick_fixing(run)
+            if not groups:
+                run["subphase"] = "check"
+                return ensure_pending_action(run_root, run)
+            action = _launch_batch(run_root, run, [(None, group) for group in groups])
         else:
             action = _launch_for_state(run_root, run, "worker")
     elif s == "running_e2e":

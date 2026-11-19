@@ -1,0 +1,22 @@
+created: 2026-11-19T20:56:23.418Z
+updated: 2026-11-19T22:36:44.732Z
+update_count: 5
+last_field: description
+git_commit: 8d7d6fd
+git_branch: claude/atelier-parallel-waves
+children:
+  - actions
+  - agent-subagents
+  - caller
+  - conductor
+  - external-runners
+  - flow
+  - guards
+  - plan
+  - prompts
+  - record
+  - run-dir
+  - runners
+  - state
+  - support
+  - template

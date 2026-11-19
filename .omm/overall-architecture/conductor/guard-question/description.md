@@ -1,0 +1,1 @@
+`_raise_guard_question`（1 本）と `_raise_batch_guard`（一斉起動）。違反の詳細を `guard_issue` に入れ、building の PBI を未着手に戻し、作業者の外の変更を報告用に残し、`guard_violation` で asking_guard に移って問いを作る。一斉起動では違反した起動を `guard_issue.launches` にまとめる。問いの選択は retry・next_step（違反した起動が 1 本で、経路に次の候補があるとき）・stop。

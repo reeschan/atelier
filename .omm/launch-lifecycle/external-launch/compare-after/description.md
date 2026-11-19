@@ -1,0 +1,1 @@
+1 本の起動は `_collect_post_launch_violations`（`guards.compare` の G1・G2・G5・G14 の結果のファイル、作業者なら外の変更・依存のファイル・文字化け・壊す変更）。一斉起動は `_batch_violations` が起動ごとに `guards.compare(..., after=, ignore=)` を呼び、仲間の `targets` と仲間だけが申告したファイルを除いて比べる。作業木全体の G12・G14 は 1 回だけ見て、ファイルの持ち主に割り当てる。

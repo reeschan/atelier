@@ -1,0 +1,20 @@
+graph LR
+    ensure-pending-action["次の行動\nensure_pending_action"]
+    pick-together["一斉起動に入れる起動を選ぶ\n_pick_building・_pick_fixing・_pick_together"]
+    launch-batch["1 本か一斉起動にする\n_launch_batch"]
+    launch-for-state["役の起動\n_launch_for_state"]
+    compose-prompt["指示の組み立て\n_compose_prompt_parts"]
+    prelaunch-guards["事前の検査 G3・G4・G11・予算\n_launch_for_state・_launch_batch"]
+    make-check["検査の行動\n_make_check"]
+    asks["問いとページ\n_make_ask・_make_approval_ask"]
+    paths["書いてよい場所\nallowed_paths_for・outside_edit_rule"]
+
+    ensure-pending-action -->|"building と fixing"| pick-together
+    pick-together -->|"重ならない起動を parallel 本まで"| launch-batch
+    launch-batch -->|"起動ごとに"| launch-for-state
+    ensure-pending-action -->|"checking・fixing の check・running_e2e"| make-check
+    ensure-pending-action -->|"承認と横断の問い"| asks
+    launch-for-state -->|"状態・役・PBI・グループから"| compose-prompt
+    launch-for-state -->|"外部 runner のときだけ"| prelaunch-guards
+    prelaunch-guards -->|"違反なら一斉起動を取り消して問いを返す"| asks
+    pick-together -->|"PBI の targets・グループのファイル"| paths

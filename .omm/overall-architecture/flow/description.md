@@ -1,0 +1,1 @@
+状態の遷移表 (`TRANSITIONS`) と never の規則 (`check_invariants`)。`apply_event(run, event)` だけが状態を変える。building では `worker_returned` (まだ作る PBI がある) と `wave_built` (wave を作り終えた → checking) を使い分ける。横断の問い (asking_guard・asking_budget など) は `return_state` を覚えて戻る。

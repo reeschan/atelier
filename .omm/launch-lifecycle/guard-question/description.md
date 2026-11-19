@@ -1,0 +1,1 @@
+1 本の起動なら `_raise_guard_question`、一斉起動なら `_raise_batch_guard`。違反した起動の PBI を未着手に戻し、`guard_issue` に違反を入れて asking_guard に移る。一斉起動では違反した起動を `guard_issue.launches` にまとめて 1 問にし、違反が 1 本のときだけ「経路の次の候補で」を出す。retry で違反した起動だけがもう一度起動される。

@@ -1,0 +1,44 @@
+created: 2026-11-19T20:58:20.639Z
+updated: 2026-11-19T22:35:18.717Z
+update_count: 4
+last_field: description
+kind: nested-class
+title: conductor
+children:
+  - cmd-answer
+  - cmd-approve-edit
+  - cmd-done
+  - cmd-drive
+  - cmd-next
+  - cmd-run
+  - cmd-start
+  - cmd-status
+  - finalize
+  - finish-batch
+  - guard-question
+parentPath: []
+prev_diagram: |
+  graph LR
+      cmd-start["start\n_cmd_start"]
+      cmd-next["next\n_cmd_next"]
+      cmd-drive["drive\n_cmd_drive"]
+      cmd-run["run\n_cmd_run"]
+      cmd-done["done\n_cmd_done"]
+      cmd-answer["answer\n_cmd_answer"]
+      cmd-approve-edit["approve-edit\n_cmd_approve_edit"]
+      cmd-status["status\n_cmd_status"]
+      finalize["完了の処理\n_finalize_completion"]
+      guard-question["guard の問い\n_raise_guard_question"]
+
+      cmd-drive -->|"--done があれば先に片付ける"| cmd-done
+      cmd-drive -->|"check は _run_check の後に"| cmd-done
+      cmd-drive -->|"外部 runner の launch"| cmd-run
+      cmd-drive -->|"無ければ次の行動を作る"| cmd-next
+      cmd-run -->|"違反が無ければ"| finalize
+      cmd-run -->|"G3・G4・G11・G1 など"| guard-question
+      cmd-done -->|"違反が無ければ"| finalize
+      cmd-done -->|"agent の launch の G1 など"| guard-question
+      cmd-answer -->|"選択を事象にして次へ"| finalize
+
+      classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+      class cmd-start,cmd-drive,cmd-done,cmd-answer entry

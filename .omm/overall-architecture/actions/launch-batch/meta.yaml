@@ -1,0 +1,9 @@
+created: 2026-11-19T22:35:53.376Z
+updated: 2026-11-19T22:35:53.377Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: launch-batch
+children: []
+parentPath:
+  - actions
