@@ -242,12 +242,22 @@ class OutsideEditTests(unittest.TestCase):
             (root / "lib.py").write_text("y = 2\n", encoding="utf-8")
             self.assertEqual(["changed outside allowed paths: lib.py"], self.g1(guards.compare(root, before)))
 
+    def test_an_approved_edit_keeps_its_content_outside_the_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = self.repo(td)
+            before = guards.snapshot(root, allowed_paths=["app.py"], outside_edits={"blocked": []})
+            (root / "lib.py").write_text("y = 2\n", encoding="utf-8")
+            approved = [guards.approved_edit(root, "lib.py")]
+            (root / "lib.py").write_text("y = 3\n", encoding="utf-8")
+            self.assertEqual(["changed outside allowed paths: lib.py"], self.g1(guards.compare(root, before, approved)))
+
     def test_test_files_by_directory_and_name(self) -> None:
         for name in ("tests/test_app.py", "src/__tests__/view.tsx", "pkg/store_test.go", "src/view/Outline.test.ts",
-                     "spec/models/user_spec.rb", "e2e/select.cy.ts", "src/OutlineTest.java", "src/__snapshots__/v.snap"):
+                     "spec/models/user_spec.rb", "e2e/select.cy.ts", "src/OutlineTest.java", "src/__snapshots__/v.snap",
+                     "test_status", "./tests/a.py"):
             with self.subTest(name=name):
                 self.assertTrue(guards.is_test_file(name))
-        for name in ("app.py", "docs/specs/outline.md", "src/Contest.java", "testing.md", ""):
+        for name in ("app.py", "docs/specs/outline.md", "src/Contest.java", "testing.md", ".tests/a.py", ".test/x.py", ""):
             with self.subTest(name=name):
                 self.assertFalse(guards.is_test_file(name))
 
@@ -280,12 +290,17 @@ class WorkerOutsideEditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             init_git_repo(root)
+            (root / "lib.py").write_text("y = 1\n", encoding="utf-8")
+            commit(root, "lib.py")
             agents, tmpl = write_agents_and_template(root)
             pbis = [{"id": "PBI-1", "title": "Lower x", "depends_on": [], "level": "L1", "reason": "small", "files": ["app.py"]}]
             act = reach_building_with(root, pbis, agents_path=agents, template_path=tmpl)
             (root / "new.py").write_text("n = 1\n", encoding="utf-8")
+            (root / "lib.py").write_text("y = 2\n", encoding="utf-8")
             ask = done(root, act, {"status": "ok"})
             self.assertEqual("guard", ask["kind"])
+            # The edit outside the targets that G1 let through is still reported, though the launch was refused.
+            self.assertEqual([{"by": "PBI-1", "file": "lib.py", "why": ""}], state.load_state(root)["outside_edits"])
 
 
 if __name__ == "__main__":

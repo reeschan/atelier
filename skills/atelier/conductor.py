@@ -789,6 +789,9 @@ def _raise_guard_question(
     if unusable_reason:
         parts.append(f"runner unusable: {unusable_reason}")
     parts.extend(f"{v['rule']}: {v['detail']}" for v in violations)
+    if pending.get("role") == "worker":
+        # The edits stay in the work tree; a retry's snapshot would no longer see them as changes.
+        _record_outside_edits(run, pending, {})
     if pending.get("launch_id"):
         run.setdefault("completed_launches", []).append(pending["launch_id"])
     pbi_id = pending.get("pbi")

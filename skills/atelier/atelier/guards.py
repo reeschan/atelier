@@ -85,12 +85,12 @@ def snapshot(root, allowed_paths=None, report_path=None, child_pids=None, outsid
 
 # Directories and file names that hold tests by the usual conventions of common languages.
 _TEST_DIRS = {'test', 'tests', '__tests__', '__snapshots__'}
-_TEST_NAMES = ('test_*.*', '*_test.*', '*.test.*', '*.spec.*', '*_spec.*', '*.cy.*', '*Test.*', '*Tests.*', '*.snap')
+_TEST_NAMES = ('test_*', '*_test.*', '*.test.*', '*.spec.*', '*_spec.*', '*.cy.*', '*Test.*', '*Tests.*', '*.snap')
 
 
 def is_test_file(name):
     """True when a work-root-relative path is a test file: under a test directory or named like a test."""
-    parts = PurePosixPath(name.replace('\\', '/').lstrip('./')).parts
+    parts = PurePosixPath(name.replace('\\', '/').removeprefix('./')).parts
     if not parts:
         return False
     if any(part in _TEST_DIRS for part in parts[:-1]):
@@ -171,7 +171,8 @@ def compare(root, before, approved_edits=None, launch_id=None):
         if rule.get('no_tests') and is_test_file(name) and not user_approved:
             violations.append({'rule': 'G1', 'detail': 'test file changed by a fix PBI: ' + name})
         elif (before['allowed_paths'] is not None and not _allowed(name, before['allowed_paths'])
-              and not user_approved and not _open_outside(name, before, after)):
+              and not user_approved and (name in approved or not _open_outside(name, before, after))):
+            # A file with a registered approval keeps that content: the outside allowance does not reopen it.
             violations.append({'rule': 'G1', 'detail': 'changed outside allowed paths: ' + name})
         if Path(name).name in LOCKS | MANIFESTS:
             violations.append({'rule': 'G5', 'detail': 'dependency file changed: ' + name})
