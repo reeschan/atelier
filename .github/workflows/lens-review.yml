@@ -4,37 +4,73 @@ name: lens-review
 # plugin (https://github.com/reeschan/claude-plugins-official) and posts the
 # verified findings to the pull request.
 #
+# Starts when such a pull request is opened or updated, and when the owner
+# writes a comment starting with `/lens-review` on its conversation.
+#
 # Runs only when the pull request's author is `reeschan` and its branch lives in
-# this repository. Pull requests from other authors or from forks skip the job,
-# so the API key is never handed to their code.
+# this repository. Pull requests from other authors or from forks, and comments
+# from other people, skip the job, so the API key is never handed to their code.
 #
 # Secret: ANTHROPIC_API_KEY (Anthropic Console API key).
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-
-concurrency:
-  group: lens-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  issue_comment:
+    types: [created]
 
 jobs:
   lens-review:
     if: >-
-      github.event.pull_request.user.login == 'reeschan' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.user.login == 'reeschan' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       github.event.issue.state == 'open' &&
+       github.event.issue.user.login == 'reeschan' &&
+       github.event.comment.user.login == 'reeschan' &&
+       startsWith(github.event.comment.body, '/lens-review'))
+    concurrency:
+      group: lens-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      # A comment event carries no branch, so read it from the API and stop on
+      # a fork before anything is checked out.
+      - name: Resolve the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          info=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+            --jq '[(.head.repo.full_name // "-"), .head.sha, .base.sha] | @tsv')
+          read -r head_repo head_sha base_sha <<< "$info"
+          if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "::notice::Skipped: the branch of #${PR_NUMBER} is not in ${GITHUB_REPOSITORY}."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "run=true"
+            echo "number=${PR_NUMBER}"
+            echo "head=${head_sha}"
+            echo "base=${base_sha}"
+          } >> "$GITHUB_OUTPUT"
+
+      - if: steps.pr.outputs.run == 'true'
+        uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.pr.outputs.head }}
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@v1
+      - if: steps.pr.outputs.run == 'true'
+        uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -42,11 +78,12 @@ jobs:
           plugin_marketplaces: https://github.com/reeschan/claude-plugins-official.git
           plugins: lens-review@reeschan-plugins
           prompt: |
-            /lens-review:lens-review ${{ github.event.pull_request.number }} --comment
-            Base: ${{ github.event.pull_request.base.sha }}
-            Target: ${{ github.event.pull_request.head.sha }}
+            /lens-review:lens-review ${{ steps.pr.outputs.number }} --comment
+            Base: ${{ steps.pr.outputs.base }}
+            Target: ${{ steps.pr.outputs.head }}
 
-            この PR は push のたびにレビューし直す。投稿の付録の「「## lens-review」で始まるまとめのコメントがもうある」は、そのコメントに今の head の SHA (${{ github.event.pull_request.head.sha }}) が書かれているときだけ当てはめる。まとめのコメントには、1 行目の「## lens-review」の次の行に `head: ${{ github.event.pull_request.head.sha }}` を書く。
+            この PR は push のたびと、`/lens-review` のコメントのたびにレビューし直す。まとめのコメントには、1 行目の「## lens-review」の次の行に `head: ${{ steps.pr.outputs.head }}` を書く。
+            ${{ github.event_name == 'issue_comment' && '今回はコメントで頼まれたやり直しなので、投稿の付録の「「## lens-review」で始まるまとめのコメントがもうある」は当てはめず、まとめのコメントを出す。インラインコメントの印による重複の除き方はそのまま守る。' || format('投稿の付録の「「## lens-review」で始まるまとめのコメントがもうある」は、そのコメントに今の head の SHA ({0}) が書かれているときだけ当てはめる。', steps.pr.outputs.head) }}
           claude_args: >-
             --model sonnet
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh api:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(git fetch:*),Bash(git merge-base:*),Bash(git rev-parse:*),Bash(git ls-files:*)"
