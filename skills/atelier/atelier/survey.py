@@ -146,7 +146,9 @@ def _copy_omm(root: Path, commit: str) -> Path:
     for record in filter(None, tree.split('\0')):
         meta, path = record.split('\t', 1)
         mode, kind, sha = meta.split()
-        if kind == 'blob' and mode != '160000':
+        if mode == '120000':
+            raise ValueError(f'symbolic link in .omm: {path}')
+        if kind == 'blob':
             entries.append((path, sha))
     contents = _blobs(root, [sha for _, sha in entries]) if entries else []
     work = final.parent / f'{final.name}.tmp-{os.getpid()}'
@@ -168,14 +170,25 @@ def _copy_omm(root: Path, commit: str) -> Path:
     return final / '.omm'
 
 
+def _shallow_boundary(root: Path) -> set[str]:
+    """Commits a shallow clone cut its history at (none in a full clone)."""
+    path = Path(_git(['rev-parse', '--git-path', 'shallow'], root).decode('utf-8').strip())
+    path = path if path.is_absolute() else root / path
+    return set(path.read_text(encoding='ascii').split()) if path.is_file() else set()
+
+
 def _committed_omm(root: Path) -> dict[str, Any]:
     failed: dict[str, Any] = {'source': 'none', 'folder': None, 'reason': 'committed-failed'}
+    sha = re.compile(r'[0-9a-f]{40,64}')
     try:
-        commit = _git(['rev-list', '-1', 'HEAD', '--', '.omm'], root).decode('utf-8').strip()
-        if not re.fullmatch(r'[0-9a-f]{40,64}', commit):
+        head = _git(['rev-parse', '--verify', 'HEAD^{commit}'], root).decode('utf-8').strip()
+        commit = _git(['rev-list', '-1', head, '--', '.omm'], root).decode('utf-8').strip()
+        if not sha.fullmatch(head) or not sha.fullmatch(commit):
             return failed
+        if commit in _shallow_boundary(root):
+            return failed  # the history stops here, so a later commit may be taken for the one that changed .omm
         folder = _copy_omm(root, commit)
-        diff = _git(['diff', '--name-status', '-M', commit, 'HEAD', '--', '.', ':(exclude).omm'], root).decode('utf-8')
+        diff = _git(['diff', '--name-status', '-M', commit, head, '--', '.', ':(exclude).omm'], root).decode('utf-8')
         lines = [line for line in diff.splitlines() if line.strip()]
         listing = root / 'docs' / 'pbi' / 'prompts' / 'omm-changes.txt'
         listing.parent.mkdir(parents=True, exist_ok=True)
@@ -191,7 +204,8 @@ def omm_context(root: str | Path, cache_dir: str | Path | None = None) -> dict[s
     A repository whose HEAD tree holds .omm gets source committed (git only, no cache lookup): folder is a
     copy of .omm from the last commit that changed it, kept outside the worktree; commit is that commit;
     changes is a file listing the files changed since then (git diff --name-status -M, .omm excluded) and
-    count its lines. If git fails there, it is none (reason committed-failed).
+    count its lines. HEAD is read once for both. If git fails there, a shallow clone's history stops at that
+    commit, or .omm holds a symbolic link, it is none (reason committed-failed).
     Otherwise source is cache-hit or cache-delta (folder is the .omm to read), miss (no usable scan; reason is
     omm-pr-scan's), or none (reason: tools missing, cache inside the repository, or the lookup failed).
     Without cache_dir, omm-pr-scan picks the place ($OMM_CACHE_DIR, else beside the main clone).

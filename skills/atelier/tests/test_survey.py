@@ -65,9 +65,9 @@ class SurveyTests(unittest.TestCase):
                 run.assert_not_called()
 
 
-def git(root, *args):
+def git(root, *args, input=None):
     return subprocess.run(['git', '-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@t', *args], cwd=root, check=True,
-                          capture_output=True, text=True, encoding='utf-8').stdout.strip()
+                          capture_output=True, text=True, encoding='utf-8', input=input).stdout.strip()
 
 
 class CommittedOmmTests(unittest.TestCase):
@@ -155,6 +155,25 @@ class CommittedOmmTests(unittest.TestCase):
     def test_git_failure_after_detection_gives_committed_failed(self):
         with patch.object(survey, '_copy_omm', side_effect=subprocess.CalledProcessError(1, 'git')):
             self.assertEqual({'source': 'none', 'folder': None, 'reason': 'committed-failed'}, survey.omm_context(self.root))
+
+    def test_symbolic_link_in_omm_gives_committed_failed_and_no_copy(self):
+        target = git(self.root, 'hash-object', '-w', '--stdin', input='arch/description.md')
+        git(self.root, 'update-index', '--add', '--cacheinfo', f'120000,{target},.omm/link.md')
+        git(self.root, 'commit', '-q', '-m', 'link')
+        head = git(self.root, 'rev-parse', 'HEAD')
+        self.assertEqual({'source': 'none', 'folder': None, 'reason': 'committed-failed'}, survey.omm_context(self.root))
+        common = Path(git(self.root, 'rev-parse', '--absolute-git-dir'))
+        self.assertFalse((common / 'atelier' / 'omm' / head[:12]).exists())
+
+    def test_shallow_boundary_is_not_taken_as_the_omm_commit(self):
+        self.commit_code()
+        clone = Path(self.tmp.name).resolve() / 'clone'
+        git(Path(self.tmp.name), 'clone', '-q', '--depth', '1', self.root.as_uri(), str(clone))
+        self.assertEqual({'source': 'none', 'folder': None, 'reason': 'committed-failed'}, survey.omm_context(clone))
+        full = Path(self.tmp.name).resolve() / 'full'
+        git(Path(self.tmp.name), 'clone', '-q', self.root.as_uri(), str(full))
+        out = survey.omm_context(full)
+        self.assertEqual((self.base, 3), (out['commit'], out['count']))
 
     def test_no_omm_in_head_uses_cache_flow(self):
         git(self.root, 'rm', '-rq', '.omm')
