@@ -1,0 +1,21 @@
+node <pstack>/skills/statechart/scripts/statechart.mjs from-chart committed-omm-survey.mmd --module CommittedOmmSurvey --png
+
+Wrote CommittedOmmSurvey.tla, CommittedOmmSurvey.cfg, and CommittedOmmSurvey.map.mjs from committed-omm-survey.mmd.
+TLC on CommittedOmmSurvey.tla with CommittedOmmSurvey.cfg:
+  TypeOK holds.
+  AskOnCommitted holds.
+  RewriteRepoOmm holds.
+  TrustStale holds.
+  TLC ran 5 times in 5.9 s.
+
+Chart: 28 states and 36 transitions from 28 model states.
+28 work, 0 break a rule.
+
+No state breaks an INVARIANT rule.
+
+The spec does not draw committed-omm-survey.mmd:
+  states the agreed chart's own steps never reach:
+    RepoOmm: Repo OMM rewritten
+  1 difference(s)
+
+Wrote chart.mmd, chart.png, stories.md, summary.json in CommittedOmmSurvey-statechart.

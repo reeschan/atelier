@@ -4,12 +4,13 @@ outside data, the review skill, skipped findings and the OMM cache question."""
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from atelier import flow, plan, survey
+from atelier import actions, flow, plan, survey
 from tests.test_conductor import (
     VALID_FACTS,
     init_workspace,
@@ -355,6 +356,87 @@ class OmmTests(unittest.TestCase):
             act = start(tmp)
             self.assertEqual("surveyor", act["role"])
             self.assertEqual("tools", run_state(tmp)["omm"]["reason"])
+
+
+def git_repo(tmp: Path, omm: bool, extra_commits: int = 0) -> str:
+    """A real git repository in tmp; returns the commit that last changed .omm (or HEAD without one)."""
+
+    def git(*args: str) -> str:
+        proc = subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", *args],
+            cwd=tmp, check=True, capture_output=True, text=True, encoding="utf-8",
+        )
+        return proc.stdout.strip()
+
+    git("init", "-q")
+    (tmp / "app.txt").write_text("v0\n", encoding="utf-8", newline="\n")
+    if omm:
+        (tmp / ".omm").mkdir()
+        (tmp / ".omm" / "model.json").write_text("{}\n", encoding="utf-8", newline="\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    omm_commit = git("rev-parse", "HEAD")
+    for n in range(extra_commits):
+        (tmp / "app.txt").write_text(f"v{n + 1}\n", encoding="utf-8", newline="\n")
+        git("commit", "-q", "-am", f"change {n}")
+    return omm_commit
+
+
+class CommittedOmmFlowTests(unittest.TestCase):
+    def test_committed_omm_goes_straight_to_the_surveyor_and_reports_the_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            commit = git_repo(tmp, omm=True, extra_commits=1)
+            act = start(tmp)
+            self.assertEqual("surveyor", act["role"], act)
+            run = run_state(tmp)
+            self.assertEqual("committed", run["omm"]["source"])
+            self.assertEqual(commit, run["omm"]["commit"])
+            self.assertFalse(run["omm_asked"])
+            prompt = Path(act["prompt"]).read_text(encoding="utf-8")
+            for head in ("OMM source: committed", "OMM folder: ", "OMM commit: ", "OMM changes: "):
+                self.assertIn(head, prompt)
+            self.assertIn("(1 files)", prompt)
+            report = actions._write_report(tmp, run).read_text(encoding="utf-8")
+            self.assertIn(f"- OMM: committed ({commit[:7]} から 1 ファイル変更)", report)
+
+    def test_report_says_the_omm_is_up_to_date_with_no_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            git_repo(tmp, omm=True)
+            act = start(tmp)
+            self.assertEqual("surveyor", act["role"], act)
+            run = run_state(tmp)
+            self.assertEqual(0, run["omm"]["count"])
+            self.assertIn("(0 files)", Path(act["prompt"]).read_text(encoding="utf-8"))
+            report = actions._write_report(tmp, run).read_text(encoding="utf-8")
+            self.assertIn("- OMM: committed (HEAD に追いついている)", report)
+
+    def test_without_a_committed_omm_a_miss_still_asks(self) -> None:
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as outside, tempfile.TemporaryDirectory() as tools:
+            tmp = Path(d)
+            git_repo(tmp, omm=False)
+            script = Path(tools) / "cache.js"
+            script.write_text("", encoding="utf-8")
+            with patch.object(survey, "_cache_script", return_value=script), patch.object(
+                survey.shutil, "which", return_value="/dummy"
+            ), patch.object(survey, "_run", return_value=f"miss {outside} no-candidate"):
+                act = start(tmp)
+            self.assertEqual(("ask", "omm"), (act["action"], act["kind"]))
+            self.assertTrue(run_state(tmp)["omm_asked"])
+            self.assertEqual("miss", run_state(tmp)["omm"]["source"])
+
+    def test_report_line_when_the_committed_copy_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            start(tmp)
+            run = run_state(tmp)
+            run["omm"] = {"source": "none", "folder": None, "reason": "committed-failed"}
+            report = actions._write_report(tmp, run).read_text(encoding="utf-8")
+            self.assertIn("- OMM: コミット済みの OMM の写しを用意できなかったため、OMM なしで調べた", report)
+            run["omm"] = {"source": "cache-hit", "folder": "/x"}
+            report = actions._write_report(tmp, run).read_text(encoding="utf-8")
+            self.assertIn("- OMM: cache-hit", report)
 
 
 class ShapeTests(unittest.TestCase):

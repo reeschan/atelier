@@ -328,6 +328,15 @@ def _write_report(run_root: Path, run: dict[str, Any]) -> Path:
     omm = run.get("omm") or {}
     if omm.get("source") == "none" and omm.get("reason") == "tools":
         header.append("- OMM: 道具（node・omm・omm-pr-scan v1.2）が無いため、OMM なしで調べた")
+    elif omm.get("source") == "none" and omm.get("reason") == "committed-failed":
+        header.append("- OMM: コミット済みの OMM の写しを用意できなかったため、OMM なしで調べた")
+    elif omm.get("source") == "committed":
+        short = str(omm.get("commit") or "")[:7]
+        count = omm.get("count") or 0
+        if count:
+            header.append(f"- OMM: committed ({short} から {count} ファイル変更)")
+        else:
+            header.append("- OMM: committed (HEAD に追いついている)")
     elif omm.get("source"):
         header.append(f"- OMM: {omm['source']}")
     if run.get("e2e_skipped"):
