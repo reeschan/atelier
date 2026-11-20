@@ -13,7 +13,7 @@ The script that holds a run's state and gives the next action. It is not a model
 _Avoid_: orchestrator, scheduler, dispatcher
 
 **Surveyor (調べる役)**:
-A cheap model, with the OMM cache, that writes the fact sheet.
+A cheap model, with the committed OMM or the OMM cache, that writes the fact sheet.
 _Avoid_: scanner, explorer
 
 **Interviewer (詰める役)**:
@@ -44,6 +44,14 @@ _Avoid_: grill log, transcript
 **Fact sheet (事実の束)**:
 What the surveyor found about the repository, each item with its source.
 _Avoid_: context dump, notes
+
+**Committed OMM (コミット済みの OMM)**:
+The `.omm/` architecture diagrams and descriptions that the target repository keeps in its own commits. A run reads it as of the commit that last changed it and never writes to it.
+_Avoid_: repository cache, tracked scan
+
+**OMM cache (OMM のキャッシュ)**:
+Scans of the target repository kept outside it, keyed by the commit they describe. Used only when the repository has no committed OMM.
+_Avoid_: committed OMM, local .omm
 
 **Rule document (規約の文書)**:
 A document the target repository says to read before implementing or reviewing. The surveyor cites it, and the planner, workers and reviewer read it whole.

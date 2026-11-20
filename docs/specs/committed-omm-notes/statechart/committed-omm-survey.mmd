@@ -1,0 +1,64 @@
+stateDiagram-v2
+    state Whole {
+        state Flow {
+            state "Survey not started" as Idle
+            state "Finding OMM" as Find
+            state "Copying committed OMM" as Copy
+            state "Reading as is" as AsIs
+            state "Verifying changed elements" as Verify
+            state "Looking up cache" as Lookup
+            state "Asking whether to scan" as Ask
+            state "Scanning whole repo" as Scan
+            state "Reading cache" as CacheRead
+            state "Surveying without OMM" as NoOmm
+            state "Fact sheet written" as Done
+            [*] --> Idle
+            Idle --> Find: surveyが始まった
+            Find --> Copy: コミット済みのOMMがある [見分け]
+            %% when Committed
+            Find --> Lookup: コミット済みのOMMが無い [見分け]
+            %% when NotCommitted
+            Copy --> AsIs: 変わったファイルが無かった [差分]
+            %% when CaughtUp
+            Copy --> Verify: 変わったファイルがあった [差分]
+            %% when Changed
+            Copy --> NoOmm: 写しを作れなかった
+            Lookup --> CacheRead: 使える走査があった
+            Lookup --> NoOmm: 道具が無い
+            Lookup --> Ask: 使える走査が無かった
+            Ask --> Scan: 走査を選んだ
+            Ask --> NoOmm: OMMなしを選んだ
+            Scan --> CacheRead: 走査をキャッシュに入れた
+            AsIs --> Done: 事実の束を書いた
+            Verify --> Done: 事実の束を書いた
+            CacheRead --> Done: 事実の束を書いた
+            NoOmm --> Done: 事実の束を書いた
+        }
+        --
+        state Kind {
+            state "No committed OMM" as NotCommitted
+            state "Committed OMM" as Committed
+            [*] --> NotCommitted
+            NotCommitted --> Committed: .ommをコミットした [surveyの前]
+            %% when Idle
+        }
+        --
+        state Code {
+            state "Code caught up" as CaughtUp
+            state "Code changed since OMM" as Changed
+            [*] --> CaughtUp
+            CaughtUp --> Changed: コードだけ変えた [surveyの前]
+            %% when Idle
+        }
+        --
+        state RepoOmm {
+            state "Repo OMM untouched" as Untouched
+            state "Repo OMM rewritten" as Rewritten
+            [*] --> Untouched
+            Untouched --> Rewritten: 走査を選んだ [追跡中]
+            %% when Ask, Committed
+        }
+    }
+    %% never AskOnCommitted: Asking whether to scan & Committed OMM -- コミット済みのOMMがあるのに走査するかを聞かない
+    %% never RewriteRepoOmm: Repo OMM rewritten & Committed OMM -- runがリポジトリの.ommを書き換えない
+    %% never TrustStale: Reading as is & Code changed since OMM -- 変わったファイルがあるのに照らし合わせずに読まない
