@@ -106,14 +106,99 @@ def _external(path: Path, root: Path) -> bool:
     return not path.resolve().is_relative_to(root.resolve())
 
 
-def omm_context(root: str | Path, cache_dir: str | Path | None = None) -> dict[str, str | None]:
-    """Look up the OMM cache for HEAD.
+def _git(args: list[str], root: Path, data: bytes | None = None) -> bytes:
+    """Run git directly (not through _run, so a stubbed _run never reaches the committed-OMM path)."""
+    return subprocess.run(['git', '-c', 'core.quotepath=off'] + args, cwd=root, check=True, capture_output=True,
+                          input=data).stdout
 
-    source is cache-hit or cache-delta (folder is the .omm to read), miss (no usable scan; reason is
+
+def _has_committed_omm(root: Path) -> bool:
+    try:
+        return bool(_git(['ls-tree', 'HEAD', '--', '.omm'], root).strip())
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _blobs(root: Path, shas: list[str]) -> list[bytes]:
+    """Contents of blobs, read from the object database in one cat-file --batch call."""
+    out = _git(['cat-file', '--batch'], root, ''.join(f'{s}\n' for s in shas).encode('ascii'))
+    blobs, pos = [], 0
+    for sha in shas:
+        end = out.index(b'\n', pos)
+        head = out[pos:end].split()
+        if len(head) != 3 or head[0].decode('ascii') != sha or head[1] != b'blob':
+            raise ValueError(f'unexpected cat-file output for {sha}')
+        size = int(head[2])
+        blobs.append(out[end + 1:end + 1 + size])
+        pos = end + 1 + size + 1
+    return blobs
+
+
+def _copy_omm(root: Path, commit: str) -> Path:
+    """Copy .omm of commit into <git common dir>/atelier/omm/<12 digits>/.omm; reuse a finished copy."""
+    common = Path(_git(['rev-parse', '--git-common-dir'], root).decode('utf-8').strip())
+    common = (common if common.is_absolute() else root / common).resolve()
+    final = common / 'atelier' / 'omm' / commit[:12]
+    if (final / '.omm').is_dir():
+        return final / '.omm'
+    tree = _git(['ls-tree', '-r', '-z', commit, '--', '.omm'], root).decode('utf-8')
+    entries = []
+    for record in filter(None, tree.split('\0')):
+        meta, path = record.split('\t', 1)
+        mode, kind, sha = meta.split()
+        if kind == 'blob' and mode != '160000':
+            entries.append((path, sha))
+    contents = _blobs(root, [sha for _, sha in entries]) if entries else []
+    work = final.parent / f'{final.name}.tmp-{os.getpid()}'
+    try:
+        if work.exists():
+            shutil.rmtree(work)
+        (work / '.omm').mkdir(parents=True)
+        for (path, _), body in zip(entries, contents):
+            target = work / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
+        try:
+            os.rename(work, final)
+        except OSError:
+            if not (final / '.omm').is_dir():
+                raise
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return final / '.omm'
+
+
+def _committed_omm(root: Path) -> dict[str, Any]:
+    failed: dict[str, Any] = {'source': 'none', 'folder': None, 'reason': 'committed-failed'}
+    try:
+        commit = _git(['rev-list', '-1', 'HEAD', '--', '.omm'], root).decode('utf-8').strip()
+        if not re.fullmatch(r'[0-9a-f]{40,64}', commit):
+            return failed
+        folder = _copy_omm(root, commit)
+        diff = _git(['diff', '--name-status', '-M', commit, 'HEAD', '--', '.', ':(exclude).omm'], root).decode('utf-8')
+        lines = [line for line in diff.splitlines() if line.strip()]
+        listing = root / 'docs' / 'pbi' / 'prompts' / 'omm-changes.txt'
+        listing.parent.mkdir(parents=True, exist_ok=True)
+        listing.write_text(''.join(f'{line}\n' for line in lines), encoding='utf-8', newline='\n')
+        return {'source': 'committed', 'folder': str(folder), 'commit': commit, 'changes': str(listing), 'count': len(lines)}
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError):
+        return failed
+
+
+def omm_context(root: str | Path, cache_dir: str | Path | None = None) -> dict[str, Any]:
+    """Prepare the OMM for HEAD.
+
+    A repository whose HEAD tree holds .omm gets source committed (git only, no cache lookup): folder is a
+    copy of .omm from the last commit that changed it, kept outside the worktree; commit is that commit;
+    changes is a file listing the files changed since then (git diff --name-status -M, .omm excluded) and
+    count its lines. If git fails there, it is none (reason committed-failed).
+    Otherwise source is cache-hit or cache-delta (folder is the .omm to read), miss (no usable scan; reason is
     omm-pr-scan's), or none (reason: tools missing, cache inside the repository, or the lookup failed).
     Without cache_dir, omm-pr-scan picks the place ($OMM_CACHE_DIR, else beside the main clone).
     """
     root = Path(root).resolve()
+    if _has_committed_omm(root):
+        return _committed_omm(root)
     cache = Path(cache_dir).resolve() if cache_dir else None
     script, node = _cache_script(), shutil.which('node')
     if not script or not node or not shutil.which('omm'):
@@ -167,9 +252,14 @@ def survey_prompt(root: str | Path, goal_path: str | Path, spec_path: str | Path
     result.parent.mkdir(parents=True, exist_ok=True)
     template = Path(__file__).resolve().parent.parent / 'prompts' / 'surveyor.md'
     source = omm.get('source', 'none')
+    if source == 'committed':
+        omm_lines = (f'OMM source: committed\nOMM folder: {omm.get("folder")}\nOMM commit: {omm.get("commit")}\n'
+                     f'OMM changes: {omm.get("changes")} ({omm.get("count")} files)\n')
+    else:
+        omm_lines = (f'OMM source: {source if source in ("cache-hit", "cache-delta") else "none"}\n'
+                     f'OMM folder: {omm.get("folder") or "none"}\n')
     context = (f'\nRepository: {root}\nGoal: {Path(goal_path).resolve()}\n'
                f'Spec: {Path(spec_path).resolve() if spec_path else "none"}\n'
-               f'OMM source: {source if source in ("cache-hit", "cache-delta") else "none"}\n'
-               f'OMM folder: {omm.get("folder") or "none"}\nResult: {result}\n')
+               f'{omm_lines}Result: {result}\n')
     prompt.write_text(template.read_text(encoding='utf-8') + context, encoding='utf-8')
     return prompt
