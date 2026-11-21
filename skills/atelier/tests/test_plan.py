@@ -99,6 +99,8 @@ class PlanValidationTests(unittest.TestCase):
 
         no_checks = _valid_plan()
         no_checks["pbis"][0]["checks"] = []
+        self.assertEqual([], plan.validate_plan(no_checks))
+        no_checks["checks"] = []
         self.assertTrue(plan.validate_plan(no_checks))
 
         bad_facts = _valid_plan()

@@ -148,6 +148,16 @@ def check_commands(run: dict[str, Any], kind: str) -> list[str]:
     return plan.wave_commands(checked, plan_checks)
 
 
+def worker_checks(run: dict[str, Any], commands: list[str]) -> list[str]:
+    """The commands a worker runs itself: the given ones without the plan's checks.
+
+    The plan's checks are repository-wide (the whole test suite, the type check and the like); the run
+    runs them once after the wave or the fix stage, so a worker does not run them again after every fix.
+    """
+    repository = set(run.get("plan_checks") or [])
+    return [cmd for cmd in commands if cmd not in repository]
+
+
 def _group_files(items: list[dict[str, Any]]) -> list[str]:
     files: list[str] = []
     for item in items:
@@ -635,10 +645,14 @@ def _compose_prompt_parts(
                 ticket["data"] = [{"path": need["dest"], "why": need["why"]} for need in pbi["data_needs"]]
             if pbi.get("kind") == "fix":
                 ticket["carry_over"] = state.carry_over_ticket(run, pbi)
+            ticket["checks"] = worker_checks(run, pbi.get("checks") or [])
+            ticket["repository_checks"] = list(run.get("plan_checks") or [])
             if alongside:
                 ticket["running_alongside"] = alongside
         else:
             mode = "fix"
+            # The fix stage's check and E2E run once after every fix; the worker runs only what its fix touches.
+            after_fix = check_commands(run, "fixcheck") + list(run.get("plan_e2e") or [])
             groups = run.get("fix_groups") or []
             idx = fix_group if fix_group is not None else (state.fix_groups_left(run) or [-1])[0]
             if groups and 0 <= idx < len(groups):
@@ -647,7 +661,8 @@ def _compose_prompt_parts(
                     "id": f"FIX-{idx + 1}",
                     "items": group,
                     "files": _group_files(group),
-                    "checks": plan.fix_commands(run.get("pbis", []), run.get("plan_checks") or [], _group_files(group)),
+                    "checks": worker_checks(run, plan.related_commands(run.get("pbis", []), _group_files(group))),
+                    "repository_checks": after_fix,
                 }
                 if alongside:
                     ticket["running_alongside"] = alongside
@@ -655,7 +670,8 @@ def _compose_prompt_parts(
                 ticket = {
                     "id": "FIX-E2E",
                     "failure": run.get("last_e2e_failure") or run.get("last_check_failure") or "",
-                    "checks": check_commands(run, "fixcheck") + list(run.get("plan_e2e") or []),
+                    "checks": [],
+                    "repository_checks": after_fix,
                 }
 
         plan.worker_prompt(
