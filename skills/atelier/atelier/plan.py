@@ -234,7 +234,9 @@ def validate_plan(obj: Any) -> list[str]:
             if overlap:
                 errors.append(f"{label} の targets と do_not_touch が重なっています: {', '.join(sorted(overlap))}")
 
-        _validate_str_list(pbi.get("checks"), f"{label}.checks", errors, require_nonempty_list=True)
+        own_checks = _validate_str_list(pbi.get("checks"), f"{label}.checks", errors)
+        if own_checks == [] and not obj.get("checks"):
+            errors.append(f"{label} の checks が空です。計画の checks も空のときは、PBI に関係するテストを checks に書いてください。")
         _validate_str_list(pbi.get("facts"), f"{label}.facts", errors)
         _validate_str_list(pbi.get("acceptance"), f"{label}.acceptance", errors, require_nonempty_list=True)
         evidence = _validate_str_list(pbi.get("evidence"), f"{label}.evidence", errors, require_nonempty_list=True)
@@ -373,14 +375,19 @@ def wave_commands(pbis: Iterable[dict[str, Any]], plan_checks: Iterable[str]) ->
     return out
 
 
+def related_commands(pbis: list[dict[str, Any]], files: Iterable[str]) -> list[str]:
+    """The checks of the PBIs that own one of the files (have it in their targets), each command once."""
+    fixed = {_norm_path(f) for f in files if _is_nonempty_str(f)}
+    owners = [p for p in pbis if fixed & {_norm_path(t) for t in (p.get("targets") or []) if _is_nonempty_str(t)}]
+    return wave_commands(owners, [])
+
+
 def fix_commands(pbis: list[dict[str, Any]], plan_checks: list[str], files: Iterable[str]) -> list[str]:
-    """The plan's checks and the checks of PBIs that own a fixed file.
+    """The checks of PBIs that own a fixed file and the plan's checks.
 
     With neither, every PBI's checks, so a fix never goes unchecked.
     """
-    fixed = {_norm_path(f) for f in files if _is_nonempty_str(f)}
-    owners = [p for p in pbis if fixed & {_norm_path(t) for t in (p.get("targets") or []) if _is_nonempty_str(t)}]
-    commands = wave_commands(owners, plan_checks)
+    commands = wave_commands([{"checks": related_commands(pbis, files)}], plan_checks)
     return commands or wave_commands(pbis, [])
 
 
