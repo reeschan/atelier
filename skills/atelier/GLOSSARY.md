@@ -137,6 +137,10 @@ _Avoid_: 束, bundle, parallel job
 A command whose exit code decides pass or fail. No model judges it.
 _Avoid_: verification by review
 
+**Repository check (全体の検査)**:
+A check over the whole repository (the whole test suite, the type check and the like), listed in the plan's `checks`. The conductor runs it once after each wave and once after the fix stage; a worker runs only the tests related to its own work.
+_Avoid_: PBI check, worker check
+
 **Guard rule (守りの規則)**:
 One of the rules that protect against harm (G1 to G14), each with how it is stopped.
 _Avoid_: caution, note, warning
