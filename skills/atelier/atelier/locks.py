@@ -45,8 +45,9 @@ COMMIT_NAME = "lock_commit"
 
 
 def _git(root: Path, *args: str, env: dict[str, str] | None = None, stdin: bytes | None = None) -> str:
+    # Paths are literal: a locked file named acceptance/case[1].py must not also take acceptance/case1.py.
     proc = subprocess.run(
-        ["git", "-C", str(root), *args],
+        ["git", "--literal-pathspecs", "-C", str(root), *args],
         input=stdin,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -273,15 +274,38 @@ def lock(root: Path, run: dict[str, Any]) -> dict[str, Any]:
 
 
 def locked_list(root: Path, run: dict[str, Any]) -> dict[str, Any]:
-    """The lock list the checks go by: the copy outside the work tree, or the list in the lock commit."""
+    """The lock list the checks go by: the copy outside the work tree, or the list in the lock commit, whichever
+    first has the sha256 recorded when the lock was made (both hold the same bytes). The bytes that are hashed are
+    the bytes that are read. When neither does, that is a fault of the lock (StateError), not an empty list."""
     kept = run.get("lock") or {}
-    copy = Path(kept["outside"]) / COPY_NAME if kept.get("outside") else None
-    try:
-        if copy is not None and copy.is_file():
-            return json.loads(copy.read_text(encoding="utf-8"))
-        return json.loads(_git(Path(root).resolve(), "show", f"{kept['commit']}:{kept.get('list') or LIST_PATH}"))
-    except (OSError, ValueError, KeyError, state.StateError):
+    if not kept:
         return {}
+    expected = kept.get("sha256")
+    root = Path(root).resolve()
+
+    def from_copy() -> bytes:
+        return (Path(kept["outside"]) / COPY_NAME).read_bytes()
+
+    def from_commit() -> bytes:
+        return _git(root, "show", f"{kept['commit']}:{kept.get('list') or LIST_PATH}").encode("utf-8", "surrogateescape")
+
+    for read in ([from_copy] if kept.get("outside") else []) + ([from_commit] if kept.get("commit") else []):
+        try:
+            raw = read()
+        except (OSError, state.StateError):
+            continue
+        if expected and hashlib.sha256(raw).hexdigest() != expected:
+            continue
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            continue
+        if isinstance(data, dict):
+            return data
+    raise state.StateError(
+        "lock: neither the copy of the lock list outside the work tree nor the list in the lock commit "
+        f"{kept.get('commit')} has the sha256 recorded at the lock ({expected})"
+    )
 
 
 def guard_entry(root: Path, run: dict[str, Any]) -> dict[str, Any] | None:
@@ -348,7 +372,10 @@ def copy_problem(root: Path, run: dict[str, Any]) -> str | None:
     copy = outside / COPY_NAME
     if not copy.is_file():
         return f"鍵の一覧の写しが無い: {copy}"
-    digest = hashlib.sha256(copy.read_bytes()).hexdigest()
+    try:
+        digest = hashlib.sha256(copy.read_bytes()).hexdigest()
+    except OSError as exc:
+        return f"鍵の一覧の写しが読めない（{type(exc).__name__}）: {copy}"
     if digest != expected:
         return f"鍵の一覧の写し（{copy}）の sha256 が記録と違う（記録: {expected} / 今: {digest}）"
     if kept.get("sha256") and kept["sha256"] != expected:

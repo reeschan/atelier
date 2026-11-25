@@ -85,8 +85,15 @@ def _py_decorators(node: ast.AST, keep_all: bool) -> list[str]:
     return out
 
 
+def _py_type_params(node: ast.AST) -> str:
+    """The type parameters of a generic function or class (Python 3.12 or later): "[T: int, *Ts]", or ""."""
+    params = getattr(node, "type_params", None) or []
+    return f"[{', '.join(ast.unparse(p) for p in params)}]" if params else ""
+
+
 def _py_function(node: ast.FunctionDef | ast.AsyncFunctionDef, indent: str = "") -> list[str]:
-    head = f"{'async ' if isinstance(node, ast.AsyncFunctionDef) else ''}def {node.name}({ast.unparse(node.args)})"
+    head = (f"{'async ' if isinstance(node, ast.AsyncFunctionDef) else ''}def {node.name}{_py_type_params(node)}"
+            f"({ast.unparse(node.args)})")
     if node.returns is not None:
         head += f" -> {ast.unparse(node.returns)}"
     return [indent + line for line in [*_py_decorators(node, False), head]]
@@ -98,7 +105,7 @@ def _py_public(name: str) -> bool:
 
 def _py_class(node: ast.ClassDef) -> list[str]:
     bases = [ast.unparse(b) for b in node.bases] + [ast.unparse(k) for k in node.keywords]
-    lines = [*_py_decorators(node, True), f"class {node.name}" + (f"({', '.join(bases)})" if bases else "")]
+    lines = [*_py_decorators(node, True), f"class {node.name}{_py_type_params(node)}" + (f"({', '.join(bases)})" if bases else "")]
     for item in node.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and _py_public(item.name):
             lines += _py_function(item, "    ")
@@ -168,8 +175,17 @@ def _ts_candidates(module: str, explicit: bool) -> list[str]:
     return [path + ext for ext in _TS_TRY] + [f"{path}/index{ext}" for ext in _TS_TRY]
 
 
+_TS_LITERAL_OR_SPACE = re.compile(r"(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|\s+", re.DOTALL)
+
+
+def _ts_collapse(text: str) -> str:
+    """Collapse whitespace to one space, outside string and template literals (whose spaces are part of the type)."""
+    return _TS_LITERAL_OR_SPACE.sub(lambda m: m.group(1) or " ", text).strip()
+
+
 def _ts_statements(text: str) -> list[str]:
-    """Split a declaration file into its top-level statements, without comments, whitespace collapsed."""
+    """Split a declaration file into its top-level statements, without comments, whitespace collapsed outside
+    literals."""
     out: list[str] = []
     cur: list[str] = []
     depth = 0
@@ -200,13 +216,13 @@ def _ts_statements(text: str) -> list[str]:
             depth -= 1
         if depth:
             continue
-        stmt = " ".join("".join(cur).split())
+        stmt = _ts_collapse("".join(cur))
         block = re.match(r"^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:class|interface|namespace|module|enum|global)\b", stmt)
         if ch == ";" or (ch == "}" and block):
             if stmt.strip(";"):
                 out.append(stmt)
             cur = []
-    rest = " ".join("".join(cur).split())
+    rest = _ts_collapse("".join(cur))
     if rest:
         out.append(rest)
     return out
@@ -220,19 +236,29 @@ def _ts_declaration(text: str, name: str) -> list[str]:
     return [s for s in _ts_statements(text) if pattern.match(s)]
 
 
+def _ts_emitted(tmp: str, rel: str) -> Path | None:
+    posix = PurePosixPath(rel)
+    stem = posix.name.rsplit(".", 1)[0]
+    outs = sorted(Path(tmp).rglob(f"{stem}.d.*ts"))
+    same = [p for p in outs if p.parent.relative_to(tmp).as_posix() == posix.parent.as_posix()]
+    return (same or outs or [None])[0]
+
+
 def _typescript(root: Path, rel: str, name: str, tsc: str) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="atelier-tsc-") as tmp:
         args = [tsc, "--declaration", "--emitDeclarationOnly", "--skipLibCheck", "--allowJs", "--jsx", "preserve",
                 "--rootDir", str(root), "--outDir", tmp, str(root / rel)]
-        try:
-            proc = subprocess.run(args, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=TIMEOUT)
-        except (OSError, subprocess.SubprocessError) as exc:
-            return {"signature": None, "reason": f"{FAILED}: tsc ({type(exc).__name__})"}
-        posix = PurePosixPath(rel)
-        stem = posix.name.rsplit(".", 1)[0]
-        outs = sorted(Path(tmp).rglob(f"{stem}.d.*ts"))
-        same = [p for p in outs if p.parent.relative_to(tmp).as_posix() == posix.parent.as_posix()]
-        chosen = (same or outs or [None])[0]
+        chosen = None
+        # tsc 6 refuses a file named on the command line when a tsconfig.json is there, unless told --ignoreConfig
+        # (which an older tsc does not know); the declaration is taken the same way, standalone, either way.
+        for extra in ([], ["--ignoreConfig"]):
+            try:
+                proc = subprocess.run(args + extra, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=TIMEOUT)
+            except (OSError, subprocess.SubprocessError) as exc:
+                return {"signature": None, "reason": f"{FAILED}: tsc ({type(exc).__name__})"}
+            chosen = _ts_emitted(tmp, rel)
+            if chosen is not None or b"--ignoreConfig" not in proc.stdout + proc.stderr:
+                break
         if chosen is None:
             tail = proc.stdout.decode("utf-8", "replace").strip().splitlines()[-1:] or [""]
             return {"signature": None, "reason": f"{FAILED}: tsc ({tail[0][:200]})"}
@@ -556,8 +582,13 @@ def _toml_value(value: Any) -> str:
     raise ValueError(f"cannot write {type(value).__name__} as TOML")
 
 
-def _header_parts(header: str) -> tuple[str, ...]:
-    return tuple(p.strip().strip("\"'") for p in header.split("."))
+def _append_block(out: list[str], block: list[str], nl: str) -> None:
+    """Put block at the end of out, after a blank line."""
+    if out and not out[-1].endswith(("\n", "\r")):
+        out.append(nl)
+    if out and out[-1].strip():
+        out.append(nl)
+    out.extend(b + nl for b in block)
 
 
 def _replace_sections(text: str, header_re: re.Pattern[str], matches: Any, block: list[str]) -> str:
@@ -577,32 +608,98 @@ def _replace_sections(text: str, header_re: re.Pattern[str], matches: Any, block
         if not skipping:
             out.append(line)
     if not placed and block:
-        if out and not out[-1].endswith(("\n", "\r")):
-            out.append(nl)
-        if out and out[-1].strip():
-            out.append(nl)
-        out.extend(b + nl for b in block)
+        _append_block(out, block, nl)
     return "".join(out)
 
 
-_TOML_ANY_HEADER = re.compile(r"^\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$")
 _INI_HEADER = re.compile(r"^\[([^\]]+)\]")
+_TOML_KEY_PART = r"""(?:[A-Za-z0-9_-]+|"(?:[^"\\\n]|\\.)*"|'[^'\n]*')"""
+_TOML_PAIR = re.compile(rf"^\s*({_TOML_KEY_PART}(?:\s*\.\s*{_TOML_KEY_PART})*)\s*=")
+
+
+def _toml_path(snippet: str) -> tuple[str, ...]:
+    """The key path a table header ("[a.b]", "[[a.b]]") or a key ("a.b = 0") names, read by the TOML parser."""
+    node: Any = tomllib.loads(snippet)  # type: ignore[union-attr]
+    path: list[str] = []
+    while isinstance(node, dict) and len(node) == 1:
+        name, node = next(iter(node.items()))
+        path.append(name)
+        if isinstance(node, list) and node:
+            node = node[-1]
+    return tuple(path)
+
+
+def _toml_segments(text: str) -> list[tuple[str, tuple[str, ...], list[str]]]:
+    """The lines of a TOML document in pieces, each ("header", path, lines), ("pair", key path, lines) or
+    ("other", (), lines) for a blank or comment line. A pair holds every line of its value (a multi-line string or
+    array), so a line inside a value is never taken for a header; a header may be indented."""
+    lines = text.splitlines(keepends=True)
+    out: list[tuple[str, tuple[str, ...], list[str]]] = []
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if not stripped or stripped.startswith("#"):
+            out.append(("other", (), lines[i:i + 1]))
+            i += 1
+            continue
+        if stripped.startswith("["):
+            out.append(("header", _toml_path(stripped), lines[i:i + 1]))
+            i += 1
+            continue
+        pair = _TOML_PAIR.match(lines[i])
+        if not pair:
+            raise ValueError(f"line {i + 1} is neither a table header nor a key")
+        for j in range(i + 1, len(lines) + 1):
+            try:
+                tomllib.loads("".join(lines[i:j]))  # type: ignore[union-attr]
+            except ValueError:
+                continue
+            break
+        else:
+            raise ValueError(f"the value on line {i + 1} does not end")
+        out.append(("pair", _toml_path(pair.group(1) + " = 0"), lines[i:j]))
+        i = j
+    return out
 
 
 def _set_toml(text: str, key: str, value: Any) -> str:
+    """Write the table key anew: drop its header table (and its sub-tables) and the dotted keys that define it under
+    another table, and put the table where its header was (or at the end). A key written inside the inline value of
+    a parent cannot be rewritten alone."""
+    if tomllib is None:
+        raise ValueError("tomllib is not available")
     parts = tuple(key.split("."))
-
-    def matches(header: str) -> bool:
-        got = _header_parts(header)
-        return got[: len(parts)] == parts
-
+    n = len(parts)
     block: list[str] = []
     if value is not None:
         if not isinstance(value, dict):
             raise ValueError(f"{key} is not a table")
         block = ["[" + ".".join(_toml_key(p) for p in parts) + "]"]
         block += [f"{_toml_key(k)} = {_toml_value(v)}" for k, v in value.items()]
-    return _replace_sections(text, _TOML_ANY_HEADER, matches, block)
+    nl = _newline(text)
+    out: list[str] = []
+    placed = False
+    table: tuple[str, ...] = ()
+    dropping = False
+    for kind, path, lines in _toml_segments(text):
+        if kind == "header":
+            table = path
+            dropping = path[:n] == parts
+            if dropping and not placed:
+                out.extend(b + nl for b in block)
+                placed = True
+        if dropping:
+            continue
+        if kind == "pair":
+            full = table + path
+            if full[:n] == parts:
+                continue
+            if parts[: len(full)] == full:
+                raise ValueError(f"{key} is inside the value of {'.'.join(full)}")
+        out.extend(lines)
+    if not placed and block:
+        _append_block(out, block, nl)
+    return "".join(out)
 
 
 def _set_ini(text: str, key: str, value: Any) -> str:
@@ -616,15 +713,59 @@ def _set_ini(text: str, key: str, value: Any) -> str:
     return _replace_sections(text, _INI_HEADER, lambda header: header.strip() == key, block)
 
 
+def _without(fmt: str, data: Any, key: str) -> Any:
+    """The parsed data without key (and without the tables left empty on its path), to compare the rest."""
+    data = _plain(data)
+    if not isinstance(data, dict):
+        return data
+    if fmt == "ini":
+        data.pop(key, None)
+        return data
+    parts = key.split(".")
+    trail: list[tuple[dict[str, Any], str]] = []
+    node: Any = data
+    while parts and isinstance(node, dict):
+        cut = next((c for c in range(len(parts), 0, -1) if ".".join(parts[:c]) in node), None)
+        if cut is None:
+            break
+        head = ".".join(parts[:cut])
+        if cut == len(parts):
+            node.pop(head)
+            break
+        trail.append((node, head))
+        node, parts = node[head], parts[cut:]
+    for parent, name in reversed(trail):
+        if parent[name] != {}:
+            break
+        parent.pop(name)
+    return data
+
+
+def _linked(root: Path, rel: str) -> bool:
+    """True when the file, or a folder on its way from the work root, is a link, or it lies outside the work root."""
+    node = root
+    for part in PurePosixPath(_norm(rel)).parts:
+        node = node / part
+        if node.is_symlink():
+            return True
+    try:
+        node.resolve().relative_to(root)
+    except (OSError, ValueError):
+        return True
+    return False
+
+
 def restore_key(root: Path, rel: str, key: str, value: Any) -> bool:
     """Put one key of a file workers also touch back to its locked value; True when the file now holds it.
 
     Only the key is rewritten (a TOML table or an ini section is written anew). When the result does not read back
-    as the locked value, the file is left as it was.
+    as the locked value, or the rest of the file does not read back as it was, the file is left as it was. A file
+    that is a link (or under one) is not written through.
     """
     spec = key_spec(rel)
-    path = Path(root).resolve() / rel
-    if spec is None or not path.is_file():
+    root = Path(root).resolve()
+    path = root / rel
+    if spec is None or not path.is_file() or _linked(root, rel):
         return False
     fmt = spec[0]
     raw = path.read_bytes()
@@ -633,7 +774,14 @@ def restore_key(root: Path, rel: str, key: str, value: Any) -> bool:
         bom = raw.startswith(b"\xef\xbb\xbf")
         setter = {"json": _set_json, "toml": _set_toml, "ini": _set_ini}[fmt]
         new = setter(text, key, value)
-        if not same(_value(fmt, _parse(fmt, new), key), value):
+        parsed = _parse(fmt, new)
+        if not same(_value(fmt, parsed, key), value):
+            return False
+        try:
+            before = _parse(fmt, text)
+        except (ValueError, configparser.Error):
+            before = None  # The file does not read now: there is no parsed rest to compare with.
+        if before is not None and not same(_without(fmt, before, key), _without(fmt, parsed, key)):
             return False
     except (UnicodeError, ValueError, KeyError, TypeError, configparser.Error):
         return False
