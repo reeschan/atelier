@@ -16,10 +16,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10: pyproject.toml keys are recorded as unextractable instead.
+    tomllib = None  # type: ignore[assignment]
+
+NEEDS_TOMLLIB = unittest.skipIf(tomllib is None, "pyproject.toml keys need tomllib (Python 3.11 or later)")
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent
 if str(SKILLS_DIR) not in sys.path:
@@ -91,6 +97,7 @@ class LockSignatureCliTests(unittest.TestCase):
         self.assertEqual(0, code, out)
         return out
 
+    @NEEDS_TOMLLIB
     def test_the_lock_list_holds_the_signatures_the_unextractable_interfaces_and_the_keys(self) -> None:
         self.lock_and_launch()
         run = saved(self.root)
@@ -140,6 +147,7 @@ class LockSignatureCliTests(unittest.TestCase):
         nxt = self.done(again)
         self.assertEqual(("checking", "check"), (saved(self.root)["state"], nxt["action"]))
 
+    @NEEDS_TOMLLIB
     def test_a_worker_that_changes_a_locked_key_is_stopped_and_only_the_key_goes_back(self) -> None:
         launch = self.lock_and_launch()
         (self.root / "app.py").write_bytes(b"def add(a, b):\n    return a + b\n")
