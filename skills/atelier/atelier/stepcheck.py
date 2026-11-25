@@ -168,9 +168,12 @@ class Interfaces:
         return dotted if dotted in self.py else None
 
     def js_key(self, stem: str) -> str | None:
-        for key in self.js:
-            if stem == key or stem.endswith("/" + key) or key.endswith("/" + stem):
-                return key
+        """The interface a resolved repository path is: the same path, or the path under src/ of a module the plan
+        names without it. A path that only ends the same way is another file."""
+        if stem in self.js:
+            return stem
+        if stem.startswith("src/") and stem[len("src/"):] in self.js:
+            return stem[len("src/"):]
         return None
 
 
@@ -234,6 +237,34 @@ def _fails(node: ast.AST) -> bool:
     if isinstance(node, ast.Assert):
         return True
     return isinstance(node, ast.Call) and (bool(_PY_ASSERT_CALL.match(_last(node.func))) or _last(node.func) == "fail")
+
+
+_NESTED = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
+def _own_nodes(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.AST]:
+    """The nodes of a function's body, and of the nested functions it calls by name. The body of a nested function it
+    only defines, and of a nested class, does not run when the function runs."""
+    out: list[ast.AST] = []
+    nested: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    done: set[int] = set()
+    pending: list[ast.AST] = list(node.body)
+    while True:
+        while pending:
+            item = pending.pop()
+            if isinstance(item, _NESTED):
+                if not isinstance(item, ast.ClassDef):
+                    nested.setdefault(item.name, item)
+                continue
+            out.append(item)
+            pending.extend(ast.iter_child_nodes(item))
+        called = {n.func.id for n in out if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        more = [f for name, f in nested.items() if name in called and id(f) not in done]
+        if not more:
+            return out
+        for function in more:
+            done.add(id(function))
+            pending.extend(function.body)
 
 
 def _handler_names(handler: ast.ExceptHandler) -> list[str]:
@@ -364,7 +395,7 @@ class _PythonCheck:
         if not (is_then or is_test):
             return
         pattern = _PY_ASSERT_CALL if is_then else _PY_TEST_ASSERT_CALL
-        for inner in ast.walk(node):
+        for inner in _own_nodes(node):
             if isinstance(inner, ast.Assert):
                 return
             if isinstance(inner, ast.Raise) and inner.exc is not None and _last(inner.exc) == "AssertionError":
@@ -549,7 +580,8 @@ class _JsCheck:
             return path if path in self.ifaces.js else None
         if kind == "outside":
             return None
-        return self.ifaces.js_key(path) or (self.ifaces.js_key("src/" + path) if spec.startswith(("@/", "~/", "#")) else None)
+        aliased = spec.startswith(("@/", "~/", "#")) or not spec.startswith((".", "/"))
+        return self.ifaces.js_key(path) or (self.ifaces.js_key("src/" + path) if aliased else None)
 
     def _check_spec(self, offset: int, spec: str, clause: str | None) -> None:
         key = self._interface_of(spec)
@@ -569,8 +601,8 @@ class _JsCheck:
                 item = re.sub(r"^\s*type\s+", "", item).strip()
                 if not item:
                     continue
-                name, _, alias = item.partition(" as ")
-                name, alias = name.strip(), (alias or name).strip()
+                name, *alias = re.split(r"\s+as\s+", item, maxsplit=1)
+                name, alias = name.strip(), (alias[0] if alias else name).strip()
                 if name in names:
                     self.name_aliases.add(alias)
                 else:
@@ -582,7 +614,11 @@ class _JsCheck:
             if star:
                 self.module_aliases[star.group(1)] = key
             elif re.fullmatch(r"[\w$]+", item):
-                self.module_aliases[item] = key
+                # A default import binds the export named default, not the module.
+                if "default" in names:
+                    self.name_aliases.add(item)
+                else:
+                    self.add(offset, "import", f"default（{item}） from {spec}")
 
     def _imports(self) -> None:
         seen: set[int] = set()
@@ -595,7 +631,8 @@ class _JsCheck:
             if self._in_code(match.start()):
                 seen.add(match.start("spec"))
                 bind = match.group("bind")
-                self._check_spec(match.start(), match.group("spec"), bind.replace(":", " as ") if bind.startswith("{") else bind)
+                # require gives the module's exports: a bare name binds the module, like import * as.
+                self._check_spec(match.start(), match.group("spec"), bind.replace(":", " as ") if bind.startswith("{") else f"* as {bind}")
         for pattern in (_JS_IMPORT_BARE, _JS_DYNAMIC):
             for match in pattern.finditer(self.plain):
                 if self._in_code(match.start()) and match.start("spec") not in seen:
@@ -712,10 +749,45 @@ class _JsCheck:
                     text = (self.root / config).read_text(encoding="utf-8")
                 except (OSError, UnicodeError):
                     continue
+                if name == "package.json":
+                    self._package_strict(config, text)
+                    continue
                 plain, code = _mask(text) if language_of(name) == JS else (text, text)
                 for match in _STRICT_OFF.finditer(plain):
                     if code[match.start()] == plain[match.start()] or match.group(0).startswith("--") or language_of(name) != JS:
                         self.problems.append((None, "undefined", f"{config}:{_line(text, match.start())} の {match.group(0).strip()}"))
+
+    def _package_strict(self, config: str, text: str) -> None:
+        """Strict off in a package.json, read only where cucumber reads it: the cucumber key and the scripts that run
+        cucumber. Another tool's option (a linter's --no-strict) does not count. A file that is not JSON is read whole."""
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            for match in _STRICT_OFF.finditer(text):
+                self.problems.append((None, "undefined", f"{config}:{_line(text, match.start())} の {match.group(0).strip()}"))
+            return
+        places: list[tuple[str, str]] = []
+        if "cucumber" in data:
+            places.append(("cucumber", json.dumps(data["cucumber"], ensure_ascii=False)))
+        scripts = data.get("scripts")
+        commands = {k: v for k, v in scripts.items() if isinstance(v, str)} if isinstance(scripts, dict) else {}
+        # A script runs cucumber when it calls cucumber or another script that does (npm run X, yarn X, pnpm X).
+        runs = {k for k, v in commands.items() if re.search(r"(?<![\w-])cucumber(?:-js)?(?![\w-])", v)}
+        while True:
+            more = {
+                k for k, v in commands.items() if k not in runs and any(
+                    re.search(rf"(?<![\w-])(?:npm|pnpm|yarn|bun)\s+(?:run(?:-script)?\s+)?{re.escape(r)}(?![\w:.-])", v) for r in runs
+                )
+            }
+            if not more:
+                break
+            runs |= more
+        places += [(f"scripts.{k}", v) for k, v in commands.items() if k in runs]
+        for where, value in places:
+            for match in _STRICT_OFF.finditer(value):
+                self.problems.append((None, "undefined", f"{config} の {where} の {match.group(0).strip()}"))
 
 
 # --- entry point ----------------------------------------------------------------------------------------------------
