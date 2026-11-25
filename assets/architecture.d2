@@ -64,10 +64,13 @@ conductor: "Conductor (conductor.py, no model)" {
   template: "Template\nlevels L1–L5 → routes, roles, limits" {
     class: svc
   }
-  guards: "Guard rules G1–G14\nbefore launch, refuse, after-check" {
+  guards: "Guard rules G1–G14\nbefore launch, refuse, after-check\nG1 puts a changed key back" {
     class: svc
   }
   record: "Run record\ntokens, rules read and fired" {
+    class: svc
+  }
+  accept: "Acceptance and keys (acceptance_first)\nRed check (JUnit XML), step-definition check,\nlocks, signatures, check after each wave" {
     class: svc
   }
 }
@@ -79,6 +82,9 @@ home: "Your home (~/.config/atelier)" {
   agents: "agents.json · models/\nrunner registration only" {
     class: svc
     icon: https://icons.terrastruct.com/essentials%2F204-settings.svg
+  }
+  locks: "locks/<run>.json\nsha256 of the lock list copy" {
+    class: svc
   }
 }
 
@@ -118,11 +124,15 @@ ommcache: ".omm-cache (outside the repository)" {
   shape: page
 }
 
+lockcopy: "<git common dir>/atelier/<run>/\nlock list copy, lock commit id\n(outside the work tree)" {
+  shape: page
+}
+
 repo: Target repository {
   class: zone
   icon: https://cdn.simpleicons.org/git
 
-  code: "Source code and rule documents\nrules read by every role" {
+  code: "Source code and rule documents\nlocked acceptance tests, lock commit" {
     class: svc
   }
   review: "Review skill of the repository\nthe final review" {
@@ -154,3 +164,7 @@ conductor.flow -> tools.am: "approval pages" {style.stroke-dash: 4}
 cc.roles -> tools.omm: "surveyor" {style.stroke-dash: 4}
 cc.caller -> tools.omm: "full scan when asked" {style.stroke-dash: 4}
 tools.omm <-> ommcache: "nearest cache, delta"
+conductor.flow -> conductor.accept
+conductor.accept -> repo.code: "run acceptance cases, lock commit"
+conductor.accept -> lockcopy: "copy of the lock list"
+conductor.accept -> home.locks: "sha256"
