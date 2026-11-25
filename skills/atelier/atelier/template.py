@@ -145,6 +145,12 @@ def resolve_template(base_path: Path | str | None = None, switch: dict | None = 
     return {'template': load_template(base_path, agents_path), 'ask': False}
 
 
+def part_enabled(template: dict | None, part: str) -> bool:
+    """Whether a template part is on. A part the template does not name is on, so older templates keep working."""
+    parts = (template or {}).get('parts') or {}
+    return parts.get(part, True) is not False
+
+
 def parallel_limit(run_or_limits: dict) -> int:
     """The most launches to start together for a run (or its limits); runs started before the limit existed get the default."""
     limits = run_or_limits.get('limits', run_or_limits) if isinstance(run_or_limits, dict) else {}

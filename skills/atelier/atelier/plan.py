@@ -13,13 +13,19 @@ from .survey import inside_repo
 SCHEMA_PLAN = "atelier.plan/1"
 SCHEMA_FINDINGS = "atelier.findings/1"
 SCHEMA_TRIAGE = "atelier.triage/1"
+SCHEMA_ACCEPTANCE_REVIEW = "atelier.acceptance_review/1"
+REVIEW_VERDICTS = ("ok", "fix")
 
 LEVELS = ("L1", "L2", "L3", "L4", "L5")
 SEVERITIES = ("critical", "major", "minor")
 FINDING_KINDS = ("correctness", "spec", "rule", "style")
 EVIDENCE_PATTERN = re.compile(r".+:[1-9][0-9]*")
-# Fields a re-planned PBI that already passed must keep unchanged.
-FROZEN_FIELDS = ("id", "goal", "targets", "checks")
+# Fields a re-planned PBI that already passed must keep unchanged ("targets" is compared as paths plus the unit-test marks).
+FROZEN_FIELDS = ("id", "goal", "targets", "checks", "kind")
+PBI_KINDS = ("build", "acceptance", "e2e", "stub")
+DEFAULT_KIND = "build"
+SCENARIO_MODES = ("normal", "light", "light-no-red")
+UNIT_MARK = "unit"
 TRIAGE_DECISIONS = ("fix", "skip", "ask")
 MIN_CONFIDENCE = 80
 
@@ -93,6 +99,160 @@ def _validate_str_list(
     return out
 
 
+def split_targets(targets: Any) -> tuple[list[str], list[str]]:
+    """A PBI's target entries as (every path, the paths marked as unit tests).
+
+    An entry is a path string or {"path": ..., "kind": "unit"}. Entries of any other shape are skipped here;
+    validate_plan reports them. Both lists keep their order and name each path once.
+    """
+    paths: list[str] = []
+    units: list[str] = []
+    for entry in targets if isinstance(targets, list) else []:
+        marked = isinstance(entry, dict) and entry.get("kind") == UNIT_MARK
+        path = entry.get("path") if isinstance(entry, dict) else entry
+        if not _is_nonempty_str(path):
+            continue
+        if path not in paths:
+            paths.append(path)
+        if marked and path not in units:
+            units.append(path)
+    return paths, units
+
+
+def _validate_targets(value: Any, label: str, errors: list[str]) -> list[str] | None:
+    """Validate targets whose entries are path strings or {"path", "kind": "unit"}; return the paths."""
+    if not isinstance(value, list):
+        errors.append(f"{label} は配列にしてください。")
+        return None
+    if not value:
+        errors.append(f"{label} は 1 件以上指定してください。")
+        return None
+    out: list[str] = []
+    for idx, entry in enumerate(value):
+        item = f"{label}[{idx}]"
+        if isinstance(entry, dict):
+            if not _is_nonempty_str(entry.get("path")):
+                errors.append(f"{item} の path は空でない文字列にしてください。")
+                continue
+            if entry.get("kind") != UNIT_MARK:
+                errors.append(f"{item} の kind は {UNIT_MARK!r} にしてください（ユニットテストの印）。")
+            extra = sorted(set(entry) - {"path", "kind"})
+            if extra:
+                errors.append(f"{item} に使えない項目があります: {', '.join(extra)}")
+            out.append(entry["path"])
+        elif _is_nonempty_str(entry):
+            out.append(entry)
+        else:
+            errors.append(f"{item} は空でない文字列か、path と kind（unit）を持つオブジェクトにしてください。")
+    return out
+
+
+def _validate_interfaces(value: Any, errors: list[str]) -> None:
+    if not isinstance(value, list):
+        errors.append("interfaces は配列にしてください。")
+        return
+    for idx, entry in enumerate(value):
+        item = f"interfaces[{idx}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{item} はオブジェクトにしてください。")
+            continue
+        for key in ("module", "name"):
+            if not _is_nonempty_str(entry.get(key)):
+                errors.append(f"{item} の {key} は空でない文字列にしてください。")
+
+
+def _validate_scenarios(value: Any, pbi_ids: set[str], errors: list[str]) -> None:
+    if not isinstance(value, list):
+        errors.append("scenarios は配列にしてください。")
+        return
+    seen_scenarios: set[str] = set()
+    seen_cases: set[str] = set()
+    for idx, scenario in enumerate(value):
+        label = f"scenarios[{idx}]"
+        if not isinstance(scenario, dict):
+            errors.append(f"{label} はオブジェクトにしてください。")
+            continue
+        sid = scenario.get("id")
+        if not _is_nonempty_str(sid):
+            errors.append(f"{label} の id は空でない文字列にしてください。")
+        elif sid in seen_scenarios:
+            errors.append(f"シナリオ id {sid!r} が重複しています。")
+        else:
+            seen_scenarios.add(sid)
+            label = sid
+        if not _is_nonempty_str(scenario.get("text")):
+            errors.append(f"{label} の text（要件の本文）は空でない文字列にしてください。")
+        mode = scenario.get("mode")
+        if mode not in SCENARIO_MODES:
+            errors.append(f"{label} の mode は {', '.join(SCENARIO_MODES)} のいずれかにしてください。")
+        gherkin = scenario.get("gherkin")
+        if mode == "normal" and not _is_nonempty_str(gherkin):
+            errors.append(f"{label} は mode が normal なので、gherkin（Gherkin の本文）を書いてください。")
+        elif gherkin is not None and not isinstance(gherkin, str):
+            errors.append(f"{label} の gherkin は文字列にしてください。")
+        spare = scenario.get("spare_count")
+        if not _is_int(spare) or spare < 0:
+            errors.append(f"{label} の spare_count（控えの件数）は 0 以上の整数にしてください。")
+        cases = scenario.get("cases")
+        if not isinstance(cases, list) or not cases:
+            errors.append(f"{label} の cases は 1 件以上の配列にしてください。")
+            continue
+        for cidx, case in enumerate(cases):
+            clabel = f"{label}.cases[{cidx}]"
+            if not isinstance(case, dict):
+                errors.append(f"{clabel} はオブジェクトにしてください。")
+                continue
+            cid = case.get("id")
+            if not _is_nonempty_str(cid):
+                errors.append(f"{clabel} の id は空でない文字列にしてください。")
+            elif cid in seen_cases:
+                errors.append(f"ケース id {cid!r} が重複しています。")
+            else:
+                seen_cases.add(cid)
+                clabel = f"{label}.{cid}"
+            if not isinstance(case.get("values"), dict):
+                errors.append(f"{clabel} の values は列名と値のオブジェクトにしてください。")
+            owner = case.get("pbi")
+            if not _is_nonempty_str(owner):
+                errors.append(f"{clabel} の pbi（割り当て先の PBI）は空でない文字列にしてください。")
+            elif owner not in pbi_ids:
+                errors.append(f"{clabel} の pbi {owner!r} は計画にありません。")
+            needs = case.get("needs", [])
+            if not isinstance(needs, list) or not all(_is_nonempty_str(n) for n in needs):
+                errors.append(f"{clabel} の needs（通るのに要る PBI）は PBI id の配列にしてください（無ければ []）。")
+            else:
+                for need in needs:
+                    if need not in pbi_ids:
+                        errors.append(f"{clabel} の needs の {need!r} は計画にありません。")
+
+
+def _validate_requirements(pbis: list[Any], scenarios: Any, errors: list[str]) -> None:
+    """An acceptance PBI may name the requirements (scenario ids) whose acceptance tests it writes.
+
+    Only an acceptance PBI names them, each requirement is in the scenarios, and no two PBIs name the same one.
+    """
+    known = {sc.get("id") for sc in scenarios if isinstance(sc, dict)} if isinstance(scenarios, list) else set()
+    claimed: dict[str, str] = {}
+    for idx, pbi in enumerate(pbis):
+        if not isinstance(pbi, dict) or "requirements" not in pbi:
+            continue
+        label = pbi["id"] if _is_nonempty_str(pbi.get("id")) else f"pbis[{idx}]"
+        reqs = pbi["requirements"]
+        if pbi.get("kind", DEFAULT_KIND) != "acceptance":
+            errors.append(f"{label} の requirements は kind が acceptance の PBI にだけ書けます。")
+            continue
+        if not isinstance(reqs, list) or not all(_is_nonempty_str(r) for r in reqs):
+            errors.append(f"{label} の requirements は要件（scenarios の id）の配列にしてください。")
+            continue
+        for rid in reqs:
+            if rid not in known:
+                errors.append(f"{label} の requirements の {rid!r} は scenarios にありません。")
+            elif claimed.setdefault(rid, label) != label:
+                errors.append(
+                    f"要件 {rid} の受け入れテストを {claimed[rid]} と {label} の両方が書くことになっています。1 つの受け入れの PBI にしてください。"
+                )
+
+
 def _validate_data_needs(value: Any, label: str, errors: list[str]) -> None:
     if not isinstance(value, list):
         errors.append(f"{label} は配列にしてください（無ければ []）。")
@@ -121,7 +281,17 @@ def frozen_changes(old_pbis: list[dict[str, Any]], new_plan: dict[str, Any], pas
         if new is None:
             errors.append(f"合格済みの {pid} が組み直した計画にありません。")
             continue
-        changed = [f for f in FROZEN_FIELDS if new.get(f) != old.get(f)]
+        changed = []
+        for field in FROZEN_FIELDS:
+            if field == "targets":
+                new_paths, new_units = split_targets(new.get("targets"))
+                if new_paths != list(old.get("targets") or []) or new_units != list(old.get("unit_tests") or []):
+                    changed.append(field)
+            elif field == "kind":
+                if (new.get("kind") or DEFAULT_KIND) != (old.get("kind") or DEFAULT_KIND):
+                    changed.append(field)
+            elif new.get(field) != old.get(field):
+                changed.append(field)
         if changed:
             errors.append(f"合格済みの {pid} の {', '.join(changed)} が変わっています。")
     return errors
@@ -164,8 +334,12 @@ def _compute_waves(pbis: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return result
 
 
-def validate_plan(obj: Any) -> list[str]:
-    """Validate an atelier.plan/1 object and return Japanese error strings."""
+def validate_plan(obj: Any, acceptance_first: bool = False) -> list[str]:
+    """Validate an atelier.plan/1 object and return Japanese error strings.
+
+    With acceptance_first on, the plan must also carry scenarios and interfaces. With it off, a plan without
+    them passes as before; any that are given are still checked for shape.
+    """
     if not isinstance(obj, dict):
         return ["計画は JSON オブジェクトにしてください。"]
 
@@ -186,6 +360,11 @@ def validate_plan(obj: Any) -> list[str]:
             or not isinstance(review.get("args", ""), str)
         ):
             errors.append("final_review は null か {\"skill\": 名前, \"args\": 文字列} にしてください。")
+
+    if "interfaces" in obj:
+        _validate_interfaces(obj["interfaces"], errors)
+    elif acceptance_first:
+        errors.append("interfaces（公開の口のモジュールと名前の配列）を指定してください。")
 
     pbis = obj.get("pbis")
     if not isinstance(pbis, list) or not pbis:
@@ -227,7 +406,10 @@ def validate_plan(obj: Any) -> list[str]:
             errors.append(f"{label} で sensitive_candidate が true の場合は sensitive_reason が必要です。")
 
         _validate_str_list(pbi.get("depends_on"), f"{label}.depends_on", errors)
-        targets = _validate_str_list(pbi.get("targets"), f"{label}.targets", errors, require_nonempty_list=True)
+        kind = pbi.get("kind", DEFAULT_KIND)
+        if kind not in PBI_KINDS:
+            errors.append(f"{label} の kind は {', '.join(PBI_KINDS)} のいずれかにしてください（省略時は {DEFAULT_KIND}）。")
+        targets = _validate_targets(pbi.get("targets"), f"{label}.targets", errors)
         dnt = _validate_str_list(pbi.get("do_not_touch"), f"{label}.do_not_touch", errors)
         if targets is not None and dnt is not None:
             overlap = {_norm_path(p) for p in targets} & {_norm_path(p) for p in dnt}
@@ -247,6 +429,14 @@ def validate_plan(obj: Any) -> list[str]:
 
         if _is_nonempty_str(pid):
             valid_pbi_items.append(pbi)
+
+    if "scenarios" in obj:
+        _validate_scenarios(obj["scenarios"], seen_ids, errors)
+        if acceptance_first and isinstance(obj["scenarios"], list) and not obj["scenarios"]:
+            errors.append("scenarios は 1 件以上指定してください。")
+    elif acceptance_first:
+        errors.append("scenarios（要件ごとのシナリオの配列）を指定してください。")
+    _validate_requirements(pbis, obj.get("scenarios"), errors)
 
     if len(valid_pbi_items) == len(pbis) and len(seen_ids) == len(pbis):
         dep_ok = True
@@ -268,11 +458,145 @@ def validate_plan(obj: Any) -> list[str]:
                     dep_ok = False
         if dep_ok:
             try:
-                _compute_waves(pbis)
+                wave_list = _compute_waves(pbis)
             except ValueError as exc:
                 errors.append(str(exc))
+            else:
+                if acceptance_first:
+                    wave_of = {p["id"]: n for n, wave in enumerate(wave_list) for p in wave}
+                    _check_form_rules(obj, pbis, wave_of, errors)
 
     return errors
+
+
+_SOURCE_EXTENSIONS = (
+    "py", "js", "jsx", "ts", "tsx", "mjs", "cjs", "go", "rs", "rb", "java", "kt", "php", "cs", "swift", "vue", "svelte",
+)
+_TEST_NAME = re.compile(r"(^test[_.-])|([_.-](test|tests|spec)$)", re.IGNORECASE)
+LIGHT_MODES = ("light", "light-no-red")
+LIGHT_MAX_FILES = 3
+
+
+def _stem(path: str) -> str:
+    norm = _norm_path(path)
+    head, dot, ext = norm.rpartition(".")
+    return head if dot and ext.lower() in _SOURCE_EXTENSIONS and "/" not in ext else norm
+
+
+def is_test_file(path: str) -> bool:
+    """True when the file name looks like a test file (test_x.py, x_test.go, x.test.ts, x.spec.ts and the like)."""
+    name = PurePosixPath(_norm_path(path)).name
+    return bool(_TEST_NAME.search(_stem(name)))
+
+
+def implementation_files(pbi: dict[str, Any]) -> list[str]:
+    """A PBI's targets that are not tests: neither marked as unit tests nor named like a test file."""
+    paths, units = split_targets(pbi.get("targets"))
+    return [p for p in paths if p not in units and not is_test_file(p)]
+
+
+def _module_in_paths(module: str, paths: Iterable[str]) -> bool:
+    mod = module.strip().replace("\\", "/")
+    mod = _stem(mod) if "/" in mod or mod.rsplit(".", 1)[-1].lower() in _SOURCE_EXTENSIONS else mod.replace(".", "/")
+    mod = mod.removeprefix("./").strip("/")
+    if not mod:
+        return False
+    for path in paths:
+        stem = _stem(path)
+        if PurePosixPath(stem).name in ("__init__", "index"):
+            stem = PurePosixPath(stem).parent.as_posix()
+        if stem == mod or stem.endswith("/" + mod) or mod.endswith("/" + stem):
+            return True
+    return False
+
+
+def _has_question_mark(value: Any) -> bool:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    return "?" in text
+
+
+def _check_form_rules(obj: dict[str, Any], pbis: list[dict[str, Any]], wave_of: dict[str, int], errors: list[str]) -> None:
+    """The rules on the shape of an acceptance-first plan: where each kind of PBI sits and how cases are assigned."""
+    by_id = {p["id"]: p for p in pbis}
+
+    def kind_of(pbi: dict[str, Any]) -> Any:
+        return pbi.get("kind", DEFAULT_KIND)
+
+    build_waves = [wave_of[p["id"]] for p in pbis if kind_of(p) == "build"]
+    for pbi in pbis:
+        pid, kind = pbi["id"], kind_of(pbi)
+        if kind in ("acceptance", "stub") and wave_of[pid] != 0:
+            errors.append(f"{pid} は kind が {kind} なので、最初の wave（depends_on なし）に置いてください。")
+        if kind == "e2e":
+            if pbi.get("level") in LEVELS[:2]:
+                errors.append(f"{pid} は kind が e2e なので、level は L3 以上にしてください（今は {pbi.get('level')}）。")
+            if any(wave_of[pid] <= w for w in build_waves):
+                errors.append(f"{pid} は kind が e2e なので、すべての kind が build の PBI より後の wave に置いてください。")
+
+    scenarios = obj.get("scenarios")
+    if not isinstance(scenarios, list):
+        return
+    interfaces = [i for i in (obj.get("interfaces") or []) if isinstance(i, dict) and _is_nonempty_str(i.get("module"))]
+    # Owners as acceptance.requirement_owners computes them: named by an acceptance PBI, or else the open one.
+    acceptance_pbis = [p for p in pbis if kind_of(p) == "acceptance"]
+    named = {r for p in acceptance_pbis for r in (p.get("requirements") or []) if isinstance(r, str)}
+    has_open = any(not p.get("requirements") for p in acceptance_pbis)
+    unowned = [
+        str(s.get("id"))
+        for s in scenarios
+        if isinstance(s, dict) and s.get("id") not in named and not has_open
+    ]
+    if unowned:
+        errors.append(
+            f"要件 {', '.join(unowned)} の受け入れテストを書く kind が acceptance の PBI がありません。"
+            "kind が acceptance の PBI の requirements にその要件を入れるか、requirements を持たない acceptance の PBI を置いてください。"
+        )
+    for scenario in scenarios:
+        if not isinstance(scenario, dict) or not isinstance(scenario.get("cases"), list):
+            continue
+        sid = scenario.get("id")
+        cases = [c for c in scenario["cases"] if isinstance(c, dict)]
+
+        for case in cases:
+            owner = case.get("pbi")
+            needs = case.get("needs", [])
+            if not isinstance(owner, str) or owner not in by_id or not isinstance(needs, list):
+                continue
+            needed = {owner, *(n for n in needs if isinstance(n, str) and n in by_id)}
+            last = max(wave_of[n] for n in needed)
+            latest = sorted(n for n in needed if wave_of[n] == last)
+            if len(latest) > 1:
+                errors.append(
+                    f"ケース {case.get('id')!r}（要件 {sid}）は、wave が一番後の PBI が同じ wave に複数あります"
+                    f"（{', '.join(latest)}）。1 つのケースを同じ wave の複数の PBI にまたがらせず、PBI を分け直してください。"
+                )
+            elif owner != latest[0]:
+                errors.append(
+                    f"ケース {case.get('id')!r}（要件 {sid}）の割り当て先は、wave の順で一番後に終わる {latest[0]} にしてください"
+                    f"（今は {owner}）。"
+                )
+
+        if scenario.get("mode") in LIGHT_MODES:
+            owners = sorted({c["pbi"] for c in cases if isinstance(c.get("pbi"), str) and c["pbi"] in by_id})
+            broken: list[str] = []
+            built = [by_id[o] for o in owners if kind_of(by_id[o]) == "build"]
+            built_paths = [p for pbi in built for p in split_targets(pbi.get("targets"))[0]]
+            new_ifaces = [f"{i['module']}.{i.get('name')}" for i in interfaces if _module_in_paths(i["module"], built_paths)]
+            if new_ifaces:
+                broken.append(f"新しい公開の口がある（{', '.join(new_ifaces)}）")
+            files = sorted({f for o in owners for f in implementation_files(by_id[o])})
+            if len(owners) > 1:
+                broken.append(f"ケースの割り当て先が {len(owners)} つの PBI（{', '.join(owners)}）にわたる")
+            if len(files) > LIGHT_MAX_FILES:
+                broken.append(f"実装のファイルが {len(files)} つある（{LIGHT_MAX_FILES} つ以下にしてください）")
+            marked = [str(c.get("id")) for c in cases if _has_question_mark(c.get("values"))]
+            if marked:
+                broken.append(f"ケースの期待値に ? がある（{', '.join(marked)}）")
+            if broken:
+                errors.append(
+                    f"要件 {sid} は mode が {scenario.get('mode')} ですが、軽量の条件から外れています: {'; '.join(broken)}。"
+                    "mode を normal にするか、計画を分け直してください。"
+                )
 
 
 def waves(plan: dict[str, Any]) -> list[list[dict[str, Any]]]:
@@ -389,6 +713,47 @@ def fix_commands(pbis: list[dict[str, Any]], plan_checks: list[str], files: Iter
     """
     commands = wave_commands([{"checks": related_commands(pbis, files)}], plan_checks)
     return commands or wave_commands(pbis, [])
+
+
+def validate_acceptance_review(obj: Any, expected_files: Iterable[str]) -> list[str]:
+    """Validate an atelier.acceptance_review/1 object: every expected file once, each ok or fix with a reason."""
+    if not isinstance(obj, dict):
+        return ["受け入れテストの確認の結果は JSON オブジェクトにしてください。"]
+    errors: list[str] = []
+    if obj.get("schema") != SCHEMA_ACCEPTANCE_REVIEW:
+        errors.append(f"schema は {SCHEMA_ACCEPTANCE_REVIEW} にしてください。")
+    items = obj.get("files")
+    if not isinstance(items, list):
+        errors.append("files は配列にしてください。")
+        return errors
+    seen: set[str] = set()
+    for index, item in enumerate(items):
+        label = f"files[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{label} はオブジェクトにしてください。")
+            continue
+        file = item.get("file")
+        if not _is_nonempty_str(file):
+            errors.append(f"{label} の file は空でない文字列にしてください。")
+        else:
+            file = _norm_path(file)
+            if file in seen:
+                errors.append(f"ファイル {file} が重複しています。")
+            seen.add(file)
+            label = file
+        verdict = item.get("verdict")
+        if verdict not in REVIEW_VERDICTS:
+            errors.append(f"{label} の verdict は {', '.join(REVIEW_VERDICTS)} のいずれかにしてください。")
+        elif verdict == "fix" and not _is_nonempty_str(item.get("reason")):
+            errors.append(f"{label} は fix なので reason を空でない文字列で書いてください。")
+    expected = {_norm_path(f) for f in expected_files}
+    missing = sorted(expected - seen)
+    extra = sorted(seen - expected)
+    if missing:
+        errors.append(f"受け入れテストのファイルについて返していません: {', '.join(missing)}。")
+    if extra:
+        errors.append(f"確認の対象でないファイルが含まれています: {', '.join(extra)}。")
+    return errors
 
 
 def validate_triage(obj: Any, expected_ids: Iterable[str] | None = None) -> list[str]:
@@ -521,9 +886,13 @@ def planner_prompt(
     out_path: str | Path | None = None,
     rule_docs: Iterable[str] | None = None,
     passed_pbis: Iterable[str] | None = None,
+    acceptance_first: bool | None = None,
+    scenarios: list[dict[str, Any]] | None = None,
+    interfaces: list[dict[str, Any]] | None = None,
+    acceptance_files: list[dict[str, Any]] | None = None,
 ) -> Path:
-    """Write a planner prompt for mode ('plan', 'revise', or 'triage') using only approved spec and facts."""
-    if mode not in ("plan", "revise", "triage"):
+    """Write a planner prompt for mode ('plan', 'revise', 'triage' or 'acceptance_review') using only approved spec and facts."""
+    if mode not in ("plan", "revise", "triage", "acceptance_review"):
         raise ValueError(f"unsupported planner mode: {mode}")
 
     root_p = Path(root).resolve()
@@ -544,6 +913,7 @@ def planner_prompt(
     if mode in ("plan", "revise"):
         lvl_data = levels if levels is not None else _load_levels_json()
         lines.append(f"Levels: {json.dumps(lvl_data, ensure_ascii=False)}")
+        lines.append(f"Acceptance first: {'on' if acceptance_first else 'off'}")
     if mode == "revise":
         if plan_path is not None:
             lines.append(f"Current plan: {Path(plan_path).resolve()}")
@@ -552,6 +922,10 @@ def planner_prompt(
     if mode == "triage":
         if findings_path is not None:
             lines.append(f"Findings: {Path(findings_path).resolve()}")
+    if mode == "acceptance_review":
+        lines.append(f"Approved scenarios: {json.dumps(scenarios or [], ensure_ascii=False)}")
+        lines.append(f"Public interfaces: {json.dumps(interfaces or [], ensure_ascii=False)}")
+        lines.append(f"Acceptance test files: {json.dumps(acceptance_files or [], ensure_ascii=False)}")
     lines.append(f"Result: {result_p}")
 
     prompt.write_text(template + "\n".join(lines) + "\n", encoding="utf-8")
