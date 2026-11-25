@@ -17,6 +17,7 @@ PBI of the wave that did not pass fails that PBI, and a case its worker left red
 
 from __future__ import annotations
 
+import os
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -42,6 +43,8 @@ ASSERTION_TYPES = frozenset({"AssertionError", "AssertionFailedError", "JestAsse
 NOT_IMPLEMENTED_TYPES = frozenset({"NotImplementedError", "NotImplementedException"})
 _EXCEPTION_NAME = re.compile(r"\s*([A-Za-z_][\w.]*(?:Error|Exception))\b")
 _NOT_IMPLEMENTED_TEXT = re.compile(r"not[ _-]?implemented", re.IGNORECASE)
+# An untyped failure counts as an assertion when its message starts with assert or names expect / expected as a word.
+_EXPECT_WORD = re.compile(r"(?<![A-Za-z0-9_])expect(?:ed)?(?![A-Za-z0-9_])", re.IGNORECASE)
 MESSAGE_LIMIT = 200
 
 
@@ -188,6 +191,24 @@ def keep_acceptance_files(pbi: dict[str, Any], result: dict[str, Any]) -> None:
     pbi["acceptance_files"] = kept
 
 
+# Characters a shell (POSIX sh, PowerShell or cmd) would read in a path filled into the acceptance command.
+_SHELL_CHARS = re.compile(r"[\"'`$\\;&|<>(){}\[\]*?!#~%^,@\r\n\t]")
+
+
+def unsafe_path(path: str) -> str:
+    """The characters of a path that a shell would read rather than pass on, or "" when there are none.
+
+    Paths are filled into the acceptance command as they are (in double quotes when they hold a space), so a path
+    with any of these is not run.
+    """
+    return "".join(dict.fromkeys(_SHELL_CHARS.findall(path)))
+
+
+def _unsafe_reason(path: str) -> str:
+    chars = unsafe_path(path)
+    return f"ファイル {path} の名前に、シェルが読み替える文字 {chars} がある（コマンドに入れずに止めた）" if chars else ""
+
+
 def _quoted(command: str, key: str, value: str) -> str:
     if re.search(r"\s", value) and f'"{key}"' not in command and f"'{key}'" not in command:
         value = f'"{value}"'
@@ -238,6 +259,8 @@ def red_check_plan(run: dict[str, Any], results_dir: str) -> tuple[list[dict[str
                 reason = f"受け入れの PBI {owner['id']} の結果の acceptance_files に、この要件のファイルが無い"
             elif not guards.covered(file, list(owner.get("targets") or [])):
                 reason = f"ファイル {file} が受け入れの PBI {owner['id']} の targets に無い"
+            else:
+                reason = _unsafe_reason(file)
         if reason:
             unrun.append({"requirement": rid, "passed": False, "reasons": [reason]})
             continue
@@ -297,7 +320,7 @@ def failure_kind(case: dict[str, str]) -> str:
         return "not_implemented"
     if _NOT_IMPLEMENTED_TEXT.search(message) and name in ("", "Error"):
         return "not_implemented"
-    if not name and (message.startswith("assert") or "expect" in message.lower()):
+    if not name and (message.startswith("assert") or _EXPECT_WORD.search(message)):
         return "assertion"
     return name or "unknown"
 
@@ -400,12 +423,33 @@ def judge_red(root: Path, run: dict[str, Any], pending: dict[str, Any], result: 
 STEP_CHECK_PREFIX = "ステップ定義の検査: "
 
 
-def step_check_files(run: dict[str, Any], groups: list[dict[str, Any]]) -> dict[str, list[str]]:
+_WALK_SKIP = frozenset({".git", "node_modules", "__pycache__"})
+
+
+def _target_files(root: Path, target: str) -> list[str]:
+    """The work-root-relative files a target names: itself, or the files under a directory or matched by a glob."""
+    path = plan._norm_path(target).rstrip("/")
+    fixed, is_glob = plan._fixed_part(path)
+    if not is_glob and not (root / path).is_dir():
+        return [path]
+    base = fixed.rsplit("/", 1)[0] if is_glob and "/" in fixed else ("" if is_glob else path)
+    out: list[str] = []
+    for top, dirs, names in os.walk(root / base if base else root):
+        dirs[:] = sorted(d for d in dirs if d not in _WALK_SKIP)
+        for name in sorted(names):
+            rel = (Path(top) / name).relative_to(root).as_posix()
+            if guards.covered(rel, [path]):
+                out.append(rel)
+    return out
+
+
+def step_check_files(root: Path, run: dict[str, Any], groups: list[dict[str, Any]]) -> dict[str, list[str]]:
     """File -> the requirements its step definition checks count for.
 
     Each requirement's own file counts for the requirements run from it. The other files in the targets of an
-    acceptance PBI (step definitions, conftest, support code) count for every requirement of that PBI in this check.
-    Glob targets and files that are some requirement's own file are left to that requirement.
+    acceptance PBI (step definitions, conftest, support code) count for every requirement of that PBI in this check;
+    a directory or glob target counts with every file under it or matching it now. Files that are some
+    requirement's own file are left to that requirement.
     """
     owners = requirement_owners(run)
     files: dict[str, list[str]] = {}
@@ -419,11 +463,11 @@ def step_check_files(run: dict[str, Any], groups: list[dict[str, Any]]) -> dict[
             continue
         reqs = [rid for rid in checked if owners.get(rid) == pid]
         for target in pbi.get("targets") or []:
-            path = str(target).replace("\\", "/").removeprefix("./")
-            if path in own_files or any(ch in path for ch in "*?[") or not stepcheck.language_of(path) or stepcheck.is_runner_config(path):
-                continue
-            files.setdefault(path, [])
-            files[path] += [rid for rid in reqs if rid not in files[path]]
+            for path in _target_files(Path(root), str(target)):
+                if path in own_files or not stepcheck.language_of(path) or stepcheck.is_runner_config(path):
+                    continue
+                files.setdefault(path, [])
+                files[path] += [rid for rid in reqs if rid not in files[path]]
     return files
 
 
@@ -439,7 +483,7 @@ def run_step_checks(root: Path, run: dict[str, Any], groups: list[dict[str, Any]
     checked: list[str] = []
     failed: list[str] = []
     reasons: dict[str, list[str]] = {}
-    for path, reqs in step_check_files(run, groups).items():
+    for path, reqs in step_check_files(root, run, groups).items():
         if not (root / path).is_file():
             continue
         result = stepcheck.check_file(root, path, interfaces)
@@ -555,11 +599,9 @@ def settle_red(run: dict[str, Any], verdicts: list[dict[str, Any]], check_id: st
         if pbi["id"] in rebuild:
             pbi["status"] = "pending"
             pbi["red_failure"] = rebuild[pbi["id"]]
-            # The rebuilt tests are checked again, the ones that passed included.
-            for rid, owner in owners.items():
-                entry = red_entry(run, rid)
-                if owner == pbi["id"] and entry["status"] == "passed":
-                    entry["status"] = "pending"
+            # The rebuilt tests are checked again, the ones that passed included, and so are the other acceptance
+            # PBIs' tests in its targets.
+            _reopen_red(run, pbi, owners)
         else:
             pbi["status"] = "passed"
             pbi.pop("red_failure", None)
@@ -627,16 +669,21 @@ def settle_review(run: dict[str, Any], result: dict[str, Any], tmpl: dict[str, A
 
     result["files"] holds {"file", "verdict", "reason"} for every file asked. A file marked ok is settled. A file
     marked fix has its acceptance PBI built again on the L5 route, and every requirement of that PBI goes back to
-    the Red check; in the second review a file marked fix leaves its requirements unresolved, without a lock.
+    the Red check, with the other acceptance PBIs' files in its targets (their approvals are dropped). A requirement
+    whose file is marked fix for the second time is left unresolved, without a lock.
     """
     kept = run.setdefault("acceptance_review", {"round": 0, "files": {}, "history": []})
     kept["round"] += 1
+    # How many times the planner marked each requirement's file fix: a rebuild asks again about files that were ok,
+    # so the count is kept per requirement, not taken from the round.
+    fixes = kept.setdefault("fixes", {})
     asked = {item["file"]: item["requirements"] for item in review_files(run)}
     owners = requirement_owners(run)
-    verdicts = {_norm(str(item["file"])): item for item in result.get("files") or []}
+    # Matched the way validate_acceptance_review matches them.
+    verdicts = {plan._norm_path(str(item["file"])): item for item in result.get("files") or []}
     rebuild: dict[str, list[dict[str, Any]]] = {}
     for file, reqs in asked.items():
-        item = verdicts.get(file) or {"verdict": "ok", "reason": ""}
+        item = verdicts.get(plan._norm_path(file)) or {"verdict": "ok", "reason": ""}
         reason = str(item.get("reason") or "")
         kept["history"].append(
             {"review": review_id, "round": kept["round"], "file": file, "verdict": item["verdict"], "reason": reason}
@@ -644,16 +691,21 @@ def settle_review(run: dict[str, Any], result: dict[str, Any], tmpl: dict[str, A
         if item["verdict"] == "ok":
             kept["files"][file] = {"status": "ok", "requirements": list(reqs), "reason": ""}
             continue
+        rebuilt_here = False
         for rid in reqs:
             owner = owners.get(rid)
-            if owner is None or state.get_pbi(run, owner) is None or kept["round"] >= REVIEW_TRIES:
+            fixes[rid] = int(fixes.get(rid) or 0) + 1
+            if owner is None or state.get_pbi(run, owner) is None or fixes[rid] >= REVIEW_TRIES:
                 entry = red_entry(run, rid)
                 entry["reasons"] = [reason]
                 entry["status"] = "unresolved"
                 _leave_unresolved(run, rid, owner, entry, kind=REVIEW_RULE)
-                kept["files"][file] = {"status": "unresolved", "requirements": list(reqs), "reason": reason}
             else:
+                rebuilt_here = True
                 rebuild.setdefault(owner, []).append({"requirement": rid, "reasons": [f"planner の確認（{file}）: {reason}"]})
+        if not rebuilt_here:
+            # A file some of whose requirements are rebuilt is read again; its unresolved ones are no longer asked.
+            kept["files"][file] = {"status": "unresolved", "requirements": list(reqs), "reason": reason}
     for pid, failures in rebuild.items():
         pbi = state.get_pbi(run, pid)
         pbi["status"] = "pending"
@@ -665,17 +717,36 @@ def settle_review(run: dict[str, Any], result: dict[str, Any], tmpl: dict[str, A
         pbi["route_inputs"] = choice["inputs"]
         pbi["route_template"] = choice["template"]
         pbi["route_index"] = 0
-        # The rebuilt tests are checked again, and read again, the files that were ok included.
-        for rid, owner in owners.items():
-            if owner != pid:
-                continue
-            entry = red_entry(run, rid)
-            if entry["status"] == "passed":
-                entry["status"] = "pending"
-            for file, info in list(kept["files"].items()):
-                if rid in info.get("requirements", []) and info.get("status") == "ok":
-                    del kept["files"][file]
+        # The rebuilt tests are checked again, and read again, the files that were ok included. So are the files of
+        # other acceptance PBIs' requirements that the rebuilt PBI's targets let it change.
+        reopened = _reopen_red(run, pbi, owners)
+        for file, info in list(kept["files"].items()):
+            if info.get("status") == "ok" and (
+                set(info.get("requirements") or []) & reopened or guards.covered(file, list(pbi.get("targets") or []))
+            ):
+                del kept["files"][file]
+                for rid in info.get("requirements") or []:
+                    entry = red_entry(run, rid)
+                    if entry["status"] == "passed":
+                        entry["status"] = "pending"
     return "acceptance_rebuild" if rebuild else "acceptance_reviewed"
+
+
+def _reopen_red(run: dict[str, Any], pbi: dict[str, Any], owners: dict[str, str]) -> set[str]:
+    """Send back to the Red check the passed requirements a rebuilt acceptance PBI can change: its own, and those
+    whose acceptance test file is in its targets. Returns the requirements it owns or whose file it can change."""
+    targets = list(pbi.get("targets") or [])
+    out: set[str] = set()
+    for rid, owner in owners.items():
+        owner_pbi = pbi if owner == pbi["id"] else state.get_pbi(run, owner)
+        file = str(((owner_pbi or {}).get("acceptance_files") or {}).get(rid) or "")
+        if owner != pbi["id"] and not (file and guards.covered(file, targets)):
+            continue
+        out.add(rid)
+        entry = red_entry(run, rid)
+        if entry["status"] == "passed":
+            entry["status"] = "pending"
+    return out
 
 
 WAVE_CASES_RULE = "acceptance_cases"
@@ -705,6 +776,9 @@ def wave_case_plan(
             continue
         if not file:
             unrun.append(f"要件 {rid}: 受け入れテストのファイルが分からない")
+            continue
+        if unsafe_path(file):
+            unrun.append(f"要件 {rid}: {_unsafe_reason(file)}")
             continue
         group = groups.get(file)
         if group is None:
@@ -765,6 +839,9 @@ def judge_wave_cases(
     Returns {"ran", "missing", "failed", "excused", "by_pbi", "wave_reasons", "notes"}.
     """
     ids = [str(c) for c in cases]
+    requirement_of = {
+        str(c.get("id")): sc["id"] for sc in scenarios(run) for c in sc.get("cases") or [] if isinstance(c, dict) and c.get("id")
+    }
     seen: dict[str, str] = {}
     notes: list[str] = []
     for group in groups:
@@ -772,9 +849,14 @@ def judge_wave_cases(
         if error:
             notes.append(f"{group['file']}: {error}")
             continue
+        group_reqs = set(group.get("requirements") or [])
         for case in testcases:
             cid = match_case_id(case.get("name", ""), ids)
             if cid is None:
+                continue
+            # A case counts only from the file of its own requirement.
+            rid = requirement_of.get(cid)
+            if rid is not None and rid not in group_reqs:
                 continue
             kind = failure_kind(case)
             if kind == "skipped":

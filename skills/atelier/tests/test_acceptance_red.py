@@ -154,11 +154,12 @@ def red_records(root: Path) -> list[dict]:
 
 
 def pass_review(root: Path, review: dict, verdicts: dict[str, tuple[str, str]] | None = None) -> dict:
-    """Answer the planner's acceptance review: ok for every file asked, except the verdicts given. Returns the next action."""
-    from atelier import acceptance  # noqa: PLC0415
-
+    """Answer the planner's acceptance review: ok for every file its prompt asks about, except the verdicts given.
+    Returns the next action."""
     assert review["role"] == "planner", review
-    files = [item["file"] for item in acceptance.review_files(saved(root))]
+    field = "Acceptance test files: "
+    prompt = Path(review["prompt"]).read_text(encoding="utf-8")
+    files = [item["file"] for item in json.loads(next(ln for ln in prompt.splitlines() if ln.startswith(field))[len(field):])]
     items = []
     for file in files:
         verdict, reason = (verdicts or {}).get(file, ("ok", ""))
