@@ -504,8 +504,10 @@ def _handle_check_done(
             result = actions.judge_wave(root, run, pending or {}, result)
             exit_code = result["exit_code"]
             laid = set(result.get("case_failed_pbis") or [])
-        if exit_code != 0 and not result.get("failed_pbis"):
-            derived = _failed_pbis_from_commands(run, result) | laid
+        if exit_code != 0:
+            # The PBIs the cases and the lock failed always join the ones the result names (or the commands show).
+            given = {str(p) for p in result.get("failed_pbis") or []}
+            derived = (given or _failed_pbis_from_commands(run, result)) | laid
             if derived:
                 result = {**result, "failed_pbis": sorted(derived)}
         _append_check_records_for_wave(root, run, result, exit_code, rechecked)

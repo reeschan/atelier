@@ -136,14 +136,31 @@ def locked_changes(root, blobs, ignore=()):
     names = [n for n in sorted(blobs) if not _allowed(n, ignore)]
     present = [n for n in names if (root / n).is_file() and not (root / n).is_symlink()]
     current = {}
-    if present:
-        proc = subprocess.run(['git', '-C', str(root), 'hash-object', '--stdin-paths'],
-                              input=''.join(n + '\n' for n in present).encode('utf-8'),
+    # The names go as arguments after --, in batches that keep the command line short, so a name with a newline
+    # stays one path (--stdin-paths would split it). git still applies the repository's filters to each path.
+    for batch in _name_batches(present):
+        proc = subprocess.run(['git', '-C', str(root), 'hash-object', '--', *batch],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if proc.returncode:
             raise RuntimeError('git inspection failed: ' + proc.stderr.decode('utf-8', 'replace').strip())
-        current = dict(zip(present, proc.stdout.decode('ascii').split()))
+        current.update(zip(batch, proc.stdout.decode('ascii').split()))
     return [n for n in names if current.get(n) != blobs[n]]
+
+
+_BATCH_CHARS = 6000
+
+
+def _name_batches(names):
+    """The names in order, in lists whose total length stays under _BATCH_CHARS (at least one name in each)."""
+    batch, size = [], 0
+    for name in names:
+        if batch and size + len(name) + 1 > _BATCH_CHARS:
+            yield batch
+            batch, size = [], 0
+        batch.append(name)
+        size += len(name) + 1
+    if batch:
+        yield batch
 
 
 def _ignored(name, ignore, directory=False):
@@ -194,7 +211,7 @@ def locked_key_changes(root, locked, ignore=()):
             if 'value' in got and _signatures.same(got['value'], keys[path][key]):
                 continue
             was = (before.get(path) or {}).get(key)
-            if was is not None and was == got:
+            if was is not None and _signatures.same(was, got):
                 continue
             new = _signatures.brief(got['value']) if 'value' in got else f"（{got['error']}）"
             out.append({'rule': 'G1', 'path': path, 'key': key,

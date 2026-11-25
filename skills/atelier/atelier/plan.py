@@ -231,7 +231,11 @@ def _validate_requirements(pbis: list[Any], scenarios: Any, errors: list[str]) -
 
     Only an acceptance PBI names them, each requirement is in the scenarios, and no two PBIs name the same one.
     """
-    known = {sc.get("id") for sc in scenarios if isinstance(sc, dict)} if isinstance(scenarios, list) else set()
+    known = (
+        {sc["id"] for sc in scenarios if isinstance(sc, dict) and _is_nonempty_str(sc.get("id"))}
+        if isinstance(scenarios, list)
+        else set()
+    )
     claimed: dict[str, str] = {}
     for idx, pbi in enumerate(pbis):
         if not isinstance(pbi, dict) or "requirements" not in pbi:
@@ -536,15 +540,22 @@ def _check_form_rules(obj: dict[str, Any], pbis: list[dict[str, Any]], wave_of: 
     scenarios = obj.get("scenarios")
     if not isinstance(scenarios, list):
         return
-    interfaces = [i for i in (obj.get("interfaces") or []) if isinstance(i, dict) and _is_nonempty_str(i.get("module"))]
+    # Shapes validate_plan already reported are read as empty here, so the rules add errors and do not crash.
+    listed = obj.get("interfaces") if isinstance(obj.get("interfaces"), list) else []
+    interfaces = [i for i in listed if isinstance(i, dict) and _is_nonempty_str(i.get("module"))]
     # Owners as acceptance.requirement_owners computes them: named by an acceptance PBI, or else the open one.
     acceptance_pbis = [p for p in pbis if kind_of(p) == "acceptance"]
-    named = {r for p in acceptance_pbis for r in (p.get("requirements") or []) if isinstance(r, str)}
+    named = {
+        r
+        for p in acceptance_pbis
+        for r in (p.get("requirements") if isinstance(p.get("requirements"), list) else [])
+        if isinstance(r, str)
+    }
     has_open = any(not p.get("requirements") for p in acceptance_pbis)
     unowned = [
         str(s.get("id"))
         for s in scenarios
-        if isinstance(s, dict) and s.get("id") not in named and not has_open
+        if isinstance(s, dict) and _is_nonempty_str(s.get("id")) and s["id"] not in named and not has_open
     ]
     if unowned:
         errors.append(

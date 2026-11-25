@@ -77,13 +77,22 @@ def _field_values(facts: Any, field: str, key: str) -> list[str]:
     return out
 
 
+ACCEPTANCE_PLACEHOLDERS = ('{file}', '{junit}')
+
+
 def acceptance_commands(facts: Any) -> list[str]:
-    """Commands of kind acceptance in a fact sheet, in order, without duplicates."""
+    """Commands of kind acceptance in a fact sheet, in order, without duplicates.
+
+    Only a command that carries both {file} (the file to run) and {junit} (where the JUnit XML goes) can run one
+    file and be read; a command without them is left out.
+    """
     out: list[str] = []
     for item in (facts.get('commands') if isinstance(facts, dict) else None) or []:
         if isinstance(item, dict) and item.get('kind') == 'acceptance':
             command = item.get('command')
-            if isinstance(command, str) and command.strip() and command.strip() not in out:
+            if not isinstance(command, str) or not all(key in command for key in ACCEPTANCE_PLACEHOLDERS):
+                continue
+            if command.strip() not in out:
                 out.append(command.strip())
     return out
 

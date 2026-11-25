@@ -694,7 +694,7 @@ def worker_result_errors(result: dict[str, Any]) -> list[str]:
             errors.append("stop はオブジェクトにしてください（無ければ省く）。")
         else:
             exc = stop.get("exception")
-            if isinstance(exc, bool) or exc not in STOP_EXCEPTIONS:
+            if type(exc) is not int or exc not in STOP_EXCEPTIONS:
                 errors.append("stop の exception は 1 から 4 の整数にしてください。")
             if not _text(stop.get("reason")):
                 errors.append("stop の reason は空でない文字列にしてください。")

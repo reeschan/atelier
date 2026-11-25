@@ -676,6 +676,12 @@ def _compose_prompt_parts(
         for p in (spec_path, facts_path):
             if p.is_file():
                 referenced.append(p)
+        if mode == "acceptance_review":
+            # The planner reads these test files, so the G4 scan before an external send covers them too.
+            for entry in acceptance.review_files(run):
+                test_file = Path(run_root) / str(entry["file"])
+                if test_file.is_file():
+                    referenced.append(test_file)
         kept = record.filter_parts(tmpl, parts_by_id)
         return prompt_text, record.measure_read(kept), referenced
 
@@ -737,6 +743,9 @@ def _compose_prompt_parts(
                     "checks": [],
                     "repository_checks": after_fix,
                 }
+            if run.get("acceptance_first") and run.get("lock"):
+                # The fix stage's worker must not change the locked files either (G1 puts them back).
+                ticket["locked_files"] = list(run["lock"].get("files") or [])
 
         plan.worker_prompt(
             run_root,
@@ -922,12 +931,20 @@ def _check_action(run_root: Path, run: dict[str, Any], prefix: str, commands: li
 
 
 def append_red_records(run_root: Path, run: dict[str, Any], verdicts: list[dict[str, Any]]) -> None:
-    """Write the Red check's verdicts to the run record, each acceptance PBI with its reasons (G4 scan first)."""
-    for event in acceptance.record_events(run, verdicts):
+    """Write the Red check's verdicts to the run record, each acceptance PBI with its reasons.
+
+    Every event is scanned (G4) before any is written, so a refusal leaves none behind for a retry to write twice;
+    the first-pass marks stay on the run only when all of them pass.
+    """
+    marks = list(run.get("first_pass_checked_pbis") or [])
+    events = acceptance.record_events(run, verdicts)
+    for event in events:
         line = json.dumps(event, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
         hits = guards.scan_secrets(line)
         if hits:
+            run["first_pass_checked_pbis"] = marks
             raise state.StateError(f"G4: secret detected in Red check record ({hits[0]['kind']})")
+    for event in events:
         record.append(state.record_path(run_root), event)
 
 

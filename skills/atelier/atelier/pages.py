@@ -1,6 +1,7 @@
 """Build Japanese approval drafts and render them with answer-me-with-html."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -68,6 +69,17 @@ def _modes_by_pbi(scenarios):
     return modes
 
 
+def _case_value(values, key):
+    """A case's value for the Examples table: a non-empty string as it is, any other value as JSON ("" and null
+    included, so a boundary value is not shown as unknown), and NO_MODE for a column the case does not have."""
+    if key not in values:
+        return NO_MODE
+    value = values[key]
+    if isinstance(value, str) and value:
+        return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
 def _scenario_lines(scenarios):
     """One block per requirement: normal shows Gherkin and the Examples table; light modes list case ids and test names."""
     if not scenarios:
@@ -82,7 +94,7 @@ def _scenario_lines(scenarios):
             columns = []
             for case in cases:
                 columns += [k for k in (case.get('values') or {}) if k not in columns]
-            lines += _table(['ケース', *columns], [[c.get('id'), *[(c.get('values') or {}).get(k, '') for k in columns]] for c in cases])
+            lines += _table(['ケース', *columns], [[c.get('id'), *[_case_value(c.get('values') or {}, k) for k in columns]] for c in cases])
         else:
             lines += _table(['ケース', 'テスト名'], [(c.get('id'), c.get('test_name') or c.get('name') or scenario.get('text')) for c in cases])
         lines.append('')

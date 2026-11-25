@@ -161,8 +161,8 @@ class FormRulesCliTests(unittest.TestCase):
                 mutate(obj["scenarios"][index]["cases"][0])
                 errors = plan.validate_plan(obj, acceptance_first=True)
                 self.assertIsInstance(errors, list)
-                if errors:
-                    self.assertTrue(all(isinstance(e, str) for e in errors))
+                self.assertTrue(errors)
+                self.assertTrue(all(isinstance(e, str) for e in errors))
 
 
 class FormRulesOffTests(unittest.TestCase):
