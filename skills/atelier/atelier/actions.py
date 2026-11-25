@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from . import flow, guards, interview, pages, plan, record, runners, state, survey, template
+from . import acceptance, flow, guards, interview, locks, pages, plan, record, runners, state, survey, template
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -313,10 +313,65 @@ def _unfinished_lines(run: dict[str, Any]) -> list[str]:
     if edits:
         lines += ["", "## 対象の外で変えたファイル", ""]
         lines += [f"- {e['by']}: {e['file']} — {e['why'] or '（理由の記載なし）'}" for e in edits]
+    lines += acceptance.unresolved_lines(run)
+    lines += _worker_note_lines(run)
     batches = run.get("batches") or []
     if batches:
         lines += ["", "## 一斉起動（同時に動いた起動）", ""]
         lines += [f"- {b['id']}: {'、'.join(b['members'])}" for b in batches]
+    return lines
+
+
+def lock_ticket_fields(run: dict[str, Any], pbi: dict[str, Any]) -> dict[str, Any]:
+    """What the ticket of an implementation PBI carries once the acceptance tests are locked.
+
+    Every build, e2e or fix PBI gets the locked files (the worker must not change them). A build or e2e PBI also gets
+    the ids of the cases assigned to it and the files marked as unit tests it may write; a fix PBI gets the cases of
+    the PBIs its carry-over holds, when there are any (the wave check judges it on them). Nothing before the lock.
+    """
+    kept = run.get("lock")
+    kind = pbi.get("kind") or plan.DEFAULT_KIND
+    if not run.get("acceptance_first") or not kept or kind in acceptance.STAGE_KINDS:
+        return {}
+    fields: dict[str, Any] = {"locked_files": list(kept.get("files") or [])}
+    if kind in ("build", "e2e", "fix"):
+        # A fix PBI is judged on the cases of the PBIs its carry-over holds.
+        owners = {pbi["id"]}
+        if kind == "fix":
+            co = state.carry_over_of(run, pbi.get("carry_over") or "") or {}
+            owners = set(co.get("pbis") or [])
+        locked = set(locks.locked_requirements(run))
+        cases = [
+            str(case["id"])
+            for sc in acceptance.scenarios(run)
+            if sc["id"] in locked
+            for case in sc.get("cases") or []
+            if isinstance(case, dict) and case.get("id") and case.get("pbi") in owners
+        ]
+        if kind != "fix" or cases:
+            fields["cases"] = cases
+    if kind in ("build", "e2e"):
+        fields["unit_tests"] = list(pbi.get("unit_tests") or [])
+    return fields
+
+
+def _worker_note_lines(run: dict[str, Any]) -> list[str]:
+    """The report's lines for the objections and stops workers returned, per PBI."""
+    lines: list[str] = []
+    objections = [(p["id"], o) for p in run.get("pbis", []) for o in p.get("objections") or []]
+    if objections:
+        lines += ["", "## 作業者の異議", ""]
+        for pid, o in objections:
+            lines.append(
+                f"- {pid} {o.get('case', '')}（{'Green' if o.get('state') == 'green' else '赤のまま'}）: "
+                f"{o.get('what', '')} — {o.get('why', '')} / 仮の解釈: {o.get('interpretation', '')}"
+            )
+    stops = [(p["id"], p["stop"]) for p in run.get("pbis", []) if p.get("stop")]
+    if stops:
+        lines += ["", "## 作業者の stop", ""]
+        for pid, s in stops:
+            label = state.STOP_EXCEPTION_LABELS.get(s.get("exception"), "")
+            lines.append(f"- {pid}: 例外 {s.get('exception')}（{label}） — {s.get('reason', '')}")
     return lines
 
 
@@ -351,6 +406,9 @@ def _write_report(run_root: Path, run: dict[str, Any]) -> Path:
         header.append(f"- OMM: {omm['source']}")
     if run.get("e2e_skipped"):
         header.append("- E2E: E2E のコマンドが無いため流していない")
+    if run.get("acceptance_first") is not None:
+        header.append(f"- 部品「受け入れを先に置く」: {pages.acceptance_toggle_text(run.get('acceptance_first'), run.get('acceptance_reason'))}")
+    header += acceptance.report_lines(run)
     header += _unfinished_lines(run)
     header.append("")
     report_path.write_text("\n".join(header) + summary_md, encoding="utf-8")
@@ -429,7 +487,7 @@ def _budget_would_exceed(run: dict[str, Any], prompt_text: str | list[str]) -> b
 
 def _step_for_launch(run: dict[str, Any], tmpl: dict[str, Any], role: str, pbi_id: str | None) -> dict[str, Any]:
     s = run["state"]
-    if s == "building" and pbi_id:
+    if s in ("building", "building_acceptance") and pbi_id:
         pbi = state.get_pbi(run, pbi_id)
         assert pbi is not None
         if not pbi.get("route"):
@@ -570,9 +628,9 @@ def _compose_prompt_parts(
         kept = record.filter_parts(tmpl, parts_by_id)
         return prompt_text, record.measure_read(kept), referenced
 
-    if s in ("planning", "triaging"):
+    if s in ("planning", "triaging", "reviewing_acceptance"):
         staged_prompt = stage_dir / f"planner-{s}.md"
-        mode = run.get("planner_mode", "plan") if s == "planning" else "triage"
+        mode = {"planning": run.get("planner_mode", "plan"), "triaging": "triage"}.get(s, "acceptance_review")
         plan_file = state.run_dir(run_root) / "plan.json"
         findings_path = state.run_dir(run_root) / "results" / "findings_kept.json"
         if s == "triaging" and not findings_path.is_file():
@@ -594,6 +652,10 @@ def _compose_prompt_parts(
             out_path=staged_prompt,
             rule_docs=rule_docs,
             passed_pbis=[p["id"] for p in run.get("pbis", []) if p.get("status") == "passed"],
+            acceptance_first=bool(run.get("acceptance_first")),
+            scenarios=acceptance.review_scenarios(run) if mode == "acceptance_review" else None,
+            interfaces=[dict(i) for i in run.get("interfaces") or []] if mode == "acceptance_review" else None,
+            acceptance_files=acceptance.review_files(run) if mode == "acceptance_review" else None,
         )
         prompt_text = staged_prompt.read_text(encoding="utf-8")
         planner_md = (_PROMPTS_DIR / "planner.md").read_text(encoding="utf-8")
@@ -614,12 +676,18 @@ def _compose_prompt_parts(
         for p in (spec_path, facts_path):
             if p.is_file():
                 referenced.append(p)
+        if mode == "acceptance_review":
+            # The planner reads these test files, so the G4 scan before an external send covers them too.
+            for entry in acceptance.review_files(run):
+                test_file = Path(run_root) / str(entry["file"])
+                if test_file.is_file():
+                    referenced.append(test_file)
         kept = record.filter_parts(tmpl, parts_by_id)
         return prompt_text, record.measure_read(kept), referenced
 
-    if s in ("building", "fixing"):
+    if s in ("building", "building_acceptance", "fixing"):
         staged_prompt = stage_dir / f"worker-{s}.md"
-        if s == "building":
+        if s != "fixing":
             mode = "pbi"
             pbi = state.get_pbi(run, pbi_id or "") or {}
             ticket = {
@@ -647,6 +715,8 @@ def _compose_prompt_parts(
                 ticket["carry_over"] = state.carry_over_ticket(run, pbi)
             ticket["checks"] = worker_checks(run, pbi.get("checks") or [])
             ticket["repository_checks"] = list(run.get("plan_checks") or [])
+            ticket.update(acceptance.ticket_fields(run, pbi))
+            ticket.update(lock_ticket_fields(run, pbi))
             if alongside:
                 ticket["running_alongside"] = alongside
         else:
@@ -673,6 +743,9 @@ def _compose_prompt_parts(
                     "checks": [],
                     "repository_checks": after_fix,
                 }
+            if run.get("acceptance_first") and run.get("lock"):
+                # The fix stage's worker must not change the locked files either (G1 puts them back).
+                ticket["locked_files"] = list(run["lock"].get("files") or [])
 
         plan.worker_prompt(
             run_root,
@@ -825,6 +898,11 @@ def _make_check(run_root: Path, run: dict[str, Any], kind: str) -> dict[str, Any
     commands = check_commands(run, kind)
     if not commands:
         raise state.StateError(f"no check commands for {kind}: the plan and its PBIs name none")
+    return _check_action(run_root, run, kind, commands)
+
+
+def _check_action(run_root: Path, run: dict[str, Any], prefix: str, commands: list[str], **extra: Any) -> dict[str, Any]:
+    """A check action running commands, unless the check component forbids one of their arguments (G11)."""
     comp = (run.get("components") or {}).get("check")
     if isinstance(comp, dict) and "forbidden_args" in comp:
         blocked = [arg for cmd in commands for arg in guards.forbidden_args(comp, cmd.split())]
@@ -840,7 +918,7 @@ def _make_check(run_root: Path, run: dict[str, Any], kind: str) -> dict[str, Any
                 level="check",
                 violations=[{"rule": "G11", "detail": f"forbidden args in check: {', '.join(blocked)}"}],
             )
-    launch_id = state.next_launch_id(run, kind)
+    launch_id = state.next_launch_id(run, prefix)
     result_path = state.run_dir(run_root) / "results" / f"{launch_id}.json"
     result_path.parent.mkdir(parents=True, exist_ok=True)
     return {
@@ -848,6 +926,208 @@ def _make_check(run_root: Path, run: dict[str, Any], kind: str) -> dict[str, Any
         "commands": commands,
         "result": str(result_path.resolve()),
         "launch_id": launch_id,
+        **extra,
+    }
+
+
+def append_red_records(run_root: Path, run: dict[str, Any], verdicts: list[dict[str, Any]]) -> None:
+    """Write the Red check's verdicts to the run record, each acceptance PBI with its reasons.
+
+    Every event is scanned (G4) before any is written, so a refusal leaves none behind for a retry to write twice;
+    the first-pass marks stay on the run only when all of them pass.
+    """
+    marks = list(run.get("first_pass_checked_pbis") or [])
+    events = acceptance.record_events(run, verdicts)
+    for event in events:
+        line = json.dumps(event, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        hits = guards.scan_secrets(line)
+        if hits:
+            run["first_pass_checked_pbis"] = marks
+            raise state.StateError(f"G4: secret detected in Red check record ({hits[0]['kind']})")
+    for event in events:
+        record.append(state.record_path(run_root), event)
+
+
+def _make_red_check(run_root: Path, run: dict[str, Any]) -> dict[str, Any] | None:
+    """The Red check: each requirement's acceptance test file run with the run's acceptance command.
+
+    Each command writes JUnit XML under docs/pbi/results/<check id>/, which done reads. When no requirement can
+    be run (none left, or none has a file), the verdicts are applied here and None is returned.
+    """
+    check_id = f"red-{run['counters']['launch_seq'] + 1:04d}"
+    results_dir = f"{state.run_dir(Path('.')).as_posix()}/results/{check_id}"
+    groups, unrun = acceptance.red_check_plan(run, results_dir)
+    if not groups:
+        append_red_records(run_root, run, unrun)
+        flow.apply_event(run, acceptance.settle_red(run, unrun, None))
+        return None
+    (run_root / results_dir).mkdir(parents=True, exist_ok=True)
+    for group in groups:
+        stale = run_root / group["junit"]
+        if stale.exists():
+            stale.unlink()
+    return _check_action(run_root, run, "red", [g["command"] for g in groups], stage="red", red=groups, red_unrun=unrun)
+
+
+def locked_wave(run: dict[str, Any]) -> bool:
+    """True when the wave check goes by the lock: the run puts acceptance first and its tests are locked."""
+    return bool(run.get("acceptance_first")) and bool(run.get("lock"))
+
+
+def wave_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """The PBIs a wave check judges: the built and failed ones, and the held ones checked again with them."""
+    return [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")] + state.recheck_held_pbis(run)
+
+
+LOCK_COPY_STOP = "鍵の仕組みの故障なので wave の検査を止めた（作業者への差し戻しにはしない）: "
+
+
+def _settle_wave_lock(run_root: Path, run: dict[str, Any], pbis: list[dict[str, Any]], check_id: str) -> None:
+    """The wave check's step (1): put the locked files and keys that differ from the lock back, and keep whose
+    failure each difference is (the PBIs of the wave with its path in their targets) or leave it unresolved."""
+    changes = locks.wave_changes(run_root, run)
+    if not changes:
+        return
+    files = locks.restore(run_root, run, locks.violated(changes))
+    keys, failed = locks.restore_keys(run_root, run, changes)
+    entry: dict[str, Any] = {"check": check_id, "files": files}
+    if keys:
+        entry["keys"] = keys
+    if failed:
+        entry["keys_not_restored"] = failed
+    sigs = locks.changed_signatures(changes)
+    if sigs:
+        entry["signatures"] = sigs
+    run.setdefault("lock_restored", []).append(entry)
+    owned, unowned = locks.change_owners(changes, pbis)
+    kept = run.setdefault("wave_check", {}).setdefault("lock_failures", {})
+    for pid, details in owned.items():
+        kept.setdefault(pid, [])
+        kept[pid] += [d for d in details if d not in kept[pid]]
+    if unowned:
+        acceptance.add_unresolved(
+            run, acceptance.WAVE_LOCK_UNRESOLVED, "; ".join(unowned), check=check_id, changes=unowned, restored=[*files, *keys]
+        )
+
+
+def _make_wave_check(run_root: Path, run: dict[str, Any]) -> dict[str, Any]:
+    """The check at the end of a wave.
+
+    Without a lock it runs the wave's PBIs' checks and the plan's checks, as before. In a locked run it goes in order:
+    (0) the copy of the lock list outside the work tree against its recorded sha256 (a difference stops the check and
+    asks the user; no PBI is carried over), (1) the locked files, keys and signatures against the lock (put back, and
+    laid on the PBI that has the path in its targets, or left unresolved), then (2) and (3) in one check: the locked
+    cases with the acceptance command and JUnit XML, then the PBIs' checks and the plan's checks.
+    """
+    if not locked_wave(run):
+        return _make_check(run_root, run, "check")
+    problem = locks.copy_problem(run_root, run)
+    if problem:
+        return _raise_prelaunch_guard(
+            run_root,
+            run,
+            rule=locks.COPY_RULE,
+            role="check",
+            pbi_id=None,
+            runner="check",
+            model="script",
+            level="check",
+            violations=[{"rule": locks.COPY_RULE, "detail": LOCK_COPY_STOP + problem}],
+        )
+    check_id = f"check-{run['counters']['launch_seq'] + 1:04d}"
+    pbis = wave_pbis(run)
+    _settle_wave_lock(run_root, run, pbis, check_id)
+    listed = locks.locked_list(run_root, run)
+    results_dir = f"{state.run_dir(Path('.')).as_posix()}/results/{check_id}"
+    groups, unrun = acceptance.wave_case_plan(run, [str(r) for r in listed.get("requirements") or []], results_dir)
+    commands = [g["command"] for g in groups]
+    commands += [c for c in plan.wave_commands(pbis, run.get("plan_checks") or []) if c not in commands]
+    if not commands:
+        raise state.StateError("no check commands for check: the plan, its PBIs and the acceptance tests name none")
+    (run_root / results_dir).mkdir(parents=True, exist_ok=True)
+    for group in groups:
+        stale = run_root / group["junit"]
+        if stale.exists():
+            stale.unlink()
+    wave = {
+        "groups": groups,
+        "unrun": unrun,
+        "cases": [str(c) for c in listed.get("cases") or []],
+        "assignments": {str(k): str(v) for k, v in (listed.get("assignments") or {}).items()},
+        "pbis": [p["id"] for p in pbis],
+    }
+    return _check_action(run_root, run, "check", commands, stage="wave", wave=wave)
+
+
+def judge_wave(run_root: Path, run: dict[str, Any], pending: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """A locked run's wave check result, judged on the cases and the lock as well as on the commands.
+
+    The acceptance commands' exit codes are left out (the cases of PBIs not built yet are meant to be red). The
+    missing and failed cases, and the lock's differences found before the check, fail the PBIs they are laid on
+    (case_failed_pbis); missing cases with no PBI of the wave to hold them fail every non-fix PBI of the wave, or are
+    left unresolved when there is none. The other commands, the PBIs' checks and the plan's, stay in "commands" to be
+    judged as before. The output starts with the reasons.
+    """
+    wave = pending.get("wave") or {}
+    groups = list(wave.get("groups") or [])
+    acceptance_commands = {g["command"] for g in groups}
+    commands = [c for c in result.get("commands") or [] if isinstance(c, dict)]
+    rest = [c for c in commands if str(c.get("command")) not in acceptance_commands]
+    wave_ids = [str(p) for p in wave.get("pbis") or []]
+    cases = [str(c) for c in wave.get("cases") or []]
+    verdict = acceptance.judge_wave_cases(run_root, run, groups, cases, dict(wave.get("assignments") or {}), wave_ids)
+    kept = run.pop("wave_check", None) or {}
+    lock_failures = kept.get("lock_failures") or {}
+    by_pbi: dict[str, list[str]] = {}
+    for pid, details in lock_failures.items():
+        by_pbi.setdefault(pid, []).extend(f"鍵と違った: {d}" for d in details)
+    for pid, reasons in verdict["by_pbi"].items():
+        by_pbi.setdefault(pid, []).extend(reasons)
+    check_id = str(pending.get("launch_id") or "")
+    case_failed = bool(verdict["by_pbi"])
+    if verdict["wave_reasons"]:
+        builders = [pid for pid in wave_ids if (state.get_pbi(run, pid) or {}).get("kind") != "fix"]
+        for pid in builders:
+            by_pbi.setdefault(pid, []).extend(verdict["wave_reasons"])
+        case_failed = case_failed or bool(builders)
+        if not builders:
+            acceptance.add_unresolved(
+                run, acceptance.WAVE_CASES_UNRESOLVED, "; ".join(verdict["wave_reasons"]), check=check_id, cases=list(verdict["missing"])
+            )
+    failing = [c for c in rest if c.get("exit_code")]
+    rules: list[str] = []
+    if lock_failures:
+        rules.append(locks.WAVE_RULE)
+    if case_failed:
+        rules.append(acceptance.WAVE_CASES_RULE)
+    if failing:
+        rules.append("G9")
+    lines: list[str] = []
+    if by_pbi:
+        lines.append("wave の検査（受け入れのケースと鍵）で落ちた PBI:")
+        lines += [f"- {pid}: {reason}" for pid, reasons in by_pbi.items() for reason in reasons]
+    unrun = [*wave.get("unrun", []), *verdict["notes"]]
+    if unrun:
+        lines.append("流せなかった受け入れテスト:")
+        lines += [f"- {note}" for note in unrun]
+    output = "\n".join([*lines, str(result.get("output") or "")]).strip()
+    exit_code = next((c["exit_code"] for c in failing), 1 if by_pbi else 0)
+    run.setdefault("wave_cases", []).append({
+        "check": check_id,
+        "total": len(cases),
+        "ran": list(verdict["ran"]),
+        "missing": list(verdict["missing"]),
+        "failed": dict(verdict["failed"]),
+        "excused": list(verdict["excused"]),
+        "sent_back": sorted(by_pbi),
+    })
+    return {
+        **result,
+        "exit_code": exit_code,
+        "output": output,
+        "commands": rest,
+        "case_failed_pbis": sorted(by_pbi),
+        "rules": rules if exit_code else [],
     }
 
 
@@ -971,9 +1251,14 @@ def _build_presentation(run: dict[str, Any], page_kind: str) -> tuple[dict[str, 
             "plan_checks": list(run.get("plan_checks") or []),
             "plan_e2e": list(run.get("plan_e2e") or []),
             "final_review": run.get("final_review"),
+            "acceptance_first": run.get("acceptance_first"),
+            "acceptance_reason": run.get("acceptance_reason"),
+            "scenarios": list(run.get("scenarios") or []) if run.get("acceptance_first") else [],
+            "interfaces": list(run.get("interfaces") or []),
             "conclusion": f"PBI {len(pbis)} 件の計画を作成しました。",
             "before": "仕様の承認",
-            "after": "wave ごとの実装 → 機械の検査 → 最後の見直し → E2E → 報告",
+            "after": ("受け入れテストを作る → Red の確認 → " if run.get("acceptance_first") else "")
+            + "wave ごとの実装 → 機械の検査 → 最後の見直し → E2E → 報告",
             "decisions": decisions,
         })
     else:
@@ -1251,7 +1536,7 @@ def _pick_building(run: dict[str, Any], tmpl: dict[str, Any]) -> list[dict[str, 
         except state.StateError:
             return None
 
-    candidates = state.buildable_pbis(run)
+    candidates = acceptance.stage_buildable(run) if run["state"] == "building_acceptance" else state.buildable_pbis(run)
     picked = _pick_together(candidates, lambda pbi: _owned_paths(run, pbi=pbi), kind_of, template.parallel_limit(run))
     return picked or candidates[:1]
 
@@ -1383,9 +1668,15 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
     elif s == "awaiting_plan_approval":
         kind, choices, _ = ASK_CHOICES[s]
         action = _make_approval_ask(run_root, run, "plan", kind, choices)
-    elif s == "building":
+    elif s in ("building", "building_acceptance"):
+        if s == "building" and locks.lock_pending(run):
+            # The planner's review is done: lock the acceptance tests before any build or e2e PBI is launched.
+            locks.lock(run_root, run)
         picked = _pick_building(run, active_template(run))
         pbi = picked[0] if picked else None
+        if pbi is None and s == "building_acceptance":
+            flow.apply_event(run, "acceptance_built")
+            return ensure_pending_action(run_root, run)
         if pbi is None:
             has_passed = any(p.get("status") == "passed" for p in run.get("pbis", []))
             if has_passed and run["counters"]["review_count"] == 0:
@@ -1399,14 +1690,21 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
         action = _launch_batch(run_root, run, [(chosen["id"], None) for chosen in picked])
         if action.get("action") == "launch":
             pbi["status"] = "building"
+        # never BuildBeforeLock: a build or e2e PBI is not launched before the acceptance tests are locked.
+        flow.check_invariants(run)
     elif s == "checking":
-        action = _make_check(run_root, run, "check")
+        action = _make_wave_check(run_root, run)
+    elif s == "checking_red":
+        red_check = _make_red_check(run_root, run)
+        if red_check is None:
+            return ensure_pending_action(run_root, run)
+        action = red_check
     elif s == "reviewing":
         if run.get("final_review"):
             action = _review_skill_action(run_root, run)
         else:
             action = _launch_for_state(run_root, run, "reviewer")
-    elif s == "triaging":
+    elif s in ("triaging", "reviewing_acceptance"):
         action = _launch_for_state(run_root, run, "planner")
     elif s == "awaiting_fix_approval":
         kind, choices, _ = ASK_CHOICES[s]

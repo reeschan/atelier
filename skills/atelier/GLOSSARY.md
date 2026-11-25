@@ -69,8 +69,20 @@ _Avoid_: fixture request, asset
 One small unit of work a worker can build from its ticket alone.
 _Avoid_: task, ticket
 
+**Retrospective list (振り返りの一覧)**:
+Everything the run set aside to decide once at the end: the final review's findings, objections, unresolved failures, plan returns, mutation survivors, E2E failures and unlock requests, each with its kind.
+_Avoid_: review.yaml, backlog, issue list
+
 **Fix list (直しの一覧)**:
-The final review's findings the user approved to fix.
+The items of the retrospective list the user approved to fix.
+
+**Leftover (残り)**:
+An item still failing after the fix stage. The run does not fix it; it goes to the backlog, and the run is not complete.
+_Avoid_: carry-over, remaining TODO
+
+**Backlog (backlog)**:
+The leftovers of past runs of one repository, kept outside the working tree, which the next run's planner reads as candidate PBIs.
+_Avoid_: todo list, issue tracker
 
 **Run record (run の記録)**:
 One line per launch, check and fix: role, model, tokens, rules read and rules fired.
@@ -83,6 +95,52 @@ _Avoid_: TODO, deferred failure, hold
 **Fix PBI (修正の PBI)**:
 A PBI the conductor writes from a carry-over and puts before the PBIs that depend on the failed one. The planner does not write it.
 _Avoid_: rework PBI, auto-fix
+
+**Unresolved (未解決)**:
+A carry-over whose fix PBI failed twice, or a failed check that no PBI owns. The run holds the PBI and those that depend on it, goes on without asking, and puts it on the retrospective list.
+_Avoid_: blocked, rebuild question
+
+**Objection (異議)**:
+A worker's record that a locked case looks wrong, written instead of changing it. The worker goes on, and the objection goes on the retrospective list.
+_Avoid_: carry_over, dispute, test edit
+
+**Plan return (途中の戻り)**:
+A pause in the middle of a run, asked of the user, to let the planner change a public interface or a scenario that later PBIs cannot be built on. Each one is counted and goes on the retrospective list.
+_Avoid_: replan, escalation
+
+## Acceptance
+
+**Acceptance PBI (受け入れの PBI)**:
+A PBI that turns approved scenarios into runnable tests and changes no source. All of them are built in the first wave, before any building PBI.
+_Avoid_: test PBI, tester task
+
+**Scenario (シナリオ)**:
+One behaviour the spec requires, written in Gherkin as a Scenario Outline, which the user approves with the plan.
+_Avoid_: acceptance criterion, test case
+
+**Case (ケース)**:
+One row of a scenario's examples, with an ID such as `REQ-12/C1`. Cases, not scenarios, are assigned to PBIs, counted and reported.
+_Avoid_: example, test, scenario
+
+**Red check (Red の確認)**:
+The check of an acceptance PBI. It passes when every case fails for the missing behaviour (an assertion or a not-implemented error), never for a broken import or a case that already passes.
+_Avoid_: failing test run
+
+**Lock (鍵)**:
+The acceptance test files, their settings and the public interfaces that no worker may change, recorded outside the working tree with the commit they were locked at.
+_Avoid_: test_paths, do_not_touch, freeze
+
+**Light mode (軽量モード)**:
+A way to build a small requirement without scenarios or approval: its cases are plain tests with IDs, still checked red and locked.
+_Avoid_: quick mode, no-test mode
+
+**Hidden case (控え)**:
+A case the worker never sees: the planner writes only the relation between its values, and the conductor picks new values at each wave's check.
+_Avoid_: hold-out, hold, secret test
+
+**Mutation survivor (生き残り)**:
+A small change to the changed code that no test caught. It goes on the retrospective list as a gap in the scenarios or in the unit tests.
+_Avoid_: mutant, weak test
 
 ## Routing
 

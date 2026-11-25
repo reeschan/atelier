@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from atelier import actions, eol, flow, guards, interview, pages, plan, record, runners, state, survey, template
+from atelier import acceptance, actions, eol, flow, guards, interview, locks, pages, plan, record, runners, state, survey, template
 
 
 class ConductorError(Exception):
@@ -73,6 +73,11 @@ def _git_head(root: Path) -> str | None:
     return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
 
 
+def _lock_guard(root: Path, run: dict[str, Any]) -> dict[str, Any] | None:
+    """The locked files' blobs, signatures and keys every launch after the lock is compared against (G1)."""
+    return locks.guard_entry(root, run) if run.get("lock") else None
+
+
 def _launch_snapshot(root: Path, run: dict[str, Any], act: dict[str, Any]) -> dict[str, Any]:
     """The work root before a launch. A worker may also change existing files outside its paths."""
     return guards.snapshot(
@@ -80,7 +85,48 @@ def _launch_snapshot(root: Path, run: dict[str, Any], act: dict[str, Any]) -> di
         allowed_paths=actions.allowed_paths_for(run, act["role"], act.get("pbi"), act.get("fix_group")),
         report_path=act["result"],
         outside_edits=actions.outside_edit_rule(run, act["role"], act.get("pbi")),
+        locked=_lock_guard(root, run),
     )
+
+
+def _restore_locked(root: Path, run: dict[str, Any], launch_id: str | None, violations: list[dict[str, str]]) -> dict[str, list[str]]:
+    """Put the locked files and keys a launch changed back to the lock commit's content, and keep a record of it.
+
+    A changed signature only stops the launch: the source file stays as the worker wrote it.
+    """
+    names = locks.restore(root, run, locks.violated(violations))
+    keys, failed = locks.restore_keys(root, run, violations)
+    if names or keys:
+        entry: dict[str, Any] = {"launch_id": launch_id, "files": names}
+        if keys:
+            entry["keys"] = keys
+        run.setdefault("lock_restored", []).append(entry)
+    return {"files": names, "keys": keys, "keys_failed": failed, "signatures": locks.changed_signatures(violations)}
+
+
+def _lock_notes(restored: dict[str, list[str]]) -> list[str]:
+    """What the lock did about a launch's violations, for the guard question."""
+    notes = []
+    if restored["files"]:
+        notes.append("鍵のファイルを鍵のコミットの中身に戻した: " + ", ".join(restored["files"]))
+    if restored["keys"]:
+        notes.append("鍵のキーを鍵のコミットの値に戻した: " + ", ".join(restored["keys"]))
+    if restored["keys_failed"]:
+        notes.append("鍵のキーを戻せなかった: " + ", ".join(restored["keys_failed"]))
+    if restored["signatures"]:
+        notes.append(
+            "公開の口のシグネチャが鍵と違うので止めた（ソースのファイルは戻していない）: " + ", ".join(restored["signatures"])
+        )
+    return notes
+
+
+def _lock_issue_fields(restored: dict[str, list[str]]) -> dict[str, list[str]]:
+    return {
+        "lock_restored": restored["files"],
+        "keys_restored": restored["keys"],
+        "keys_not_restored": restored["keys_failed"],
+        "signatures_changed": restored["signatures"],
+    }
 
 
 def _ensure_snapshot(root: Path, run: dict[str, Any], act: dict[str, Any]) -> None:
@@ -89,7 +135,9 @@ def _ensure_snapshot(root: Path, run: dict[str, Any], act: dict[str, Any]) -> No
         if existing is not None and existing.get("launch_id") == act.get("launch_id"):
             return
         # One work root before every launch of the batch; each launch's own paths come in at done.
-        run["pending_snapshot"] = {**guards.snapshot(root), "launch_id": act["launch_id"]} if _is_git_repo(root) else None
+        run["pending_snapshot"] = (
+            {**guards.snapshot(root, locked=_lock_guard(root, run)), "launch_id": act["launch_id"]} if _is_git_repo(root) else None
+        )
     elif act.get("action") == "launch" and act.get("runner") == "agent":
         existing = run.get("pending_snapshot")
         if existing is not None and existing.get("launch_id") == act.get("launch_id"):
@@ -432,16 +480,34 @@ def _reroute(tmpl: dict[str, Any], pbi: dict[str, Any]) -> None:
     pbi["route_index"] = 0
 
 
-def _handle_check_done(root: Path, run: dict[str, Any], result: dict[str, Any]) -> None:
+def _handle_check_done(
+    root: Path, run: dict[str, Any], result: dict[str, Any], pending: dict[str, Any] | None = None
+) -> None:
     exit_code = result.get("exit_code")
     if not isinstance(exit_code, int) or isinstance(exit_code, bool):
         raise ConductorError("G9: check result must include integer 'exit_code'")
 
     s = run["state"]
-    if s == "checking":
+    if s == "checking_red":
+        # The Red check passes on the JUnit XML its commands wrote, not on their exit codes: they are meant to fail.
+        verdicts = acceptance.judge_red(root, run, pending or {}, result)
+        try:
+            actions.append_red_records(root, run, verdicts)
+        except state.StateError as exc:
+            raise ConductorError(str(exc)) from exc
+        flow.apply_event(run, acceptance.settle_red(run, verdicts, (pending or {}).get("launch_id")))
+    elif s == "checking":
         rechecked = state.recheck_held_pbis(run)
-        if exit_code != 0 and not result.get("failed_pbis"):
-            derived = _failed_pbis_from_commands(run, result)
+        laid: set[str] = set()
+        if (pending or {}).get("wave") is not None:
+            # A locked run: the cases and the lock fail the PBIs they are laid on; the other commands as before.
+            result = actions.judge_wave(root, run, pending or {}, result)
+            exit_code = result["exit_code"]
+            laid = set(result.get("case_failed_pbis") or [])
+        if exit_code != 0:
+            # The PBIs the cases and the lock failed always join the ones the result names (or the commands show).
+            given = {str(p) for p in result.get("failed_pbis") or []}
+            derived = (given or _failed_pbis_from_commands(run, result)) | laid
             if derived:
                 result = {**result, "failed_pbis": sorted(derived)}
         _append_check_records_for_wave(root, run, result, exit_code, rechecked)
@@ -556,7 +622,7 @@ def _build_pbis_from_plan(run: dict[str, Any], result: dict[str, Any]) -> list[d
                 continue
             level = item["level"]
             level_reason = item["level_reason"]
-            targets = list(item.get("targets") or [])
+            targets, unit_tests = plan.split_targets(item.get("targets"))
             pbi = {
                 "id": pid,
                 "title": item["title"],
@@ -565,8 +631,11 @@ def _build_pbis_from_plan(run: dict[str, Any], result: dict[str, Any]) -> list[d
                 "level": level,
                 "level_reason": level_reason,
                 "reason": level_reason,
+                "kind": item.get("kind") or plan.DEFAULT_KIND,
+                **({"requirements": list(item["requirements"])} if item.get("requirements") else {}),
                 "targets": targets,
                 "files": targets,
+                "unit_tests": unit_tests,
                 "do_not_touch": list(item.get("do_not_touch") or []),
                 "checks": list(item.get("checks") or []),
                 "facts": list(item.get("facts") or []),
@@ -596,6 +665,10 @@ def _validate_completion_before_accept(
 ) -> None:
     if pending["action"] != "launch":
         return
+    if pending.get("role") == "worker":
+        errors = state.worker_result_errors(result)
+        if errors:
+            raise ConductorError(" ".join(errors))
     if any(result.get(flag) for flag in ("plan_broken", "sensitive_detected", "budget_exceeded")):
         return
 
@@ -618,7 +691,7 @@ def _validate_completion_before_accept(
             if missing:
                 raise ConductorError(f"spec missing required to-spec sections: {', '.join(missing)}")
     elif s == "planning":
-        errors = plan.validate_plan(result)
+        errors = plan.validate_plan(result, acceptance_first=bool(run.get("acceptance_first")))
         review = result.get("final_review")
         if not errors and review:
             names = survey.review_skill_names(actions.load_facts(root, run))
@@ -635,6 +708,10 @@ def _validate_completion_before_accept(
             raise ConductorError(str(exc)) from exc
     elif s == "reviewing":
         errors = plan.validate_findings(result)
+        if errors:
+            raise ConductorError(" ".join(errors))
+    elif s == "reviewing_acceptance":
+        errors = plan.validate_acceptance_review(result, [item["file"] for item in acceptance.review_files(run)])
         if errors:
             raise ConductorError(" ".join(errors))
     elif s == "triaging":
@@ -671,6 +748,9 @@ def _record_outside_edits(run: dict[str, Any], pending: dict[str, Any], result: 
 def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any], result: dict[str, Any]) -> None:
     if pending.get("role") == "worker":
         _record_outside_edits(run, pending, result)
+        worker_pbi = state.get_pbi(run, pending["pbi"]) if pending.get("pbi") else None
+        if worker_pbi is not None:
+            state.keep_worker_notes(worker_pbi, result)
     # Cross-cutting flags reported by a role
     for flag, event in (
         ("plan_broken", "plan_broken"),
@@ -695,6 +775,10 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
     s = run["state"]
     if s == "surveying":
         run["facts_file"] = str(Path(pending["result"]).resolve())
+        decision = survey.decide_acceptance(result, run.get("active_template"), _is_git_repo(root))
+        run["acceptance_first"] = decision["enabled"]
+        run["acceptance_reason"] = decision["reason"]
+        run["acceptance_commands"] = decision["commands"]
         flow.apply_event(run, "survey_done")
     elif s == "interviewing":
         run["pending_tree_snapshot"] = None
@@ -724,6 +808,8 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
     elif s == "planning":
         run["pbis"] = _build_pbis_from_plan(run, result)
         run["open_questions"] = list(result.get("open_questions") or [])
+        run["scenarios"] = [dict(sc) for sc in result.get("scenarios") or []]
+        run["interfaces"] = [dict(i) for i in result.get("interfaces") or []]
         run["plan_checks"] = list(result.get("checks") or [])
         run["plan_e2e"] = list(result.get("e2e") or [])
         run["final_review"] = result.get("final_review")
@@ -749,6 +835,18 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
             flow.apply_event(run, "worker_returned")
         else:
             flow.apply_event(run, "wave_built")
+    elif s == "building_acceptance":
+        pbi = state.get_pbi(run, pending.get("pbi") or "")
+        if pbi is not None:
+            pbi["status"] = "built"
+            acceptance.keep_acceptance_files(pbi, result)
+            notes = [n for n in result.get("carry_over") or [] if isinstance(n, dict)]
+            if notes:
+                pbi["worker_carry_over"] = notes
+        if acceptance.stage_buildable(run):
+            flow.apply_event(run, "worker_returned")
+        else:
+            flow.apply_event(run, "acceptance_built")
     elif s == "reviewing":
         kept, dropped = plan.split_findings(list(result.get("findings") or []))
         run["findings"] = kept
@@ -766,6 +864,8 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
             flow.apply_event(run, "triaged")
             if not dropped and not run["fix_list"]:
                 flow.apply_event(run, "nothing_to_fix")
+    elif s == "reviewing_acceptance":
+        flow.apply_event(run, acceptance.settle_review(run, result, actions.active_template(run), pending.get("launch_id")))
     elif s == "triaging":
         finding_by_id = {f["id"]: f for f in run.get("findings", [])}
         fix_items: list[dict[str, Any]] = []
@@ -826,6 +926,8 @@ def _raise_guard_question(
     if unusable_reason:
         parts.append(f"runner unusable: {unusable_reason}")
     parts.extend(f"{v['rule']}: {v['detail']}" for v in violations)
+    restored = _restore_locked(root, run, pending.get("launch_id"), violations)
+    parts.extend(_lock_notes(restored))
     if pending.get("role") == "worker":
         # The edits stay in the work tree; a retry's snapshot would no longer see them as changes.
         _record_outside_edits(run, pending, {})
@@ -845,6 +947,7 @@ def _raise_guard_question(
         "violations": violations,
         "pending_destructive": list(pending_destructive or []),
         "pending_garbled": list(pending_garbled or []),
+        **_lock_issue_fields(restored),
         "detail": "; ".join(parts),
     }
     flow.apply_event(run, "guard_violation")
@@ -897,7 +1000,7 @@ def _finalize_completion(
         run.setdefault("completed_launches", []).append(expected_id)
 
     if pending["action"] == "check":
-        _handle_check_done(root, run, result)
+        _handle_check_done(root, run, result, pending)
     else:
         if pending.get("role") == "worker":
             _restore_lf(root, run, pending, result)
@@ -1205,7 +1308,7 @@ def _run_batch(root: Path, run: dict[str, Any], batch: dict[str, Any], timeout: 
             prechecked[member["launch_id"]] = violations
         else:
             specs[member["launch_id"]] = spec
-    before = guards.snapshot(root) if _is_git_repo(root) else None
+    before = guards.snapshot(root, locked=_lock_guard(root, run)) if _is_git_repo(root) else None
     started = {lid: runners.start_external(spec) for lid, spec in specs.items()}
     outcomes = {lid: runners.finish_external(handle, timeout) for lid, handle in started.items()}
     return _finish_batch(root, run, batch, before, outcomes, prechecked)
@@ -1321,6 +1424,8 @@ def _raise_batch_guard(
             f"{v['rule']}: {v['detail']}" for v in violations[lid]
         ]
         parts.append(f"{_member_label(m)}: " + "; ".join(details))
+    restored = _restore_locked(root, run, batch["launch_id"], [v for e in entries for v in e["violations"]])
+    parts.extend(_lock_notes(restored))
     single = entries[0] if len(entries) == 1 else None
     run["guard_issue"] = {
         "launch_id": batch["launch_id"],
@@ -1333,6 +1438,7 @@ def _raise_batch_guard(
         "pending_destructive": [f for m in bad for f in destructive.get(m["launch_id"], [])],
         "pending_garbled": [g for m in bad for g in garbled.get(m["launch_id"], [])],
         "launches": entries,
+        **_lock_issue_fields(restored),
         "detail": " / ".join(parts),
     }
     flow.apply_event(run, "guard_violation")

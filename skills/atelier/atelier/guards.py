@@ -11,11 +11,18 @@ from pathlib import Path, PurePosixPath
 import subprocess
 import re
 
+from . import signatures as _signatures
+
 LOCKS = {'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 'Pipfile.lock', 'uv.lock', 'Cargo.lock', 'Gemfile.lock', 'composer.lock', 'go.sum'}
 MANIFESTS = {'package.json', 'pyproject.toml', 'requirements.txt', 'Pipfile', 'Cargo.toml', 'Gemfile', 'composer.json', 'go.mod'}
 _TRIPLE_Q_RE = re.compile(r'\?{3,}')
 _CJK_CHAR = r'[\u3040-\u309f\u30a0-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af\uff66-\uff9f]'
 _CJK_Q_CJK_RE = re.compile(rf'{_CJK_CHAR}\?{_CJK_CHAR}')
+# The G1 detail for a locked file (an acceptance test file or the lock list) that differs from the lock commit.
+LOCKED_DETAIL = 'locked file changed: '
+# The G1 details for a locked public interface signature and a locked key of a file workers also touch.
+SIGNATURE_DETAIL = 'locked signature changed: '
+KEY_DETAIL = 'locked key changed: '
 
 
 def _git(root, *args):
@@ -67,19 +74,27 @@ def approved_edit(root, path):
     return {'path': name, 'digest': _digest(p)}
 
 
-def snapshot(root, allowed_paths=None, report_path=None, child_pids=None, outside_edits=None):
+def snapshot(root, allowed_paths=None, report_path=None, child_pids=None, outside_edits=None, locked=None):
     """The work root before a launch.
 
     outside_edits lets compare() pass a change to an existing file outside allowed_paths. It is a dict:
     "blocked" lists the paths that stay closed (a PBI's do_not_touch), and "no_tests" closes every test
     file, inside allowed_paths too (a fix PBI must not rewrite the tests it is meant to make pass).
+    locked is {"commit", "blobs": {path: blob id}, "signatures", "keys"} once the acceptance tests are locked:
+    compare() stops a change to any of those files, inside allowed_paths too, by its git blob, and a change of a
+    locked signature or key during the launch. The signatures and keys as they are before the launch are kept with
+    it, so a difference that was there before the launch is not laid on it.
     """
     root = Path(root).resolve()
+    if locked and (locked.get('signatures') or locked.get('keys')):
+        locked = {**locked, 'signatures_now': _signatures.current(root, locked.get('signatures') or {}),
+                  'keys_now': _signatures.key_values(root, locked.get('keys') or {})}
     return {'root': str(root), 'head': _git(root, 'rev-parse', '--verify', 'HEAD').strip(),
             'branch': _git(root, 'symbolic-ref', '--short', '-q', 'HEAD').strip() if _branch_exists(root) else '',
             'stash': _git(root, 'stash', 'list', '--format=%H'), 'files': _files(root),
             'allowed_paths': list(allowed_paths) if allowed_paths is not None else None,
             'outside_edits': dict(outside_edits) if outside_edits is not None else None,
+            'locked': dict(locked) if locked else None,
             'report_path': str(report_path) if report_path else None, 'child_pids': list(child_pids or [])}
 
 
@@ -107,10 +122,107 @@ def _edit_of_existing(name, before, after):
     )
 
 
+def _locked_blobs(before):
+    return (before.get('locked') or {}).get('blobs') or {}
+
+
+def locked_changes(root, blobs, ignore=()):
+    """Locked files whose git blob in the work root is not the locked one (missing files included).
+
+    The blob is what git would store for the file (git hash-object, with the repository's line ending
+    conversion), so a change that git converts away on add is not a change.
+    """
+    root = Path(root).resolve()
+    names = [n for n in sorted(blobs) if not _allowed(n, ignore)]
+    present = [n for n in names if (root / n).is_file() and not (root / n).is_symlink()]
+    current = {}
+    # The names go as arguments after --, in batches that keep the command line short, so a name with a newline
+    # stays one path (--stdin-paths would split it). git still applies the repository's filters to each path.
+    for batch in _name_batches(present):
+        proc = subprocess.run(['git', '-C', str(root), 'hash-object', '--', *batch],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if proc.returncode:
+            raise RuntimeError('git inspection failed: ' + proc.stderr.decode('utf-8', 'replace').strip())
+        current.update(zip(batch, proc.stdout.decode('ascii').split()))
+    return [n for n in names if current.get(n) != blobs[n]]
+
+
+_BATCH_CHARS = 6000
+
+
+def _name_batches(names):
+    """The names in order, in lists whose total length stays under _BATCH_CHARS (at least one name in each)."""
+    batch, size = [], 0
+    for name in names:
+        if batch and size + len(name) + 1 > _BATCH_CHARS:
+            yield batch
+            batch, size = [], 0
+        batch.append(name)
+        size += len(name) + 1
+    if batch:
+        yield batch
+
+
+def _ignored(name, ignore, directory=False):
+    """True when a path belongs to another launch of the batch (for a directory: a path inside it does)."""
+    if _allowed(name, ignore):
+        return True
+    return directory and any(_allowed(p.rstrip('/'), [name]) for p in ignore if name not in ('', '.'))
+
+
+def locked_signature_changes(root, locked, ignore=()):
+    """G1 violations for the locked signatures that differ from the lock now and changed during the launch.
+
+    A signature whose tool is not there now is not compared. The detail gives the locked and the current signature.
+    """
+    entries = (locked or {}).get('signatures') or {}
+    if not entries:
+        return []
+    before = (locked or {}).get('signatures_now') or {}
+    now = _signatures.current(root, entries)
+    out = []
+    for key in sorted(entries):
+        entry = entries[key]
+        if key not in now or _ignored(str(entry.get('file') or ''), ignore, entry.get('language') == _signatures.GO):
+            continue
+        sig = now[key].get('signature')
+        if sig == entry.get('signature') or (key in before and before[key].get('signature') == sig):
+            continue
+        new = _signatures.brief(sig) if sig is not None else f"（{now[key].get('reason') or '取り出せない'}）"
+        out.append({'rule': 'G1', 'module': entry['module'], 'name': entry['name'],
+                    'detail': f"{SIGNATURE_DETAIL}{entry['module']} {entry['name']}"
+                              f"（鍵: {_signatures.brief(entry.get('signature'))} / 今: {new}）"})
+    return out
+
+
+def locked_key_changes(root, locked, ignore=()):
+    """G1 violations for the locked keys whose value differs from the lock now and changed during the launch."""
+    keys = (locked or {}).get('keys') or {}
+    if not keys:
+        return []
+    before = (locked or {}).get('keys_now') or {}
+    now = _signatures.key_values(root, keys)
+    out = []
+    for path in sorted(keys):
+        if _allowed(path, ignore):
+            continue
+        for key in sorted(keys[path]):
+            got = (now.get(path) or {}).get(key) or {'error': '読めない'}
+            if 'value' in got and _signatures.same(got['value'], keys[path][key]):
+                continue
+            was = (before.get(path) or {}).get(key)
+            if was is not None and _signatures.same(was, got):
+                continue
+            new = _signatures.brief(got['value']) if 'value' in got else f"（{got['error']}）"
+            out.append({'rule': 'G1', 'path': path, 'key': key,
+                        'detail': f"{KEY_DETAIL}{path} {key}（鍵: {_signatures.brief(keys[path][key])} / 今: {new}）"})
+    return out
+
+
 def _open_outside(name, before, after):
     """True when the snapshot lets this change outside allowed_paths through."""
     rule = before.get('outside_edits')
-    if rule is None or not _edit_of_existing(name, before, after):
+    if rule is None or name in _locked_blobs(before) or not _edit_of_existing(name, before, after):
         return False
     if _allowed(name, rule.get('blocked') or []):
         return False
@@ -171,10 +283,13 @@ def compare(root, before, approved_edits=None, launch_id=None, *, after=None, ig
             violations.append({'rule': 'G2', 'detail': key + ' changed'})
     changed = {p for p in before['files'].keys() | after['files'].keys()
                if before['files'].get(p) != after['files'].get(p) and not _allowed(p, ignore)}
+    locked = _locked_blobs(before)
     for name in sorted(changed):
         user_approved = name in approved and after['files'].get(name) == approved[name]
         rule = before.get('outside_edits') or {}
-        if rule.get('no_tests') and is_test_file(name) and not user_approved:
+        if name in locked:
+            pass  # A locked file is judged by its git blob below, whoever's paths it is in.
+        elif rule.get('no_tests') and is_test_file(name) and not user_approved:
             violations.append({'rule': 'G1', 'detail': 'test file changed by a fix PBI: ' + name})
         elif _allowed(name, rule.get('blocked') or []) and not user_approved:
             # do_not_touch holds even when a target directory covers the file.
@@ -185,6 +300,9 @@ def compare(root, before, approved_edits=None, launch_id=None, *, after=None, ig
             violations.append({'rule': 'G1', 'detail': 'changed outside allowed paths: ' + name})
         if Path(name).name in LOCKS | MANIFESTS:
             violations.append({'rule': 'G5', 'detail': 'dependency file changed: ' + name})
+    violations.extend({'rule': 'G1', 'detail': LOCKED_DETAIL + name} for name in locked_changes(root, locked, ignore))
+    violations.extend(locked_signature_changes(root, before.get('locked'), ignore))
+    violations.extend(locked_key_changes(root, before.get('locked'), ignore))
     for name, digest in sorted(during.items()):
         outside = before['allowed_paths'] is not None and not _allowed(name, before['allowed_paths'])
         if outside and name not in changed and not _allowed(name, ignore) and after['files'].get(name) != digest:

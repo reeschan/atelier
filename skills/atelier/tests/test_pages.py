@@ -10,7 +10,7 @@ RUN = {
  'conclusion': '注文を確認できるようにします。', 'before': '注文を受ける', 'after': '注文を確認する',
  'template': {'name': '標準', 'roles': {'planner': {'runner': 'agent', 'model': 'opus', 'effort': None}}, 'routes': {'L2': [{'runner': 'codex', 'model': 'モデルA', 'effort': 'high'}]}, 'limits': {'auto_fix': 1, 'e2e_rounds': 2, 'budget_tokens': None, 'budget_usd': 5}},
  'pbis': [{'id': 'PBI-1', 'title': '確認画面', 'level': 'L2', 'level_reason': '画面を追加', 'sensitive_reason': '個人情報を扱う', 'data_needs': [{'source': 'D:/data/order.bin', 'dest': 'tests/fixtures/order.bin', 'why': '実データで確かめる'}]}],
- 'plan_checks': ['npm run type-check'], 'plan_e2e': [], 'final_review': {'skill': 'repo-review', 'args': 'full'},
+ 'acceptance_first': False, 'acceptance_reason': 'テンプレートで切った', 'plan_checks': ['npm run type-check'], 'plan_e2e': [], 'final_review': {'skill': 'repo-review', 'args': 'full'},
  'candidates': [{'id': '指摘-2', 'kind': '確信度が 80 未満', 'title': '名前を直す', 'reason': 'minor・確信度 55・読みにくい'}],
  'estimate': '約 2 時間', 'decisions': [{'question': '通知しますか', 'options': [{'label': '通知する', 'note': '結果を知らせる', 'recommended': True}, {'label': '通知しない', 'note': '画面で確認する'}]}],
  'spec': '注文の内容を確認します。', 'fix_list': [{'id': '修正-1', 'title': '表示を直す', 'reason': '金額が読みにくい'}]
@@ -55,4 +55,28 @@ class PageTests(unittest.TestCase):
   result = pages.draft('plan', {'pbis': [{'id': 'PBI-1'}]})
   self.assertIn('未確認', result['text'])
   self.assertNotIn('なし | なし | なし', result['text'])
+ def test_acceptance_toggle_table(self):
+  for enabled, reason, cells in ((True, None, '| 入り | なし |'), (False, 'git のリポジトリでない', '| 切り | git のリポジトリでない |'), (None, None, '| 未確認 | 未確認 |')):
+   with self.subTest(enabled=enabled):
+    text = pages.draft('plan', {**RUN, 'acceptance_first': enabled, 'acceptance_reason': reason})['text']
+    self.assertIn('## 部品の入り切り', text)
+    self.assertIn(cells, text)
 
+ def test_scenarios_mode_and_kind_columns(self):
+  scenarios = [
+   {'id': 'R1', 'text': '二つの数を足せる', 'mode': 'normal', 'gherkin': 'Scenario Outline: add\n  Given <a>', 'cases': [{'id': 'R1-1', 'values': {'a': 1, 'sum': 3}, 'pbi': 'PBI-2'}]},
+   {'id': 'R2', 'text': '依存を更新する', 'mode': 'light', 'cases': [{'id': 'R2-1', 'values': {}, 'pbi': 'PBI-1'}]}]
+  pbis = [{'id': 'PBI-1', 'title': '土台', 'level': 'L2', 'kind': 'stub'}, {'id': 'PBI-2', 'title': '本体', 'level': 'L2'}, {'id': 'PBI-3', 'title': '通し', 'level': 'L3', 'kind': 'e2e'}]
+  text = pages.draft('plan', {**RUN, 'pbis': pbis, 'acceptance_first': True, 'acceptance_reason': None, 'scenarios': scenarios})['text']
+  self.assertIn('## シナリオ', text)
+  self.assertIn('```gherkin\nScenario Outline: add', text)
+  self.assertIn('| ケース | a | sum |\n| --- | --- | --- |\n| R1-1 | 1 | 3 |', text)
+  self.assertIn('| ケース | テスト名 |\n| --- | --- |\n| R2-1 | 依存を更新する |', text)
+  self.assertIn('| モード | 種類 |', text)
+  self.assertIn('| light | stub |', text)
+  self.assertIn('| normal | build |', text)
+  self.assertIn('| — | e2e |', text)
+  self.assertIn('（受け入れ 0、stub 1、build 1、E2E 1）', text)
+ def test_no_scenario_section_when_acceptance_first_is_off(self):
+  text = pages.draft('plan', {**RUN, 'acceptance_first': False, 'scenarios': [{'id': 'R1', 'text': 'x', 'mode': 'normal', 'cases': []}]})['text']
+  self.assertNotIn('## シナリオ', text)

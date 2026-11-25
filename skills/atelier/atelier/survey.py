@@ -8,8 +8,10 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .template import part_enabled
+
 FIELDS = ('modules', 'layers', 'likely_files', 'tests', 'conventions', 'rule_docs', 'commands', 'review_skills')
-COMMAND_KINDS = ('unit', 'type', 'lint', 'e2e', 'all')
+COMMAND_KINDS = ('unit', 'type', 'lint', 'e2e', 'all', 'acceptance')
 # Keys each item of these fields carries besides id, text and source.
 EXTRA_KEYS = {'rule_docs': ('path',), 'commands': ('command', 'kind'), 'review_skills': ('name', 'path')}
 
@@ -73,6 +75,46 @@ def _field_values(facts: Any, field: str, key: str) -> list[str]:
         if isinstance(value, str) and value.strip() and value.strip() not in out:
             out.append(value.strip())
     return out
+
+
+ACCEPTANCE_PLACEHOLDERS = ('{file}', '{junit}')
+
+
+def acceptance_commands(facts: Any) -> list[str]:
+    """Commands of kind acceptance in a fact sheet, in order, without duplicates.
+
+    Only a command that carries both {file} (the file to run) and {junit} (where the JUnit XML goes) can run one
+    file and be read; a command without them is left out.
+    """
+    out: list[str] = []
+    for item in (facts.get('commands') if isinstance(facts, dict) else None) or []:
+        if isinstance(item, dict) and item.get('kind') == 'acceptance':
+            command = item.get('command')
+            if not isinstance(command, str) or not all(key in command for key in ACCEPTANCE_PLACEHOLDERS):
+                continue
+            if command.strip() not in out:
+                out.append(command.strip())
+    return out
+
+
+ACCEPTANCE_REASONS = {'template': 'テンプレートで切った', 'not_git': 'git のリポジトリでない', 'no_command': 'acceptance のコマンドが無い'}
+
+
+def decide_acceptance(facts: Any, template: dict | None, is_git: bool) -> dict:
+    """Decide after the survey whether acceptance goes first: {'enabled', 'reason', 'commands'}.
+
+    It is off when the template turns it off, the work root is not a git repository, or the fact sheet has no acceptance command.
+    """
+    commands = acceptance_commands(facts)
+    if not part_enabled(template, 'acceptance_first'):
+        reason = ACCEPTANCE_REASONS['template']
+    elif not is_git:
+        reason = ACCEPTANCE_REASONS['not_git']
+    elif not commands:
+        reason = ACCEPTANCE_REASONS['no_command']
+    else:
+        return {'enabled': True, 'reason': None, 'commands': commands}
+    return {'enabled': False, 'reason': reason, 'commands': []}
 
 
 def rule_doc_paths(facts: Any) -> list[str]:

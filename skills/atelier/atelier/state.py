@@ -101,6 +101,12 @@ def new_run_state(
         "findings_dropped": [],
         "triage_skipped": [],
         "e2e_skipped": False,
+        "acceptance_first": None,
+        "acceptance_reason": None,
+        "acceptance_commands": [],
+        "red": {},
+        "unresolved": [],
+        "lock": None,
         "planner_mode": "plan",
         "plan_revision_request": "",
         "open_questions": [],
@@ -647,3 +653,57 @@ def carry_over_fix_items(run: dict[str, Any]) -> list[dict[str, Any]]:
             "files": files,
         })
     return items
+
+
+OBJECTION_STATES = ("green", "red")
+STOP_EXCEPTIONS = (1, 2, 3, 4)
+STOP_EXCEPTION_LABELS = {
+    1: "公開の口の前提が崩れた",
+    2: "鍵つきのケースどうしが矛盾する",
+    3: "前提の外のものが無い",
+    4: "安全の問題",
+}
+
+
+def _text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def worker_result_errors(result: dict[str, Any]) -> list[str]:
+    """Errors in the shape of a worker result's objections (case, what, why, state, interpretation) and stop
+    (exception 1-4, reason). Both are optional; a field that is there must have the right shape."""
+    errors: list[str] = []
+    if "objections" in result:
+        items = result["objections"]
+        if not isinstance(items, list):
+            errors.append("objections は配列にしてください（無ければ省く）。")
+        else:
+            for idx, item in enumerate(items):
+                label = f"objections[{idx}]"
+                if not isinstance(item, dict):
+                    errors.append(f"{label} はオブジェクトにしてください。")
+                    continue
+                for key in ("case", "what", "why", "interpretation"):
+                    if not _text(item.get(key)):
+                        errors.append(f"{label} の {key} は空でない文字列にしてください。")
+                if item.get("state") not in OBJECTION_STATES:
+                    errors.append(f"{label} の state は {' か '.join(OBJECTION_STATES)} にしてください。")
+    if "stop" in result:
+        stop = result["stop"]
+        if not isinstance(stop, dict):
+            errors.append("stop はオブジェクトにしてください（無ければ省く）。")
+        else:
+            exc = stop.get("exception")
+            if type(exc) is not int or exc not in STOP_EXCEPTIONS:
+                errors.append("stop の exception は 1 から 4 の整数にしてください。")
+            if not _text(stop.get("reason")):
+                errors.append("stop の reason は空でない文字列にしてください。")
+    return errors
+
+
+def keep_worker_notes(pbi: dict[str, Any], result: dict[str, Any]) -> None:
+    """Keep a worker's objections and stop on its PBI, for the report. Nothing here asks a question."""
+    if isinstance(result.get("objections"), list) and result["objections"]:
+        pbi["objections"] = [dict(o) for o in result["objections"] if isinstance(o, dict)]
+    if isinstance(result.get("stop"), dict):
+        pbi["stop"] = dict(result["stop"])
