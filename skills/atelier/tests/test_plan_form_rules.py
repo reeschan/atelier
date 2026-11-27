@@ -1,4 +1,7 @@
-"""The plan's form rules for acceptance-first runs: light conditions, case assignment and where each PBI kind sits."""
+"""The plan's form rules for acceptance-first runs: light conditions, case assignment and where each PBI kind sits.
+
+The rules on e2e PBIs (level L3 or higher, a wave after every build PBI) hold with acceptance_first off as well.
+"""
 
 import copy
 import sys
@@ -170,7 +173,8 @@ class FormRulesOffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d).resolve()
             act = start_to_planner(root, [UNIT])
-            first = make_pbi("PBI-1")
+            # The e2e rules hold with the toggle off too, so the e2e PBI is L3; the stub outside the first wave passes.
+            first = make_pbi("PBI-1", level="L3")
             first["kind"] = "e2e"
             second = make_pbi("PBI-2", targets=["b.py"])
             second["kind"] = "stub"
@@ -182,10 +186,52 @@ class FormRulesOffTests(unittest.TestCase):
         from atelier import plan
 
         obj = copy.deepcopy(form_plan())
-        by_id(obj, "PBI-5")["level"] = "L1"
+        by_id(obj, "PBI-2")["depends_on"] = ["PBI-1"]
         self.assertEqual([], plan.validate_plan(obj))
         self.assertTrue(plan.validate_plan(obj, acceptance_first=True))
         self.assertEqual([], plan.validate_plan(form_plan(), acceptance_first=True))
+
+    def test_validate_plan_refuses_a_bad_e2e_pbi_with_the_toggle_on_or_off(self) -> None:
+        from atelier import plan
+
+        for first in (False, True):
+            for label, mutate, word in (
+                ("L1", lambda o: by_id(o, "PBI-5").update(level="L1"), "L3"),
+                ("L2", lambda o: by_id(o, "PBI-5").update(level="L2"), "L3"),
+                ("same wave as a build PBI", lambda o: by_id(o, "PBI-5").update(depends_on=["PBI-3"]), "build"),
+                ("before a build PBI", lambda o: by_id(o, "PBI-5").update(depends_on=["PBI-1"]), "build"),
+            ):
+                with self.subTest(acceptance_first=first, case=label):
+                    obj = copy.deepcopy(form_plan())
+                    mutate(obj)
+                    errors = plan.validate_plan(obj, acceptance_first=first)
+                    self.assertEqual(1, len(errors), errors)
+                    self.assertIn("PBI-5", errors[0])
+                    self.assertIn("e2e", errors[0])
+                    self.assertIn(word, errors[0])
+            with self.subTest(acceptance_first=first, case="good"):
+                self.assertEqual([], plan.validate_plan(form_plan(), acceptance_first=first))
+
+    def test_the_planner_is_refused_a_bad_e2e_pbi_with_the_toggle_off(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            act = start_to_planner(root, [UNIT])
+            self.assertFalse(saved_run(root)["acceptance_first"])
+            build = make_pbi("PBI-1")
+            e2e = make_pbi("PBI-2", depends_on=["PBI-1"], level="L2", targets=["e2e/app.spec.js"])
+            e2e["kind"] = "e2e"
+            code, out = submit(root, act, make_plan([build, e2e]))
+            self.assertEqual(2, code, out)
+            self.assertIn("PBI-2 は kind が e2e なので、level は L3 以上", out["error"])
+
+            e2e.update(level="L3", depends_on=[])
+            code, out = submit(root, act, make_plan([build, e2e]))
+            self.assertEqual(2, code, out)
+            self.assertIn("PBI-2 は kind が e2e なので、すべての kind が build の PBI より後の wave", out["error"])
+
+            e2e["depends_on"] = ["PBI-1"]
+            code, ask = submit(root, act, make_plan([build, e2e]))
+            self.assertEqual("plan_approval", ask["kind"], ask)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,8 @@ RUN = {
  'acceptance_first': False, 'acceptance_reason': 'テンプレートで切った', 'plan_checks': ['npm run type-check'], 'plan_e2e': [], 'final_review': {'skill': 'repo-review', 'args': 'full'},
  'candidates': [{'id': '指摘-2', 'kind': '確信度が 80 未満', 'title': '名前を直す', 'reason': 'minor・確信度 55・読みにくい'}],
  'estimate': '約 2 時間', 'decisions': [{'question': '通知しますか', 'options': [{'label': '通知する', 'note': '結果を知らせる', 'recommended': True}, {'label': '通知しない', 'note': '画面で確認する'}]}],
- 'spec': '注文の内容を確認します。', 'fix_list': [{'id': '修正-1', 'title': '表示を直す', 'reason': '金額が読みにくい'}]
+ 'spec': '注文の内容を確認します。',
+ 'fix_list': [{'id': '修正-1', 'kind': '見直しの指摘', 'title': '表示を直す', 'what': 'app.py:3 の正しさの指摘（major）', 'why': '金額が読みにくい', 'tried': '最後の見直しで見つかった。まだ直していない', 'state': '未修正', 'interpretation': 'なし', 'options': ['直す: 表示を直す', '見送る（backlog に残す）'], 'recommendation': '直す', 'pbis': ['PBI-1'], 'files': ['app.py'], 'reason': '仕様の金額の書き方に反する'}]
 }
 
 class PageTests(unittest.TestCase):
@@ -24,6 +25,8 @@ class PageTests(unittest.TestCase):
     self.assertEqual(result['text'], (EXPECTED / (kind + '.md')).read_text(encoding='utf-8'))
     self.assertTrue(result['summary'])
     self.assertIn('決めること', '\n'.join(result['summary']))
+  # The plan page has no E2E limit even when the template still names one.
+  self.assertNotIn('E2E の回数', pages.draft('plan', RUN)['text'])
  def test_render_refuses_corruption_before_launch(self):
   with TemporaryDirectory() as d:
    path = Path(d) / 'draft.md'

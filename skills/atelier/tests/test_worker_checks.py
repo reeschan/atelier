@@ -68,25 +68,28 @@ class WorkerTicketTests(unittest.TestCase):
             )
             code, act = done(tmp, act, {"exit_code": 0})
             code, act = done(tmp, act, {"schema": "atelier.findings/1", "findings": [make_finding("F-1", files=["b.py"])]})
-            code, act = done(tmp, act, {"schema": "atelier.triage/1", "items": [{"id": "F-1", "decision": "fix", "reason": "bug"}]})
+            # E2E runs once, after the final review; its failure goes to the triage, not to a fix worker
+            self.assertEqual(("check", ["npm run e2e"]), (act["action"], act["commands"]))
+            code, act = done(tmp, act, {"exit_code": 1, "output": "e2e: spec/box.spec.ts failed"})
+            self.assertEqual(("launch", "planner"), (act["action"], act["role"]), act)
+            code, act = done(tmp, act, {"schema": "atelier.triage/1", "items": [
+                {"id": "F-1", "decision": "fix", "reason": "bug"},
+                {"id": "E2E-1", "decision": "skip", "reason": "the box spec is flaky"},
+            ]})
             act = approve(tmp)
 
             fix = ticket_of(act)
+            self.assertEqual("FIX-1", fix["id"])
             self.assertEqual(["node --test test/b.test.js"], fix["checks"])
-            self.assertEqual(["node --test test/b.test.js", *WHOLE, "npm run e2e"], fix["repository_checks"])
+            # The run checks the fix stage once, in the final check: the whole check, then E2E.
+            self.assertEqual(["node --test test/b.test.js", *WHOLE], fix["repository_checks"])
 
             code, act = done(tmp, act, {"status": "ok"})
-            self.assertEqual(("check", ["node --test test/b.test.js", *WHOLE]), (act["action"], act["commands"]))
+            self.assertEqual(
+                ("check", ["node --test test/b.test.js", *WHOLE, "npm run e2e"]), (act["action"], act["commands"])
+            )
             code, act = done(tmp, act, {"exit_code": 0})
-            self.assertEqual(["npm run e2e"], act["commands"])
-
-            code, act = done(tmp, act, {"exit_code": 1, "output": "e2e: spec/box.spec.ts failed"})
-            self.assertEqual(("launch", "worker"), (act["action"], act["role"]), act)
-            e2e_fix = ticket_of(act)
-            self.assertEqual(("FIX-E2E", []), (e2e_fix["id"], e2e_fix["checks"]))
-            self.assertIn("spec/box.spec.ts", e2e_fix["failure"])
-            self.assertIn("npm run e2e", e2e_fix["repository_checks"])
-            self.assertIn("npm test", e2e_fix["repository_checks"])
+            self.assertEqual("done", act["action"], act)
 
     def test_a_fix_pbi_for_a_failed_whole_check_reproduces_it_instead_of_rerunning_it(self) -> None:
         with tempfile.TemporaryDirectory() as d:

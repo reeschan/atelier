@@ -106,7 +106,7 @@ class FixPbiTests(unittest.TestCase):
             self.assertEqual(("passed", "passed"), (pbis["PBI-1"]["status"], pbis["CO-1-FIX"]["status"]))
             self.assertEqual("fixed_by_pbi", state.load_state(tmp)["carry_overs"][0]["status"])
 
-    def test_the_second_fix_pbi_goes_one_level_up_and_the_third_failure_asks(self) -> None:
+    def test_the_second_fix_pbi_goes_one_level_up_and_the_third_failure_is_held_without_asking(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             act = fail_first_wave(tmp)
@@ -117,10 +117,20 @@ class FixPbiTests(unittest.TestCase):
             self.assertNotEqual(level, pbis_of(tmp)["CO-1-FIX"]["level"])
             self.assertEqual(2, state.load_state(tmp)["carry_overs"][0]["tries"])
 
+            # The third failure asks nothing: the fix PBI, PBI-1 and PBI-2 (which needs it) are held, and the
+            # run goes on to the final review since no other PBI is left.
             act = done(tmp, act, {"status": "ok"})
-            ask = done(tmp, act, {**FAILED, "failed_pbis": ["CO-1-FIX"]})
-            self.assertEqual(("ask", "rebuild"), (ask["action"], ask["kind"]))
-            self.assertIn("CO-1-FIX", Path(ask["question"]).read_text(encoding="utf-8"))
+            act = done(tmp, act, {**FAILED, "failed_pbis": ["CO-1-FIX"]})
+            self.assertEqual(("launch", "reviewer"), (act["action"], act["role"]))
+            pbis = pbis_of(tmp)
+            self.assertEqual(
+                {"PBI-1": "held", "CO-1-FIX": "held", "PBI-2": "held", "PBI-3": "passed"},
+                {pid: p["status"] for pid, p in pbis.items()},
+            )
+            run = state.load_state(tmp)
+            self.assertEqual("unresolved", run["carry_overs"][0]["status"])
+            self.assertEqual(["CO-1"], [u["carry_over"] for u in run["unresolved"]])
+            self.assertEqual(["check-1"], run["unresolved"][0]["commands"])
 
     def test_no_auto_fix_launch_after_a_failed_check(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -242,7 +252,9 @@ class LastWaveTests(unittest.TestCase):
         act = done(tmp, act, {"status": "ok"})
         act = done(tmp, act, {**FAILED, "failed_pbis": ["PBI-1"]})
         self.assertEqual(("launch", "reviewer"), (act["action"], act["role"]))
-        ask = done(tmp, act, {"schema": "atelier.findings/1", "findings": []})
+        act = done(tmp, act, {"schema": "atelier.findings/1", "findings": []})
+        self.assertEqual("check", act["action"])  # E2E runs after the final review
+        ask = done(tmp, act, {"exit_code": 0})
         self.assertEqual(("ask", "fix_approval"), (ask["action"], ask["kind"]))
         return ask
 
@@ -259,7 +271,6 @@ class LastWaveTests(unittest.TestCase):
             act = done(tmp, act, {"status": "ok"})
             self.assertEqual("check", act["action"])
             act = done(tmp, act, {"exit_code": 0})
-            act = done(tmp, act, {"exit_code": 0})
             self.assertEqual("done", act["action"])
             self.assertTrue(act["complete"])
             self.assertEqual("fixed", state.load_state(tmp)["carry_overs"][0]["status"])
@@ -271,8 +282,6 @@ class LastWaveTests(unittest.TestCase):
             reply = tmp / "reply.json"
             reply.write_text(json.dumps({"choice": "approve", "exclude_ids": ["CO-1"]}), encoding="utf-8")
             act = answer(tmp, "--reply", str(reply))
-            self.assertEqual("check", act["action"])
-            act = done(tmp, act, {"exit_code": 0})
             self.assertEqual("done", act["action"])
             self.assertFalse(act["complete"])
             self.assertEqual(["PBI-1"], act["unfinished_pbis"])

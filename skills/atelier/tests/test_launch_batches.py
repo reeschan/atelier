@@ -352,6 +352,41 @@ class FixStageTests(unittest.TestCase):
             self.assertEqual(check["action"], "check")
             self.assertEqual(load_run(root)["fix_groups_done"], [0, 1, 2])
 
+    def test_an_unlock_group_starts_first_and_alone_then_the_other_groups_start_together(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            act = agent_batch_run(root, [pbi("PBI-1", ["a.py"])])
+            write_result_for(act, {"status": "ok"})
+            run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
+            run = load_run(root)
+            run["state"] = "awaiting_fix_approval"
+            run["pending_action"] = None
+            run["pbis"][0]["status"] = "passed"
+            run["counters"]["review_count"] = 1
+            # The unlock (as the triage resolved it) sits between two findings whose files overlap nothing.
+            opened = {"cases": ["R1-2"], "fixed": ["R1-2"], "added": [], "fix": "scenario", "requirement": "R1", "file": "acc/R1.json"}
+            run["fix_list"] = [
+                {**make_finding("F1"), "file": "a.py", "decision": "fix"},
+                {**make_finding("OB-1"), "file": None, "decision": "ask", "unlock": opened},
+                {**make_finding("F2"), "file": "b.py", "decision": "fix"},
+            ]
+            state.save_state(root, run)
+            run_cli("next", "--root", str(root))
+            code, act = run_cli("answer", "--root", str(root), "--choice", "approve")
+            self.assertEqual(code, 0, act)
+            # The unlock's group goes first and on its own: its lines are checked before any group changes the code.
+            self.assertEqual((act["action"], act["fix_group"]), ("launch", 0))
+            self.assertEqual([[i["id"] for i in g] for g in load_run(root)["fix_groups"]], [["OB-1"], ["F1"], ["F2"]])
+            write_result_for(act, {"status": "ok"})
+            code, nxt = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
+            # This run has no lock, so the unlock's lines cannot be checked: the unlock is left over, and then the other
+            # groups start together.
+            self.assertEqual(nxt["action"], "launches", nxt)
+            self.assertEqual([m["fix_group"] for m in nxt["launches"]], [1, 2])
+            run = load_run(root)
+            self.assertEqual([(lo["kind"], lo["items"]) for lo in run["leftovers"]], [("unlock_failed", ["OB-1"])])
+            self.assertEqual(run["unlock_checks"], [])
+
 
 class OldRunTests(unittest.TestCase):
     def test_a_run_saved_with_fix_group_index_keeps_its_finished_groups(self) -> None:

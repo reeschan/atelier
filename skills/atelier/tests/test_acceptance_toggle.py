@@ -116,6 +116,38 @@ class AcceptanceToggleTests(unittest.TestCase):
                 report = actions._write_report(root, run).read_text(encoding="utf-8")
                 self.assertIn("- 部品「受け入れを先に置く」: " + line, report)
 
+    def test_report_shows_the_cases_and_the_unlocks_when_acceptance_first(self) -> None:
+        from atelier import actions
+        run = survey(self.root, [ACCEPTANCE])
+        run["scenarios"] = [{"id": "R1", "mode": "normal", "cases": [{"id": f"R1-{n}", "pbi": "PBI-1"} for n in (1, 2, 3, 4)]}]
+        run["wave_cases"] = [{
+            "check": "check-0003", "total": 4, "ran": ["R1-1", "R1-2", "R1-3"], "missing": ["R1-4"],
+            "failed": {"R1-2": "failure", "R1-3": "failure"}, "excused": ["R1-3"], "passed": ["R1-1"], "sent_back": [],
+        }]
+        run["unlocks"] = [{
+            "item": "OB-1", "requirement": "R1", "file": "tests/test_accept.py", "cases": ["R1-2"], "fixed": ["R1-2"],
+            "added": [], "fix": "scenario", "commit_before": "a" * 40, "commit": "b" * 40,
+            "verified": {"work_tree": {"R1-2": "passed"}},
+        }]
+        report = actions._write_report(self.root, run).read_text(encoding="utf-8")
+        # R1-2 passed after its unlock; R1-3 stayed red with an objection; R1-4 did not run.
+        self.assertIn("- 受け入れのケース: 計画の 4 件。通った 2 件・落ちた 1 件（うち異議つきの赤 1 件）・流れていない 1 件", report)
+        self.assertIn("- 鍵を外した記録: 1 件", report)
+        self.assertIn("## 鍵を外した記録", report)
+        self.assertIn(
+            "- OB-1（要件 R1、シナリオを直す）: ケース R1-2。ファイル tests/test_accept.py。鍵のコミット aaaaaaa → bbbbbbb", report
+        )
+        self.assertIn("- 途中の戻り: 0 回", report)
+        self.assertIn("- backlog: 残りが無いため、backlog に入れたものは無い", report)
+
+    def test_report_has_no_case_lines_when_acceptance_first_is_off(self) -> None:
+        from atelier import actions
+        run = survey(self.root, [UNIT])
+        report = actions._write_report(self.root, run).read_text(encoding="utf-8")
+        self.assertNotIn("受け入れのケース", report)
+        self.assertNotIn("鍵を外した記録", report)
+        self.assertIn("- 途中の戻り: 0 回", report)
+
     def test_unknown_command_kind_is_still_refused(self) -> None:
         git_init(self.root)
         _, goal, spec = init_workspace(self.root)

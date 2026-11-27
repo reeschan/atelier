@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -12,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from atelier import acceptance, actions, eol, flow, guards, interview, locks, pages, plan, record, runners, state, survey, template
+from atelier import acceptance, actions, backlog, eol, flow, guards, interview, locks, pages, plan, record, retro, runners, state, survey, template
 
 
 class ConductorError(Exception):
@@ -79,13 +80,17 @@ def _lock_guard(root: Path, run: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _launch_snapshot(root: Path, run: dict[str, Any], act: dict[str, Any]) -> dict[str, Any]:
-    """The work root before a launch. A worker may also change existing files outside its paths."""
+    """The work root before a launch. A worker may also change existing files outside its paths.
+
+    The fix worker of an unlock may change the acceptance test file the unlock opens (G1 does not guard it for this
+    launch); every other locked file stays guarded.
+    """
     return guards.snapshot(
         root,
         allowed_paths=actions.allowed_paths_for(run, act["role"], act.get("pbi"), act.get("fix_group")),
         report_path=act["result"],
-        outside_edits=actions.outside_edit_rule(run, act["role"], act.get("pbi")),
-        locked=_lock_guard(root, run),
+        outside_edits=actions.outside_edit_rule(run, act["role"], act.get("pbi"), act.get("fix_group")),
+        locked=locks.without(_lock_guard(root, run), actions.opened_files(run, act.get("fix_group"))),
     )
 
 
@@ -183,7 +188,6 @@ def _load_json_arg(raw: str | None, label: str) -> dict[str, Any] | None:
 def _apply_resolved_template(run: dict[str, Any], tmpl: dict[str, Any]) -> None:
     run["active_template"] = tmpl
     run["limits"] = dict(tmpl["limits"])
-    run["counters"]["e2e_limit"] = tmpl["limits"].get("e2e_rounds", 2)
 
 
 def _normalize_tokens(tokens: Any) -> Any:
@@ -362,10 +366,11 @@ def _append_check_records_for_wave(
     run: dict[str, Any],
     result: dict[str, Any],
     exit_code: int,
-    rechecked: list[dict[str, Any]],
 ) -> None:
-    checked_pbis = [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")] + rechecked
+    checked_pbis = [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")]
     failed_ids = set(result.get("failed_pbis") or [])
+    # Known (the key is there) even when empty: a failure laid on no PBI is left unresolved and the PBIs pass.
+    known = "failed_pbis" in result
     raw_rules = [str(r) for r in (result.get("rules") or [])]
     first_checked = run.setdefault("first_pass_checked_pbis", [])
     pbi_launches = run.get("pbi_launches") or {}
@@ -389,7 +394,7 @@ def _append_check_records_for_wave(
 
     for pbi in checked_pbis:
         pid = pbi["id"]
-        passed = exit_code == 0 or (bool(failed_ids) and pid not in failed_ids)
+        passed = exit_code == 0 or (known and pid not in failed_ids)
         # A fix PBI's check is a second try at its carried PBIs' check, never a first pass.
         is_first = pid not in first_checked and pbi.get("kind") != "fix"
         if is_first:
@@ -412,22 +417,62 @@ def _append_check_records_for_wave(
             raise ConductorError(f"G4: secret detected in check record ({hits[0]['kind']})")
 
 
-def _failed_pbis_from_commands(run: dict[str, Any], result: dict[str, Any]) -> set[str]:
-    """The PBIs a failed wave check is laid on, from each command's exit code.
+def _command_outputs(result: dict[str, Any], commands: list[str]) -> dict[str, str]:
+    """Each failed command's own part of a check's output.
 
-    A PBI fails when one of its own checks failed. A failed command no PBI of the wave owns (a plan check)
-    is laid on every PBI of the wave except fix PBIs, which pass or fail on their own checks only.
-    Empty when the result has no per-command exit codes.
+    The check writes each failed command's output after a "$ <command>" line (_check_output). A command whose
+    part cannot be found (the result was written another way) gets the whole output.
     """
-    failing = {str(c.get("command")) for c in result.get("commands") or [] if isinstance(c, dict) and c.get("exit_code")}
+    output = str(result.get("output") or "")
+    known = [str(c.get("command")) for c in result.get("commands") or [] if isinstance(c, dict)]
+    out: dict[str, str] = {}
+    for cmd in commands:
+        head = f"$ {cmd}\n"
+        if output.startswith(head):
+            start = len(head)
+        else:
+            at = output.find("\n" + head)
+            if at < 0:
+                out[cmd] = output
+                continue
+            start = at + 1 + len(head)
+        ends = [i for i in (output.find(f"\n$ {other}", start) for other in known) if i >= 0]
+        out[cmd] = output[start:min(ends)] if ends else output[start:]
+    return out
+
+
+def _lay_failed_commands(
+    run: dict[str, Any], result: dict[str, Any], check_id: str | None
+) -> tuple[set[str], list[str]] | None:
+    """Whose failure each failed command of a wave check is, by the failure owners' steps (state.failure_owners).
+
+    (1) the PBIs of the wave with the command in their own checks, else (2) the PBIs of the wave with a test file in
+    their targets that the command's output names, else (3) none: the command goes on the run's unresolved list with
+    the end of its output and the check's id, and no PBI fails for it. Fix PBIs go by the same steps. Returns (the
+    failed PBIs, the failed commands laid on them), or None when the result has no per-command exit codes.
+    """
+    failing = [str(c.get("command")) for c in result.get("commands") or [] if isinstance(c, dict) and c.get("exit_code")]
     if not failing:
-        return set()
+        return None
     checked = [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")]
-    owned = {cmd for p in checked for cmd in p.get("checks") or []}
-    ids = {p["id"] for p in checked if failing & set(p.get("checks") or [])}
-    if failing - owned:
-        ids |= {p["id"] for p in checked if p.get("kind") != "fix"}
-    return ids
+    outputs = _command_outputs(result, failing)
+    ids: set[str] = set()
+    laid: list[str] = []
+    for cmd in failing:
+        owners, _step = state.failure_owners(checked, cmd, outputs[cmd])
+        if owners:
+            ids |= set(owners)
+            laid.append(cmd)
+            continue
+        acceptance.add_unresolved(
+            run,
+            acceptance.CHECK_UNRESOLVED,
+            "落ちたコマンドを checks に持つ PBI も、出力に名前が出るテストのファイルを targets に持つ PBI も wave に無い",
+            command=cmd,
+            output=state.output_tail(outputs[cmd]),
+            check=check_id or "",
+        )
+    return ids, laid
 
 
 def _carry_failed_check(run: dict[str, Any], failed_commands: list[str]) -> str:
@@ -435,13 +480,13 @@ def _carry_failed_check(run: dict[str, Any], failed_commands: list[str]) -> str:
 
     The failed PBIs become a carry-over. While PBIs are left, a fix PBI goes before them (a failed fix PBI
     is tried once more one level up); after the last wave the carry-over waits for the fix stage. A fix PBI
-    that failed past its tries is left failed, and the user is asked.
+    that failed past its tries is left unresolved without asking the user: it, its carry-over's PBIs and the
+    PBIs that depend on them are held, and the run goes on with the PBIs that do not.
     """
     output = run.get("last_check_failure") or ""
     failed = [p for p in run.get("pbis", []) if p.get("status") == "failed"]
-    left = state.any_pending_pbis(run)
-    exceeded = False
     tmpl = actions.active_template(run)
+    retried: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for fix in [p for p in failed if p.get("kind") == "fix"]:
         co = state.carry_over_of(run, fix["carry_over"])
         if co is None:
@@ -449,8 +494,13 @@ def _carry_failed_check(run: dict[str, Any], failed_commands: list[str]) -> str:
         co["output"] = output
         co["commands"] = failed_commands or co["commands"]
         if co["tries"] >= state.FIX_PBI_TRIES:
-            exceeded = True
-        elif not left:
+            _leave_carry_over_unresolved(run, co, fix)
+        else:
+            retried.append((fix, co))
+    # The PBIs held above are no longer left; what is left is what does not depend on them.
+    left = state.any_pending_pbis(run)
+    for fix, co in retried:
+        if not left:
             fix["status"] = "carried"
         else:
             co["tries"] += 1
@@ -458,7 +508,8 @@ def _carry_failed_check(run: dict[str, Any], failed_commands: list[str]) -> str:
             fix["checks"] = list(co["commands"]) or fix["checks"]
             fix["level"] = _next_level(fix.get("level", "L2"))
             _reroute(tmpl, fix)
-    originals = [p for p in failed if p.get("kind") != "fix"]
+    # A failed PBI held above as unresolved stays held; it is not carried over again.
+    originals = [p for p in failed if p.get("kind") != "fix" and p.get("status") == "failed"]
     if originals:
         co = state.record_carry_over(run, originals, failed_commands, output)
         if left:
@@ -466,9 +517,23 @@ def _carry_failed_check(run: dict[str, Any], failed_commands: list[str]) -> str:
             _reroute(tmpl, fix)
             state.insert_fix_pbi(run, co, fix)
             co["tries"] = 1
-    if exceeded:
-        return "check_failed"
     return "carried_next" if state.any_pending_pbis(run) else "carried_last"
+
+
+def _leave_carry_over_unresolved(run: dict[str, Any], co: dict[str, Any], fix: dict[str, Any]) -> dict[str, Any]:
+    """Hold a carry-over whose fix PBI failed past its tries and put it on the run's unresolved list."""
+    held = state.hold_unresolved(run, co)
+    return acceptance.add_unresolved(
+        run,
+        acceptance.CARRY_OVER_UNRESOLVED,
+        f"修正の PBI {fix['id']} が {co['tries']} 回作っても検査に落ちた（2 回目は 1 難度上）",
+        carry_over=co["id"],
+        fix_pbi=fix["id"],
+        pbis=list(co["pbis"]),
+        commands=list(co["commands"]),
+        output=state.output_tail(co.get("output") or ""),
+        held_pbis=held,
+    )
 
 
 def _reroute(tmpl: dict[str, Any], pbi: dict[str, Any]) -> None:
@@ -478,6 +543,47 @@ def _reroute(tmpl: dict[str, Any], pbi: dict[str, Any]) -> None:
     pbi["route_inputs"] = route_choice["inputs"]
     pbi["route_template"] = route_choice["template"]
     pbi["route_index"] = 0
+
+
+def _lock_passed_e2e(root: Path, run: dict[str, Any]) -> None:
+    """In a locked run, add the E2E files of the e2e PBIs that passed the wave check to the lock: the list is written
+    again, the lock commit moves on, and the copy outside the work tree, the commit id and the hash are written again.
+    From the next launch on, G1 and the wave check guard those files. A run without acceptance_first has no lock."""
+    if not actions.locked_wave(run) or not locks.passed_e2e(run):
+        return
+    try:
+        locks.extend(root, run)
+    except state.StateError as exc:
+        raise ConductorError(str(exc)) from exc
+
+
+def _settle_unlock_check(root: Path, run: dict[str, Any], pending: dict[str, Any]) -> None:
+    """An unlock's check is done: judge its fixed and added lines from the JUnit XML (not the exit codes; the lock
+    commit's run is meant to fail), take the temporary worktree away, and lock the tests again or put the file back
+    (actions.settle_unlock_check). The fix stage then goes on: the next unlock's check, the groups left, or the
+    final check once."""
+    try:
+        verdict = actions.settle_unlock_check(root, run, pending)
+    except state.StateError as exc:
+        raise ConductorError(str(exc)) from exc
+    info = pending.get("unlock") or {}
+    hits = _try_append_record(root, {
+        "type": "check",
+        "pbi": None,
+        "rules": [] if verdict["passed"] else [acceptance.UNLOCK_RULE],
+        "stage": "unlock",
+        "model": "script",
+        "level": "unlock",
+        "result": "pass" if verdict["passed"] else "fail",
+        "read_launch_ids": [str(info["launch_id"])] if info.get("launch_id") else [],
+        "first_pass": False,
+    })
+    if hits:
+        raise ConductorError(f"G4: secret detected in unlock check record ({hits[0]['kind']})")
+    if state.fix_groups_left(run) or run.get("unlock_checks"):
+        run["subphase"] = "build"
+        return
+    flow.apply_event(run, "fixes_built")
 
 
 def _handle_check_done(
@@ -497,29 +603,39 @@ def _handle_check_done(
             raise ConductorError(str(exc)) from exc
         flow.apply_event(run, acceptance.settle_red(run, verdicts, (pending or {}).get("launch_id")))
     elif s == "checking":
-        rechecked = state.recheck_held_pbis(run)
         laid: set[str] = set()
         if (pending or {}).get("wave") is not None:
-            # A locked run: the cases and the lock fail the PBIs they are laid on; the other commands as before.
+            # A locked run: the cases and the lock fail the PBIs they are laid on; the other commands as below.
             result = actions.judge_wave(root, run, pending or {}, result)
             exit_code = result["exit_code"]
             laid = set(result.get("case_failed_pbis") or [])
+        failed_commands = [
+            str(c["command"]) for c in result.get("commands") or [] if isinstance(c, dict) and c.get("exit_code")
+        ]
         if exit_code != 0:
-            # The PBIs the cases and the lock failed always join the ones the result names (or the commands show).
+            # The PBIs the cases and the lock failed always join the ones the result names, or the ones the failure
+            # owners' steps lay the failed commands on. A failure laid on no PBI is left unresolved, and the PBIs
+            # pass unless something else fails them. With neither, every PBI of the wave fails (nothing tells which).
             given = {str(p) for p in result.get("failed_pbis") or []}
-            derived = (given or _failed_pbis_from_commands(run, result)) | laid
-            if derived:
-                result = {**result, "failed_pbis": sorted(derived)}
-        _append_check_records_for_wave(root, run, result, exit_code, rechecked)
+            owned = None if given else _lay_failed_commands(run, result, (pending or {}).get("launch_id"))
+            result = {k: v for k, v in result.items() if k != "failed_pbis"}
+            if given:
+                result["failed_pbis"] = sorted(given | laid)
+            elif owned is not None:
+                result["failed_pbis"] = sorted(owned[0] | laid)
+                failed_commands = owned[1]
+            elif laid:
+                result["failed_pbis"] = sorted(laid)
+            if "failed_pbis" in result and not result["failed_pbis"]:
+                # Only unresolved failures: the wave passes and the run goes on.
+                exit_code = 0
+        _append_check_records_for_wave(root, run, result, exit_code)
         if exit_code == 0:
             run["last_check_failure"] = ""
             run["last_failed_rules"] = []
             for pbi in run.get("pbis", []):
                 if pbi.get("status") in ("built", "failed"):
                     pbi["status"] = "passed"
-            for pbi in rechecked:
-                pbi["status"] = "passed"
-                pbi.pop("held_reason", None)
             state.settle_passed_fix_pbis(run)
             if state.any_pending_pbis(run):
                 flow.apply_event(run, "wave_passed_next")
@@ -542,13 +658,18 @@ def _handle_check_done(
                 for pbi in run.get("pbis", []):
                     if pbi.get("status") == "built":
                         pbi["status"] = "failed"
-            failed_commands = [
-                str(c["command"]) for c in result.get("commands") or [] if isinstance(c, dict) and c.get("exit_code")
-            ]
             # A fix PBI that passed in a failed wave still settles its carry-over.
             state.settle_passed_fix_pbis(run)
             flow.apply_event(run, _carry_failed_check(run, failed_commands))
-    elif s == "fixing":
+        _lock_passed_e2e(root, run)
+    elif s == "fixing" and (pending or {}).get("stage") == "unlock":
+        _settle_unlock_check(root, run, pending or {})
+    elif s in ("final_checking", "fixing"):
+        # The final check runs once after the fix stage. Passed or failed, the run goes to the report: what failed is
+        # left over on the run, and no fix worker is launched again. A run saved while it waited for the old fix
+        # check takes that check as its final check.
+        if s == "fixing":
+            flow.apply_event(run, "fixes_built")
         rules = [str(r) for r in (result.get("rules") or ([] if exit_code == 0 else ["G9"]))]
         hits = _try_append_record(root, {
             "type": "check",
@@ -562,18 +683,10 @@ def _handle_check_done(
             "first_pass": False,
         })
         if hits:
-            raise ConductorError(f"G4: secret detected in fix check record ({hits[0]['kind']})")
-        if exit_code == 0:
-            fixed = {item["id"] for item in run.get("fix_list") or [] if item.get("kind") == "carry_over"}
-            for co in state.open_carry_overs(run):
-                if co["id"] in fixed:
-                    state.settle_carry_over(run, co, "fixed")
-            run["last_fix_launch_ids"] = []
-            state.reset_fix_groups(run, [])
-            flow.apply_event(run, "fix_check_passed")
-        else:
-            state.reset_fix_groups(run)
-            run["subphase"] = "build"
+            raise ConductorError(f"G4: secret detected in final check record ({hits[0]['kind']})")
+        actions.finish_final_check(run, {**result, "exit_code": exit_code}, list((pending or {}).get("commands") or []) or None)
+        run["last_fix_launch_ids"] = []
+        state.reset_fix_groups(run, [])
     elif s == "running_e2e":
         rules = [str(r) for r in (result.get("rules") or ([] if exit_code == 0 else ["G9"]))]
         hits = _try_append_record(root, {
@@ -589,18 +702,11 @@ def _handle_check_done(
         })
         if hits:
             raise ConductorError(f"G4: secret detected in e2e check record ({hits[0]['kind']})")
-        if exit_code == 0:
-            run["last_e2e_failure"] = ""
-            flow.apply_event(run, "e2e_passed")
-        else:
-            run["last_e2e_failure"] = (
-                result.get("output")
-                or result.get("error")
-                or result.get("summary")
-                or json.dumps(result, ensure_ascii=False)
-            )
-            state.reset_fix_groups(run, [])
-            flow.apply_event(run, "e2e_failed")
+        # Passed or failed, E2E goes on one way: a failure joins the retrospective list, never the fix stage.
+        try:
+            actions.finish_e2e(root, run, {**result, "exit_code": exit_code})
+        except retro.RetroError as exc:
+            raise ConductorError(str(exc)) from exc
     else:
         raise ConductorError(f"unexpected check completion in state {s}")
 
@@ -633,6 +739,8 @@ def _build_pbis_from_plan(run: dict[str, Any], result: dict[str, Any]) -> list[d
                 "reason": level_reason,
                 "kind": item.get("kind") or plan.DEFAULT_KIND,
                 **({"requirements": list(item["requirements"])} if item.get("requirements") else {}),
+                # The backlog entries this PBI takes; they are marked as taken by the run when the plan is approved.
+                **({"backlog": list(dict.fromkeys(item["backlog"]))} if item.get("backlog") else {}),
                 "targets": targets,
                 "files": targets,
                 "unit_tests": unit_tests,
@@ -691,7 +799,9 @@ def _validate_completion_before_accept(
             if missing:
                 raise ConductorError(f"spec missing required to-spec sections: {', '.join(missing)}")
     elif s == "planning":
-        errors = plan.validate_plan(result, acceptance_first=bool(run.get("acceptance_first")))
+        errors = plan.validate_plan(
+            result, acceptance_first=bool(run.get("acceptance_first")), backlog_ids=backlog.candidate_ids(run)
+        )
         review = result.get("final_review")
         if not errors and review:
             names = survey.review_skill_names(actions.load_facts(root, run))
@@ -715,10 +825,41 @@ def _validate_completion_before_accept(
         if errors:
             raise ConductorError(" ".join(errors))
     elif s == "triaging":
-        expected_ids = [f["id"] for f in run.get("findings", [])]
-        errors = plan.validate_triage(result, expected_ids=expected_ids)
+        # Every item of the retrospective list, once; an unlock names cases of the lock (or lines added to one of its
+        # requirements), and an unlock request's own unlock is checked the same way.
+        try:
+            listed = retro.load_items(run)
+        except state.StateError as exc:
+            raise ConductorError(str(exc)) from exc
+        errors = plan.validate_triage(
+            _with_requested_unlocks(listed, result),
+            expected_ids=[item["id"] for item in listed],
+            locked_cases=locks.locked_cases(run),
+            plan_cases=list(acceptance.case_requirements(run)),
+        )
         if errors:
             raise ConductorError(" ".join(errors))
+
+
+def _with_requested_unlocks(listed: list[dict[str, Any]], result: dict[str, Any]) -> dict[str, Any]:
+    """The triage result, with an unlock request's own unlock on its item when the decision fixes or asks it and
+    names no unlock of its own (an unlock request asks for the lock to come off those cases)."""
+    requested = {item["id"]: retro.requested_unlock(item) for item in listed}
+    items = result.get("items")
+    if not isinstance(items, list):
+        return result
+    out: list[Any] = []
+    for item in items:
+        if (
+            isinstance(item, dict)
+            and "unlock" not in item
+            and isinstance(item.get("id"), str)
+            and requested.get(item["id"]) is not None
+            and item.get("decision") in plan.UNLOCK_DECISIONS
+        ):
+            item = {**item, "unlock": requested[item["id"]]}
+        out.append(item)
+    return {**result, "items": out}
 
 
 def _record_outside_edits(run: dict[str, Any], pending: dict[str, Any], result: dict[str, Any]) -> None:
@@ -735,7 +876,7 @@ def _record_outside_edits(run: dict[str, Any], pending: dict[str, Any], result: 
             group = (state.fix_groups_left(run) or [0])[0]
         owner = f"FIX-{group + 1}"
     else:
-        owner = "FIX-E2E"
+        owner = "FIX"
     edits = run.setdefault("outside_edits", [])
     for name in pending.get("outside_edits") or []:
         entry = next((e for e in edits if (e["by"], e["file"]) == (owner, name)), None)
@@ -806,9 +947,12 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
             }
             run["subphase"] = "ask"
     elif s == "planning":
+        before = acceptance.scenarios(run)
         run["pbis"] = _build_pbis_from_plan(run, result)
         run["open_questions"] = list(result.get("open_questions") or [])
         run["scenarios"] = [dict(sc) for sc in result.get("scenarios") or []]
+        # A re-plan writes the scenarios anew; a requirement it left as it was keeps being left out of the lock.
+        acceptance.keep_unchanged_marks(run, before)
         run["interfaces"] = [dict(i) for i in result.get("interfaces") or []]
         run["plan_checks"] = list(result.get("checks") or [])
         run["plan_e2e"] = list(result.get("e2e") or [])
@@ -831,8 +975,14 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
                     hits = _try_append_record(root, {"type": "fix", "rule": rule_id, "method": "auto"})
                     if hits:
                         raise ConductorError(f"G4: secret detected in fix record ({hits[0]['kind']})")
+            if pbi is not None and isinstance(result.get("stop"), dict):
+                # A stop (one of the four exceptions) holds this PBI and the PBIs that depend on it; the other PBIs
+                # of the wave go on, and the user is asked once nothing is left to launch.
+                state.hold_for_stop(run, pbi_id)
         if state.next_buildable_pbi(run) is not None:
             flow.apply_event(run, "worker_returned")
+        elif state.stopped_pbis(run):
+            flow.apply_event(run, "worker_stopped")
         else:
             flow.apply_event(run, "wave_built")
     elif s == "building_acceptance":
@@ -848,39 +998,45 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
         else:
             flow.apply_event(run, "acceptance_built")
     elif s == "reviewing":
-        kept, dropped = plan.split_findings(list(result.get("findings") or []))
-        run["findings"] = kept
+        # The review's findings, the workers' objections, the unresolved items and the plan returns become one
+        # retrospective list, written outside the work tree. Only review items are left out for confidence or style.
+        # E2E runs next; a failed E2E joins the list before the triage sorts it.
+        findings = [f for f in result.get("findings") or [] if isinstance(f, dict)]
+        run["findings"] = plan.split_findings(findings)[0]
+        kept, dropped = retro.collect(run, findings)
         run["findings_dropped"] = dropped
-        kept_path = state.run_dir(root) / "results" / "findings_kept.json"
-        kept_path.parent.mkdir(parents=True, exist_ok=True)
-        kept_path.write_text(
-            json.dumps({"schema": plan.SCHEMA_FINDINGS, "findings": kept}, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        try:
+            retro.write(root, run, kept, dropped)
+        except retro.RetroError as exc:
+            raise ConductorError(str(exc)) from exc
         flow.apply_event(run, "review_returned")
-        if not kept:
-            run["fix_list"] = state.carry_over_fix_items(run)
-            run["triage_ask_items"] = []
-            flow.apply_event(run, "triaged")
-            if not dropped and not run["fix_list"]:
-                flow.apply_event(run, "nothing_to_fix")
     elif s == "reviewing_acceptance":
         flow.apply_event(run, acceptance.settle_review(run, result, actions.active_template(run), pending.get("launch_id")))
     elif s == "triaging":
-        finding_by_id = {f["id"]: f for f in run.get("findings", [])}
+        try:
+            listed = retro.load_items(run)
+        except state.StateError as exc:
+            raise ConductorError(str(exc)) from exc
+        finding_by_id = {item["id"]: item for item in listed}
+        locked = locks.locked_cases(run)
         fix_items: list[dict[str, Any]] = []
         ask_items: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
-        for item in result.get("items") or []:
+        for item in _with_requested_unlocks(listed, result).get("items") or []:
             fid = item["id"]
             base = dict(finding_by_id.get(fid, {"id": fid}))
+            # An unlock request's own unlock is the decision's only when the decision takes it (above).
+            base.pop("unlock", None)
             merged = {
                 **base,
                 "id": fid,
                 "decision": item["decision"],
                 "reason": item["reason"],
-                "title": base.get("fix") or base.get("why") or fid,
+                "title": base.get("title") or base.get("what") or base.get("fix") or base.get("why") or fid,
             }
+            if isinstance(item.get("unlock"), dict) and item["decision"] in plan.UNLOCK_DECISIONS:
+                # The lock comes off these cases in the fix stage, once the fix list with this item is approved.
+                merged["unlock"] = acceptance.resolve_unlock(run, item["unlock"], locked)
             if item["decision"] == "fix":
                 fix_items.append(merged)
             elif item["decision"] == "ask":
@@ -892,22 +1048,29 @@ def _handle_launch_done(root: Path, run: dict[str, Any], pending: dict[str, Any]
         run["triage_skipped"] = skipped
         flow.apply_event(run, "triaged")
     elif s == "fixing":
-        fixed_rules = [str(r) for r in (result.get("fixed_rules") or ["review" if run.get("approvals", {}).get("fix_list") else "e2e"])]
+        fixed_rules = [str(r) for r in (result.get("fixed_rules") or ["review"])]
         for rule_id in fixed_rules:
             hits = _try_append_record(root, {"type": "fix", "rule": rule_id, "method": "asked"})
             if hits:
                 raise ConductorError(f"G4: secret detected in fix record ({hits[0]['kind']})")
+        group = None
         if run.get("fix_groups"):
             group = pending.get("fix_group")
             if group is None:
                 left = state.fix_groups_left(run)
                 group = left[0] if left else None
+        # What the worker could not fix is left over; the fix stage does not launch it again.
+        actions.fix_open_leftovers(run, group, result)
+        if run.get("fix_groups"):
             if group is not None:
                 state.mark_fix_group_done(run, group)
-            if state.fix_groups_left(run):
+                # An unlock's fixed lines are checked next, before any other launch (actions.make_unlock_check).
+                actions.queue_unlock_check(run, group, pending.get("launch_id"))
+            if state.fix_groups_left(run) or run.get("unlock_checks"):
                 run["subphase"] = "build"
                 return
-        run["subphase"] = "check"
+        # Every fix group is built: the final check runs once, and the fix stage is not entered again.
+        flow.apply_event(run, "fixes_built")
     else:
         raise ConductorError(f"unexpected launch completion in state {s}")
 
@@ -1192,7 +1355,7 @@ def _member_label(member: dict[str, Any]) -> str:
     if member.get("pbi"):
         return member["pbi"]
     group = member.get("fix_group")
-    return f"FIX-{group + 1}" if group is not None else "FIX-E2E"
+    return f"FIX-{group + 1}" if group is not None else "FIX"
 
 
 def _batch_violations(
@@ -1247,8 +1410,10 @@ def _batch_violations(
         mine = {
             **before,
             "allowed_paths": actions.allowed_paths_for(run, m["role"], m.get("pbi"), m.get("fix_group")),
-            "outside_edits": actions.outside_edit_rule(run, m["role"], m.get("pbi")),
+            "outside_edits": actions.outside_edit_rule(run, m["role"], m.get("pbi"), m.get("fix_group")),
             "report_path": m["result"],
+            # The file an unlock opens is opened to its own launch only.
+            "locked": locks.without(before.get("locked"), actions.opened_files(run, m.get("fix_group"))),
         }
         ignore = [p for other, paths in owned.items() if other != lid for p in paths]
         ignore += [name for name, ids in claimers.items() if len(ids) == 1 and ids[0] != lid]
@@ -1621,6 +1786,77 @@ def _apply_level_changes(run: dict[str, Any], reply_obj: dict[str, Any] | None) 
         pbi["route_index"] = 0
 
 
+def _start_planner_revision(
+    run: dict[str, Any],
+    *,
+    request: str,
+    action: str,
+    changed: list[str],
+    summary: str,
+    plan_return: str | None,
+) -> None:
+    """Send a run back to the planner's revise on the user's answer (the broken-plan or the plan-return question).
+
+    The passed PBIs stay as they are (_validate_completion_before_accept refuses a plan that changes them), the open
+    carry-overs go into the re-plan with the PBIs they hold, and the revised plan is approved again. In an acceptance-first run the
+    scenarios as they are now are kept, so that the approval can tell which requirements the new plan changed and
+    lock the tests again (_reopen_after_replan).
+    """
+    for co in state.open_carry_overs(run):
+        co["status"] = "replanned"
+    if run.get("acceptance_first") and run.get("lock"):
+        run["plan_return_relock"] = {"plan_return": plan_return, "scenarios": copy.deepcopy(acceptance.scenarios(run))}
+    run["planner_mode"] = "revise"
+    run["plan_revision_request"] = request
+    run["pending_plan_sends"] = None
+    state.append_approval_revision(run, action=action, changed_pbis=changed, summary=summary)
+
+
+def _plan_return_request(run: dict[str, Any], record: dict[str, Any], text: str | None) -> str:
+    """What the planner is asked to change when the user fixes the plan after a worker's stop."""
+    lines = [
+        f"The worker on {stop['pbi']} ({stop['title']}) returned a stop: exception {stop['exception']} "
+        f"({stop['label']}). Reason: {stop['reason']}"
+        for stop in record["stops"]
+    ]
+    lines += [
+        f"Objection of {item.get('pbi')} on {item.get('case')}: {item.get('what')} ({item.get('why')})"
+        for item in record.get("objections") or []
+    ]
+    lines.append(f"The run held these PBIs while it asked the user: {', '.join(record['held_pbis']) or 'none'}.")
+    if text:
+        lines.append(f"User note: {text}")
+    lines.append(
+        "The user chose to fix the plan. Change only the PBIs that the public interface and the scenarios behind "
+        "this stop concern, and keep every other PBI as it is. The passed PBIs cannot change."
+    )
+    if run.get("acceptance_first"):
+        lines.append(
+            "Fix the scenarios and the interfaces the stop concerns. The acceptance PBI of each requirement whose "
+            "scenario you change is built again, checked Red and read by you again, and the acceptance tests are "
+            "then locked again. A passed stub PBI cannot change: to change a public interface, add a stub PBI for it."
+        )
+    return "\n".join(lines)
+
+
+def _reopen_after_replan(run: dict[str, Any]) -> None:
+    """When a plan the planner revised in the middle of an acceptance-first run is approved, send the requirements it
+    changed back to the acceptance stage and take the lock off.
+
+    The acceptance PBIs of the changed (or added) requirements are built again, checked Red and read by the planner
+    again; the next entry into building locks the tests again, with a new lock list, lock commit, copy outside the
+    work tree and hash. Nothing happens for an approval that follows no re-plan.
+    """
+    pending = run.pop("plan_return_relock", None)
+    if not pending or not run.get("acceptance_first"):
+        return
+    reopened = acceptance.reopen_revised(run, pending.get("scenarios") or [])
+    before = locks.lift(run, pending.get("plan_return"))
+    record = next((r for r in run.get("plan_returns") or [] if r.get("id") == pending.get("plan_return")), None)
+    if record is not None:
+        record["relock"] = {**reopened, "lock_before": (before or {}).get("commit")}
+
+
 def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
     provided = [bool(args.text is not None), bool(args.reply is not None), bool(args.choice is not None)]
     if sum(provided) != 1:
@@ -1658,13 +1894,35 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
         if text:
             lines.append(f"User note: {text}")
         lines.append("Rebuild the PBIs that have not passed so that their targets cover what the code needs.")
-        for co in state.open_carry_overs(run):
-            co["status"] = "replanned"
-        run["planner_mode"] = "revise"
-        run["plan_revision_request"] = "\n".join(lines)
-        run["pending_plan_sends"] = None
-        state.append_approval_revision(run, action="replan", changed_pbis=[change["pbi"]] if change.get("pbi") else [], summary=change.get("reason", ""))
+        _start_planner_revision(
+            run,
+            request="\n".join(lines),
+            action="replan",
+            changed=[change["pbi"]] if change.get("pbi") else [],
+            summary=change.get("reason", ""),
+            plan_return=None,
+        )
         flow.apply_event(run, "replan")
+    elif s == "asking_plan_return":
+        if choice == "continue":
+            # The stop goes on as an objection: kept as a plan return for the retrospective, the stopped PBI to the
+            # wave's check as its worker built it, and the PBIs that depend on it back to waiting for it.
+            record = state.record_plan_return(run, "continue", text or "")
+            state.release_stop_hold(run, record["id"])
+            flow.apply_event(run, "plan_return_continue")
+        elif choice == "replan":
+            record = state.record_plan_return(run, "replan", text or "")
+            _start_planner_revision(
+                run,
+                request=_plan_return_request(run, record, text),
+                action="plan_return",
+                changed=[stop["pbi"] for stop in record["stops"]],
+                summary="; ".join(f"{stop['pbi']}: {stop['reason']}" for stop in record["stops"]),
+                plan_return=record["id"],
+            )
+            flow.apply_event(run, "plan_return_replan")
+        else:
+            raise ConductorError(f"invalid choice '{choice}' for {s}")
     elif s == "asking_interview":
         if choice == "skip":
             spec_file = run.get("spec_file")
@@ -1700,6 +1958,12 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
             pending_sends = run.pop("pending_plan_sends", None)
             run["approvals"]["plan_sends"] = dict(pending_sends if pending_sends is not None else actions._plan_sends(run))
             state.append_approval_revision(run, action="approved", summary=text or "")
+            _reopen_after_replan(run)
+            try:
+                # The backlog entries the plan's PBIs take get this run's id, so later runs do not get them again.
+                backlog.take(root, run)
+            except OSError as exc:
+                run.setdefault("backlog", {})["take_error"] = str(exc)
             flow.apply_event(run, "plan_approved")
         elif choice == "revise":
             if reply_obj:
@@ -1718,21 +1982,6 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
                     "proceed_pbis": list(reply_obj.get("proceed_pbis") or reply_obj.get("proceed_without_prereq") or []),
                 }
             flow.apply_event(run, "sensitive_detected")
-        else:
-            raise ConductorError(f"invalid choice '{choice}' for {s}")
-    elif s == "asking_rebuild":
-        if choice in ("retry", "retry_up"):
-            tmpl = actions.active_template(run)
-            for pbi in run.get("pbis", []):
-                if pbi.get("status") in ("failed", "built"):
-                    pbi["status"] = "pending"
-                    if choice == "retry_up":
-                        pbi["level"] = _next_level(pbi.get("level", "L2"))
-                        _reroute(tmpl, pbi)
-            flow.apply_event(run, "rebuild_retry")
-        elif choice in ("hold", "hold_stop"):
-            state.hold_after_rebuild(run, continue_dependents=choice == "hold")
-            flow.apply_event(run, "rebuild_hold")
         else:
             raise ConductorError(f"invalid choice '{choice}' for {s}")
     elif s == "awaiting_fix_approval":
@@ -1775,13 +2024,6 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
         elif choice in ("nothing_to_fix", "approve"):
             state.reset_fix_groups(run, [])
             flow.apply_event(run, "nothing_to_fix")
-        else:
-            raise ConductorError(f"invalid choice '{choice}' for {s}")
-    elif s == "asking_e2e_limit":
-        if choice == "continue":
-            flow.apply_event(run, "e2e_continue")
-        elif choice == "stop":
-            flow.apply_event(run, "stop")
         else:
             raise ConductorError(f"invalid choice '{choice}' for {s}")
     elif s == "asking_template_switch":
@@ -1936,18 +2178,20 @@ def _run_check(root: Path, act: dict[str, Any], shell: str | None, timeout: int 
     """Run every command of a check, even after a failure, and write the result file.
 
     The exit code is the first failing command's; each command's own exit code is in "commands", so a
-    carry-over names every check that failed, not only the first.
+    carry-over names every check that failed, not only the first. A command named in the action's cwds runs in that
+    folder instead of the work root (an unlock's check runs the lock commit's state in a temporary worktree).
     """
     exit_code = 0
     outputs: list[tuple[str, int, str]] = []
     codes: list[dict[str, Any]] = []
+    cwds = act.get("cwds") or {}
     for cmd in act["commands"]:
         argv: str | list[str] = [shell, "-c", cmd] if shell else cmd
         try:
             proc = subprocess.run(
                 argv,
                 shell=shell is None,
-                cwd=str(root),
+                cwd=str(cwds.get(cmd) or root),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

@@ -13,6 +13,17 @@ and the check in the reasons. Files in other languages are skipped and the repor
 Once the tests are locked, every wave check runs the locked cases again with the acceptance command and JUnit XML
 (wave_case_plan, judge_wave_cases): a case that did not run is a reason to send the wave back, a case assigned to a
 PBI of the wave that did not pass fails that PBI, and a case its worker left red with an objection counts as run.
+
+When the user fixes the plan in the middle of the run (a plan return, or a broken plan), the requirements whose
+scenarios the new plan changed go back to the acceptance stage (reopen_revised): their acceptance PBIs are built
+again, checked Red and read by the planner, and the tests are locked again. In that Red check a case assigned to a
+PBI a worker has already built may pass (built_cases).
+
+When the retrospective takes the lock off locked cases (an unlock: resolve_unlock), the fix stage has their
+acceptance test file fixed as an acceptance PBI would write it. The fixed and added lines are then run with the
+acceptance command twice (unlock_check_plan): at the lock commit, in a temporary worktree, where they must fail, and
+in the work tree, where they must pass when the decision fixes the scenario and fail with an assertion when it fixes
+the implementation. The other cases of the file must end as they did before (judge_unlock).
 """
 
 from __future__ import annotations
@@ -176,6 +187,9 @@ def ticket_fields(run: dict[str, Any], pbi: dict[str, Any]) -> dict[str, Any]:
     }
     if pbi.get("red_failure"):
         fields["red_failure"] = [dict(item) for item in pbi["red_failure"]]
+    if pbi.get("revised"):
+        # Built again after a plan return: the requirements whose scenarios the re-plan changed.
+        fields["revised"] = list(pbi["revised"])
     return fields
 
 
@@ -356,12 +370,14 @@ def judge_group(
     testcases: list[dict[str, str]],
     xml_error: str | None,
     exit_code: Any = None,
+    may_pass: frozenset[str] | set[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """The verdict of each requirement run by one command of the Red check.
 
     A requirement passes when its JUnit XML was read, every one of its case ids is in a testcase name, every such
     testcase failed with an assertion or a not-implemented error, and the file ran no testcase without a case id
-    of the group.
+    of the group. A case in may_pass (assigned to a PBI a worker has built: after a plan return the behaviour can be
+    there already) may also pass.
     """
     reqs = list(group["requirements"])
     if xml_error:
@@ -382,7 +398,7 @@ def judge_group(
             continue
         seen[rid].add(cid)
         kind = failure_kind(case)
-        if kind not in _GOOD_FAILURES:
+        if kind not in _GOOD_FAILURES and not (kind == "passed" and cid in may_pass):
             problems[rid].append(_problem(cid, kind, case))
     verdicts: list[dict[str, Any]] = []
     for rid in reqs:
@@ -396,6 +412,22 @@ def judge_group(
     return verdicts
 
 
+def built_cases(run: dict[str, Any]) -> set[str]:
+    """The cases assigned to a PBI that a worker has built before (it has a launch), other than an acceptance or stub
+    PBI. Their behaviour may already be in the work tree, so the Red check lets them pass. That happens only when the
+    acceptance stage runs again after a plan return: before the first lock no such PBI is launched."""
+    launched = {pid for pid, ids in (run.get("pbi_launches") or {}).items() if ids}
+    out: set[str] = set()
+    for sc in scenarios(run):
+        for case in sc.get("cases") or []:
+            if not isinstance(case, dict) or not case.get("id") or case.get("pbi") not in launched:
+                continue
+            pbi = state.get_pbi(run, str(case["pbi"]))
+            if pbi is not None and (pbi.get("kind") or plan.DEFAULT_KIND) not in STAGE_KINDS:
+                out.add(str(case["id"]))
+    return out
+
+
 def judge_red(root: Path, run: dict[str, Any], pending: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
     """Every requirement's verdict from a finished Red check: the ones it could not run, then each command's."""
     codes = {
@@ -407,9 +439,10 @@ def judge_red(root: Path, run: dict[str, Any], pending: dict[str, Any], result: 
     }
     verdicts = [dict(item) for item in pending.get("red_unrun") or []]
     groups = list(pending.get("red") or [])
+    built = built_cases(run)
     for group in groups:
         testcases, error = read_junit(Path(root) / group["junit"])
-        verdicts += judge_group(group, cases_by_requirement, testcases, error, codes.get(group["command"]))
+        verdicts += judge_group(group, cases_by_requirement, testcases, error, codes.get(group["command"]), built)
     step_reasons = run_step_checks(Path(root), run, groups)
     for verdict in verdicts:
         extra = step_reasons.get(verdict["requirement"])
@@ -605,6 +638,7 @@ def settle_red(run: dict[str, Any], verdicts: list[dict[str, Any]], check_id: st
         else:
             pbi["status"] = "passed"
             pbi.pop("red_failure", None)
+            pbi.pop("revised", None)
     return "red_rebuild" if rebuild else "red_done"
 
 
@@ -626,7 +660,42 @@ def report_lines(run: dict[str, Any]) -> list[str]:
     kept = run.get("step_checks")
     ran = f"流した {len(kept.get('checked') or [])} ファイル（落ちた {len(kept.get('failed') or [])}）" if kept else "流していない"
     lines.append(f"- ステップ定義の機械の検査: {ran}、飛ばした言語: {stepcheck.skipped_text(skipped_step_languages(run))}")
-    return lines + wave_case_lines(run)
+    return lines + case_result_lines(run) + wave_case_lines(run) + [f"- 鍵を外した記録: {len(run.get('unlocks') or [])} 件"]
+
+
+def case_result_lines(run: dict[str, Any]) -> list[str]:
+    """The report's line on the plan's cases: how many there are and how they ended (the last wave check, then the
+    checks of the unlocks after it)."""
+    total = list(case_requirements(run))
+    if not total:
+        return []
+    ends = ends_before_unlock(run)
+    if ends is None:
+        return [f"- 受け入れのケース: 計画の {len(total)} 件（wave の検査で流していない）"]
+    ran = set(ends["ran"]) & set(total)
+    passed = set(ends["passed"]) & ran
+    excused = set(((run.get("wave_cases") or [{}])[-1]).get("excused") or []) & (ran - passed)
+    return [
+        f"- 受け入れのケース: 計画の {len(total)} 件。通った {len(passed)} 件・落ちた {len(ran - passed)} 件"
+        f"（うち異議つきの赤 {len(excused)} 件）・流れていない {len(total) - len(ran)} 件"
+    ]
+
+
+def unlock_record_lines(run: dict[str, Any]) -> list[str]:
+    """The report's section on the unlocks: each case whose lock came off, what was fixed and the lock commits."""
+    records = [r for r in run.get("unlocks") or [] if isinstance(r, dict)]
+    if not records:
+        return []
+    lines = ["", "## 鍵を外した記録", ""]
+    for r in records:
+        cases = "、".join(str(c) for c in r.get("cases") or []) or "（ケースなし）"
+        added = f"、足した行 {'、'.join(str(c) for c in r['added'])}" if r.get("added") else ""
+        before, after = str(r.get("commit_before") or "")[:7], str(r.get("commit") or "")[:7]
+        lines.append(
+            f"- {r.get('item') or '（件なし）'}（要件 {r.get('requirement') or '（不明）'}、{plan.UNLOCK_FIX_LABELS.get(r.get('fix'), r.get('fix') or '')}）: "
+            f"ケース {cases}{added}。ファイル {r.get('file') or '（不明）'}。鍵のコミット {before or '（なし）'} → {after or '（なし）'}"
+        )
+    return lines
 
 
 def unresolved_lines(run: dict[str, Any]) -> list[str]:
@@ -658,6 +727,26 @@ def unresolved_lines(run: dict[str, Any]) -> list[str]:
             lines.append(
                 f"- {item['id']}（wave の検査 {item.get('check') or ''}）: 流れなかったケースを負わせる PBI が wave に無い。"
                 f"理由: {item.get('reason') or '（記載なし）'}"
+            )
+        elif item.get("kind") == WAVE_CASES_RED_UNRESOLVED:
+            lines.append(
+                f"- {item['id']}（wave の検査 {item.get('check') or ''}）: 前の wave で通ったケースが赤になったが、"
+                f"負わせる PBI が wave に無い。理由: {item.get('reason') or '（記載なし）'}"
+            )
+        elif item.get("kind") == CHECK_UNRESOLVED:
+            last = next((ln.strip() for ln in reversed(str(item.get("output") or "").splitlines()) if ln.strip()), "")
+            lines.append(
+                f"- {item['id']}（wave の検査 {item.get('check') or ''}）: {item.get('command') or '（コマンド不明）'} が落ちたが、"
+                f"持ち主の PBI が決まらない。理由: {item.get('reason') or '（記載なし）'}。出力の最後の行: {last or '（出力なし）'}"
+            )
+        elif item.get("kind") == CARRY_OVER_UNRESOLVED:
+            commands = "、".join(item.get("commands") or []) or "（コマンド不明）"
+            held = "、".join(item.get("held_pbis") or []) or "なし"
+            last = next((ln.strip() for ln in reversed(str(item.get("output") or "").splitlines()) if ln.strip()), "")
+            lines.append(
+                f"- {item['id']}（持ち越し {item.get('carry_over')}、修正の PBI {item.get('fix_pbi') or 'なし'}）: "
+                f"{item.get('reason') or '修正の PBI が落ち続けた'}。聞かずに保留にした PBI: {held}。落ちたコマンド: {commands}。"
+                f"出力の最後の行: {last or '（出力なし）'}"
             )
         else:
             lines.append(f"- {item.get('id')}: {item.get('reason') or ''}")
@@ -749,9 +838,97 @@ def _reopen_red(run: dict[str, Any], pbi: dict[str, Any], owners: dict[str, str]
     return out
 
 
+def _scenario_body(sc: dict[str, Any]) -> dict[str, Any]:
+    """What a requirement's acceptance tests are written from: its text, mode and Gherkin, and each case's id, values
+    and test name. Where its cases are assigned does not change the tests (the lock list is written again anyway)."""
+    return {
+        "text": sc.get("text"),
+        "mode": sc.get("mode"),
+        "gherkin": sc.get("gherkin"),
+        "cases": [
+            {"id": c.get("id"), "values": c.get("values"), "test_name": c.get("test_name") or c.get("name")}
+            for c in sc.get("cases") or []
+            if isinstance(c, dict)
+        ],
+    }
+
+
+def _scenarios_by_id(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {sc["id"]: sc for sc in items or [] if isinstance(sc, dict) and isinstance(sc.get("id"), str)}
+
+
+def keep_unchanged_marks(run: dict[str, Any], before: list[dict[str, Any]]) -> None:
+    """A re-plan writes the scenarios anew. A requirement whose scenario it left as it was stays out of the lock
+    (no_lock) when it was left unresolved before."""
+    old = _scenarios_by_id(before)
+    for sc in scenarios(run):
+        prev = old.get(sc["id"])
+        if prev is not None and prev.get("no_lock") and _scenario_body(prev) == _scenario_body(sc):
+            sc["no_lock"] = True
+
+
+def revised_requirements(run: dict[str, Any], before: list[dict[str, Any]]) -> list[str]:
+    """The requirements whose scenario a re-plan changed or added, against the scenarios before it, in plan order."""
+    old = _scenarios_by_id(before)
+    return [sc["id"] for sc in scenarios(run) if sc["id"] not in old or _scenario_body(sc) != _scenario_body(old[sc["id"]])]
+
+
+def reopen_revised(run: dict[str, Any], before: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Send the requirements a re-plan in the middle of an acceptance-first run changed back to the acceptance stage.
+
+    A requirement whose scenario the planner changed or added starts the Red check over and is no longer left out of
+    the lock. Its acceptance PBI is built again, with the changed requirements in its ticket (revised). As when the
+    planner's review sends a file back, every passed requirement that PBI can change goes back to the Red check, and
+    the review of the files involved is dropped. Every requirement sent back gets its Red and review tries anew. The
+    requirements the re-plan left as they were, and the acceptance PBIs of no changed requirement, stay as they were.
+
+    Returns {"revised", "reopened", "rebuilt"}: the changed requirements, every requirement sent back, and the
+    acceptance PBIs built again.
+    """
+    revised = revised_requirements(run, before)
+    owners = requirement_owners(run)
+    by_id = _scenarios_by_id(scenarios(run))
+    rebuilt: list[dict[str, Any]] = []
+    for rid in revised:
+        by_id[rid].pop("no_lock", None)
+        red_entry(run, rid).update(status="pending", failures=0, reasons=[])
+        owner = state.get_pbi(run, owners.get(rid, "")) if owners.get(rid) else None
+        if owner is not None and owner.get("status") not in ("held", "sensitive") and owner not in rebuilt:
+            rebuilt.append(owner)
+    for pbi in rebuilt:
+        pbi["status"] = "pending"
+        pbi.pop("red_failure", None)
+        pbi["revised"] = [rid for rid in revised if owners.get(rid) == pbi["id"]]
+        _reopen_red(run, pbi, owners)
+    red = run.setdefault("red", {})
+    kept = run.setdefault("acceptance_review", {"round": 0, "files": {}, "history": []})
+    files = kept.setdefault("files", {})
+    targets = [str(t) for pbi in rebuilt for t in pbi.get("targets") or []]
+    for file, info in list(files.items()):
+        reqs = [str(r) for r in info.get("requirements") or []]
+        back = any((red.get(r) or {}).get("status") == "pending" for r in reqs)
+        if back or (info.get("status") == "ok" and guards.covered(file, targets)):
+            del files[file]
+            for rid in reqs:
+                if (red.get(rid) or {}).get("status") == "passed":
+                    red[rid]["status"] = "pending"
+    reopened = [rid for rid in by_id if (red.get(rid) or {}).get("status") == "pending"]
+    fixes = kept.setdefault("fixes", {})
+    for rid in reopened:
+        red[rid].update(failures=0, reasons=[])
+        fixes.pop(rid, None)
+    return {"revised": revised, "reopened": reopened, "rebuilt": [p["id"] for p in rebuilt]}
+
+
 WAVE_CASES_RULE = "acceptance_cases"
 WAVE_LOCK_UNRESOLVED = "lock_changed"
 WAVE_CASES_UNRESOLVED = "cases_missing"
+# A case that passed in an earlier wave check and is red now, with no PBI of the wave to lay it on.
+WAVE_CASES_RED_UNRESOLVED = "cases_red_again"
+# A carry-over whose fix PBI failed past its tries; its PBIs and the PBIs that depend on them are held.
+CARRY_OVER_UNRESOLVED = "carry_over"
+# A failed command of a wave check with no PBI of the wave to lay it on (state.failure_owners).
+CHECK_UNRESOLVED = "check_failed"
 
 
 def wave_case_plan(
@@ -833,18 +1010,29 @@ def judge_wave_cases(
 
     A case ran when a testcase with its id did not end skipped. A case left red with an objection counts as run and
     is not sent back. A case that did not run (skipped, left out by a tag, its file moved) is sent back: laid on the
-    PBI of the wave it is assigned to, or on the wave when none is (wave_reasons). A case assigned to a PBI of the
-    wave that ran and did not pass fails that PBI. Cases of PBIs not in the wave are not judged on their result.
+    PBI of the wave it is assigned to. A case assigned to a PBI of the wave that ran and did not pass fails that PBI.
 
-    Returns {"ran", "missing", "failed", "excused", "by_pbi", "wave_reasons", "notes"}.
+    A case with no PBI of the wave to hold it goes by the failure owners' steps (case_owners): when it did not run,
+    and when it passed in an earlier wave check and is red now. Laid on no PBI, it is left for the caller to put on
+    the unresolved list (wave_reasons for the cases that did not run, red_again for the red ones). Other cases of PBIs
+    not in the wave (not built yet) are not judged on their result.
+
+    Returns {"ran", "missing", "failed", "excused", "passed", "by_pbi", "wave_reasons", "unowned_missing",
+    "red_again", "notes"}.
     """
     ids = [str(c) for c in cases]
     requirement_of = {
         str(c.get("id")): sc["id"] for sc in scenarios(run) for c in sc.get("cases") or [] if isinstance(c, dict) and c.get("id")
     }
     seen: dict[str, str] = {}
+    messages: dict[str, str] = {}
+    group_of: dict[str, dict[str, Any]] = {}
     notes: list[str] = []
     for group in groups:
+        for rid in group.get("requirements") or []:
+            for cid, req in requirement_of.items():
+                if req == rid:
+                    group_of.setdefault(cid, group)
         testcases, error = read_junit(Path(root) / group["junit"])
         if error:
             notes.append(f"{group['file']}: {error}")
@@ -858,36 +1046,88 @@ def judge_wave_cases(
             rid = requirement_of.get(cid)
             if rid is not None and rid not in group_reqs:
                 continue
+            group_of.setdefault(cid, group)
             kind = failure_kind(case)
             if kind == "skipped":
                 continue
             if seen.get(cid) in (None, "passed"):
                 seen[cid] = kind
+                messages[cid] = str(case.get("message") or "")
     excused = objection_red_cases(run, assignments)
     missing = [cid for cid in ids if cid not in seen and cid not in excused]
     failed = {cid: kind for cid, kind in seen.items() if kind != "passed" and cid not in excused}
+    before = passed_cases(run)
+    pbis = [p for p in (state.get_pbi(run, pid) for pid in wave) if p is not None]
     by_pbi: dict[str, list[str]] = {}
     wave_reasons: list[str] = []
+    unowned_missing: list[str] = []
+    red_again: list[str] = []
     for cid in missing:
         reason = f"{cid}: 流れなかった（skip・タグで外れた・ファイルが動いたなど）"
         holder = case_holder(run, assignments.get(cid), wave)
-        if holder:
-            by_pbi.setdefault(holder, []).append(reason)
-        else:
+        # A case with no holder in the wave goes by steps (2) and (3): no command of the wave ran it on its own.
+        owners = [holder] if holder else case_owners(pbis, group_of.get(cid), "", by_checks=False)
+        for pid in owners:
+            by_pbi.setdefault(pid, []).append(reason)
+        if not owners:
             wave_reasons.append(reason)
+            unowned_missing.append(cid)
     for cid in ids:
-        holder = case_holder(run, assignments.get(cid), wave) if cid in failed else None
+        if cid not in failed:
+            continue
+        holder = case_holder(run, assignments.get(cid), wave)
         if holder:
             by_pbi.setdefault(holder, []).append(f"{cid}: 割り当てたケースが落ちた（{failed[cid]}）")
+        elif cid in before:
+            owners = case_owners(pbis, group_of.get(cid), messages.get(cid, ""))
+            for pid in owners:
+                by_pbi.setdefault(pid, []).append(f"{cid}: 前の wave で通ったケースが落ちた（{failed[cid]}）")
+            if not owners:
+                red_again.append(cid)
     return {
         "ran": [cid for cid in ids if cid in seen or cid in excused],
         "missing": missing,
         "failed": failed,
         "excused": sorted(excused & set(ids)),
+        "passed": [cid for cid in ids if seen.get(cid) == "passed" and cid not in excused],
         "by_pbi": by_pbi,
         "wave_reasons": wave_reasons,
+        "unowned_missing": unowned_missing,
+        "red_again": red_again,
         "notes": notes,
     }
+
+
+def case_owners(
+    pbis: list[dict[str, Any]], group: dict[str, Any] | None, message: str, *, by_checks: bool = True
+) -> list[str]:
+    """The PBIs of the wave a locked case with no holder in the wave is laid on, by the failure owners' steps.
+
+    (1) the PBIs with the command that ran the case in their own checks (skipped with by_checks False), else (2) the
+    PBIs with the case's acceptance test file in their targets, or with a test file the failure message names, else
+    (3) none: the case is left unresolved.
+    """
+    command = str((group or {}).get("command") or "")
+    file = str((group or {}).get("file") or "")
+    if by_checks and command:
+        own = [p["id"] for p in pbis if command in (p.get("checks") or [])]
+        if own:
+            return own
+    by_file = {p["id"] for p in pbis if file and guards.covered(file, [str(t) for t in p.get("targets") or []])}
+    by_message = set(state.named_test_owners(message, pbis))
+    return [p["id"] for p in pbis if p["id"] in by_file | by_message]
+
+
+def passed_cases(run: dict[str, Any]) -> set[str]:
+    """The locked cases that passed in a wave check so far."""
+    out: set[str] = set()
+    for entry in run.get("wave_cases") or []:
+        if "passed" in entry:
+            out |= {str(c) for c in entry.get("passed") or []}
+        else:
+            # Kept before the passed cases were: the ones that ran, did not fail and had no objection.
+            out |= {str(c) for c in entry.get("ran") or []} - set(entry.get("failed") or {}) - set(entry.get("excused") or [])
+    return out
 
 
 def add_unresolved(run: dict[str, Any], kind: str, reason: str, **fields: Any) -> dict[str, Any]:
@@ -909,6 +1149,221 @@ def wave_case_lines(run: dict[str, Any]) -> list[str]:
         f"- wave の検査の受け入れのケース: {len(kept)} 回流した。最後は {len(last.get('ran') or [])} / {last.get('total', 0)} 件が流れ、"
         f"異議つきの赤 {len(last.get('excused') or [])} 件。差し戻した回 {sent_back} 回"
     ]
+
+
+UNLOCK_RULE = "unlock_check"
+# Where an unlock's lines run: at the lock commit (in a temporary worktree) and in the work tree (the implementation now).
+UNLOCK_PLACES = ("lock_commit", "work_tree")
+UNLOCK_PLACE_LABELS = {"lock_commit": "鍵のコミットの状態", "work_tree": "今の実装"}
+
+
+def case_requirements(run: dict[str, Any]) -> dict[str, str]:
+    """Each case of the plan's scenarios -> its requirement, in plan order."""
+    return {
+        str(case["id"]): sc["id"]
+        for sc in scenarios(run)
+        for case in sc.get("cases") or []
+        if isinstance(case, dict) and case.get("id")
+    }
+
+
+def requirement_file(run: dict[str, Any], rid: str) -> str:
+    """A requirement's acceptance test file, as its acceptance PBI's result named it ("" when there is none)."""
+    owner = requirement_owners(run).get(rid)
+    pbi = state.get_pbi(run, owner) if owner else None
+    return str(((pbi or {}).get("acceptance_files") or {}).get(rid) or "")
+
+
+def resolve_unlock(run: dict[str, Any], unlock: dict[str, Any], locked: dict[str, str]) -> dict[str, Any]:
+    """A triage decision's unlock, against the lock (locked: each locked case -> its requirement).
+
+    The named cases that are locked are the fixed lines; the others are added lines of the same requirement, assigned
+    to the PBI the first fixed case is assigned to (else the requirement's first case's). The file is the
+    requirement's acceptance test file: the only file the unlock opens.
+    """
+    cases = [str(c) for c in unlock.get("cases") or []]
+    fixed = [c for c in cases if c in locked]
+    rid = str(unlock.get("requirement") or next((locked[c] for c in fixed), ""))
+    sc = next((s for s in scenarios(run) if s["id"] == rid), {})
+    assigned = {str(c.get("id")): c.get("pbi") for c in sc.get("cases") or [] if isinstance(c, dict) and c.get("id")}
+    pbi = next((assigned[c] for c in fixed if assigned.get(c)), None) or next((p for p in assigned.values() if p), None)
+    added = [c for c in cases if c not in locked]
+    return {
+        "cases": cases,
+        "fixed": fixed,
+        "added": added,
+        "fix": unlock.get("fix"),
+        "requirement": rid,
+        "file": requirement_file(run, rid),
+        "mode": sc.get("mode"),
+        "assign": {c: str(pbi) for c in added} if pbi else {},
+    }
+
+
+def add_unlocked_cases(run: dict[str, Any], unlock: dict[str, Any], item_id: str = "") -> list[str]:
+    """Put an unlock's added cases into its requirement's scenario once the tests are locked again with them, so that
+    the scenarios and the lock list name the same cases (their values are in the test lines only). Returns them."""
+    sc = next((s for s in scenarios(run) if s["id"] == unlock.get("requirement")), None)
+    if sc is None:
+        return []
+    have = {str(c.get("id")) for c in sc.get("cases") or [] if isinstance(c, dict)}
+    added: list[str] = []
+    for cid in unlock.get("added") or []:
+        if str(cid) in have:
+            continue
+        case: dict[str, Any] = {"id": str(cid), "values": {}, "needs": [], "added_by_unlock": item_id}
+        pbi = (unlock.get("assign") or {}).get(cid)
+        if pbi:
+            case["pbi"] = pbi
+        sc.setdefault("cases", []).append(case)
+        added.append(str(cid))
+    return added
+
+
+def unlock_check_plan(run: dict[str, Any], unlock: dict[str, Any], results_dir: str) -> tuple[list[dict[str, str]], str]:
+    """The commands that check an unlock's lines: the acceptance command on its file, once at the lock commit (run in
+    the temporary worktree) and once in the work tree, each writing JUnit XML under results_dir (relative to where it
+    runs). Returns ([{"where", "command", "junit"}], "") or ([], why they cannot run)."""
+    command = next(iter(run.get("acceptance_commands") or []), "")
+    file = str(unlock.get("file") or "")
+    if not command:
+        return [], "run に acceptance のコマンドが無い"
+    if not file:
+        return [], f"要件 {unlock.get('requirement') or '（不明）'} の受け入れテストのファイルが分からない"
+    if unsafe_path(file):
+        return [], _unsafe_reason(file)
+    out = []
+    for where in UNLOCK_PLACES:
+        junit = f"{results_dir}/{where}.xml"
+        out.append({"where": where, "command": fill_command(command, file, junit), "junit": junit})
+    return out, ""
+
+
+def ends_before_unlock(run: dict[str, Any]) -> dict[str, list[str]] | None:
+    """How the locked cases ended last, for judge_unlock: {"passed", "ran"} as the last wave check left them, then as
+    each earlier unlock's run in the work tree left its own cases. None when no wave check ran the locked cases."""
+    kept = run.get("wave_cases") or []
+    if not kept:
+        return None
+    last = kept[-1]
+    ran = {str(c) for c in last.get("ran") or []}
+    if "passed" in last:
+        passed = {str(c) for c in last.get("passed") or []}
+    else:
+        passed = ran - set(last.get("failed") or {}) - set(last.get("excused") or [])
+    for record in run.get("unlocks") or []:
+        for cid, kind in ((record.get("verified") or {}).get("work_tree") or {}).items():
+            ran.add(str(cid))
+            if kind == "passed":
+                passed.add(str(cid))
+            else:
+                passed.discard(str(cid))
+    return {"passed": sorted(passed), "ran": sorted(ran)}
+
+
+def _rank(kind: str) -> int:
+    # A testcase run twice ends as its worst run: skipped < passed < any failure.
+    return 0 if kind == "skipped" else 1 if kind == "passed" else 2
+
+
+def _case_ends(testcases: list[dict[str, str]], ids: list[str]) -> tuple[dict[str, str], list[str]]:
+    """How each case id ended, and the names of the testcases with no id of ids."""
+    ends: dict[str, str] = {}
+    extra: list[str] = []
+    for case in testcases:
+        cid = match_case_id(case.get("name", ""), ids)
+        if cid is None:
+            extra.append(case.get("name") or "（名前なし）")
+            continue
+        kind = failure_kind(case)
+        if cid not in ends or _rank(kind) > _rank(ends[cid]):
+            ends[cid] = kind
+    return ends, extra
+
+
+def judge_unlock(
+    run: dict[str, Any],
+    unlock: dict[str, Any],
+    runs: dict[str, tuple[list[dict[str, str]], str | None]],
+    locked: dict[str, str],
+    before: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Whether an unlock's fixed and added lines hold, from the JUnit XML of its two runs.
+
+    runs maps lock_commit and work_tree to (the testcases, why the XML could not be read). locked maps each locked
+    case to its requirement; before is how the locked cases ended last (ends_before_unlock).
+    - The unlock's cases: at the lock commit each ran and did not pass (an error counts as failing there, since the
+      implementation is not in that commit; a light-no-red requirement cannot be made Red, so it only has to run). In
+      the work tree each passed when the decision fixes the scenario, and failed with an assertion or a
+      not-implemented error when it fixes the implementation.
+    - The file's other locked cases, whose lines the fix leaves as they were: at the lock commit each ran and did not
+      pass (light-no-red: ran); in the work tree each ran, and ended as in the last wave check (passed stays passed,
+      red stays red).
+    - A testcase with no id of the unlock's cases or of the file's locked cases fails the check too.
+    Returns {"passed", "reasons", "lock_commit", "work_tree"}: how each of the unlock's cases ended at each place.
+    """
+    targets = [str(c) for c in unlock.get("cases") or []]
+    file = str(unlock.get("file") or "")
+    modes = {sc["id"]: sc.get("mode") for sc in scenarios(run)}
+    others = [cid for cid, rid in locked.items() if cid not in targets and file and requirement_file(run, rid) == file]
+    no_red = {cid for cid in [*targets, *others] if modes.get(locked.get(cid) or unlock.get("requirement")) == NO_RED_MODE}
+    ids = [*targets, *others]
+    reasons: list[str] = []
+    ends: dict[str, dict[str, str]] = {}
+    extra: list[str] = []
+    for where in UNLOCK_PLACES:
+        testcases, error = runs.get(where) or ([], "流していない")
+        label = UNLOCK_PLACE_LABELS[where]
+        if error:
+            reasons.append(f"{label}で流せなかった: {error}")
+            continue
+        ends[where], names = _case_ends(testcases, ids)
+        extra += [n for n in names if n not in extra]
+    if extra:
+        reasons.append("鍵を外すケースにもファイルの鍵のケースにも無い testcase がある: " + ", ".join(extra))
+    lock_ends = ends.get("lock_commit")
+    now_ends = ends.get("work_tree")
+    lock_label = UNLOCK_PLACE_LABELS["lock_commit"]
+    fix = unlock.get("fix")
+    passed_before = set((before or {}).get("passed") or [])
+    ran_before = set((before or {}).get("ran") or [])
+    for cid in targets:
+        if lock_ends is not None:
+            kind = lock_ends.get(cid)
+            if kind in (None, "skipped"):
+                reasons.append(f"{cid}: {lock_label}で{'飛ばされた' if kind else '流れなかった'}")
+            elif kind == "passed" and cid not in no_red:
+                reasons.append(f"{cid}: {lock_label}で通った（直した行・足した行は、鍵のコミットの状態では落ちるはず）")
+        if now_ends is not None:
+            kind = now_ends.get(cid)
+            if kind in (None, "skipped"):
+                reasons.append(f"{cid}: 今の実装で{'飛ばされた' if kind else '流れなかった'}")
+            elif fix == "scenario" and kind != "passed":
+                reasons.append(f"{cid}: シナリオを直すと決めたが、今の実装で通らない（{kind}）")
+            elif fix == "implementation" and kind == "passed":
+                reasons.append(f"{cid}: 実装を直すと決めたが、今の実装で通った（直した行が今の実装との違いを捉えていない）")
+            elif fix == "implementation" and kind not in _GOOD_FAILURES:
+                reasons.append(f"{cid}: 実装を直すと決めたが、今の実装での落ち方が assertion でも未実装でもない（{kind}）")
+    for cid in others:
+        if lock_ends is not None:
+            kind = lock_ends.get(cid)
+            if kind in (None, "skipped"):
+                reasons.append(f"{cid}: 対象の外のケースが{lock_label}で流れなかった")
+            elif kind == "passed" and cid not in no_red:
+                reasons.append(f"{cid}: 対象の外のケースが{lock_label}で通った（その行が変わった）")
+        if now_ends is not None:
+            kind = now_ends.get(cid)
+            if kind in (None, "skipped"):
+                reasons.append(f"{cid}: 対象の外のケースが今の実装で流れなかった")
+            elif cid in passed_before and kind != "passed":
+                reasons.append(f"{cid}: 対象の外のケースが、前の wave の検査では通ったのに今の実装で通らない（{kind}）")
+            elif cid in ran_before and cid not in passed_before and kind == "passed":
+                reasons.append(f"{cid}: 対象の外のケースが、前の wave の検査では通らなかったのに今の実装で通る（その行が変わった）")
+    return {
+        "passed": not reasons,
+        "reasons": reasons,
+        **{where: {cid: (ends.get(where) or {}).get(cid, "missing") for cid in targets} for where in UNLOCK_PLACES},
+    }
 
 
 def _norm(path: str) -> str:

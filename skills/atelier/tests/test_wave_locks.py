@@ -265,6 +265,16 @@ class WaveLockTests(unittest.TestCase):
                 self.setUp()
                 nxt = self.run_wave_after_build(ends)
                 run = saved(self.root)
+                if reason.startswith("R1-3"):
+                    # R1-3 is PBI-4's, and no PBI of the wave has its test file in its targets: it is left unresolved,
+                    # and PBI-3 is not failed for it.
+                    self.assertEqual("passed", state.get_pbi(run, "PBI-3")["status"])
+                    self.assertEqual([], run.get("carry_overs") or [])
+                    (item,) = run["unresolved"]
+                    self.assertEqual((acceptance.WAVE_CASES_UNRESOLVED, ["R1-3"]), (item["kind"], item["cases"]))
+                    self.assertIn(reason, item["reason"])
+                    self.assertEqual(["PBI-4"], pbis_of(nxt))
+                    continue
                 self.assertEqual("carried", state.get_pbi(run, "PBI-3")["status"])
                 (co,) = run["carry_overs"]
                 self.assertEqual((["PBI-3"], [PBI_CHECK]), (co["pbis"], co["commands"]))
@@ -300,11 +310,13 @@ class WaveLockTests(unittest.TestCase):
         (self.root / "plan_fail").write_bytes(b"")
         nxt = self.run_wave(outcomes())
         run = saved(self.root)
-        self.assertEqual("carried", state.get_pbi(run, "PBI-3")["status"])
-        (co,) = run["carry_overs"]
-        self.assertEqual((["PBI-3"], [PLAN_CHECK]), (co["pbis"], co["commands"]))
-        self.assertEqual(["G9"], run["last_failed_rules"])
-        self.assertEqual(["CO-1-FIX"], pbis_of(nxt))
+        # The plan's check names no test file of PBI-3's targets: it is left unresolved and PBI-3 passes.
+        self.assertEqual("passed", state.get_pbi(run, "PBI-3")["status"])
+        self.assertEqual([], run.get("carry_overs") or [])
+        (item,) = run["unresolved"]
+        self.assertEqual((acceptance.CHECK_UNRESOLVED, PLAN_CHECK), (item["kind"], item["command"]))
+        self.assertEqual([], run["last_failed_rules"])
+        self.assertEqual(["PBI-4"], pbis_of(nxt))
 
     def run_wave_after_build(self, ends: dict, result: dict | None = None) -> dict:
         self.build(self.lock_and_launch(), result)

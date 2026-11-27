@@ -66,6 +66,16 @@ class TemplateTests(unittest.TestCase):
         self.assertFalse(selected['ask'])
         self.assertEqual(selected['template']['name'], self.default['name'])
 
+    def test_an_older_e2e_limit_is_read_but_not_used(self):
+        # E2E runs once and a failure goes to the retrospective list: the default has no E2E limit any more.
+        self.assertNotIn('e2e_rounds', json.loads(template.DEFAULT_TEMPLATE.read_text(encoding='utf-8'))['limits'])
+        self.assertNotIn('e2e_rounds', self.default['limits'])
+        for rounds in (2, 0, 7):
+            value = copy.deepcopy(self.default)
+            value['limits']['e2e_rounds'] = rounds
+            with self.subTest(rounds=rounds):
+                self.assertEqual(template.validate_template(value, self.agents)['limits']['e2e_rounds'], rounds)
+
     def test_bad_inputs(self):
         with self.assertRaises(template.TemplateError):
             template.resolve_template(None, [], agents_path=self.agents)

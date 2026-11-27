@@ -156,14 +156,20 @@ class TestIntegrationSeam1(unittest.TestCase):
             self.assertEqual(plan_ask["chat"], [plan_ask["summary"][0], plan_ask["summary"][-1]])
             self.assertTrue(plan_ask["chat"][0].startswith("結論"))
             self.assertTrue(plan_ask["chat"][-1].startswith("決めること"))
+            plan_draft = Path(plan_ask["draft"]).read_text(encoding="utf-8")
+            self.assertNotIn("E2E の回数", plan_draft)
+            self.assertIn("最後の見直し → E2E → 振り返りの一覧の仕分け → 直す一覧の承認 → 報告", plan_draft)
 
-            # Progress to fix_approval -> rendered page
+            # Progress to fix_approval (after the final review and E2E) -> rendered page
             _, act = run_cli("answer", "--root", str(root), "--choice", "approve")
             write_result_for(act, {"status": "ok"})
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             write_result_for(act, {"exit_code": 0})
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             write_result_for(act, {"schema": "atelier.findings/1", "findings": [make_finding("F-1")]})
+            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
+            self.assertEqual(act["action"], "check")
+            write_result_for(act, {"exit_code": 0})
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             write_result_for(act, {
                 "schema": "atelier.triage/1",
@@ -311,7 +317,11 @@ class TestIntegrationSeam1(unittest.TestCase):
                     make_finding("F-5", file="e.py", confidence=70),
                 ],
             })
-            _, tri = run_cli("done", "--root", str(root), "--launch-id", rev["launch_id"])
+            # E2E runs after the final review, before the triage
+            _, e2e = run_cli("done", "--root", str(root), "--launch-id", rev["launch_id"])
+            self.assertEqual((e2e["action"], e2e["commands"]), ("check", ["python e2e.py"]))
+            write_result_for(e2e, {"exit_code": 0})
+            _, tri = run_cli("done", "--root", str(root), "--launch-id", e2e["launch_id"])
             self.assertEqual(tri["role"], "planner")
             self.assertIn("Mode: triage", Path(tri["prompt"]).read_text(encoding="utf-8"))
 
@@ -575,12 +585,18 @@ class TestIntegrationSeam1(unittest.TestCase):
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             _, act = run_cli("answer", "--root", str(root), "--choice", "approve")
 
-            # 7. building (PBI-1) -> 8. checking (fail #1) -> building (the fix PBI) -> checking (fail #2)
-            #    -> building (the fix PBI, one level up) -> checking (fail #3) -> 9. asking_rebuild
+            # 7. building (PBI-1, its worker returns a stop) -> asking_plan_return (PBI-2 needs PBI-1, so both are held
+            #    and nothing is left to launch) -> going on with the stop as an objection -> 8. checking (fail #1)
+            #    -> building (the fix PBI) -> checking (fail #2) -> building (the fix PBI, one level up)
+            #    -> checking (fail #3) -> held as unresolved, no question; PBI-2 is held too and nothing is left to
+            #    build -> reviewing
             self.assertEqual(record_state(), "building")
             (root / "app.py").write_text("x = 2\n", encoding="utf-8")
-            write_result_for(act, {"status": "ok"})
+            write_result_for(act, {"status": "ok", "stop": {"exception": 3, "reason": "the exporter needs a schema"}})
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
+            self.assertEqual(record_state(), "asking_plan_return")
+            self.assertEqual((act["action"], act["kind"]), ("ask", "plan_return"))
+            _, act = run_cli("answer", "--root", str(root), "--choice", "continue")
             self.assertEqual(record_state(), "checking")
 
             write_result_for(act, {"exit_code": 1, "failed_pbis": ["PBI-1"], "output": "fail 1"})
@@ -593,30 +609,30 @@ class TestIntegrationSeam1(unittest.TestCase):
                 _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
                 write_result_for(act, {"exit_code": 1, "failed_pbis": ["CO-1-FIX"], "output": f"fail {n}"})
                 _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-            self.assertEqual(record_state(), "asking_rebuild")
 
-            _, act = run_cli("answer", "--root", str(root), "--choice", "retry_up")
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-            write_result_for(act, {"exit_code": 0})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-
-            # Wave 2: PBI-2
-            self.assertEqual(act["pbi"], "PBI-2")
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-            write_result_for(act, {"exit_code": 0})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-
-            # 11. reviewing -> 12. triaging -> 13. awaiting_fix_approval -> 14. fixing
+            # 11. reviewing -> 12. running_e2e (fails once; no fix stage, no limit question) -> 13. triaging
+            #     -> 14. awaiting_fix_approval -> 15. fixing -> 16. final_checking -> 17. reporting -> 18. done
             self.assertEqual(record_state(), "reviewing")
+            self.assertEqual((act["action"], act["role"]), ("launch", "reviewer"))
             write_result_for(act, {"schema": "atelier.findings/1", "findings": [make_finding("F-1")]})
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
+            self.assertEqual(record_state(), "running_e2e")
+            self.assertEqual(act["action"], "check")
+            write_result_for(act, {"exit_code": 1, "output": "e2e failed"})
+            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             self.assertEqual(record_state(), "triaging")
+            self.assertEqual((act["action"], act["role"]), ("launch", "planner"))
 
+            # The retrospective list holds the finding, the unresolved carry-over, the plan return and the E2E
+            # failure; triage sorts every item once.
             write_result_for(act, {
                 "schema": "atelier.triage/1",
-                "items": [{"id": "F-1", "decision": "fix", "reason": "fix bug"}],
+                "items": [
+                    {"id": "F-1", "decision": "fix", "reason": "fix bug"},
+                    {"id": "UR-1", "decision": "skip", "reason": "left for the backlog"},
+                    {"id": "PR-1", "decision": "skip", "reason": "the stop went on as an objection"},
+                    {"id": "E2E-1", "decision": "skip", "reason": "the E2E server was down"},
+                ],
             })
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             self.assertEqual(record_state(), "awaiting_fix_approval")
@@ -625,28 +641,8 @@ class TestIntegrationSeam1(unittest.TestCase):
             self.assertEqual(record_state(), "fixing")
             write_result_for(act, {"status": "ok"})
             _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-            write_result_for(act, {"exit_code": 0})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-
-            # 15. running_e2e -> fail #1 (<= limit 1 -> fixing) -> fail #2 (> limit 1 -> 16. asking_e2e_limit)
-            self.assertEqual(record_state(), "running_e2e")
-            write_result_for(act, {"exit_code": 1})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-            write_result_for(act, {"exit_code": 0})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-
-            write_result_for(act, {"exit_code": 1})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-            self.assertEqual(record_state(), "asking_e2e_limit")
-
-            # continue -> 1 fix -> e2e pass -> 17. reporting -> 18. done
-            _, act = run_cli("answer", "--root", str(root), "--choice", "continue")
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
-            write_result_for(act, {"exit_code": 0})
-            _, act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
+            self.assertEqual(record_state(), "final_checking")
+            self.assertEqual(act["action"], "check")
             write_result_for(act, {"exit_code": 0})
             _, done_act = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
             self.assertEqual(done_act["action"], "done")
@@ -656,11 +652,21 @@ class TestIntegrationSeam1(unittest.TestCase):
             history_states = {h["from"] for h in final_st["history"]} | {h["to"] for h in final_st["history"]}
             expected_diagram_states = {
                 "surveying", "asking_interview", "interviewing", "awaiting_spec_approval",
-                "planning", "awaiting_plan_approval", "building", "checking",
-                "asking_rebuild", "reviewing", "triaging", "awaiting_fix_approval", "fixing",
-                "running_e2e", "asking_e2e_limit", "reporting", "done",
+                "planning", "awaiting_plan_approval", "building", "checking", "asking_plan_return",
+                "reviewing", "running_e2e", "triaging", "awaiting_fix_approval", "fixing", "final_checking",
+                "reporting", "done",
             }
             self.assertTrue(expected_diagram_states <= history_states, expected_diagram_states - history_states)
+            self.assertNotIn("asking_e2e_limit", history_states)
+            tail = [h["to"] for h in final_st["history"]][-7:]
+            self.assertEqual(
+                ["running_e2e", "triaging", "awaiting_fix_approval", "fixing", "final_checking", "reporting", "done"], tail
+            )
+            self.assertNotIn("asking_rebuild", history_states)
+            self.assertEqual(final_st["counters"]["plan_returns"], 1)
+            # PBI-1, its fix PBI and PBI-2 stayed held as unresolved, so the run is not complete.
+            self.assertFalse(done_act["complete"])
+            self.assertEqual(done_act["unfinished_pbis"], ["PBI-1", "CO-1-FIX", "PBI-2"])
             self.assertTrue(Path(done_act["report"]).is_file())
             self.assertTrue((root / "docs" / "pbi" / "REPORT.md").is_file())
 
@@ -801,7 +807,6 @@ class TestIntegrationSeam1(unittest.TestCase):
             e2e_checks = 0
             saw_interview_round = False
             saw_fix_pbi = False
-            saw_rebuild = False
             saw_fix_approval = False
             saw_e2e_failure = False
 
@@ -835,9 +840,14 @@ class TestIntegrationSeam1(unittest.TestCase):
                             write_result_for(act, {"done": True, "spec_path": str(spec_path)})
                     elif role == "planner":
                         if "Mode: triage" in prompt_text:
+                            # The retrospective list holds the finding, the unresolved carry-over and the E2E failure.
                             write_result_for(act, {
                                 "schema": "atelier.triage/1",
-                                "items": [{"id": "F-1", "decision": "fix", "reason": "must fix"}],
+                                "items": [
+                                    {"id": "F-1", "decision": "fix", "reason": "must fix"},
+                                    {"id": "UR-1", "decision": "skip", "reason": "left for the backlog"},
+                                    {"id": "E2E-1", "decision": "skip", "reason": "failed once, a flaky server"},
+                                ],
                                 "tokens": {"input": 60, "output": 20, "total": 80},
                             })
                         else:
@@ -875,7 +885,7 @@ class TestIntegrationSeam1(unittest.TestCase):
                             write_result_for(act, {"exit_code": 1, "output": "e2e failed once"})
                         else:
                             write_result_for(act, {"exit_code": 0})
-                    elif "fixcheck-" in res_path:
+                    elif "final-" in res_path:
                         write_result_for(act, {"exit_code": 0})
                     else:
                         build_checks += 1
@@ -901,9 +911,6 @@ class TestIntegrationSeam1(unittest.TestCase):
                         act = call_conductor("answer", "--root", str(root), "--text", "1. JSON")
                     elif ask_kind in ("spec_approval", "plan_approval"):
                         act = call_conductor("answer", "--root", str(root), "--choice", "approve")
-                    elif ask_kind == "rebuild":
-                        saw_rebuild = True
-                        act = call_conductor("answer", "--root", str(root), "--choice", "retry")
                     elif ask_kind == "fix_approval":
                         saw_fix_approval = True
                         act = call_conductor("answer", "--root", str(root), "--choice", "approve")
@@ -914,9 +921,13 @@ class TestIntegrationSeam1(unittest.TestCase):
 
             self.assertTrue(saw_interview_round)
             self.assertTrue(saw_fix_pbi)
-            self.assertTrue(saw_rebuild)
+            # The fix PBI failing past its tries asks nothing (an ask of kind rebuild fails above): the run holds
+            # PBI-1, the fix PBI and PBI-2, which needs PBI-1, and finishes unfinished.
+            self.assertFalse(act["complete"])
+            self.assertEqual(act["unfinished_pbis"], ["PBI-1", "CO-1-FIX", "PBI-2"])
             self.assertTrue(saw_fix_approval)
             self.assertTrue(saw_e2e_failure)
+            self.assertEqual(1, e2e_checks)  # E2E runs once, after the final review
 
             report_path = Path(act["report"])
             self.assertTrue(report_path.is_file())

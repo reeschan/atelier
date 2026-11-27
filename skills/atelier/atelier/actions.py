@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
-from . import acceptance, flow, guards, interview, locks, pages, plan, record, runners, state, survey, template
+from . import acceptance, backlog, flow, guards, interview, locks, pages, plan, record, retro, runners, state, survey, template
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -31,31 +33,22 @@ ASK_CHOICES: dict[str, tuple[str, list[dict[str, str]], str]] = {
         ],
         "PBI の計画を確認し、承認・修正・sensitive の指定を選んでください。",
     ),
-    "asking_rebuild": (
-        "rebuild",
-        [
-            {"id": "retry", "label": "同じ経路でもう 1 回"},
-            {"id": "retry_up", "label": "1 難度上の経路で"},
-            {"id": "hold", "label": "保留にして、依存する PBI は続ける"},
-            {"id": "hold_stop", "label": "保留にして、依存する PBI も止める"},
-        ],
-        "同じ持ち越しの修正の PBI を 2 回作っても検査に落ちました。次の対応を選んでください。",
-    ),
     "awaiting_fix_approval": (
         "fix_approval",
         [
             {"id": "approve", "label": "直す一覧を承認する"},
-            {"id": "nothing_to_fix", "label": "直すものがない（E2E へ）"},
+            {"id": "nothing_to_fix", "label": "直すものがない（報告へ）"},
         ],
-        "最後の見直しの仕分け結果を確認し、修正へ進むかを選んでください。",
+        "振り返りの一覧の仕分け結果を確認し、修正へ進むかを選んでください。",
     ),
-    "asking_e2e_limit": (
-        "e2e_limit",
+    "asking_plan_return": (
+        "plan_return",
         [
-            {"id": "continue", "label": "修正を 1 回だけ続ける"},
-            {"id": "stop", "label": "止めて報告する"},
+            {"id": "replan", "label": "計画を直す"},
+            {"id": "continue", "label": "異議として続ける（振り返りに回す）"},
         ],
-        "E2E の失敗回数が上限を超えました。1 回だけ続けるか止めるかを選んでください。",
+        "作業者が stop を返しました。その PBI と、それに依る PBI だけを止め、wave のほかの PBI は作り終えました。"
+        "計画を直すか、異議として振り返りに回して続けるかを選んでください。",
     ),
     "asking_budget": (
         "budget",
@@ -109,7 +102,6 @@ def active_template(run: dict[str, Any]) -> dict[str, Any]:
     loaded = template.load_template(run.get("template_path"), run.get("agents_path"))
     run["active_template"] = loaded
     run["limits"] = dict(loaded["limits"])
-    run["counters"]["e2e_limit"] = loaded["limits"].get("e2e_rounds", 2)
     return loaded
 
 
@@ -136,7 +128,7 @@ def rule_docs_for(run_root: Path, run: dict[str, Any], tmpl: dict[str, Any]) -> 
 
 
 def check_commands(run: dict[str, Any], kind: str) -> list[str]:
-    """Commands for a check: the wave's PBIs, the fixed files' PBIs, or the plan's E2E."""
+    """Commands for a check: the wave's PBIs, the fixed files' PBIs, the plan's E2E, or the final check (both)."""
     pbis = run.get("pbis", [])
     plan_checks = list(run.get("plan_checks") or [])
     if kind == "e2e":
@@ -144,8 +136,400 @@ def check_commands(run: dict[str, Any], kind: str) -> list[str]:
     if kind == "fixcheck":
         files = [f for group in (run.get("fix_groups") or []) for f in _group_files(group)]
         return plan.fix_commands(pbis, plan_checks, files)
-    checked = [p for p in pbis if p.get("status") in ("built", "failed")] + state.recheck_held_pbis(run)
+    if kind == "final":
+        # The whole check after the fix stage (the plan's checks and the fixed files' PBIs' checks), then E2E.
+        return list(dict.fromkeys([*check_commands(run, "fixcheck"), *check_commands(run, "e2e")]))
+    checked = [p for p in pbis if p.get("status") in ("built", "failed")]
     return plan.wave_commands(checked, plan_checks)
+
+
+def finish_e2e(run_root: Path, run: dict[str, Any], result: dict[str, Any] | None) -> None:
+    """The one way on after E2E: passed, failed, or skipped (result None, the plan has no E2E commands).
+
+    A failed E2E does not go back to the fix stage: its failed commands and the end of its output become e2e_failure
+    items of the retrospective list. The run then takes the one transition after E2E (flow.AFTER_E2E, the triage); a
+    list with nothing to sort skips the triage, and with nothing to show either, the fix approval, to the report.
+    A stage between E2E and the triage (the mutation check) goes in here.
+    """
+    commands = check_commands(run, "e2e")
+    if result is None:
+        run["e2e_skipped"] = True
+        run["e2e"] = {"result": "skipped", "commands": []}
+        retro.ensure(run_root, run)
+    elif result.get("exit_code") == 0:
+        run["e2e"] = {"result": "passed", "commands": commands}
+        retro.ensure(run_root, run)
+    else:
+        failed = [
+            {"command": str(c["command"]), "exit_code": c.get("exit_code")}
+            for c in result.get("commands") or []
+            if isinstance(c, dict) and c.get("command") and c.get("exit_code")
+        ]
+        output = result.get("output") or result.get("error") or result.get("summary") or ""
+        run["e2e"] = {
+            "result": "failed",
+            "commands": commands,
+            "exit_code": result.get("exit_code"),
+            "failed": failed,
+            "output": state.output_tail(str(output)),
+        }
+        retro.add_e2e_failure(run_root, run)
+    flow.apply_event(run, "e2e_done")
+    if run["state"] == "triaging":
+        _skip_empty_triage(run)
+
+
+def finish_final_check(run: dict[str, Any], result: dict[str, Any] | None, commands: list[str] | None = None) -> None:
+    """The final check is over (result None: there was nothing to run). Nothing is built again after it.
+
+    Every failed command becomes a leftover on the run (its kind, the command, the end of the output and the fix list
+    items it comes from); a failed check that does not tell which command failed is one leftover for all of them.
+    The carry-overs on the fix list settle as fixed when their commands passed. Then the run goes to the report.
+    """
+    commands = list(commands if commands is not None else check_commands(run, "final"))
+    e2e = set(run.get("plan_e2e") or [])
+    fix_items = [item for item in run.get("fix_list") or [] if item.get("id")]
+    if result is None:
+        run["final_check"] = {"result": "skipped", "commands": []}
+        _settle_fixed_carry_overs(run, set(), passed_all=True)
+        flow.apply_event(run, "final_check_done")
+        return
+    exit_code = result.get("exit_code")
+    output = str(result.get("output") or result.get("error") or result.get("summary") or "")
+    per_command = [c for c in result.get("commands") or [] if isinstance(c, dict) and c.get("command")]
+    failed = [c for c in per_command if c.get("exit_code")]
+    run["final_check"] = {
+        "result": "passed" if exit_code == 0 else "failed",
+        "commands": commands,
+        "exit_code": exit_code,
+        "failed": [{"command": str(c["command"]), "exit_code": c.get("exit_code")} for c in failed],
+    }
+    if exit_code == 0:
+        _settle_fixed_carry_overs(run, set(), passed_all=True)
+    else:
+        for c in failed:
+            command = str(c["command"])
+            state.add_leftover(
+                run,
+                "e2e_failure" if command in e2e else "check_failure",
+                f"最後の検査で {command} が落ちた",
+                command=command,
+                exit_code=c.get("exit_code"),
+                output=str(c.get("output") or output),
+                items=_items_for_command(run, fix_items, command),
+            )
+        if not failed:
+            state.add_leftover(
+                run,
+                "check_failure",
+                f"最後の検査が落ちた（どのコマンドが落ちたかは結果に無い）: {'、'.join(commands)}",
+                exit_code=exit_code,
+                output=output,
+                items=[item["id"] for item in fix_items],
+                commands=commands,
+            )
+        passed = {str(c["command"]) for c in per_command if not c.get("exit_code")}
+        _settle_fixed_carry_overs(run, passed, passed_all=False)
+    flow.apply_event(run, "final_check_done")
+
+
+def _items_for_command(run: dict[str, Any], fix_items: list[dict[str, Any]], command: str) -> list[str]:
+    """The fix list items a failed command of the final check comes from: the items whose files' PBIs run it, or,
+    for a command no fixed file's PBI runs (the plan's checks, E2E), every item of the fix list."""
+    pbis = run.get("pbis", [])
+    owned = [item["id"] for item in fix_items if command in plan.related_commands(pbis, _group_files([item]))]
+    return owned or [item["id"] for item in fix_items]
+
+
+def _settle_fixed_carry_overs(run: dict[str, Any], passed: set[str], *, passed_all: bool) -> None:
+    """The carry-overs on the fix list are fixed when the final check passed, or when each of their commands ran in
+    it and passed."""
+    fixed = {item["id"] for item in run.get("fix_list") or [] if item.get("kind") == "carry_over"}
+    for co in state.open_carry_overs(run):
+        if co["id"] not in fixed:
+            continue
+        if passed_all or (co.get("commands") and set(co["commands"]) <= passed):
+            state.settle_carry_over(run, co, "fixed")
+
+
+def fix_open_leftovers(run: dict[str, Any], group: int | None, result: dict[str, Any]) -> list[dict[str, Any]]:
+    """What a fix worker returned in `open` (it could not fix them) is left over, with its group's items."""
+    groups = run.get("fix_groups") or []
+    in_range = group is not None and 0 <= group < len(groups)
+    items = [str(i.get("id")) for i in groups[group] if isinstance(i, dict) and i.get("id")] if in_range else []
+    label = f"FIX-{group + 1}" if group is not None else "FIX"
+    out = []
+    opened = result.get("open")
+    for entry in opened if isinstance(opened, list) else []:
+        text = state.open_item_text(entry)
+        if text:
+            out.append(state.add_leftover(run, "fix_open", text, items=items, fix_group=label))
+    return out
+
+
+def queue_unlock_check(run: dict[str, Any], group: int | None, launch_id: str | None) -> bool:
+    """When a fix group made of an unlock is built, put its check in line (it comes before any other launch)."""
+    item = unlock_item(run, group)
+    if item is None:
+        return False
+    run.setdefault("unlock_checks", []).append({"group": group, "item": item.get("id"), "launch_id": launch_id})
+    return True
+
+
+def make_unlock_check(run_root: Path, run: dict[str, Any]) -> dict[str, Any] | None:
+    """The check of the next unlock whose fix worker returned (run["unlock_checks"]).
+
+    The lock commit is made again in a temporary git worktree outside the work tree (locks.add_worktree), the fixed
+    acceptance test file is copied into it, and the check runs the acceptance command on that file twice: there (its
+    cwds entry) and in the work tree, each writing JUnit XML. The worktree is taken away when the check is done
+    (settle_unlock_check). When the check cannot be made (no acceptance command, no file or no change in it, no
+    worktree), the unlock is settled as not confirmed here and None is returned.
+    """
+    entry = run["unlock_checks"][0]
+    if entry.get("worktree"):
+        # A worktree an earlier try of this check made and did not take away.
+        locks.remove_worktree(run_root, entry.pop("worktree"))
+    item = unlock_item(run, entry.get("group")) or {}
+    unlock = item.get("unlock") or {}
+    kept = run.get("lock") or {}
+    check_id = f"unlock-{run['counters']['launch_seq'] + 1:04d}"
+    results_dir = f"{state.run_dir(Path('.')).as_posix()}/results/{check_id}"
+    runs, why = acceptance.unlock_check_plan(run, unlock, results_dir)
+    file = str(unlock.get("file") or "")
+    if not why and not kept.get("commit"):
+        why = "run に鍵が無い"
+    if not why and not (run_root / file).is_file():
+        why = f"直した受け入れテストのファイル {file} が作業ツリーに無い"
+    if not why and not _changed_from_lock(run_root, kept["commit"], file):
+        why = f"{file} が鍵のコミットの中身から変わっていない（直した行も足した行も無い）"
+    if why:
+        _settle_unconfirmed_unlock(run_root, run, entry, item, [why])
+        return None
+    try:
+        tree = locks.add_worktree(run_root, kept["commit"])
+    except state.StateError as exc:
+        _settle_unconfirmed_unlock(run_root, run, entry, item, [f"一時的な worktree を作れなかった（{exc}）"])
+        return None
+    try:
+        copied = tree / file
+        copied.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(run_root / file, copied)
+        for base in (tree, run_root):
+            (base / results_dir).mkdir(parents=True, exist_ok=True)
+            for c in runs:
+                (base / c["junit"]).unlink(missing_ok=True)
+    except OSError as exc:
+        locks.remove_worktree(run_root, tree)
+        _settle_unconfirmed_unlock(run_root, run, entry, item, [f"直したファイルを一時的な worktree に写せなかった（{exc}）"])
+        return None
+    entry["worktree"] = str(tree)
+    # The content that is checked is the content that is locked again: settle_unlock_check compares it.
+    entry["sha256"] = hashlib.sha256((run_root / file).read_bytes()).hexdigest()
+    action = _check_action(
+        run_root,
+        run,
+        "unlock",
+        [c["command"] for c in runs],
+        stage="unlock",
+        unlock={**entry, "runs": runs},
+        cwds={c["command"]: str(tree) for c in runs if c["where"] == "lock_commit"},
+    )
+    if action.get("action") != "check":
+        # A guard question came instead; the check is made again, with a new worktree, once it is answered.
+        locks.remove_worktree(run_root, tree)
+        entry.pop("worktree", None)
+    return action
+
+
+def _changed_from_lock(run_root: Path, commit: str, file: str) -> bool:
+    """True when the file in the work tree is not the lock commit's blob (git compares it with the line ending
+    conversion), or when that cannot be told."""
+    try:
+        blobs = locks.tree_blobs(run_root, commit, [file])
+        return file not in blobs or bool(guards.locked_changes(run_root, blobs))
+    except (state.StateError, RuntimeError):
+        return True
+
+
+def settle_unlock_check(run_root: Path, run: dict[str, Any], pending: dict[str, Any]) -> dict[str, Any]:
+    """Settle an unlock's check from the JUnit XML its two runs wrote; the temporary worktree is taken away first.
+
+    When the fixed and added lines held (acceptance.judge_unlock), the tests are locked again (locks.relock: the
+    fixed file and the list with the unlock record, the copy, the commit id and the hash); for a decision to fix the
+    implementation, a fix group then makes the implementation pass the new lines. When they did not, the file goes back
+    to the lock commit's content and the unlock is left over. Returns the verdict.
+    """
+    info = pending.get("unlock") or {}
+    queue = run.get("unlock_checks") or []
+    entry = next((e for e in queue if e.get("group") == info.get("group")), queue[0] if queue else dict(info))
+    item = unlock_item(run, entry.get("group")) or {}
+    unlock = item.get("unlock") or {}
+    tree = Path(info["worktree"]) if info.get("worktree") else None
+    results: dict[str, tuple[list[dict[str, str]], str | None]] = {}
+    try:
+        for c in info.get("runs") or []:
+            junit = Path(run_root) / c["junit"]
+            source = tree / c["junit"] if c["where"] == "lock_commit" and tree is not None else None
+            if source is not None and source.is_file():
+                # The worktree goes away: its JUnit XML is kept in the run folder (and read again from there).
+                try:
+                    junit.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, junit)
+                except OSError:
+                    junit = source
+            results[c["where"]] = acceptance.read_junit(junit)
+    finally:
+        problems = locks.remove_worktree(run_root, tree) if tree is not None else []
+    if entry in queue:
+        queue.remove(entry)
+    verdict = acceptance.judge_unlock(
+        run, unlock, results, locks.locked_cases(run), acceptance.ends_before_unlock(run)
+    ) if unlock else {"passed": False, "reasons": ["鍵を外す件が修正の段に無い"], "lock_commit": {}, "work_tree": {}}
+    file = Path(run_root) / str(unlock.get("file") or "")
+    now = hashlib.sha256(file.read_bytes()).hexdigest() if unlock.get("file") and file.is_file() else None
+    if verdict["passed"] and info.get("sha256") and now != info["sha256"]:
+        verdict = {**verdict, "passed": False, "reasons": [f"{unlock.get('file')} が確かめた後に変わった（確かめた中身でないので鍵をかけ直さない）"]}
+    if problems:
+        run.setdefault("unlock_cleanup_problems", []).extend(problems)
+    if not verdict["passed"]:
+        _settle_unconfirmed_unlock(run_root, run, entry, item, verdict["reasons"])
+        return verdict
+    record = {
+        "item": item.get("id"),
+        "kind": item.get("kind") or "review",
+        "requirement": unlock.get("requirement"),
+        "file": unlock.get("file"),
+        "cases": list(unlock.get("cases") or []),
+        "fixed": list(unlock.get("fixed") or []),
+        "added": list(unlock.get("added") or []),
+        "fix": unlock.get("fix"),
+        "reason": item.get("reason") or "",
+        "check": pending.get("launch_id"),
+        "verified": {where: dict(verdict[where]) for where in acceptance.UNLOCK_PLACES},
+    }
+    locks.relock(run_root, run, [str(unlock.get("file"))], record, added=dict(unlock.get("assign") or {}))
+    acceptance.add_unlocked_cases(run, unlock, str(item.get("id") or ""))
+    if unlock.get("fix") == "implementation":
+        run.setdefault("fix_groups", []).append([_after_unlock_item(run, item)])
+    return verdict
+
+
+def _settle_unconfirmed_unlock(
+    run_root: Path, run: dict[str, Any], entry: dict[str, Any], item: dict[str, Any], reasons: list[str]
+) -> None:
+    """An unlock whose lines could not be confirmed: its file goes back to the lock commit's content, and it is left
+    over (the lock does not move)."""
+    queue = run.get("unlock_checks") or []
+    if entry in queue:
+        queue.remove(entry)
+    unlock = item.get("unlock") or {}
+    file = str(unlock.get("file") or "")
+    restored = locks.restore(run_root, run, [file]) if file and run.get("lock") else []
+    group = entry.get("group")
+    state.add_leftover(
+        run,
+        "unlock_failed",
+        f"{unlock_text(unlock)} を確かめられず、鍵をかけ直さなかった（{'、'.join(reasons)}）",
+        output="\n".join(reasons),
+        items=[str(item["id"])] if item.get("id") else [],
+        fix_group=f"FIX-{group + 1}" if isinstance(group, int) else "FIX",
+        requirement=unlock.get("requirement"),
+        cases=list(unlock.get("cases") or []),
+        fix=unlock.get("fix"),
+        restored=restored,
+    )
+
+
+def _after_unlock_item(run: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    """The fix group item that makes the implementation pass an unlock's new lines, once they are locked again.
+
+    It works on the item's own files that are not locked, or else on the targets of the PBIs the unlock's cases are
+    assigned to.
+    """
+    unlock = item["unlock"]
+    locked = set((run.get("lock") or {}).get("files") or [])
+    base = {k: v for k, v in item.items() if k != "unlock"}
+    files = [f for f in _group_files([base]) if f not in locked]
+    if not files:
+        rid = unlock.get("requirement")
+        sc = next((s for s in acceptance.scenarios(run) if s["id"] == rid), {})
+        cases = set(unlock.get("cases") or [])
+        pbis = [c.get("pbi") for c in sc.get("cases") or [] if isinstance(c, dict) and c.get("id") in cases]
+        pbis += list((unlock.get("assign") or {}).values())
+        for pid in dict.fromkeys(p for p in pbis if p):
+            pbi = state.get_pbi(run, str(pid)) or {}
+            files += [str(t) for t in pbi.get("targets") or [] if str(t) not in locked and str(t) not in files]
+    affects = base.get("affects") if isinstance(base.get("affects"), dict) else {}
+    return {
+        **base,
+        "file": None,
+        "files": files,
+        "affects": {"pbis": list(affects.get("pbis") or []), "files": files},
+        "after_unlock": {
+            "cases": list(unlock.get("cases") or []),
+            "requirement": unlock.get("requirement"),
+            "acceptance_files": [unlock.get("file")],
+            "acceptance_command": next(iter(run.get("acceptance_commands") or []), ""),
+            "commit": ((run.get("unlocks") or [{}])[-1]).get("commit"),
+        },
+    }
+
+
+def final_check_text(run: dict[str, Any]) -> str:
+    """How the final check went, for the report."""
+    final = run.get("final_check") or {}
+    left = len(run.get("leftovers") or [])
+    if final.get("result") == "passed":
+        return "通った" + (f"（作業者が直せなかった {left} 件を残りにした）" if left else "")
+    if final.get("result") == "failed":
+        return f"落ちた（{left} 件を残りにした。作り直していない）"
+    if final.get("result") == "skipped":
+        return "流すコマンドが無いため流していない"
+    return "流していない（修正の段が無かった）"
+
+
+def leftover_lines(run: dict[str, Any]) -> list[str]:
+    """The report's lines for what the final check left over."""
+    leftovers = run.get("leftovers") or []
+    if not leftovers:
+        return []
+    labels = {
+        "check_failure": "検査の失敗",
+        "e2e_failure": "E2E の失敗",
+        "fix_open": "修正の作業者が直せなかった",
+        "unlock_failed": "鍵を外す修正を確かめられなかった",
+    }
+    lines = ["", "## 残り（最後の検査の後、直していないもの）", ""]
+    for lo in leftovers:
+        source = f"（元の件: {'、'.join(lo.get('items') or [])}）" if lo.get("items") else ""
+        lines.append(f"- {lo['id']} {labels.get(lo['kind'], lo['kind'])}: {lo.get('what', '')}{source}")
+    return lines
+
+
+def _skip_empty_triage(run: dict[str, Any]) -> None:
+    """With nothing on the retrospective list, no planner sorts it: the carry-overs alone go to the fix approval,
+    and with no carry-over and nothing left out either, the user is not asked and the run goes to the report."""
+    listed = run.get("retro") or {}
+    if listed.get("count"):
+        return
+    run["fix_list"] = state.carry_over_fix_items(run)
+    run["triage_ask_items"] = []
+    flow.apply_event(run, "triaged")
+    if not listed.get("dropped") and not run["fix_list"]:
+        flow.apply_event(run, "nothing_to_fix")
+
+
+def e2e_text(run: dict[str, Any]) -> str:
+    """How E2E went, for the report."""
+    if run.get("e2e_skipped"):
+        return "E2E のコマンドが無いため流していない"
+    e2e = run.get("e2e") or {}
+    if e2e.get("result") == "passed":
+        return "通った"
+    if e2e.get("result") == "failed":
+        count = len(e2e.get("failed") or []) or 1
+        return f"落ちた（{count} 件を振り返りの一覧に入れた。修正の段には戻していない）"
+    return "流していない（E2E の前に run が終わった）"
 
 
 def worker_checks(run: dict[str, Any], commands: list[str]) -> list[str]:
@@ -161,18 +545,60 @@ def worker_checks(run: dict[str, Any], commands: list[str]) -> list[str]:
 def _group_files(items: list[dict[str, Any]]) -> list[str]:
     files: list[str] = []
     for item in items:
-        for path in [item.get("file"), *(item.get("files") or [])]:
+        if plan.is_unlock(item):
+            # An unlock opens its acceptance test file and nothing else.
+            paths = [item["unlock"].get("file")]
+        else:
+            affects = item.get("affects") if isinstance(item.get("affects"), dict) else {}
+            paths = [item.get("file"), *(item.get("files") or []), *(affects.get("files") or [])]
+        for path in paths:
             if isinstance(path, str) and path.strip() and path not in files:
                 files.append(path)
     return files
 
 
-def outside_edit_rule(run: dict[str, Any], role: str, pbi_id: str | None) -> dict[str, Any] | None:
+def unlock_item(run: dict[str, Any], fix_group: int | None) -> dict[str, Any] | None:
+    """The item with an unlock that a fix group is made of (plan.fix_groups gives it a group of its own), or None."""
+    groups = run.get("fix_groups") or []
+    if fix_group is None or not 0 <= fix_group < len(groups):
+        return None
+    return next((item for item in groups[fix_group] if plan.is_unlock(item)), None)
+
+
+def opened_files(run: dict[str, Any], fix_group: int | None) -> list[str]:
+    """The locked files an unlock opens to the launch of its fix group in the fix stage: its acceptance test file.
+
+    G1 lets that launch change them (locks.without); every other locked file and the lock list stay guarded, and no
+    other launch has anything opened.
+    """
+    item = unlock_item(run, fix_group) if run.get("state") == "fixing" else None
+    kept = run.get("lock") or {}
+    if item is None or not kept:
+        return []
+    file = str(item["unlock"].get("file") or "")
+    listed = kept.get("list") or locks.LIST_PATH
+    return [file] if file and file != listed and file in (kept.get("files") or []) else []
+
+
+def unlock_text(unlock: dict[str, Any]) -> str:
+    """An unlock in one phrase, for the fix approval page: the requirement, its cases and the decision."""
+    fix = plan.UNLOCK_FIX_LABELS.get(str(unlock.get("fix")), str(unlock.get("fix") or ""))
+    cases = "、".join(str(c) for c in unlock.get("cases") or []) or "（ケース不明）"
+    added = [str(c) for c in unlock.get("added") or []]
+    more = f"。足す行: {'、'.join(added)}" if added else ""
+    return f"鍵を外す: 要件 {unlock.get('requirement') or '（不明）'} の {cases}（{fix}）{more}"
+
+
+def outside_edit_rule(
+    run: dict[str, Any], role: str, pbi_id: str | None, fix_group: int | None = None
+) -> dict[str, Any] | None:
     """What a worker may change outside its paths: existing files, except its do_not_touch (G1).
 
-    A fix PBI may not change test files at all, so it cannot pass its checks by rewriting their expectations.
+    A fix PBI may not change test files at all, so it cannot pass its checks by rewriting their expectations. The
+    fix worker of an unlock may change nothing outside the acceptance test file the unlock opens: its lines are then
+    checked against the implementation as the build left it.
     """
-    if role != "worker":
+    if role != "worker" or opened_files(run, fix_group):
         return None
     pbi = state.get_pbi(run, pbi_id) if pbi_id else None
     if pbi is None:
@@ -232,35 +658,8 @@ def _write_question(run_root: Path, kind: str, body: str) -> Path:
     return q_path
 
 
-FAILURE_LINES = 20
-
-
 def _pbi_label(pbi: dict[str, Any]) -> str:
     return f"{pbi['id']}（{pbi.get('title') or pbi['id']}）"
-
-
-def _rebuild_detail(run: dict[str, Any], body: str) -> tuple[str, bool]:
-    """The rebuild question: which PBIs failed, which PBIs wait on them, and the end of the check output."""
-    targets = state.rebuild_hold_targets(run)
-    dependents = state.dependents_of(run, [p["id"] for p in targets])
-    lines = [body, ""]
-    if targets:
-        lines.append("落ちた PBI: " + "、".join(_pbi_label(p) for p in targets))
-    if dependents:
-        lines += [
-            "これに依る PBI（間接を含む）: " + "、".join(dependents),
-            "",
-            "- 依存する PBI は続ける: 落ちた PBI は変更を作業ツリーに残したまま保留にし、依存する PBI を先に作ります。"
-            "依存する PBI の検査で保留した PBI の検査ももう一度流し、通れば通ったとして扱います。",
-            "- 依存する PBI も止める: 依存する PBI は作らずに残し、報告に未完了として載せます。",
-        ]
-    else:
-        lines.append("これに依る PBI はありません。保留にすると、変更は作業ツリーに残したまま次へ進みます。")
-    failure = str(run.get("last_check_failure") or "").strip()
-    if failure:
-        tail = failure.splitlines()[-FAILURE_LINES:]
-        lines += ["", f"検査の出力（最後の {len(tail)} 行）:", "```", *tail, "```"]
-    return "\n".join(lines), bool(dependents)
 
 
 CARRY_STATUS_LABELS = {
@@ -269,11 +668,12 @@ CARRY_STATUS_LABELS = {
     "fixed": "修正の段で直った",
     "dropped": "直す一覧から外した",
     "replanned": "計画の組み直しに含めた",
+    "unresolved": "未解決（修正の PBI が 2 回落ち、聞かずに保留にした）",
 }
 
 
 def _unfinished_lines(run: dict[str, Any]) -> list[str]:
-    """Report lines for PBIs that did not pass, and for held PBIs that dependents went on without."""
+    """Report lines for PBIs that did not pass, the dependencies PBIs went on without, and the carry-overs."""
     lines: list[str] = []
     unfinished = state.unfinished_pbis(run)
     if unfinished:
@@ -284,10 +684,11 @@ def _unfinished_lines(run: dict[str, Any]) -> list[str]:
             waiting = state.unmet_deps(run, pbi)
             if status == "pending" and waiting:
                 text += f"（{'、'.join(waiting)} を待っていて始まっていない）"
-            elif status == "held" and pbi.get("held_reason") == "sensitive_dependency":
-                text += "（sensitive で外した PBI に依る）"
-            elif status == "held" and pbi.get("held_reason") == "stale_dependency":
-                text += "（計画の変更で前提が変わった）"
+            elif status == "held" and pbi.get("held_reason") == state.UNRESOLVED_HOLD:
+                co = pbi.get("held_carry_over")
+                text += f"（{state.HELD_REASON_LABELS[state.UNRESOLVED_HOLD]}{f'、持ち越し {co}' if co else ''}）"
+            elif status == "held" and pbi.get("held_reason") in state.HELD_REASON_LABELS:
+                text += f"（{state.HELD_REASON_LABELS[pbi['held_reason']]}）"
             lines.append(text)
     went_on = sorted({dep for p in run.get("pbis", []) for dep in p.get("waived_deps") or []})
     if went_on:
@@ -355,6 +756,32 @@ def lock_ticket_fields(run: dict[str, Any], pbi: dict[str, Any]) -> dict[str, An
     return fields
 
 
+def unlock_ticket_fields(run: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    """What the ticket of an unlock's fix group carries: the worker fixes the lines of the unlock's cases (and adds the
+    new ones) in their acceptance test file, the way an acceptance PBI writes tests, from the approved scenario and the
+    decision. That file is opened to this launch alone, so it is not among the ticket's locked files."""
+    unlock = item["unlock"]
+    opened = [str(unlock["file"])] if unlock.get("file") else []
+    sc = next((s for s in acceptance.scenarios(run) if s["id"] == unlock.get("requirement")), None)
+    kept = run.get("lock") or {}
+    return {
+        "kind": "unlock",
+        "unlock": {
+            "cases": list(unlock.get("cases") or []),
+            "fixed": list(unlock.get("fixed") or []),
+            "added": list(unlock.get("added") or []),
+            "fix": unlock.get("fix"),
+            "requirement": unlock.get("requirement"),
+            "acceptance_files": opened,
+            "acceptance_command": next(iter(run.get("acceptance_commands") or []), ""),
+            "reason": str(item.get("reason") or ""),
+            "scenario": acceptance._ticket_scenario(sc) if sc else None,
+        },
+        "interfaces": [dict(i) for i in run.get("interfaces") or [] if isinstance(i, dict)],
+        "locked_files": [f for f in kept.get("files") or [] if f not in opened],
+    }
+
+
 def _worker_note_lines(run: dict[str, Any]) -> list[str]:
     """The report's lines for the objections and stops workers returned, per PBI."""
     lines: list[str] = []
@@ -372,23 +799,61 @@ def _worker_note_lines(run: dict[str, Any]) -> list[str]:
         for pid, s in stops:
             label = state.STOP_EXCEPTION_LABELS.get(s.get("exception"), "")
             lines.append(f"- {pid}: 例外 {s.get('exception')}（{label}） — {s.get('reason', '')}")
+    returns = run.get("plan_returns") or []
+    if returns:
+        lines += ["", "## 途中の戻り", ""]
+        for item in returns:
+            decision = state.PLAN_RETURN_DECISIONS.get(item.get("decision"), str(item.get("decision") or ""))
+            stopped = "; ".join(
+                f"{s.get('pbi')} 例外 {s.get('exception')}（{s.get('label', '')}） — {s.get('reason', '')}"
+                for s in item.get("stops") or []
+            )
+            lines.append(f"- {item.get('id')}（{decision}）: {stopped or '（stop の記録なし）'}")
     return lines
 
 
+def _report_status(run: dict[str, Any]) -> str:
+    """The report's state: unfinished while a PBI did not pass or anything is left over."""
+    unfinished = state.unfinished_pbis(run)
+    left = len(run.get("leftovers") or [])
+    if unfinished and left:
+        return f"未完了（終わっていない PBI が {len(unfinished)} 件、残りが {left} 件ある）"
+    if unfinished:
+        return f"未完了（終わっていない PBI が {len(unfinished)} 件ある）"
+    if left:
+        return f"未完了（残りが {left} 件ある）"
+    return run["state"]
+
+
+def skipped_check_text(run: dict[str, Any]) -> str:
+    """The machine checks the run skipped, for the report."""
+    skipped: list[str] = []
+    if run.get("acceptance_first"):
+        languages = acceptance.skipped_step_languages(run)
+        if languages:
+            skipped.append(f"ステップ定義の機械の検査（{'、'.join(languages)}）")
+    if run.get("e2e_skipped"):
+        skipped.append("E2E（コマンドが無い）")
+    if (run.get("final_check") or {}).get("result") == "skipped":
+        skipped.append("最後の検査（流すコマンドが無い）")
+    return "、".join(skipped) or "なし"
+
+
 def _write_report(run_root: Path, run: dict[str, Any]) -> Path:
+    """Write REPORT.md. The run's leftovers go to the backlog first (once), and the first line says how many there are."""
     report_path = state.run_dir(run_root) / "REPORT.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     summary_md, _ = record.report(state.record_path(run_root))
-    unfinished = state.unfinished_pbis(run)
-    status = f"未完了（終わっていない PBI が {len(unfinished)} 件ある）" if unfinished else run["state"]
+    backlog.add_leftovers(run_root, run)
+    note = backlog.headline(run)
+    returns = run.get("plan_returns") or []
     header = [
-        f"# Atelier v8 報告 ({run['run_id']})",
+        f"# Atelier v8 報告 ({run['run_id']})" + (f" — {note}" if note else ""),
         "",
-        f"- 状態: {status}",
+        f"- 状態: {_report_status(run)}",
         f"- PBI 数: {len(run.get('pbis', []))}",
         f"- 持ち越し: {len(run.get('carry_overs') or [])} 件（残り {len(state.open_carry_overs(run))} 件）",
         f"- 見直し回数: {run['counters']['review_count']}",
-        f"- E2E 失敗回数: {run['counters']['e2e_failures']}",
     ]
     omm = run.get("omm") or {}
     if omm.get("source") == "none" and omm.get("reason") == "tools":
@@ -404,12 +869,17 @@ def _write_report(run_root: Path, run: dict[str, Any]) -> Path:
             header.append("- OMM: committed (HEAD に追いついている)")
     elif omm.get("source"):
         header.append(f"- OMM: {omm['source']}")
-    if run.get("e2e_skipped"):
-        header.append("- E2E: E2E のコマンドが無いため流していない")
+    header.append(f"- E2E: {e2e_text(run)}")
+    header.append(f"- 最後の検査: {final_check_text(run)}")
+    header.append(f"- 途中の戻り: {max(len(returns), int(run['counters'].get('plan_returns') or 0))} 回")
+    header.append(f"- 飛ばした機械の検査: {skipped_check_text(run)}")
+    header += backlog.report_lines(run)
     if run.get("acceptance_first") is not None:
         header.append(f"- 部品「受け入れを先に置く」: {pages.acceptance_toggle_text(run.get('acceptance_first'), run.get('acceptance_reason'))}")
     header += acceptance.report_lines(run)
     header += _unfinished_lines(run)
+    header += leftover_lines(run)
+    header += acceptance.unlock_record_lines(run)
     header.append("")
     report_path.write_text("\n".join(header) + summary_md, encoding="utf-8")
     return report_path
@@ -450,6 +920,11 @@ def _write_handoff(run_root: Path, run: dict[str, Any], report_path: Path) -> Pa
     unfinished = [p["id"] for p in state.unfinished_pbis(run)]
     if unfinished:
         lines.append(f"- 終わっていない PBI: {'、'.join(unfinished)}（報告の「終わっていない PBI」に理由がある）")
+    left = run.get("leftovers") or []
+    if left:
+        kept = run.get("backlog") or {}
+        where = f"backlog（{kept['path']}）に入れた" if kept.get("git") and not kept.get("error") else "backlog に入れていない"
+        lines.append(f"- 残り: {len(left)} 件（{where}。報告の「残り」に中身がある）")
     lines += [
         "",
         "次にやること:",
@@ -507,7 +982,7 @@ def _step_for_launch(run: dict[str, Any], tmpl: dict[str, Any], role: str, pbi_i
         if "worker_fix" in tmpl.get("roles", {}):
             step = template.role_for(tmpl, "worker_fix")
         else:
-            choice = template.choose_route(tmpl, {"level": "L2", "level_reason": "指摘またはE2Eの修正"})
+            choice = template.choose_route(tmpl, {"level": "L2", "level_reason": "直す一覧の修正"})
             step = dict(choice["route"][0])
         run["last_fix_model"] = step.get("model", "")
         return step
@@ -632,13 +1107,15 @@ def _compose_prompt_parts(
         staged_prompt = stage_dir / f"planner-{s}.md"
         mode = {"planning": run.get("planner_mode", "plan"), "triaging": "triage"}.get(s, "acceptance_review")
         plan_file = state.run_dir(run_root) / "plan.json"
-        findings_path = state.run_dir(run_root) / "results" / "findings_kept.json"
-        if s == "triaging" and not findings_path.is_file():
-            findings_path.parent.mkdir(parents=True, exist_ok=True)
-            findings_path.write_text(
-                json.dumps({"schema": plan.SCHEMA_FINDINGS, "findings": run.get("findings", [])}, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+        # Triage reads the retrospective list, which is kept outside the work tree.
+        retro_path = retro.ensure(run_root, run) if mode == "triage" else None
+        # A new plan gets the backlog entries no run took as PBI candidates; a revision gets the same candidates.
+        candidates: list[dict[str, Any]] = []
+        if mode == "plan":
+            candidates = backlog.candidates(run_root, run)
+        elif mode == "revise":
+            candidates = backlog.kept_candidates(run_root, run)
+        no_backlog = None if (run.get("backlog") or {}).get("git", True) else "the work root is not a git repository, so there is no backlog"
         plan.planner_prompt(
             run_root,
             mode,
@@ -647,7 +1124,7 @@ def _compose_prompt_parts(
             result_path=result_path,
             plan_path=plan_file if mode == "revise" and plan_file.is_file() else None,
             request_text=run.get("plan_revision_request", "") if mode == "revise" else None,
-            findings_path=findings_path if mode == "triage" else None,
+            retro_path=retro_path,
             levels=template.load_levels() if mode in ("plan", "revise") else None,
             out_path=staged_prompt,
             rule_docs=rule_docs,
@@ -656,6 +1133,8 @@ def _compose_prompt_parts(
             scenarios=acceptance.review_scenarios(run) if mode == "acceptance_review" else None,
             interfaces=[dict(i) for i in run.get("interfaces") or []] if mode == "acceptance_review" else None,
             acceptance_files=acceptance.review_files(run) if mode == "acceptance_review" else None,
+            backlog=candidates,
+            backlog_note=no_backlog,
         )
         prompt_text = staged_prompt.read_text(encoding="utf-8")
         planner_md = (_PROMPTS_DIR / "planner.md").read_text(encoding="utf-8")
@@ -670,9 +1149,11 @@ def _compose_prompt_parts(
             if plan_file.is_file():
                 parts_by_id["section.plan"] = plan_file.read_text(encoding="utf-8-sig")
                 referenced.append(plan_file)
-        if mode == "triage" and findings_path.is_file():
-            parts_by_id["section.findings"] = findings_path.read_text(encoding="utf-8-sig")
-            referenced.append(findings_path)
+        if candidates:
+            parts_by_id["section.backlog"] = json.dumps(candidates, ensure_ascii=False)
+        if retro_path is not None and retro_path.is_file():
+            parts_by_id["section.findings"] = retro_path.read_text(encoding="utf-8-sig")
+            referenced.append(retro_path)
         for p in (spec_path, facts_path):
             if p.is_file():
                 referenced.append(p)
@@ -721,31 +1202,28 @@ def _compose_prompt_parts(
                 ticket["running_alongside"] = alongside
         else:
             mode = "fix"
-            # The fix stage's check and E2E run once after every fix; the worker runs only what its fix touches.
-            after_fix = check_commands(run, "fixcheck") + list(run.get("plan_e2e") or [])
+            # The final check runs the whole check once after every fix; the worker runs only what its fix touches.
+            after_fix = check_commands(run, "fixcheck")
             groups = run.get("fix_groups") or []
             idx = fix_group if fix_group is not None else (state.fix_groups_left(run) or [-1])[0]
-            if groups and 0 <= idx < len(groups):
-                group = groups[idx]
-                ticket = {
-                    "id": f"FIX-{idx + 1}",
-                    "items": group,
-                    "files": _group_files(group),
-                    "checks": worker_checks(run, plan.related_commands(run.get("pbis", []), _group_files(group))),
-                    "repository_checks": after_fix,
-                }
-                if alongside:
-                    ticket["running_alongside"] = alongside
-            else:
-                ticket = {
-                    "id": "FIX-E2E",
-                    "failure": run.get("last_e2e_failure") or run.get("last_check_failure") or "",
-                    "checks": [],
-                    "repository_checks": after_fix,
-                }
+            if not groups or not 0 <= idx < len(groups):
+                raise state.StateError("修正の段に、作業者に渡す直す組がありません。")
+            group = groups[idx]
+            ticket = {
+                "id": f"FIX-{idx + 1}",
+                "items": group,
+                "files": _group_files(group),
+                "checks": worker_checks(run, plan.related_commands(run.get("pbis", []), _group_files(group))),
+                "repository_checks": after_fix,
+            }
+            if alongside:
+                ticket["running_alongside"] = alongside
             if run.get("acceptance_first") and run.get("lock"):
                 # The fix stage's worker must not change the locked files either (G1 puts them back).
                 ticket["locked_files"] = list(run["lock"].get("files") or [])
+                item = next((i for i in group if plan.is_unlock(i)), None)
+                if item is not None:
+                    ticket.update(unlock_ticket_fields(run, item))
 
         plan.worker_prompt(
             run_root,
@@ -975,8 +1453,8 @@ def locked_wave(run: dict[str, Any]) -> bool:
 
 
 def wave_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
-    """The PBIs a wave check judges: the built and failed ones, and the held ones checked again with them."""
-    return [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")] + state.recheck_held_pbis(run)
+    """The PBIs a wave check judges: the built and failed ones."""
+    return [p for p in run.get("pbis", []) if p.get("status") in ("built", "failed")]
 
 
 LOCK_COPY_STOP = "鍵の仕組みの故障なので wave の検査を止めた（作業者への差し戻しにはしない）: "
@@ -1064,9 +1542,10 @@ def judge_wave(run_root: Path, run: dict[str, Any], pending: dict[str, Any], res
 
     The acceptance commands' exit codes are left out (the cases of PBIs not built yet are meant to be red). The
     missing and failed cases, and the lock's differences found before the check, fail the PBIs they are laid on
-    (case_failed_pbis); missing cases with no PBI of the wave to hold them fail every non-fix PBI of the wave, or are
-    left unresolved when there is none. The other commands, the PBIs' checks and the plan's, stay in "commands" to be
-    judged as before. The output starts with the reasons.
+    (case_failed_pbis). A missing case with no PBI of the wave to hold it, and a case that passed in an earlier wave
+    check and is red now, go by the failure owners' steps (acceptance.case_owners) and are left unresolved when those
+    lay them on no PBI; the wave is not failed for them as a whole. The other commands, the PBIs' checks and the
+    plan's, stay in "commands" for the conductor to lay by the same steps. The output starts with the reasons.
     """
     wave = pending.get("wave") or {}
     groups = list(wave.get("groups") or [])
@@ -1085,15 +1564,23 @@ def judge_wave(run_root: Path, run: dict[str, Any], pending: dict[str, Any], res
         by_pbi.setdefault(pid, []).extend(reasons)
     check_id = str(pending.get("launch_id") or "")
     case_failed = bool(verdict["by_pbi"])
+    # The cases no PBI of the wave holds, and that the failure owners' steps lay on none, are left unresolved.
     if verdict["wave_reasons"]:
-        builders = [pid for pid in wave_ids if (state.get_pbi(run, pid) or {}).get("kind") != "fix"]
-        for pid in builders:
-            by_pbi.setdefault(pid, []).extend(verdict["wave_reasons"])
-        case_failed = case_failed or bool(builders)
-        if not builders:
-            acceptance.add_unresolved(
-                run, acceptance.WAVE_CASES_UNRESOLVED, "; ".join(verdict["wave_reasons"]), check=check_id, cases=list(verdict["missing"])
-            )
+        acceptance.add_unresolved(
+            run,
+            acceptance.WAVE_CASES_UNRESOLVED,
+            "; ".join(verdict["wave_reasons"]),
+            check=check_id,
+            cases=list(verdict["unowned_missing"]),
+        )
+    if verdict["red_again"]:
+        acceptance.add_unresolved(
+            run,
+            acceptance.WAVE_CASES_RED_UNRESOLVED,
+            "; ".join(f"{cid}: 前の wave で通ったケースが落ちた（{verdict['failed'][cid]}）" for cid in verdict["red_again"]),
+            check=check_id,
+            cases=list(verdict["red_again"]),
+        )
     failing = [c for c in rest if c.get("exit_code")]
     rules: list[str] = []
     if lock_failures:
@@ -1119,6 +1606,7 @@ def judge_wave(run_root: Path, run: dict[str, Any], pending: dict[str, Any], res
         "missing": list(verdict["missing"]),
         "failed": dict(verdict["failed"]),
         "excused": list(verdict["excused"]),
+        "passed": list(verdict["passed"]),
         "sent_back": sorted(by_pbi),
     })
     return {
@@ -1255,26 +1743,19 @@ def _build_presentation(run: dict[str, Any], page_kind: str) -> tuple[dict[str, 
             "acceptance_reason": run.get("acceptance_reason"),
             "scenarios": list(run.get("scenarios") or []) if run.get("acceptance_first") else [],
             "interfaces": list(run.get("interfaces") or []),
-            "conclusion": f"PBI {len(pbis)} 件の計画を作成しました。",
+            "conclusion": f"PBI {len(pbis)} 件の計画を作成しました。" + _backlog_note(run),
             "before": "仕様の承認",
             "after": ("受け入れテストを作る → Red の確認 → " if run.get("acceptance_first") else "")
-            + "wave ごとの実装 → 機械の検査 → 最後の見直し → E2E → 報告",
+            + "wave ごとの実装 → 機械の検査 → 最後の見直し → E2E → 振り返りの一覧の仕分け → 直す一覧の承認 → 報告",
             "decisions": decisions,
         })
     else:
-        raw_fixes = run.get("fix_list") or []
-        fixes = [
-            {
-                "id": f.get("id", ""),
-                "title": f.get("title") or f.get("fix") or f.get("summary") or f.get("why") or f.get("id", ""),
-                "reason": f.get("reason") or f.get("why") or f.get("summary") or "",
-            }
-            for f in raw_fixes
-        ]
+        fixes = [_fix_page_item(run, f) for f in run.get("fix_list") or []]
         ask_items = run.get("triage_ask_items") or []
         decisions = [
             {
-                "question": f"{item.get('id', '')}: {item.get('reason', '')}",
+                "question": f"{item.get('id', '')}（{_kind_label(item)}）: {item.get('what') or item.get('title') or ''}。"
+                f"{item.get('reason', '')}" + (f"。{unlock_text(item['unlock'])}" if plan.is_unlock(item) else ""),
                 "options": [
                     {"label": "修正に含める", "note": "今回直す"},
                     {"label": "見送る", "note": "今回は直さない", "recommended": True},
@@ -1286,8 +1767,8 @@ def _build_presentation(run: dict[str, Any], page_kind: str) -> tuple[dict[str, 
         candidates = [
             {
                 "id": f.get("id", ""),
-                "kind": labels["skip"],
-                "title": f.get("fix") or f.get("why") or f.get("id", ""),
+                "kind": labels["skip"] + ("" if f.get("kind") in (None, "review") else f"（{_kind_label(f)}）"),
+                "title": f.get("fix") or f.get("what") or f.get("why") or f.get("id", ""),
                 "reason": f.get("reason") or "",
             }
             for f in run.get("triage_skipped") or []
@@ -1303,13 +1784,77 @@ def _build_presentation(run: dict[str, Any], page_kind: str) -> tuple[dict[str, 
         presentation.update({
             "candidates": candidates,
             "conclusion": f"修正対象 {len(fixes)} 件を確認してください。" if fixes else "修正対象の指摘はありません。",
-            "before": "最後の見直し → 指摘の仕分け",
-            "after": "修正の実装と検査 → E2E → 報告" if fixes else "E2E → 報告",
+            "before": "最後の見直し → E2E → 振り返りの一覧の仕分け",
+            "after": "修正の実装と検査 → 報告" if fixes else "報告",
             "decisions": decisions,
             "fix_list": fixes,
+            "ask_items": [_fix_page_item(run, f) for f in ask_items],
             "outside_tests": [e for e in run.get("outside_edits") or [] if guards.is_test_file(e["file"])],
         })
     return presentation, attachments
+
+
+def _backlog_note(run: dict[str, Any]) -> str:
+    """The plan page's note on the backlog entries the plan's PBIs take (承認すると取り込んだ run が記される)."""
+    taken = backlog.named(run)
+    if not taken:
+        return ""
+    listed = "、".join(f"{bid} → {'、'.join(pids)}" for bid, pids in taken.items())
+    return f"backlog の {len(taken)} 件を取り込みます（{listed}）。承認すると、その件にこの run が取り込んだと記します。"
+
+
+def _kind_label(item: dict[str, Any]) -> str:
+    """The kind of an item of the fix list as the approval page shows it."""
+    kind = str(item.get("kind") or "")
+    if kind == "carry_over":
+        return "持ち越し"
+    return retro.KIND_LABELS.get(kind, kind or "見直しの指摘")
+
+
+def _fix_page_item(run: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    """An item of the fix list with the retrospective list's fields, as the approval page shows it.
+
+    A carry-over skips triage; its fields come from the carry-over record. An item without the fields (a finding
+    approved from an older run) shows what it has.
+    """
+    affects = item.get("affects") if isinstance(item.get("affects"), dict) else {}
+    page = {
+        "id": item.get("id", ""),
+        "kind": _kind_label(item),
+        "title": item.get("title") or item.get("fix") or item.get("summary") or item.get("what") or item.get("why") or item.get("id", ""),
+        "what": item.get("what") or item.get("title") or item.get("fix") or "",
+        "why": item.get("why") or item.get("summary") or "",
+        "tried": item.get("tried") or "",
+        "state": item.get("state") or "",
+        "interpretation": item.get("interpretation") or "",
+        "options": list(item.get("options") or []),
+        "recommendation": item.get("recommendation") or "",
+        "pbis": list(affects.get("pbis") or []),
+        "files": list(affects.get("files") or item.get("files") or ([item["file"]] if item.get("file") else [])),
+        "reason": item.get("reason") or "",
+    }
+    if plan.is_unlock(item):
+        # The triage took the lock off cases: the page says which and what was decided.
+        page["reason"] = "。".join(p for p in (page["reason"], unlock_text(item["unlock"])) if p)
+        page["files"] = list(dict.fromkeys([*page["files"], *_group_files([item])]))
+    if item.get("kind") == "carry_over":
+        co = state.carry_over_of(run, str(item.get("id") or "")) or {}
+        output = str(item.get("why") or co.get("output") or "")
+        last = next((ln.strip() for ln in reversed(output.splitlines()) if ln.strip()), "")
+        page.update({
+            "what": item.get("title") or "",
+            "why": f"wave の検査で落ちた。出力の最後の行: {last or '（出力なし）'}",
+            "tried": (
+                f"wave の検査で落ちて持ち越し、修正の PBI を {int(co['tries'])} 回作った"
+                if co.get("tries") else "wave の検査で落ちて持ち越した（修正の PBI は作っていない）"
+            ),
+            "state": "落ちたまま（仕分けを通らずに直す一覧に入る）",
+            "interpretation": "なし",
+            "options": ["直す（元の PBI の目的は変えない）", "見送る（ID を外す）"],
+            "recommendation": "直す",
+            "pbis": list(co.get("pbis") or []),
+        })
+    return page
 
 
 def _make_approval_ask(
@@ -1542,9 +2087,15 @@ def _pick_building(run: dict[str, Any], tmpl: dict[str, Any]) -> list[dict[str, 
 
 
 def _pick_fixing(run: dict[str, Any]) -> list[int]:
-    """The fix groups to start together next; every group runs the same worker route."""
+    """The fix groups to start together next; every group runs the same worker route.
+
+    The groups of unlocks go first, and only with each other: each unlock's lines are checked against the
+    implementation as the build left it, before any other group changes it.
+    """
+    left = state.fix_groups_left(run)
+    unlocks = [idx for idx in left if unlock_item(run, idx) is not None]
     return _pick_together(
-        state.fix_groups_left(run), lambda idx: _owned_paths(run, fix_group=idx), lambda idx: "worker", template.parallel_limit(run)
+        unlocks or left, lambda idx: _owned_paths(run, fix_group=idx), lambda idx: "worker", template.parallel_limit(run)
     )
 
 
@@ -1613,6 +2164,35 @@ def _guard_ask(run_root: Path, run: dict[str, Any]) -> dict[str, Any]:
     choices.append({"id": "stop", "label": "止めて報告する"})
     detail = issue.get("detail") or "実行前後またはランナーの検査で問題が見つかりました。"
     return _make_ask(run_root, "guard", choices, detail)
+
+
+def plan_return_question(run: dict[str, Any]) -> str:
+    """The plan-return question: the stopped PBIs with their exceptions and reasons, the PBIs that are held, and what
+    each answer does."""
+    _, _, body = ASK_CHOICES["asking_plan_return"]
+    lines = [body, "", "止めた PBI:"]
+    for pbi in state.stopped_pbis(run):
+        entry = state.stop_entry(pbi)
+        lines.append(f"- {_pbi_label(pbi)}: 例外 {entry['exception']}（{entry['label']}） — {entry['reason']}")
+        lines += [
+            f"  異議 {o.get('case', '')}: {o.get('what', '')} — {o.get('why', '')}"
+            for o in pbi.get("objections") or []
+            if isinstance(o, dict)
+        ]
+    held = [p["id"] for p in state.stop_held_pbis(run)]
+    lines += [f"止まっている PBI: {'、'.join(held) or 'なし'}", ""]
+    lines.append(
+        "- 計画を直す: planner が、止めた理由の公開の口とシナリオに関わる PBI だけを直します。"
+        "合格済みの PBI は変えません。直した計画はもう一度承認してもらいます。"
+    )
+    if run.get("acceptance_first"):
+        lines.append("  直した要件の受け入れの PBI を作り直し、Red の確認と planner の確認を経てから鍵をかけ直します。")
+    lines.append(
+        "- 異議として続ける: 止めた PBI は作業者が返したままで wave の検査に回し、止まっている PBI を戻して続けます。"
+        "stop は途中の戻りとして振り返りに回します。"
+    )
+    lines.append(f"この run の途中の戻り: これまで {int((run.get('counters') or {}).get('plan_returns') or 0)} 回")
+    return "\n".join(lines)
 
 
 def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]:
@@ -1709,21 +2289,29 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
     elif s == "awaiting_fix_approval":
         kind, choices, _ = ASK_CHOICES[s]
         action = _make_approval_ask(run_root, run, "fix_list", kind, choices)
+    elif s == "fixing" and run.get("unlock_checks"):
+        # An unlock's fix worker returned: its lines are checked before any other launch.
+        unlock_check = make_unlock_check(run_root, run)
+        if unlock_check is None:
+            return ensure_pending_action(run_root, run)
+        action = unlock_check
     elif s == "fixing":
-        if sub == "check":
-            action = _make_check(run_root, run, "fixcheck")
-        elif run.get("fix_groups"):
-            groups = _pick_fixing(run)
-            if not groups:
-                run["subphase"] = "check"
-                return ensure_pending_action(run_root, run)
-            action = _launch_batch(run_root, run, [(None, group) for group in groups])
-        else:
-            action = _launch_for_state(run_root, run, "worker")
+        groups = _pick_fixing(run) if run.get("fix_groups") and sub != "check" else []
+        if not groups:
+            # Every fix group is built (a run saved with the old fix check's subphase too): the final check, once.
+            flow.apply_event(run, "fixes_built")
+            return ensure_pending_action(run_root, run)
+        action = _launch_batch(run_root, run, [(None, group) for group in groups])
+    elif s == "final_checking":
+        commands = check_commands(run, "final")
+        if not commands:
+            finish_final_check(run, None)
+            return ensure_pending_action(run_root, run)
+        action = _check_action(run_root, run, "final", commands)
     elif s == "running_e2e":
         if not run.get("plan_e2e"):
-            run["e2e_skipped"] = True
-            flow.apply_event(run, "e2e_skipped")
+            # No E2E commands: E2E is skipped (the report says so) and the run goes on as after any E2E.
+            finish_e2e(run_root, run, None)
             return ensure_pending_action(run_root, run)
         action = _make_check(run_root, run, "e2e")
     elif s == "asking_guard":
@@ -1743,12 +2331,9 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
             if line
         )
         action = _make_ask(run_root, kind, choices, detail)
-    elif s == "asking_rebuild":
-        kind, choices, body = ASK_CHOICES[s]
-        detail, has_dependents = _rebuild_detail(run, body)
-        if not has_dependents:
-            choices = [c for c in choices if c["id"] != "hold_stop"]
-        action = _make_ask(run_root, kind, choices, detail)
+    elif s == "asking_plan_return":
+        kind, choices, _ = ASK_CHOICES[s]
+        action = _make_ask(run_root, kind, choices, plan_return_question(run))
     elif s in ASK_CHOICES:
         kind, choices, body = ASK_CHOICES[s]
         action = _make_ask(run_root, kind, choices, body)
@@ -1759,12 +2344,17 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
             report_path = _write_report(run_root, run)
         handoff_path = _write_handoff(run_root, run, report_path)
         unfinished = [p["id"] for p in state.unfinished_pbis(run)]
+        left = [str(lo.get("id")) for lo in run.get("leftovers") or [] if isinstance(lo, dict)]
+        kept = run.get("backlog") or {}
         action = {
             "action": "done",
             "report": str(report_path.resolve()),
             "handoff": str(handoff_path.resolve()),
-            "complete": not unfinished,
+            # Anything left over makes the run unfinished too: it went to the backlog for a later run.
+            "complete": not unfinished and not left,
             "unfinished_pbis": unfinished,
+            "leftovers": left,
+            "backlog": kept.get("path") if kept.get("git") and not kept.get("error") else None,
         }
     else:
         raise state.StateError(f"unhandled state: {s}")
