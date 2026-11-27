@@ -26,7 +26,8 @@ PBI_KINDS = ("build", "acceptance", "e2e", "stub")
 DEFAULT_KIND = "build"
 SCENARIO_MODES = ("normal", "light", "light-no-red")
 UNIT_MARK = "unit"
-TRIAGE_DECISIONS = ("fix", "skip", "ask")
+TRIAGE_FIX = "fix"
+TRIAGE_DECISIONS = (TRIAGE_FIX, "skip", "ask")
 # A triage item's unlock: the locked cases whose lock comes off, and what was decided for them. scenario: the test
 # lines change to what the implementation does; implementation: the test lines change and the implementation follows.
 UNLOCK_FIELDS = ("cases", "fix", "requirement")
@@ -399,6 +400,8 @@ def validate_plan(obj: Any, acceptance_first: bool = False, backlog_ids: Iterabl
 
     seen_ids: set[str] = set()
     valid_pbi_items: list[dict[str, Any]] = []
+    # Built once, so an iterator of candidates holds for every PBI, not only the first.
+    known_backlog = set(backlog_ids or [])
 
     for index, pbi in enumerate(pbis):
         label = f"pbis[{index}]"
@@ -452,7 +455,7 @@ def validate_plan(obj: Any, acceptance_first: bool = False, backlog_ids: Iterabl
             if not EVIDENCE_PATTERN.fullmatch(place.strip()):
                 errors.append(f"{label}.evidence の {place!r} は path:行番号 にしてください。")
         _validate_data_needs(pbi.get("data_needs"), f"{label}.data_needs", errors)
-        _validate_backlog(pbi, label, set(backlog_ids or []), errors)
+        _validate_backlog(pbi, label, known_backlog, errors)
 
         if _is_nonempty_str(pid):
             valid_pbi_items.append(pbi)
@@ -865,6 +868,7 @@ def validate_triage(
     expected_ids: Iterable[str] | None = None,
     locked_cases: Mapping[str, str] | None = None,
     plan_cases: Iterable[str] | None = None,
+    unscoped_ids: Iterable[str] | None = None,
 ) -> list[str]:
     """Validate an atelier.triage/1 object and return Japanese error strings.
 
@@ -874,6 +878,9 @@ def validate_triage(
     (the test lines change and the implementation follows them). Such an item is fixed or asked, never skipped, and
     a case is unlocked by one item only. locked_cases (each locked case -> its requirement) and plan_cases (every case
     id of the plan) check the cases against the lock as well (_validate_unlock).
+
+    unscoped_ids are the items of the list with no files to fix (see the function unscoped_ids): such an item is
+    asked or skipped, never fixed without an unlock, so a fix worker always has a bounded set of files.
     """
     if not isinstance(obj, dict):
         return ["仕分け結果は JSON オブジェクトにしてください。"]
@@ -890,6 +897,7 @@ def validate_triage(
     seen_ids: set[str] = set()
     unlocked_by: dict[str, str] = {}
     known_cases = {str(c) for c in plan_cases or []}
+    unscoped = set(unscoped_ids or [])
     for index, item in enumerate(items):
         label = f"items[{index}]"
         if not isinstance(item, dict):
@@ -910,6 +918,12 @@ def validate_triage(
 
         if not _is_nonempty_str(item.get("reason")):
             errors.append(f"{label} の reason は空でない文字列にしてください。")
+
+        if item.get("decision") == TRIAGE_FIX and _is_nonempty_str(fid) and fid in unscoped and "unlock" not in item:
+            errors.append(
+                f"{label} は直す範囲のファイルが決まらない（持ち主の PBI もファイルも無い）ので、fix にできません。"
+                "ask か skip にしてください。"
+            )
 
         if "unlock" in item:
             for cid in _validate_unlock(item["unlock"], label, item.get("decision"), locked_cases, known_cases, errors):
@@ -951,6 +965,18 @@ def _item_files(item: dict[str, Any]) -> list[str]:
             if norm not in out:
                 out.append(norm)
     return out
+
+
+def unscoped_ids(items: Iterable[Any]) -> list[str]:
+    """The ids of the items a fix worker would get no files for: no unlock, and no file, files or affected files.
+
+    Such an item may not enter the fix list, since its worker would have no paths to keep to (for example an
+    unresolved failure whose owner PBI could not be found).
+    """
+    return [
+        str(item["id"]) for item in items
+        if isinstance(item, dict) and _is_nonempty_str(item.get("id")) and not is_unlock(item) and not _item_files(item)
+    ]
 
 
 def fix_groups(findings: list[dict[str, Any]], max_workers: int = 3) -> list[list[dict[str, Any]]]:

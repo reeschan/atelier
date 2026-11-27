@@ -152,6 +152,66 @@ class UnresolvedHoldTests(unittest.TestCase):
             )
             self.assertEqual(["PBI-1", FIX], state.load_state(tmp)["unresolved"][0]["held_pbis"])
 
+    def save_as_the_rebuild_question(self, tmp: Path, ask: dict | None = None) -> None:
+        """Save the run as an earlier version did when the fix PBI failed its second check: the fix PBI failed, the
+        other PBI of the wave passed, and the run waits for the rebuild question (or for ask, raised from it)."""
+        act = build_wave(tmp, reach_building(tmp, pbis=CHAIN))
+        act = done(tmp, act, {"exit_code": 1, "output": "unused export: helper", "failed_pbis": ["PBI-1"]})
+        act = done(tmp, build_wave(tmp, act), {"exit_code": 1, "output": "lint\nunused export: helper", "failed_pbis": [FIX]})
+        build_wave(tmp, act)
+        run = state.load_state(tmp)
+        for pbi in run["pbis"]:
+            if pbi["status"] == "built":
+                pbi["status"] = "failed" if pbi["id"] == FIX else "passed"
+        run["last_check_failure"] = "lint\nunused export: helper"
+        run["history"].append({"from": "checking", "event": "check_failed", "to": state.REMOVED_REBUILD_STATE})
+        run["state"] = state.REMOVED_REBUILD_STATE
+        run["pending_action"] = {"action": "ask", "kind": "rebuild", "launch_id": "ask-0099"}
+        run["pending_snapshot"] = None
+        if ask is not None:
+            run["return_state"] = run["state"]
+            run["state"] = ask["state"]
+            run["pending_action"] = {"action": "ask", "kind": ask["kind"], "launch_id": "ask-0100"}
+        state.save_state(tmp, run)
+
+    def assert_held_as_unresolved(self, tmp: Path) -> None:
+        run = state.load_state(tmp)
+        self.assertEqual("building", run["state"])
+        self.assertEqual(HELD, [p["id"] for p in run["pbis"] if p["status"] == "held"])
+        self.assertEqual({state.UNRESOLVED_HOLD}, {p["held_reason"] for p in run["pbis"] if p["status"] == "held"})
+        (item,) = run["unresolved"]
+        self.assertEqual(
+            ("carry_over", "CO-1", FIX, HELD, "lint\nunused export: helper"),
+            (item["kind"], item["carry_over"], item["fix_pbi"], item["held_pbis"], item["output"]),
+        )
+        self.assertIn(state.REMOVED_REBUILD_STATE, item["reason"])
+
+    def test_a_run_saved_in_the_removed_rebuild_question_goes_on_without_asking(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            self.save_as_the_rebuild_question(tmp)
+            # The saved question is gone: an answer to it is refused, and the run goes on as the flow does now.
+            code, out = run_cli("answer", "--root", str(tmp), "--choice", "hold")
+            self.assertEqual(2, code)
+            self.assertIn("no pending question in state building", out["error"])
+            code, act = run_cli("next", "--root", str(tmp))
+            self.assertEqual(0, code, act)
+            self.assertEqual(("launch", "worker", "PBI-7"), (act["action"], act["role"], act["pbi"]))
+            self.assert_held_as_unresolved(tmp)
+            self.assertEqual(
+                {"from": state.REMOVED_REBUILD_STATE, "event": "rebuild_question_removed", "to": "building"},
+                state.load_state(tmp)["history"][-1],
+            )
+
+    def test_a_question_raised_from_the_removed_rebuild_question_goes_back_to_building(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            self.save_as_the_rebuild_question(tmp, {"state": "asking_budget", "kind": "budget"})
+            code, act = run_cli("answer", "--root", str(tmp), "--choice", "resume")
+            self.assertEqual(0, code, act)
+            self.assertEqual(("launch", "worker", "PBI-7"), (act["action"], act["role"], act["pbi"]))
+            self.assert_held_as_unresolved(tmp)
+
     def test_hold_unresolved_holds_the_indirect_dependents_and_keeps_an_earlier_reason(self) -> None:
         run = {
             "pbis": [

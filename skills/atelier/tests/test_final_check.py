@@ -13,8 +13,12 @@ import unittest
 from pathlib import Path
 
 from atelier import flow, state
+from tests.test_acceptance_red import approve_plan, drive, finish_stage, pass_review, pbis_of, saved
+from tests.test_acceptance_toggle import UNIT
 from tests.test_conductor import VALID_FACTS, make_finding, make_valid_plan, run_cli
 from tests.test_review_loops import approve, done, drive_to_plan_approval, run_state
+from tests.test_unlock import BUILT, IMPL, R1_FILE, R2, R2_FILE, STUB, UnlockTestBase, r1, unlock_plan
+from tests.test_wave_locks import PBI_CHECK
 
 WHOLE = ["npm run type-check"]
 E2E = ["npm run e2e"]
@@ -153,7 +157,9 @@ class FinalCheckTests(unittest.TestCase):
             code, act = done(tmp, act, {"exit_code": 0})
             self.assertEqual("done", act["action"], act)
             self.assertEqual(2, len(run_state(tmp)["leftovers"]))
-            self.assertIn("修正の作業者が直せなかった: c.py", Path(act["report"]).read_text(encoding="utf-8"))
+            report = Path(act["report"]).read_text(encoding="utf-8")
+            self.assertIn("修正の作業者が直せなかった: c.py", report)
+            self.assertIn("- 最後の検査: 通った（修正の段で直らなかった 2 件を残りにした）", report)
 
     def test_nothing_to_fix_goes_to_the_report_without_the_final_check(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -184,6 +190,67 @@ class FinalCheckTests(unittest.TestCase):
             self.assertEqual((0, "check"), (code, act["action"]), act)
             self.assertEqual(["npm test -- b", *WHOLE, *E2E], act["commands"])
             self.assertEqual("final_checking", run_state(tmp)["state"])
+
+
+class LockedCarryOverFinalCheckTests(UnlockTestBase):
+    """In a locked run, a carry-over laid by a failed locked case settles only when that case passes in the final
+    check, which runs the case's acceptance test file (the carry-over's commands are only its PBI's checks)."""
+
+    def reach_final_check(self, fixed: bool) -> tuple[dict, dict]:
+        """PBI-3 builds R2-1 wrong (9, not 10): the last wave check carries it over as CO-1 on the case alone. The fix
+        worker of CO-1 fixes app.json when fixed. Returns the final check and the run's carry-over."""
+        acceptance_command = {"id": "c1", "text": "run one acceptance file", "source": "Makefile:3", "kind": "acceptance", "command": self.command}
+        act = approve_plan(self.root, unlock_plan(), [UNIT, acceptance_command])
+        (self.root / ".git" / "info").mkdir(parents=True, exist_ok=True)
+        (self.root / ".git" / "info" / "attributes").write_bytes(b"*.json text eol=lf\n")
+        self.write("app.py", STUB)
+        finish_stage(self.root, act, {"R1": r1(), "R2": R2})
+        launch = pass_review(self.root, drive(self.root))
+        self.assertEqual(["PBI-3"], pbis_of(launch))
+        self.write("app.py", BUILT)
+        self.write_json("app.json", {**IMPL, "test_R1[R1-2]": 4, "test_R2[R2-1]": 9})
+        self.done(launch, {"status": "ok"})
+        review = drive(self.root)
+        self.assertEqual(("launch", "reviewer"), (review["action"], review["role"]), review)
+        (co,) = saved(self.root)["carry_overs"]
+        self.assertEqual((["PBI-3"], [PBI_CHECK]), (co["pbis"], co["commands"]))
+        ask = self.done(review, {"schema": "atelier.findings/1", "findings": []})
+        self.assertEqual(("ask", "fix_approval"), (ask["action"], ask["kind"]), ask)
+        code, fix = run_cli("answer", "--root", str(self.root), "--choice", "approve")
+        self.assertEqual((0, "launch"), (code, fix["action"]), fix)
+        if fixed:
+            self.write_json("app.json", {**IMPL, "test_R1[R1-2]": 4})
+        final = self.done(fix, {"status": "ok"})
+        self.assertEqual(("check", "final_checking"), (final["action"], saved(self.root)["state"]), final)
+        return final, co
+
+    def test_the_final_check_runs_the_carried_cases_and_the_carry_over_is_fixed_when_they_pass(self) -> None:
+        final, _ = self.reach_final_check(fixed=True)
+        self.assertEqual([R1_FILE, R2_FILE], [g["file"] for g in final["final"]["groups"]])
+        self.assertEqual({"R1-1": ["CO-1"], "R1-2": ["CO-1"], "R2-1": ["CO-1"]}, final["final"]["cases"])
+        self.assertEqual([g["command"] for g in final["final"]["groups"]], final["commands"][:2])
+        out = drive(self.root)
+        self.assertEqual("done", out["action"], out)
+        self.assertTrue(out["complete"], out)
+        run = saved(self.root)
+        self.assertEqual(("passed", []), (run["final_check"]["result"], run["leftovers"]))
+        self.assertEqual("fixed", run["carry_overs"][0]["status"])
+
+    def test_a_carried_case_that_still_fails_keeps_the_carry_over_open_and_is_left_over(self) -> None:
+        self.reach_final_check(fixed=False)
+        out = drive(self.root)
+        self.assertEqual("done", out["action"], out)
+        self.assertFalse(out["complete"], out)
+        run = saved(self.root)
+        # The PBI's own check and the plan's check pass; the case does not.
+        self.assertEqual("failed", run["final_check"]["result"])
+        self.assertEqual([], run["final_check"]["failed"])
+        self.assertEqual({"R1-1": "passed", "R1-2": "passed", "R2-1": "assertion"}, run["final_check"]["cases"])
+        self.assertEqual("open", run["carry_overs"][0]["status"])
+        (left,) = run["leftovers"]
+        self.assertEqual(("check_failure", "R2-1", ["CO-1"]), (left["kind"], left["case"], left["items"]))
+        report = (self.root / "docs" / "pbi" / "REPORT.md").read_text(encoding="utf-8")
+        self.assertIn("最後の検査で受け入れのケース R2-1 が通らなかった（assertion）（元の件: CO-1）", report)
 
 
 def fix_run(**fields) -> dict:

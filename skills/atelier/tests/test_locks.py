@@ -475,6 +475,73 @@ class LockExtendTests(unittest.TestCase):
         self.assertEqual(["PBI-3"], again["e2e_pbis"])
         self.assertIsNone(locks.extend(self.root, run))
 
+    def test_a_lock_made_again_after_a_lift_keeps_the_e2e_files_as_their_wave_check_passed_them(self) -> None:
+        run = self.run_state()
+        locks.lock(self.root, run)
+        self.write_e2e()
+        state.get_pbi(run, "PBI-3")["status"] = "passed"
+        locks.extend(self.root, run)
+        passed = run["lock"]["commit"]
+        spec = git(self.root, "rev-parse", f"{passed}:e2e/add.spec.js")
+        fixture = git(self.root, "rev-parse", f"{passed}:e2e/fixtures/a.json")
+        locks.lift(run, "PR-1")
+        # While the lock is off, the passed PBI's spec is loosened and its fixture deleted, and R1's test is revised.
+        (self.root / "e2e" / "add.spec.js").write_bytes(b"// loosened\n")
+        (self.root / "e2e" / "fixtures" / "a.json").unlink()
+        (self.root / "acc" / "R1.json").write_bytes(b'{"revised": true}\n')
+        again = locks.lock(self.root, run)
+        self.assertEqual(["acc/R1.json", "e2e/add.spec.js", "e2e/fixtures/a.json", locks.LIST_PATH], again["files"])
+        self.assertEqual(spec, git(self.root, "rev-parse", f"{again['commit']}:e2e/add.spec.js"))
+        self.assertEqual(fixture, git(self.root, "rev-parse", f"{again['commit']}:e2e/fixtures/a.json"))
+        # The revised acceptance test is read from the work tree.
+        self.assertEqual('{"revised": true}', git(self.root, "show", f"{again['commit']}:acc/R1.json"))
+        # The wave check finds both E2E changes against the new lock.
+        self.assertEqual(["e2e/add.spec.js", "e2e/fixtures/a.json"], sorted(c["path"] for c in locks.wave_changes(self.root, run)))
+
+    def test_a_staged_change_of_a_file_the_new_lock_commit_carries_stays_staged(self) -> None:
+        run = self.run_state()
+        first = locks.lock(self.root, run)
+        locked_blob = git(self.root, "rev-parse", f"{first['commit']}:acc/R1.json")
+        # The user stages an edit of the locked test, then changes the work tree copy again.
+        (self.root / "acc" / "R1.json").write_bytes(b'{"staged": 1}\n')
+        git(self.root, "add", "acc/R1.json")
+        staged = git(self.root, "rev-parse", ":acc/R1.json")
+        (self.root / "acc" / "R1.json").write_bytes(b'{"work tree": 2}\n')
+        self.write_e2e()
+        state.get_pbi(run, "PBI-3")["status"] = "passed"
+        locks.extend(self.root, run)
+        self.assertEqual(locked_blob, git(self.root, "rev-parse", f"{run['lock']['commit']}:acc/R1.json"))
+        self.assertEqual(staged, git(self.root, "rev-parse", ":acc/R1.json"))
+        # The files the commit took from the work tree are staged as committed.
+        self.assertEqual(["acc/R1.json"], git(self.root, "diff", "--cached", "--name-only").splitlines())
+
+    def test_the_keys_of_the_files_the_e2e_targets_name_and_the_e2e_scripts_join_the_lock(self) -> None:
+        (self.root / "package.json").write_bytes(json.dumps({"scripts": {"test": "jest"}}).encode("utf-8"))
+        run = self.run_state()
+        run["plan_e2e"] = ["npm run e2e"]
+        locks.lock(self.root, run)
+        # Before an e2e PBI passes, the e2e script is not a locked key (the e2e PBI may still write it).
+        self.assertEqual({"package.json": {"scripts.test": "jest", "jest": None, "cucumber": None, "mocha": None, "ava": None}},
+                         locks.locked_list(self.root, run)["keys"])
+        self.write_e2e()
+        (self.root / "e2e" / "package.json").write_bytes(json.dumps({"scripts": {"test": "playwright test"}}).encode("utf-8"))
+        (self.root / "package.json").write_bytes(
+            json.dumps({"scripts": {"test": "jest", "e2e": "npm --prefix e2e test"}}).encode("utf-8")
+        )
+        state.get_pbi(run, "PBI-3")["status"] = "passed"
+        extension = locks.extend(self.root, run)
+        keys = locks.locked_list(self.root, run)["keys"]
+        self.assertEqual("npm --prefix e2e test", keys["package.json"]["scripts.e2e"])
+        self.assertEqual("jest", keys["package.json"]["scripts.test"])
+        self.assertEqual("playwright test", keys["e2e/package.json"]["scripts.test"])
+        self.assertIn("package.json scripts.e2e", extension["keys"])
+        self.assertIn("e2e/package.json scripts.test", extension["keys"])
+        # A later change of those keys is a locked change.
+        (self.root / "e2e" / "package.json").write_bytes(json.dumps({"scripts": {"test": "exit 0"}}).encode("utf-8"))
+        (self.root / "package.json").write_bytes(json.dumps({"scripts": {"test": "jest", "e2e": "exit 0"}}).encode("utf-8"))
+        changed = sorted((c["path"], c.get("key")) for c in locks.wave_changes(self.root, run))
+        self.assertEqual([("e2e/package.json", "scripts.test"), ("package.json", "scripts.e2e")], changed)
+
     def test_without_a_lock_nothing_is_added(self) -> None:
         run = self.run_state()
         self.write_e2e()
@@ -569,6 +636,27 @@ class LockAgainAfterUnlockTests(unittest.TestCase):
         locks.lift(run)
         self.assertEqual([entry], json.loads(json.dumps(locks.lock_list(run, ["acc/R1.json"])))["unlocks"])
 
+    def test_the_checked_content_is_what_is_locked_again(self) -> None:
+        run = self.run_state()
+        first = dict(locks.lock(self.root, run))
+        checked = b'{"R1-2": 5}\r\n'
+        (self.root / "acc" / "R1.json").write_bytes(checked)
+        digest = hashlib.sha256(checked).hexdigest()
+        # A write after the check: the content is not the checked one, so nothing is locked again.
+        (self.root / "acc" / "R1.json").write_bytes(b'{"R1-2": "anything"}\n')
+        with self.assertRaisesRegex(state.StateError, "changed after its check"):
+            locks.relock(self.root, run, ["acc/R1.json"], {"cases": ["R1-2"]}, checked={"acc/R1.json": digest})
+        self.assertEqual((first["commit"], first["sha256"]), (run["lock"]["commit"], run["lock"]["sha256"]))
+        self.assertEqual(first["commit"], git(self.root, "rev-parse", "HEAD"))
+        # The checked content is committed as git add converts it (here, its line endings to LF).
+        (self.root / ".git" / "info").mkdir(parents=True, exist_ok=True)
+        (self.root / ".git" / "info" / "attributes").write_bytes(b"*.json text eol=lf\n")
+        (self.root / "acc" / "R1.json").write_bytes(checked)
+        entry = locks.relock(self.root, run, ["acc/R1.json"], {"cases": ["R1-2"]}, checked={"acc/R1.json": digest})
+        self.assertEqual(blob_now(self.root, "acc/R1.json"), git(self.root, "rev-parse", f"{entry['commit']}:acc/R1.json"))
+        self.assertEqual('{"R1-2": 5}', git(self.root, "show", f"{run['lock']['commit']}:acc/R1.json"))
+        self.assertEqual([], git(self.root, "diff", "--cached", "--name-only").splitlines())
+
     def test_a_file_that_is_not_locked_is_refused_and_nothing_moves(self) -> None:
         run = self.run_state()
         first = dict(locks.lock(self.root, run))
@@ -630,6 +718,24 @@ class TemporaryWorktreeTests(unittest.TestCase):
         shutil.rmtree(tree.parent)
         self.assertEqual(2, len(self.listed()))
         self.assertEqual([], locks.remove_worktree(self.root, tree))
+        self.assertEqual(1, len(self.listed()))
+
+    def test_a_temporary_folder_inside_the_work_tree_is_refused_and_nothing_is_left(self) -> None:
+        inside = self.root / "tmp"
+        inside.mkdir()
+        with patch.object(tempfile, "tempdir", str(inside)):
+            with self.assertRaisesRegex(state.StateError, "inside the work tree"):
+                locks.add_worktree(self.root, self.head)
+        self.assertEqual([], os.listdir(inside))
+        self.assertEqual(1, len(self.listed()))
+
+    def test_a_folder_that_cannot_be_set_up_is_taken_away_and_the_error_is_a_state_error(self) -> None:
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        with patch.object(tempfile, "tempdir", other.name), patch.object(Path, "mkdir", side_effect=OSError("denied")):
+            with self.assertRaisesRegex(state.StateError, "cannot be set up"):
+                locks.add_worktree(self.root, self.head)
+        self.assertEqual([], os.listdir(other.name))
         self.assertEqual(1, len(self.listed()))
 
     def test_only_a_folder_add_worktree_made_is_deleted(self) -> None:

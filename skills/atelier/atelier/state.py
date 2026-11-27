@@ -154,7 +154,66 @@ def load_state(root: Path) -> dict[str, Any]:
         raise StateError(f"failed to read {path}: {exc}") from exc
     if not isinstance(data, dict) or data.get("schema") != SCHEMA_RUN:
         raise StateError(f"invalid run state schema in {path}")
+    resume_removed_state(data)
     return data
+
+
+# A state an earlier version saved that the flow no longer has: the question whether to build again a fix PBI that
+# failed past its tries. A run loaded in it goes on as the flow now goes with such a fix PBI (resume_removed_state).
+REMOVED_REBUILD_STATE = "asking_rebuild"
+
+
+def resume_removed_state(run: dict[str, Any]) -> None:
+    """Move on a run saved in REMOVED_REBUILD_STATE, without asking, as the flow now does after the same check.
+
+    The PBIs the question was about (the failed ones, else the built ones) are held as unresolved with their
+    carry-overs and every PBI that depends on them, and go on the run's unresolved list; a failed PBI with no
+    carry-over gets one first. The saved question is dropped, and the run goes back to building, or with nothing
+    left to build to the final review. A run in a cross-cutting question raised there goes back the same way.
+    """
+    in_state = run.get("state") == REMOVED_REBUILD_STATE
+    if not in_state and run.get("return_state") != REMOVED_REBUILD_STATE:
+        return
+    from . import acceptance  # acceptance imports this module
+
+    pbis = run.get("pbis", [])
+    asked = [p for p in pbis if p.get("status") == "failed"] or [p for p in pbis if p.get("status") == "built"]
+    carry_overs: list[dict[str, Any]] = []
+    loose: list[dict[str, Any]] = []
+    for pbi in asked:
+        co = carry_over_of(run, pbi.get("carry_over")) if pbi.get("kind") == "fix" else None
+        if co is None:
+            loose.append(pbi)
+        elif co not in carry_overs:
+            carry_overs.append(co)
+    output = run.get("last_check_failure") or ""
+    if loose:
+        carry_overs.append(record_carry_over(run, loose, [], output))
+    for co in carry_overs:
+        held = hold_unresolved(run, co)
+        acceptance.add_unresolved(
+            run,
+            acceptance.CARRY_OVER_UNRESOLVED,
+            f"前の版の、作り直すかの問い（{REMOVED_REBUILD_STATE}）で止まっていた run なので、問わずに未解決として保留した",
+            carry_over=co["id"],
+            fix_pbi=co.get("fix_pbi"),
+            pbis=list(co["pbis"]),
+            commands=list(co["commands"]),
+            output=output_tail(co.get("output") or output),
+            held_pbis=held,
+        )
+    if any_pending_pbis(run):
+        target = "building"
+    else:
+        target = "reviewing" if not (run.get("counters") or {}).get("review_count") else "reporting"
+    if not in_state:
+        run["return_state"] = target
+        return
+    run["history"].append({"from": REMOVED_REBUILD_STATE, "event": "rebuild_question_removed", "to": target})
+    run["state"] = target
+    run["subphase"] = None
+    run["pending_action"] = None
+    run["pending_snapshot"] = None
 
 
 def save_state(root: Path, run: dict[str, Any]) -> None:
@@ -304,13 +363,44 @@ def test_file_names(path: str) -> list[str]:
     return names
 
 
+# A path in a check's output: a run of path characters, with native or POSIX separators (for example
+# C:\work\tests\test_x.py, or tests/test_x.py in "tests/test_x.py::test_a").
+_PATH_TOKEN = re.compile(r"[\w.\-/\\]+")
+
+
+def _path_parts(path: str) -> list[str]:
+    return [p for p in str(path or "").strip().replace("\\", "/").split("/") if p and p != "."]
+
+
 def names_test_file(text: str, path: str) -> bool:
-    """True when the output names the test file: one of its names, not as part of a longer name."""
+    """True when the output names the test file: one of its names, not as part of a longer name.
+
+    A path in the output names the file when one of the two paths ends with the other (for example
+    C:/work/tests/test_x.py, tests/test_x.py or test_x.py for tests/test_x.py). A path to a file of the same name in
+    another folder (for example tests/unit/test_x.py for tests/integration/test_x.py) does not; once the output gives
+    such a path, a shorter path that both files end with (test_x.py) is taken to name that other file. A unittest
+    module name names the file when it is one of the file's module names, whole.
+    """
+    target = _path_parts(path)
+    if not target:
+        return False
+    shorter = elsewhere = False
+    for token in _PATH_TOKEN.findall(str(text or "")):
+        parts = _path_parts(token.rstrip(".-"))
+        if not parts or parts[-1] != target[-1]:
+            continue
+        if parts[-len(target):] == target:
+            return True
+        if target[-len(parts):] == parts:
+            shorter = True
+        else:
+            elsewhere = True
+    if shorter and not elsewhere:
+        return True
     body = str(text or "").replace("\\", "/")
+    paths = {"/".join(target[i:]) for i in range(len(target))}
     for name in test_file_names(path):
-        dotted = "/" not in name and not name.endswith(".py")
-        before = r"(?<![\w.])" if dotted else r"(?<![\w.\-])"
-        if re.search(before + re.escape(name) + r"(?!\w)", body):
+        if name not in paths and re.search(r"(?<![\w.])" + re.escape(name) + r"(?!\w)", body):
             return True
     return False
 

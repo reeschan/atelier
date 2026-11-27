@@ -10,10 +10,14 @@ work root that is not a git repository writes no backlog, and the report says so
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from atelier import actions, backlog, plan, retro, state
 from tests.test_conductor import VALID_FACTS, make_valid_plan, run_cli
@@ -303,6 +307,74 @@ class BacklogTests(unittest.TestCase):
         backlog.add_leftovers(root, run)
         self.assertEqual("r4", entries(root)[0]["taken_by"])
         self.assertNotIn("released", run["backlog"])
+
+
+class BacklogLockTests(unittest.TestCase):
+    """Runs in other worktrees change the same backlog: each change holds the lock from its read to its write."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+        init_git_repo(self.root)
+        self.path = backlog_file(self.root)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps({"id": "r1:LO-1", "run": "r1", "item": "LO-1", "taken_by": None}) + "\n", encoding="utf-8")
+
+    def run_during_write(self, other) -> dict:
+        """take r2's entry, running `other` in a second thread while the take is about to replace the file."""
+        real_write = backlog._write_lines
+        thread = threading.Thread(target=other)
+        run = {"run_id": "r2", "pbis": [{"id": "PBI-1", "backlog": ["r1:LO-1"]}]}
+
+        def write_after_other(path: Path, lines: list[str]) -> None:
+            if thread.ident is None:  # The first write only.
+                thread.start()
+                thread.join(0.5)  # With the lock, the other change waits for this write.
+            real_write(path, lines)
+
+        with mock.patch.object(backlog, "_write_lines", write_after_other):
+            backlog.take(self.root, run)
+        thread.join(10)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(backlog.lock_path(self.path).exists())
+        return run
+
+    def test_an_append_waits_for_a_take_and_is_not_lost(self) -> None:
+        other = {"run_id": "r3", "pbis": [], "leftovers": [{"id": "LO-1", "kind": "check_failure", "what": "w", "output": "o"}]}
+        self.run_during_write(lambda: backlog.add_leftovers(self.root, other))
+        self.assertNotIn("error", other["backlog"])
+        by_id = {e["id"]: e for e in entries(self.root)}
+        self.assertEqual(["r1:LO-1", "r3:LO-1"], list(by_id))
+        self.assertEqual("r2", by_id["r1:LO-1"]["taken_by"])
+
+    def test_two_runs_do_not_both_take_one_entry(self) -> None:
+        other = {"run_id": "r3", "pbis": [{"id": "PBI-1", "backlog": ["r1:LO-1"]}]}
+        run = self.run_during_write(lambda: backlog.take(self.root, other))
+        self.assertEqual(["r1:LO-1"], run["backlog"]["taken"])
+        self.assertEqual(([], ["r1:LO-1"]), (other["backlog"]["taken"], other["backlog"]["taken_elsewhere"]))
+        self.assertEqual("r2", entries(self.root)[0]["taken_by"])
+
+    def test_a_held_lock_is_waited_for_and_a_stale_one_is_removed(self) -> None:
+        lock = backlog.lock_path(self.path)
+        lock.write_text("another run", encoding="utf-8")
+        run = {"run_id": "r2", "pbis": [{"id": "PBI-1", "backlog": ["r1:LO-1"]}]}
+        with mock.patch.object(backlog, "LOCK_WAIT_SECONDS", 0.2):
+            with self.assertRaises(OSError):
+                backlog.take(self.root, run)
+            left = {"run_id": "r3", "pbis": [], "leftovers": [{"id": "LO-1", "kind": "check_failure", "what": "w"}]}
+            backlog.add_leftovers(self.root, left)
+        self.assertIn(str(lock), left["backlog"]["error"])
+        self.assertEqual(["r1:LO-1"], [e["id"] for e in entries(self.root)])
+        self.assertIsNone(entries(self.root)[0]["taken_by"])
+        self.assertEqual("another run", lock.read_text(encoding="utf-8"))
+
+        # A lock file older than LOCK_STALE_SECONDS was left by a run that died.
+        old = time.time() - backlog.LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+        self.assertEqual(["r1:LO-1"], backlog.take(self.root, run))
+        self.assertEqual("r2", entries(self.root)[0]["taken_by"])
+        self.assertFalse(lock.exists())
 
 
 if __name__ == "__main__":

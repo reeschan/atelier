@@ -299,6 +299,10 @@ def _unresolved_state(item: dict[str, Any]) -> str:
     return "未解決（持ち主の PBI が決まらない）"
 
 
+UNRESOLVED_OPTIONS = ["直す", "ユーザーに聞く", "見送る（backlog に残す）"]
+UNSCOPED_RECOMMENDATION = "ユーザーに聞く（持ち主の PBI が決まらず、直す範囲のファイルが無い）"
+
+
 def unresolved_items(run: dict[str, Any]) -> list[dict[str, Any]]:
     """The run's unresolved items, one item each, with the report's line on it as what was tried."""
     items: list[dict[str, Any]] = []
@@ -312,6 +316,13 @@ def unresolved_items(run: dict[str, Any]) -> list[dict[str, Any]]:
             *(entry.get("held_pbis") or []),
         ])
         requirement_test = bool(entry.get("requirement"))
+        files = _targets(run, pbis)
+        if requirement_test:
+            recommendation = "ユーザーに聞く（要件の受け入れテストを決め直す）"
+        elif not files:
+            recommendation = UNSCOPED_RECOMMENDATION
+        else:
+            recommendation = "直す"
         items.append(make_item(
             "unresolved",
             _str(entry.get("id")) or f"UR-{len(items) + 1}",
@@ -319,10 +330,11 @@ def unresolved_items(run: dict[str, Any]) -> list[dict[str, Any]]:
             why=_str(entry.get("reason")) or "（記載なし）",
             tried=lines[0][2:] if lines else _str(entry.get("reason")),
             state=_unresolved_state(entry),
-            options=["直す", "ユーザーに聞く", "見送る（backlog に残す）"],
-            recommendation="ユーザーに聞く（要件の受け入れテストを決め直す）" if requirement_test else "直す",
+            # With no files to fix, the triage may not fix the item (plan.unscoped_ids), so fixing is not offered.
+            options=UNRESOLVED_OPTIONS if files else UNRESOLVED_OPTIONS[1:],
+            recommendation=recommendation,
             affects_pbis=pbis,
-            affects_files=_targets(run, pbis),
+            affects_files=files,
             source={"record": f"run.json の unresolved の {entry.get('id')}", "unresolved": dict(entry)},
         ))
     return items
@@ -517,9 +529,9 @@ def split(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[
     return kept, dropped
 
 
-def _unique_ids(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Give an item whose id an earlier item has a new one (kind:id, then a number)."""
-    seen: set[str] = set()
+def _unique_ids(items: list[dict[str, Any]], reserved: Iterable[str] = ()) -> list[dict[str, Any]]:
+    """Give an item whose id an earlier item (or one of reserved) has a new one (kind:id, then a number)."""
+    seen: set[str] = set(reserved)
     out: list[dict[str, Any]] = []
     for item in items:
         iid = item["id"]
@@ -616,4 +628,5 @@ def add_e2e_failure(root: Path, run: dict[str, Any]) -> Path:
         return write(root, run, kept, dropped)
     items = [i for i in body["items"] if i.get("kind") != "e2e_failure"] + e2e_failure_items(run)
     dropped = [d for d in body.get("dropped") or [] if isinstance(d, dict)]
-    return write(root, run, _unique_ids(items), dropped)
+    # The dropped review items keep their ids (and stay out of triage), so a new item does not take one of them.
+    return write(root, run, _unique_ids(items, reserved=[_str(d.get("id")) for d in dropped]), dropped)

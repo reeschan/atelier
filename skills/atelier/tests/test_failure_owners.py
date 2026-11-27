@@ -20,6 +20,7 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent
 if str(SKILLS_DIR) not in sys.path:
     sys.path.insert(0, str(SKILLS_DIR))
 
+import conductor  # noqa: E402
 from atelier import acceptance, state  # noqa: E402
 from tests import test_wave_locks  # noqa: E402
 from tests.test_acceptance_red import pbis_of, saved  # noqa: E402
@@ -102,6 +103,32 @@ class FailureOwnerSteps(unittest.TestCase):
                 run = state.load_state(self.tmp)
                 self.assertEqual([(["PBI-1"], [PLAN_COMMAND])], [(c["pbis"], c["commands"]) for c in run["carry_overs"]])
                 self.assertFalse(run.get("unresolved"))
+
+    def test_2_reads_each_failed_command_s_whole_output(self) -> None:
+        named = "FAIL: test_lower (tests.test_box.BoxTests.test_lower)"
+        # A line that only starts like another command's header stays in the output read from the combined text.
+        combined = checked({"check-1": None, "check-2": None, PLAN_COMMAND: f"$ check-2 --help\nusage: check-2\n{named}"})
+        # The output kept with the command's exit code is read before the combined text, which may be cut short.
+        own = checked({"check-1": None, "check-2": None, PLAN_COMMAND: "(the end of a long output)"})
+        own["commands"][-1]["output"] = f"{named}\n(the end of a long output)"
+        for label, result in (("combined output", combined), ("per-command output", own)):
+            with self.subTest(label):
+                self.setUp()
+                nxt = done(self.tmp, self.first_check(), result)
+                self.assertEqual(("launch", "CO-1-FIX"), (nxt["action"], nxt["pbi"]))
+                self.assertEqual(("carried", "passed"), (statuses(self.tmp)["PBI-1"], statuses(self.tmp)["PBI-2"]))
+                self.assertFalse(state.load_state(self.tmp).get("unresolved"))
+
+    def test_the_check_keeps_each_failed_command_s_output_with_its_exit_code(self) -> None:
+        py = f'"{sys.executable}"'
+        act = {
+            "commands": [f"{py} -c \"print('$ lint --help'); print('tests/test_box.py'); raise SystemExit(1)\"", f"{py} -c \"print('ok')\""],
+            "result": str(self.tmp / "r.json"),
+        }
+        self.assertEqual(1, conductor._run_check(self.tmp, act, None, 60))
+        failed, passed = json.loads((self.tmp / "r.json").read_text(encoding="utf-8"))["commands"]
+        self.assertEqual(["$ lint --help", "tests/test_box.py"], failed["output"].strip().splitlines())
+        self.assertNotIn("output", passed)
 
     def test_3_a_failure_no_pbi_owns_is_left_unresolved_and_the_run_goes_on(self) -> None:
         tail = "\n".join(f"line {n}" for n in range(30)) + "\nImportError: cannot import name 'x' from 'helpers'"
@@ -274,6 +301,27 @@ class TestFileNames(unittest.TestCase):
         self.assertEqual((["PBI-2"], "targets"), state.failure_owners(pbis, "npm test", "FAIL src/box.test.ts"))
         pbis[0]["checks"] = ["npm test"]
         self.assertEqual((["PBI-1"], "checks"), state.failure_owners(pbis, "npm test", "FAIL src/box.test.ts"))
+
+    def test_a_path_with_its_folder_names_only_the_file_in_that_folder(self) -> None:
+        for unit, integration in (
+            ("tests/unit/test_box.py", "tests/integration/test_box.py"),
+            ("tests\\unit\\test_box.py", "tests\\integration\\test_box.py"),
+        ):
+            pbis = [{"id": "PBI-1", "targets": [unit]}, {"id": "PBI-2", "targets": [integration]}]
+            for text in (
+                "FAILED tests/unit/test_box.py::test_total - assert 1 == 2",
+                "tests\\unit\\test_box.py:12: AssertionError",
+                'File "C:\\work\\tests\\unit\\test_box.py", line 12, in test_total',
+                "FAILED /work/tests/unit/test_box.py::test_total\ntest_box.py:12: AssertionError",
+                "see tests/unit/test_box.py.",
+                "FAIL: test_total (tests.unit.test_box.BoxTests.test_total)",
+            ):
+                with self.subTest(target=unit, text=text):
+                    self.assertEqual((["PBI-1"], "targets"), state.failure_owners(pbis, "pytest", text))
+            # A file name alone does not tell the two files apart: both are named.
+            for text in ("test_box.py:12: AssertionError", "./test_box.py::test_total FAILED"):
+                with self.subTest(target=unit, text=text):
+                    self.assertEqual((["PBI-1", "PBI-2"], "targets"), state.failure_owners(pbis, "pytest", text))
 
 
 if __name__ == "__main__":

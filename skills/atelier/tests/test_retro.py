@@ -173,6 +173,10 @@ class OneListAfterTheReviewTests(unittest.TestCase):
         unresolved = by_id["UR-1"]
         self.assertIn("python -m unittest", unresolved["what"])
         self.assertEqual("check_failed", unresolved["source"]["unresolved"]["kind"])
+        # No owner PBI, so no files to fix: fixing is not offered.
+        self.assertEqual({"pbis": [], "files": []}, unresolved["affects"])
+        self.assertEqual(retro.UNRESOLVED_OPTIONS[1:], unresolved["options"])
+        self.assertEqual(retro.UNSCOPED_RECOMMENDATION, unresolved["recommendation"])
         plan_return = by_id["PR-1"]
         self.assertIn("例外 3", plan_return["what"])
         self.assertEqual(STOP["reason"], plan_return["why"])
@@ -193,11 +197,15 @@ class OneListAfterTheReviewTests(unittest.TestCase):
         every = [
             {"id": "F-1", "decision": "fix", "reason": "a defect against the spec"},
             {"id": "OB-1", "decision": "ask", "reason": "changes how R1 is read"},
-            {"id": "UR-1", "decision": "fix", "reason": "the harness import is clear"},
+            {"id": "UR-1", "decision": "ask", "reason": "no PBI owns the harness"},
             {"id": "PR-1", "decision": "skip", "reason": "went on as an objection"},
         ]
-        for items in (every[:3], every + [every[0]], every + [{"id": "F-2", "decision": "fix", "reason": "r"}]):
-            with self.subTest(ids=[i["id"] for i in items]):
+        # UR-1 has no owner PBI and so no files to fix: fixing it would give a fix worker no bounded scope.
+        unscoped_fix = [*every[:2], {**every[2], "decision": "fix"}, every[3]]
+        for items in (
+            every[:3], every + [every[0]], every + [{"id": "F-2", "decision": "fix", "reason": "r"}], unscoped_fix,
+        ):
+            with self.subTest(ids=[i["id"] for i in items], decisions=[i["decision"] for i in items]):
                 code, out = done(self.root, tri, {"schema": "atelier.triage/1", "items": items})
                 self.assertEqual(2, code, out)
                 self.assertEqual("triaging", state.load_state(self.root)["state"])
@@ -205,34 +213,62 @@ class OneListAfterTheReviewTests(unittest.TestCase):
         self.assertEqual(0, code, ask)
         self.assertEqual(("ask", "fix_approval"), (ask["action"], ask["kind"]))
         run = state.load_state(self.root)
-        self.assertEqual(["F-1", "UR-1"], [f["id"] for f in run["fix_list"]])
-        self.assertEqual(["OB-1"], [f["id"] for f in run["triage_ask_items"]])
+        self.assertEqual(["F-1"], [f["id"] for f in run["fix_list"]])
+        self.assertEqual(["OB-1", "UR-1"], [f["id"] for f in run["triage_ask_items"]])
         self.assertEqual(["PR-1"], [f["id"] for f in run["triage_skipped"]])
-        self.assertEqual(("review", "unresolved"), tuple(f["kind"] for f in run["fix_list"]))
+        self.assertEqual(("review",), tuple(f["kind"] for f in run["fix_list"]))
 
         draft = Path(ask["draft"]).read_text(encoding="utf-8")
         section = draft.split("## 直す一覧", 1)[1].split("\n## ", 1)[0]
         for text in (
             "**F-1: fix F-1**", "| 種類 | 見直しの指摘 |", "| なぜ | why F-1 |", "| 影響する PBI | PBI-1 |",
             "| 仕分けの理由 | a defect against the spec |",
-            "**UR-1: ", "| 種類 | 未解決 |", "| 何が | wave の検査のコマンド python -m unittest |",
-            "| 今の状態 | 未解決（持ち主の PBI が決まらない） |",
         ):
             self.assertIn(text, section)
         for label in ("種類", "何が", "なぜ", "試したこと", "今の状態", "仮の解釈", "選択肢", "推奨", "影響する PBI"):
-            self.assertEqual(2, section.count(f"| {label} |"), label)
+            self.assertEqual(1, section.count(f"| {label} |"), label)
         asks = draft.split("## 聞く件の中身", 1)[1].split("\n## ", 1)[0]
         self.assertIn("| 種類 | 異議 |", asks)
         self.assertIn(f"| 仮の解釈 | {OBJECTION['interpretation']} |", asks)
+        for text in (
+            "**UR-1: ", "| 種類 | 未解決 |", "| 何が | wave の検査のコマンド python -m unittest |",
+            "| 今の状態 | 未解決（持ち主の PBI が決まらない） |",
+        ):
+            self.assertIn(text, asks)
         self.assertIn("OB-1（異議）", draft.split("## 決めること", 1)[1])
         candidates = draft.split("## 見送りの候補", 1)[1]
         for row in ("| PR-1 | 見送ると仕分けた（途中の戻り） |", "| F-2 | 確信度が 80 未満 |", "| F-3 | 書き方だけの指摘 |"):
             self.assertIn(row, candidates)
 
+        # The user cannot add the unowned item to the fix list either.
+        tools = tempfile.TemporaryDirectory()
+        self.addCleanup(tools.cleanup)
+        reply = Path(tools.name) / "reply.json"
+        reply.write_text(json.dumps({"choice": "approve", "include_ids": ["UR-1"]}), encoding="utf-8")
+        code, out = run_cli("answer", "--root", str(self.root), "--reply", str(reply))
+        self.assertNotEqual(0, code, out)
+        self.assertEqual("awaiting_fix_approval", state.load_state(self.root)["state"])
+        self.assertEqual(["F-1"], [f["id"] for f in state.load_state(self.root)["fix_list"]])
+
         # Approving builds fix groups from the files the items affect.
         code, act = run_cli("answer", "--root", str(self.root), "--choice", "approve")
         self.assertEqual(0, code, act)
         self.assertEqual("fixing", state.load_state(self.root)["state"])
+
+    def test_a_failed_e2e_does_not_take_the_id_of_a_dropped_finding(self) -> None:
+        low = make_finding("E2E-1", severity="minor", confidence=50, files=["app.py"])
+        code, act = done(self.root, self.review, {"schema": "atelier.findings/1", "findings": [low]})
+        self.assertEqual((0, "check"), (code, act["action"]), act)
+        code, tri = done(self.root, act, {
+            "exit_code": 1, "commands": [{"command": "python e2e.py", "exit_code": 1}], "output": "the page has no total\n",
+        })
+        self.assertEqual(0, code, tri)
+        self.assertEqual(("launch", "planner"), (tri["action"], tri["role"]))
+        body = retro.load(state.load_state(self.root))
+        self.assertEqual([("E2E-1", "confidence")], [(i["id"], i["dropped_by"]) for i in body["dropped"]])
+        failures = [i for i in body["items"] if i["kind"] == "e2e_failure"]
+        self.assertEqual(["e2e_failure:E2E-1"], [i["id"] for i in failures])
+        self.assertNotIn("E2E-1", [i["id"] for i in body["items"]])
 
 
 class OutsideGitTests(unittest.TestCase):

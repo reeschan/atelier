@@ -424,6 +424,10 @@ class UnlockCheckTests(UnlockTestBase):
         self.assertEqual("done", out["action"], out)
         left = self.assert_not_locked_again(saved(self.root), check)
         self.assertIn("R1-2: 鍵のコミットの状態で通った", left["what"])
+        # The run left the unlock over, not a fix worker: the final check's line does not say a worker could not fix it.
+        report = (self.root / "docs" / "pbi" / "REPORT.md").read_text(encoding="utf-8")
+        self.assertIn("- 最後の検査: 通った（修正の段で直らなかった 1 件を残りにした）", report)
+        self.assertNotIn("作業者が直せなかった 1 件", report)
 
     def test_lines_that_do_not_end_now_as_decided_are_put_back_and_left_over(self) -> None:
         for label, fix, expect, reason in (
@@ -473,9 +477,37 @@ class UnlockCheckTests(UnlockTestBase):
         self.write_json("app.json", {**IMPL, "test_R1[R1-2]": 6})
         final = self.done(follow, {"status": "ok"})
         self.assertEqual("check", final["action"])
+        # The final check runs the relocked case's acceptance test file before the other checks.
+        self.assertEqual(R1_FILE, final["final"]["groups"][0]["file"])
+        self.assertEqual({"R1-2": ["OB-1"]}, final["final"]["cases"])
+        self.assertEqual(final["final"]["groups"][0]["command"], final["commands"][0])
         out = drive(self.root)
         self.assertEqual("done", out["action"], out)
-        self.assertEqual([], saved(self.root)["leftovers"])
+        run = saved(self.root)
+        self.assertEqual([], run["leftovers"])
+        self.assertEqual(("passed", {"R1-2": "passed"}), (run["final_check"]["result"], run["final_check"]["cases"]))
+
+    def test_a_relocked_case_the_implementation_still_fails_is_left_over(self) -> None:
+        launch = self.to_fix_stage("implementation")
+        self.fix_lines(launch, r1(6))
+        follow = drive(self.root)
+        self.assertEqual(("launch", 1), (follow["action"], follow["fix_group"]), follow)
+        # The follow-up worker says it is done, but app.json still gives 5 for R1-2; the other checks pass.
+        final = self.done(follow, {"status": "ok"})
+        self.assertEqual("check", final["action"])
+        out = drive(self.root)
+        self.assertEqual("done", out["action"], out)
+        self.assertFalse(out["complete"])
+        run = saved(self.root)
+        self.assertEqual(("failed", {"R1-2": "assertion"}), (run["final_check"]["result"], run["final_check"]["cases"]))
+        (left,) = run["leftovers"]
+        self.assertEqual(
+            ("check_failure", "R1-2", ["OB-1"], final["final"]["groups"][0]["command"]),
+            (left["kind"], left["case"], left["items"], left["command"]),
+        )
+        self.assertIn("最後の検査で受け入れのケース R1-2 が通らなかった（assertion）", left["what"])
+        (event,) = [r for r in records(self.root) if r.get("stage") == "fix"]
+        self.assertEqual(("fail", [acceptance.WAVE_CASES_RULE]), (event["result"], event["rules"]))
 
     def test_an_added_line_is_checked_and_joins_the_lock_list(self) -> None:
         # The unlock fixes R1-2 and adds a line for R1-3, a new case of R1.
@@ -512,11 +544,70 @@ class UnlockCheckTests(UnlockTestBase):
 
     def test_a_file_changed_after_its_check_was_made_is_not_locked_again(self) -> None:
         check = self.fix_lines(self.to_fix_stage("scenario"), r1(5))
-        # The same lines, written again in another layout while the check waits: not the content that was checked.
-        self.write(R1_FILE, json.dumps(r1(5), indent=2) + "\n")
+        # The same lines with one more blank line at the end, written while the check waits: not the bytes checked.
+        self.write(R1_FILE, json.dumps(r1(5)) + "\n\n")
         drive(self.root)
         left = self.assert_not_locked_again(saved(self.root), check)
         self.assertIn(f"{R1_FILE} が確かめた後に変わった", left["what"])
+
+    def test_a_file_changed_and_put_back_while_its_check_waits_is_not_locked_again(self) -> None:
+        check = self.fix_lines(self.to_fix_stage("scenario"), r1(5))
+        # The file is written with other lines and then with the checked bytes again: the bytes match, the write shows.
+        checked = (self.root / R1_FILE).read_bytes()
+        self.write_json(R1_FILE, r1(6))
+        (self.root / R1_FILE).write_bytes(checked)
+        drive(self.root)
+        left = self.assert_not_locked_again(saved(self.root), check)
+        self.assertIn(f"{R1_FILE} が確かめた後に変わった", left["what"])
+
+    def test_the_worktree_holds_the_bytes_that_were_hashed_when_the_file_changes_while_the_check_is_made(self) -> None:
+        launch = self.to_fix_stage("scenario")
+        target = self.root / R1_FILE
+        real = Path.read_bytes
+        changed: list[bool] = []
+
+        def read_bytes(path: Path) -> bytes:
+            # While the check is made, the file is written with other lines just before it is read.
+            frame, making = sys._getframe(1), False
+            while frame is not None and not making:
+                making, frame = frame.f_code.co_name == "make_unlock_check", frame.f_back
+            if making and not changed and Path(path).resolve() == target:
+                changed.append(True)
+                target.write_bytes((json.dumps(r1(70)) + "\n").encode("utf-8"))
+            return real(path)
+
+        with patch.object(Path, "read_bytes", read_bytes):
+            check = self.fix_lines(launch, r1(5))
+        self.assertEqual([True], changed)
+        copied = Path(check["unlock"]["worktree"]) / R1_FILE
+        self.assertEqual(hashlib.sha256(copied.read_bytes()).hexdigest(), check["unlock"]["sha256"])
+        # Both runs saw the same new lines (R1-2 now expects 70), and they do not hold: nothing is locked again.
+        drive(self.root)
+        self.assert_not_locked_again(saved(self.root), check)
+
+    def test_the_worktree_is_gone_when_the_fixed_file_cannot_be_read(self) -> None:
+        launch = self.to_fix_stage("scenario")
+        target = self.root / R1_FILE
+        real = Path.read_bytes
+
+        def read_bytes(path: Path) -> bytes:
+            frame, making = sys._getframe(1), False
+            while frame is not None and not making:
+                making, frame = frame.f_code.co_name == "make_unlock_check", frame.f_back
+            if making and Path(path).resolve() == target:
+                raise PermissionError("simulated: the file is held by another process")
+            return real(path)
+
+        with patch.object(Path, "read_bytes", read_bytes):
+            out = self.fix_lines(launch, r1(5))
+        run = saved(self.root)
+        # The check could not be made: the unlock is left over, the worktree is gone and the final check comes next.
+        self.assertEqual(("check", "final_checking"), (out["action"], run["state"]), out)
+        (left,) = run["leftovers"]
+        self.assertEqual("unlock_failed", left["kind"])
+        self.assertIn("直したファイルを一時的な worktree に写せなかった", left["what"])
+        self.assertEqual(1, len(worktrees(self.root)))
+        self.assertEqual([], run.get("unlock_checks") or [])
 
     def test_a_line_of_no_case_fails_the_check(self) -> None:
         launch = self.to_fix_stage("scenario")

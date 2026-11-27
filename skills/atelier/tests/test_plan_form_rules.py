@@ -199,7 +199,7 @@ class FormRulesOffTests(unittest.TestCase):
                 ("L1", lambda o: by_id(o, "PBI-5").update(level="L1"), "L3"),
                 ("L2", lambda o: by_id(o, "PBI-5").update(level="L2"), "L3"),
                 ("same wave as a build PBI", lambda o: by_id(o, "PBI-5").update(depends_on=["PBI-3"]), "build"),
-                ("before a build PBI", lambda o: by_id(o, "PBI-5").update(depends_on=["PBI-1"]), "build"),
+                ("before a build PBI", lambda o: by_id(o, "PBI-5").update(depends_on=[]), "build"),
             ):
                 with self.subTest(acceptance_first=first, case=label):
                     obj = copy.deepcopy(form_plan())

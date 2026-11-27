@@ -184,7 +184,9 @@ def finish_final_check(run: dict[str, Any], result: dict[str, Any] | None, comma
 
     Every failed command becomes a leftover on the run (its kind, the command, the end of the output and the fix list
     items it comes from); a failed check that does not tell which command failed is one leftover for all of them.
-    The carry-overs on the fix list settle as fixed when their commands passed. Then the run goes to the report.
+    In a locked run, every locked case the final check had to see pass and did not (judge_final) is a leftover too.
+    The carry-overs on the fix list settle as fixed when their commands passed and their locked cases did. Then the
+    run goes to the report.
     """
     commands = list(commands if commands is not None else check_commands(run, "final"))
     e2e = set(run.get("plan_e2e") or [])
@@ -198,14 +200,19 @@ def finish_final_check(run: dict[str, Any], result: dict[str, Any] | None, comma
     output = str(result.get("output") or result.get("error") or result.get("summary") or "")
     per_command = [c for c in result.get("commands") or [] if isinstance(c, dict) and c.get("command")]
     failed = [c for c in per_command if c.get("exit_code")]
+    cases = {str(cid): c for cid, c in (result.get("cases") or {}).items() if isinstance(c, dict)}
+    unpassed = {cid: c for cid, c in cases.items() if c.get("end") != "passed"}
+    blocked = {str(i) for c in unpassed.values() for i in c.get("items") or []}
     run["final_check"] = {
         "result": "passed" if exit_code == 0 else "failed",
         "commands": commands,
         "exit_code": exit_code,
         "failed": [{"command": str(c["command"]), "exit_code": c.get("exit_code")} for c in failed],
     }
-    if exit_code == 0:
-        _settle_fixed_carry_overs(run, set(), passed_all=True)
+    if cases:
+        run["final_check"]["cases"] = {cid: c.get("end") for cid, c in cases.items()}
+    if result.get("commands_passed", exit_code == 0):
+        _settle_fixed_carry_overs(run, set(), passed_all=True, blocked=blocked)
     else:
         for c in failed:
             command = str(c["command"])
@@ -229,8 +236,130 @@ def finish_final_check(run: dict[str, Any], result: dict[str, Any] | None, comma
                 commands=commands,
             )
         passed = {str(c["command"]) for c in per_command if not c.get("exit_code")}
-        _settle_fixed_carry_overs(run, passed, passed_all=False)
+        _settle_fixed_carry_overs(run, passed, passed_all=False, blocked=blocked)
+    for cid, c in unpassed.items():
+        state.add_leftover(
+            run,
+            "check_failure",
+            f"最後の検査で受け入れのケース {cid} が通らなかった（{c.get('end')}）",
+            command=c.get("command"),
+            output=str(c.get("why") or ""),
+            items=[str(i) for i in c.get("items") or []],
+            case=cid,
+        )
     flow.apply_event(run, "final_check_done")
+
+
+def final_case_plan(run: dict[str, Any], results_dir: str) -> dict[str, Any] | None:
+    """The locked cases a locked run's final check has to see pass, and how it runs them; None when there are none.
+
+    They are the cases of the carry-overs on the fix list (the locked cases assigned to their PBIs, but those a worker
+    left red with an objection) and the cases of the unlocks that fixed the implementation (their lines were locked
+    again, and a fix group then made the implementation pass them). Their requirements' acceptance test files run with
+    the acceptance command, each writing JUnit XML under results_dir (acceptance.wave_case_plan). Returns {"groups",
+    "unrun", "cases": each case -> the fix list items it comes from}.
+    """
+    locked = locks.locked_cases(run)
+    assigned = {
+        str(case["id"]): str(case["pbi"])
+        for sc in acceptance.scenarios(run)
+        for case in sc.get("cases") or []
+        if isinstance(case, dict) and str(case.get("id")) in locked and case.get("pbi")
+    }
+    excused = acceptance.objection_red_cases(run, assigned)
+    listed = {item["id"] for item in run.get("fix_list") or [] if item.get("kind") == "carry_over"}
+    cases: dict[str, list[str]] = {}
+    for co in state.open_carry_overs(run):
+        if co["id"] not in listed:
+            continue
+        held = set(co.get("pbis") or [])
+        for cid in locked:
+            if assigned.get(cid) in held and cid not in excused:
+                cases.setdefault(cid, []).append(co["id"])
+    for record in run.get("unlocks") or []:
+        if record.get("fix") != "implementation":
+            continue
+        for cid in record.get("cases") or []:
+            if str(cid) in locked:
+                items = cases.setdefault(str(cid), [])
+                if record.get("item") and record["item"] not in items:
+                    items.append(str(record["item"]))
+    if not cases:
+        return None
+    requirements = list(dict.fromkeys(locked[cid] for cid in locked if cid in cases))
+    groups, unrun = acceptance.wave_case_plan(run, requirements, results_dir)
+    return {"groups": groups, "unrun": unrun, "cases": cases}
+
+
+def judge_final(run_root: Path, run: dict[str, Any], pending: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """A locked run's final check result, judged on the locked cases it had to see pass as well as on the commands.
+
+    The acceptance commands' exit codes are left out (a case left red with an objection may fail in the same file).
+    Each case of the plan (pending["final"], final_case_plan) ends as its JUnit XML says, or missing when it did not
+    run; one that did not pass fails the final check. The other commands stay in "commands". Returns the result with
+    "exit_code" (the first failed other command's, else 1 when a case did not pass, else 0), "commands_passed" (the
+    other commands passed) and "cases": each case -> {"end", "command", "items", "why"}.
+    """
+    final = pending.get("final") or {}
+    groups = [g for g in final.get("groups") or [] if isinstance(g, dict)]
+    acceptance_commands = {str(g.get("command")) for g in groups}
+    given = [c for c in result.get("commands") or [] if isinstance(c, dict)]
+    rest = [c for c in given if str(c.get("command")) not in acceptance_commands]
+    failing = [c for c in rest if c.get("exit_code")]
+    # Without each command's exit code, the check's own exit code is all there is to go by.
+    rest_code = failing[0]["exit_code"] if failing else 0 if given else result.get("exit_code")
+    locked = locks.locked_cases(run)
+    ids = list(locked)
+    group_of = {str(rid): g for g in groups for rid in g.get("requirements") or []}
+    read: dict[str, tuple[dict[str, str], str | None]] = {}
+    cases: dict[str, dict[str, Any]] = {}
+    for cid, items in (final.get("cases") or {}).items():
+        rid = locked.get(str(cid), "")
+        group = group_of.get(rid)
+        if group is None:
+            why = "; ".join(r for r in final.get("unrun") or [] if str(r).startswith(f"要件 {rid}:")) or "流す受け入れテストが無い"
+            cases[str(cid)] = {"end": "missing", "command": None, "items": list(items), "why": why}
+            continue
+        if group["junit"] not in read:
+            testcases, error = acceptance.read_junit(Path(run_root) / group["junit"])
+            read[group["junit"]] = (acceptance._case_ends(testcases, ids)[0], error)
+        ends, error = read[group["junit"]]
+        cases[str(cid)] = {"end": ends.get(str(cid)) or "missing", "command": group["command"], "items": list(items), "why": error or ""}
+    unpassed = [cid for cid, c in cases.items() if c["end"] != "passed"]
+    rules = (["G9"] if rest_code else []) + ([acceptance.WAVE_CASES_RULE] if unpassed else [])
+    return {
+        **result,
+        "exit_code": rest_code or (1 if unpassed else 0),
+        "commands_passed": not rest_code,
+        "commands": rest,
+        "cases": cases,
+        "rules": rules,
+    }
+
+
+def _make_final_check(run_root: Path, run: dict[str, Any]) -> dict[str, Any] | None:
+    """The final check: the fixed files' PBIs' checks, the plan's checks and E2E, and in a locked run first the
+    acceptance commands of the locked cases it has to see pass (final_case_plan). With nothing to run it is finished
+    here and None is returned."""
+    commands = check_commands(run, "final")
+    check_id = f"final-{run['counters']['launch_seq'] + 1:04d}"
+    results_dir = f"{state.run_dir(Path('.')).as_posix()}/results/{check_id}"
+    final = final_case_plan(run, results_dir) if locked_wave(run) else None
+    if final is None:
+        if not commands:
+            finish_final_check(run, None)
+            return None
+        return _check_action(run_root, run, "final", commands)
+    runs = [g["command"] for g in final["groups"]]
+    commands = [*runs, *[c for c in commands if c not in runs]]
+    if not commands:
+        # The cases cannot be run (no acceptance command or file): each is left over as missing.
+        finish_final_check(run, judge_final(run_root, run, {"final": final}, {"exit_code": 0, "commands": []}), [])
+        return None
+    (run_root / results_dir).mkdir(parents=True, exist_ok=True)
+    for group in final["groups"]:
+        (run_root / group["junit"]).unlink(missing_ok=True)
+    return _check_action(run_root, run, "final", commands, final=final)
 
 
 def _items_for_command(run: dict[str, Any], fix_items: list[dict[str, Any]], command: str) -> list[str]:
@@ -241,12 +370,14 @@ def _items_for_command(run: dict[str, Any], fix_items: list[dict[str, Any]], com
     return owned or [item["id"] for item in fix_items]
 
 
-def _settle_fixed_carry_overs(run: dict[str, Any], passed: set[str], *, passed_all: bool) -> None:
+def _settle_fixed_carry_overs(
+    run: dict[str, Any], passed: set[str], *, passed_all: bool, blocked: set[str] | None = None
+) -> None:
     """The carry-overs on the fix list are fixed when the final check passed, or when each of their commands ran in
-    it and passed."""
+    it and passed; a blocked one (a locked case of it did not pass) stays open."""
     fixed = {item["id"] for item in run.get("fix_list") or [] if item.get("kind") == "carry_over"}
     for co in state.open_carry_overs(run):
-        if co["id"] not in fixed:
+        if co["id"] not in fixed or co["id"] in (blocked or set()):
             continue
         if passed_all or (co.get("commands") and set(co["commands"]) <= passed):
             state.settle_carry_over(run, co, "fixed")
@@ -311,9 +442,13 @@ def make_unlock_check(run_root: Path, run: dict[str, Any]) -> dict[str, Any] | N
         _settle_unconfirmed_unlock(run_root, run, entry, item, [f"一時的な worktree を作れなかった（{exc}）"])
         return None
     try:
+        # One read of the file: the bytes copied into the worktree are the bytes hashed. The file's stat is taken
+        # before the read, so a change made after it, even one put back later, shows at settle_unlock_check.
+        stat = _file_stat(run_root / file)
+        data = (run_root / file).read_bytes()
         copied = tree / file
         copied.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(run_root / file, copied)
+        copied.write_bytes(data)
         for base in (tree, run_root):
             (base / results_dir).mkdir(parents=True, exist_ok=True)
             for c in runs:
@@ -324,7 +459,8 @@ def make_unlock_check(run_root: Path, run: dict[str, Any]) -> dict[str, Any] | N
         return None
     entry["worktree"] = str(tree)
     # The content that is checked is the content that is locked again: settle_unlock_check compares it.
-    entry["sha256"] = hashlib.sha256((run_root / file).read_bytes()).hexdigest()
+    entry["sha256"] = hashlib.sha256(data).hexdigest()
+    entry["stat"] = stat
     action = _check_action(
         run_root,
         run,
@@ -339,6 +475,13 @@ def make_unlock_check(run_root: Path, run: dict[str, Any]) -> dict[str, Any] | N
         locks.remove_worktree(run_root, tree)
         entry.pop("worktree", None)
     return action
+
+
+def _file_stat(path: Path) -> list[int]:
+    """The file's modification time (in nanoseconds) and size: a write changes them, also one that puts the same
+    bytes back."""
+    st = path.stat()
+    return [st.st_mtime_ns, st.st_size]
 
 
 def _changed_from_lock(run_root: Path, commit: str, file: str) -> bool:
@@ -383,11 +526,18 @@ def settle_unlock_check(run_root: Path, run: dict[str, Any], pending: dict[str, 
     if entry in queue:
         queue.remove(entry)
     verdict = acceptance.judge_unlock(
-        run, unlock, results, locks.locked_cases(run), acceptance.ends_before_unlock(run)
+        run, unlock, results, locks.locked_cases(run), acceptance.ends_before_unlock(run),
+        acceptance.unlock_texts(run_root, run, unlock),
     ) if unlock else {"passed": False, "reasons": ["鍵を外す件が修正の段に無い"], "lock_commit": {}, "work_tree": {}}
     file = Path(run_root) / str(unlock.get("file") or "")
-    now = hashlib.sha256(file.read_bytes()).hexdigest() if unlock.get("file") and file.is_file() else None
-    if verdict["passed"] and info.get("sha256") and now != info["sha256"]:
+    present = bool(unlock.get("file")) and file.is_file()
+    # The work tree run read the file in place: a write to it after the check was made (seen in its stat, also when
+    # it put the same bytes back) means the verdict may not be about the bytes that would be locked again.
+    stat_now = _file_stat(file) if present else None
+    now = hashlib.sha256(file.read_bytes()).hexdigest() if present else None
+    moved = bool(info.get("stat")) and stat_now != list(info["stat"])
+    # A file changed after its check is not the content that was checked: that alone is the reason it is not locked.
+    if info.get("sha256") and (now != info["sha256"] or moved):
         verdict = {**verdict, "passed": False, "reasons": [f"{unlock.get('file')} が確かめた後に変わった（確かめた中身でないので鍵をかけ直さない）"]}
     if problems:
         run.setdefault("unlock_cleanup_problems", []).extend(problems)
@@ -407,7 +557,9 @@ def settle_unlock_check(run_root: Path, run: dict[str, Any], pending: dict[str, 
         "check": pending.get("launch_id"),
         "verified": {where: dict(verdict[where]) for where in acceptance.UNLOCK_PLACES},
     }
-    locks.relock(run_root, run, [str(unlock.get("file"))], record, added=dict(unlock.get("assign") or {}))
+    # The content the check judged is what is locked again (relock reads the file once and compares its sha256).
+    checked = {str(unlock.get("file")): str(info["sha256"])} if info.get("sha256") else None
+    locks.relock(run_root, run, [str(unlock.get("file"))], record, added=dict(unlock.get("assign") or {}), checked=checked)
     acceptance.add_unlocked_cases(run, unlock, str(item.get("id") or ""))
     if unlock.get("fix") == "implementation":
         run.setdefault("fix_groups", []).append([_after_unlock_item(run, item)])
@@ -480,7 +632,8 @@ def final_check_text(run: dict[str, Any]) -> str:
     final = run.get("final_check") or {}
     left = len(run.get("leftovers") or [])
     if final.get("result") == "passed":
-        return "通った" + (f"（作業者が直せなかった {left} 件を残りにした）" if left else "")
+        # Left over by the fix stage (a fix worker's open item, an unlock not confirmed); the labels tell which.
+        return "通った" + (f"（修正の段で直らなかった {left} 件を残りにした）" if left else "")
     if final.get("result") == "failed":
         return f"落ちた（{left} 件を残りにした。作り直していない）"
     if final.get("result") == "skipped":
@@ -2257,6 +2410,10 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
         if pbi is None and s == "building_acceptance":
             flow.apply_event(run, "acceptance_built")
             return ensure_pending_action(run_root, run)
+        if pbi is None and any(p.get("status") == "built" for p in run.get("pbis", [])):
+            # Nothing left to launch, but PBIs wait for the wave's check (for example ones a re-plan kept as built).
+            flow.apply_event(run, "worker_stopped" if state.stopped_pbis(run) else "wave_built")
+            return ensure_pending_action(run_root, run)
         if pbi is None:
             has_passed = any(p.get("status") == "passed" for p in run.get("pbis", []))
             if has_passed and run["counters"]["review_count"] == 0:
@@ -2303,11 +2460,10 @@ def ensure_pending_action(run_root: Path, run: dict[str, Any]) -> dict[str, Any]
             return ensure_pending_action(run_root, run)
         action = _launch_batch(run_root, run, [(None, group) for group in groups])
     elif s == "final_checking":
-        commands = check_commands(run, "final")
-        if not commands:
-            finish_final_check(run, None)
+        final_check = _make_final_check(run_root, run)
+        if final_check is None:
             return ensure_pending_action(run_root, run)
-        action = _check_action(run_root, run, "final", commands)
+        action = final_check
     elif s == "running_e2e":
         if not run.get("plan_e2e"):
             # No E2E commands: E2E is skipped (the report says so) and the run goes on as after any E2E.

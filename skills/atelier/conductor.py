@@ -418,26 +418,30 @@ def _append_check_records_for_wave(
 
 
 def _command_outputs(result: dict[str, Any], commands: list[str]) -> dict[str, str]:
-    """Each failed command's own part of a check's output.
+    """Each failed command's own output in a check's result.
 
-    The check writes each failed command's output after a "$ <command>" line (_check_output). A command whose
-    part cannot be found (the result was written another way) gets the whole output.
+    The check keeps each failed command's output with its exit code (_run_check). A result without it (written
+    another way) is read from the combined output, where each failed command's part follows a "$ <command>" line and
+    ends at the next whole line that is another command's header (_check_output); a line that only starts like one
+    (for example "$ lint --help" for the command lint) stays in the part. A command whose part cannot be found gets
+    the whole output.
     """
+    entries = [c for c in result.get("commands") or [] if isinstance(c, dict)]
+    own = {str(c.get("command")): c["output"] for c in entries if isinstance(c.get("output"), str)}
     output = str(result.get("output") or "")
-    known = [str(c.get("command")) for c in result.get("commands") or [] if isinstance(c, dict)]
+    lines = output.split("\n")
+    heads = {head for c in entries for head in (f"$ {c.get('command')}", f"$ {c.get('command')} (ok)")}
     out: dict[str, str] = {}
     for cmd in commands:
-        head = f"$ {cmd}\n"
-        if output.startswith(head):
-            start = len(head)
-        else:
-            at = output.find("\n" + head)
-            if at < 0:
-                out[cmd] = output
-                continue
-            start = at + 1 + len(head)
-        ends = [i for i in (output.find(f"\n$ {other}", start) for other in known) if i >= 0]
-        out[cmd] = output[start:min(ends)] if ends else output[start:]
+        if cmd in own:
+            out[cmd] = own[cmd]
+            continue
+        if f"$ {cmd}" not in lines:
+            out[cmd] = output
+            continue
+        start = lines.index(f"$ {cmd}") + 1
+        end = next((i for i in range(start, len(lines)) if lines[i] in heads), len(lines))
+        out[cmd] = "\n".join(lines[start:end])
     return out
 
 
@@ -670,6 +674,10 @@ def _handle_check_done(
         # check takes that check as its final check.
         if s == "fixing":
             flow.apply_event(run, "fixes_built")
+        if (pending or {}).get("final") is not None:
+            # A locked run: the locked cases it had to see pass go by their JUnit XML, not the acceptance exit codes.
+            result = actions.judge_final(root, run, pending or {}, result)
+            exit_code = result["exit_code"]
         rules = [str(r) for r in (result.get("rules") or ([] if exit_code == 0 else ["G9"]))]
         hits = _try_append_record(root, {
             "type": "check",
@@ -714,11 +722,30 @@ def _handle_check_done(
 KEPT_STATUSES = ("passed", "sensitive")
 
 
+def _unchanged_built_pbis(run: dict[str, Any], result: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The PBIs built and not checked yet that a re-plan leaves as they were: the fields a passed PBI cannot change
+    (plan.frozen_changes) and the dependencies are the same in the new plan."""
+    new_by_id = {p.get("id"): p for p in result.get("pbis") or [] if isinstance(p, dict)}
+    return {
+        p["id"]: p
+        for p in run.get("pbis", [])
+        if p.get("status") == "built"
+        and p["id"] in new_by_id
+        and not plan.frozen_changes([p], result, [p["id"]])
+        and list(new_by_id[p["id"]].get("depends_on") or []) == list(p.get("depends_on") or [])
+    }
+
+
 def _build_pbis_from_plan(run: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
-    """PBIs of a new plan; a re-plan keeps the PBIs that already passed (or left the run) as they were."""
+    """PBIs of a new plan; a re-plan keeps the PBIs that already passed (or left the run) as they were.
+
+    A PBI built and not checked yet that the re-plan leaves as it was keeps its build and goes to the wave's check;
+    a changed one, and one that a stop holds or that failed its check, is built again.
+    """
     wave_list = plan.waves(result)
     tmpl = actions.active_template(run)
     kept = {p["id"]: p for p in run.get("pbis", []) if p.get("status") in KEPT_STATUSES}
+    kept.update(_unchanged_built_pbis(run, result))
     built: list[dict[str, Any]] = []
     for wave_idx, wave_items in enumerate(wave_list):
         for item in wave_items:
@@ -826,7 +853,8 @@ def _validate_completion_before_accept(
             raise ConductorError(" ".join(errors))
     elif s == "triaging":
         # Every item of the retrospective list, once; an unlock names cases of the lock (or lines added to one of its
-        # requirements), and an unlock request's own unlock is checked the same way.
+        # requirements), and an unlock request's own unlock is checked the same way. An item with no files to fix is
+        # not fixed, so a fix worker always has a bounded set of files.
         try:
             listed = retro.load_items(run)
         except state.StateError as exc:
@@ -836,6 +864,7 @@ def _validate_completion_before_accept(
             expected_ids=[item["id"] for item in listed],
             locked_cases=locks.locked_cases(run),
             plan_cases=list(acceptance.case_requirements(run)),
+            unscoped_ids=plan.unscoped_ids(listed),
         )
         if errors:
             raise ConductorError(" ".join(errors))
@@ -2005,6 +2034,10 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
                 unknown = sorted(str(i) for i in approved_ask_ids - known)
                 if unknown:
                     raise ConductorError(f"unknown finding ids: {', '.join(unknown)}")
+                # An item with no files to fix stays off the fix list, so a fix worker always has a bounded scope.
+                unscoped = sorted(set(plan.unscoped_ids(pool)) & approved_ask_ids)
+                if unscoped:
+                    raise ConductorError(f"no files to fix for: {', '.join(unscoped)}")
                 for item in pool:
                     if item.get("id") in approved_ask_ids and item.get("id") not in existing_ids:
                         run.setdefault("fix_list", []).append(item)
@@ -2178,8 +2211,9 @@ def _run_check(root: Path, act: dict[str, Any], shell: str | None, timeout: int 
     """Run every command of a check, even after a failure, and write the result file.
 
     The exit code is the first failing command's; each command's own exit code is in "commands", so a
-    carry-over names every check that failed, not only the first. A command named in the action's cwds runs in that
-    folder instead of the work root (an unlock's check runs the lock commit's state in a temporary worktree).
+    carry-over names every check that failed, not only the first. A failed command's entry also keeps the end of its
+    own output, which the failure owners' steps read (_command_outputs). A command named in the action's cwds runs in
+    that folder instead of the work root (an unlock's check runs the lock commit's state in a temporary worktree).
     """
     exit_code = 0
     outputs: list[tuple[str, int, str]] = []
@@ -2204,7 +2238,7 @@ def _run_check(root: Path, act: dict[str, Any], shell: str | None, timeout: int 
         except OSError as exc:
             code, out = 127, str(exc)
         outputs.append((cmd, code, out))
-        codes.append({"command": cmd, "exit_code": code})
+        codes.append({"command": cmd, "exit_code": code, **({"output": _tail(out)} if code != 0 else {})})
         if code != 0 and exit_code == 0:
             exit_code = code
     result_path = Path(act["result"])

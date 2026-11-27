@@ -24,21 +24,24 @@ files, signatures and keys against the lock (wave_changes), whenever they were c
 back; each change fails the PBIs of the wave that have its path in their targets, or is left unresolved.
 
 An e2e PBI that passes its wave check in a locked run adds the E2E files it wrote (the files in its targets that are
-there) to the lock (extend): the list is written again with those files, the lock commit moves on to a new commit on
-top of the branch holding them and the new list, and the copy outside the work tree, the commit id and the hash are
-written again. From then on G1 and the wave check guard those files like the acceptance tests.
+there) to the lock (extend): the list is written again with those files, and with the keys of the files workers also
+touch that its targets name and the package.json scripts the plan's e2e commands run; the lock commit moves on to a
+new commit on top of the branch holding them and the new list, and the copy outside the work tree, the commit id and
+the hash are written again. From then on G1 and the wave check guard those files and keys like the acceptance tests.
 
 When the user fixes the plan in the middle of the run, the lock comes off once the new plan is approved (lift): the
 acceptance PBIs of the requirements it changed are built again and checked, and the next entry into building locks
 the tests again, with a new list, a new lock commit on top of the branch, and a new copy, commit id and hash. The
-E2E files of the e2e PBIs that passed before then are locked again with them.
+E2E files of the e2e PBIs that passed before then are locked again with them, with the content the earlier lock
+commit held, not what the work tree holds after the lift.
 
 When the retrospective takes the lock off locked cases (an unlock), the fix stage opens only their acceptance test
 file to the one fix worker of that unlock (without, for its launch's G1). The run then checks the fixed and added
 lines: in a temporary git worktree outside the work tree at the lock commit (add_worktree, removed again with git
 worktree remove and prune by remove_worktree) they must fail, and in the work tree they must end as decided. When
-they do, relock commits the fixed file and then the list with the unlock record, and writes the copy, the commit id
-and the hash again; when they do not, the file goes back to the lock commit's content (restore).
+they do, relock commits the fixed file (the content the check judged) and then the list with the unlock record, and
+writes the copy, the commit id and the hash again; when they do not, the file goes back to the lock commit's content
+(restore).
 """
 
 from __future__ import annotations
@@ -218,17 +221,56 @@ def e2e_files(root: Path, pbis: list[dict[str, Any]]) -> list[str]:
     return sorted(f for f in out if _lockable(root, f))
 
 
-def key_files(root: Path, run: dict[str, Any]) -> list[str]:
-    """The files workers also touch whose keys are locked: those at the work root, and those an acceptance PBI with a
-    locked requirement has in its targets."""
+def _carried_e2e(root: Path, run: dict[str, Any], pbis: list[dict[str, Any]]) -> tuple[dict[str, tuple[str, str]], set[str]]:
+    """The E2E files an earlier lock took for e2e PBIs, to lock again as they were (a lock made again after a lift).
+
+    For each PBI, the latest lock in run["lock_history"] that took it (its e2e_pbis) gives the files of its targets
+    that lock held, as path -> (mode, blob) in that lock commit: a passed PBI does not change in a revised plan, so
+    what its wave check passed is what is locked again, whatever the work tree holds now. Returns those entries and
+    the ids of the PBIs found so; the others' files are read from the work tree.
+    """
+    history = [h for h in reversed(run.get("lock_history") or []) if isinstance(h, dict) and h.get("commit")]
+    entries: dict[str, tuple[str, str]] = {}
+    taken: set[str] = set()
+    for pbi in pbis:
+        old = next((h for h in history if pbi["id"] in (h.get("e2e_pbis") or [])), None)
+        if old is None:
+            continue
+        taken.add(pbi["id"])
+        list_path = old.get("list") or LIST_PATH
+        targets = [t for t in (_norm(t) for t in pbi.get("targets") or []) if t]
+        mine = [str(f) for f in old.get("files") or [] if f != list_path and guards.covered(str(f), targets)]
+        if not mine:
+            continue
+        got = _tree_entries(root, old["commit"], mine)
+        missing = [f for f in mine if f not in got]
+        if missing:
+            raise state.StateError(f"lock: the earlier lock commit {old['commit']} lacks {', '.join(missing)}")
+        entries.update(got)
+    return entries, taken
+
+
+def key_files(root: Path, run: dict[str, Any], e2e: list[dict[str, Any]] | None = None) -> list[str]:
+    """The files workers also touch whose keys are locked: those at the work root, those an acceptance PBI with a
+    locked requirement has in its targets, and those the e2e PBIs in e2e have in their targets."""
     root = Path(root).resolve()
     names = _listed(root)
     out = {name for name in signatures.KEY_FILES if (root / name).is_file()}
     locked = set(locked_requirements(run))
     owners = acceptance.requirement_owners(run)
-    for pbi in run.get("pbis", []):
-        if pbi.get("kind") != "acceptance" or not any(owners.get(rid) == pbi["id"] for rid in locked):
-            continue
+    pbis = [
+        p for p in run.get("pbis", [])
+        if p.get("kind") == "acceptance" and any(owners.get(rid) == p["id"] for rid in locked)
+    ]
+    out.update(_target_key_files(root, names, pbis + [p for p in e2e or [] if p.get("kind") == "e2e"]))
+    return sorted(out)
+
+
+def _target_key_files(root: Path, names: list[str], pbis: list[dict[str, Any]]) -> list[str]:
+    """The files workers also touch that the targets of pbis cover (a directory or glob target covers the files in it),
+    less those under docs/pbi/, symlinks and files that are not there."""
+    out: set[str] = set()
+    for pbi in pbis:
         for target in pbi.get("targets") or []:
             path = _norm(target)
             if path:
@@ -236,9 +278,13 @@ def key_files(root: Path, run: dict[str, Any]) -> list[str]:
     return sorted(f for f in out if not f.startswith("docs/pbi/") and (root / f).is_file() and not (root / f).is_symlink())
 
 
-def lock_commands(run: dict[str, Any]) -> list[str]:
-    """The commands that run the tests, whose package.json scripts are locked keys."""
-    return [str(c) for c in [*(run.get("acceptance_commands") or []), *(run.get("plan_checks") or [])] if c]
+def lock_commands(run: dict[str, Any], e2e: bool = False) -> list[str]:
+    """The commands that run the tests, whose package.json scripts are locked keys; with e2e, the plan's e2e commands
+    too (once an e2e PBI has passed, the scripts they run are locked like its E2E files)."""
+    commands = [*(run.get("acceptance_commands") or []), *(run.get("plan_checks") or [])]
+    if e2e:
+        commands += list(run.get("plan_e2e") or [])
+    return [str(c) for c in commands if c]
 
 
 def lock_list(
@@ -278,34 +324,69 @@ def lock_list(
     }
 
 
-def _commit_only(root: Path, paths: list[str], message: str, keep: dict[str, tuple[str, str]] | None = None) -> str:
+def _commit_only(
+    root: Path,
+    paths: list[str],
+    message: str,
+    keep: dict[str, tuple[str, str]] | None = None,
+    given: dict[str, tuple[str, bytes]] | None = None,
+) -> str:
     """Commit the working-tree content of paths, and nothing else, on top of HEAD; return the commit.
 
     The commit is built in a separate index, so changes the user staged or left in other files stay out of it.
-    keep (path -> (mode, blob)) puts those entries in the commit as given, whatever the work tree holds (the files an
-    earlier lock commit locked). The real index then takes the committed content of paths and keep. Hooks do not run
-    (git commit-tree).
+    given (path -> (mode, content)) commits that content instead of what the work tree holds, converted as git add
+    converts the file at that path (line endings, for example). keep (path -> (mode, blob)) puts those entries in the
+    commit as given, whatever the work tree holds (the files an earlier lock commit locked). The real index then takes
+    the committed content of paths and given, and of each kept path whose index entry still matches HEAD before the
+    commit: a change the user staged in a kept path stays staged. Hooks do not run (git commit-tree).
     """
     keep = dict(keep or {})
+    given = dict(given or {})
     head = subprocess.run(
         ["git", "-C", str(root), "rev-parse", "--verify", "-q", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
     ).stdout.decode("utf-8").strip()
+    entries = dict(keep)
+    for path, (mode, content) in given.items():
+        entries[path] = (mode, _git(root, "hash-object", "-w", f"--path={path}", "--stdin", stdin=content).strip())
     with tempfile.TemporaryDirectory(prefix="atelier-lock-") as tmp:
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
         if head:
             _git(root, "read-tree", head, env=env)
-        if keep:
-            info = "".join(f"{mode} {sha}\t{path}\0" for path, (mode, sha) in keep.items())
+        if entries:
+            info = "".join(f"{mode} {sha}\t{path}\0" for path, (mode, sha) in entries.items())
             _git(root, "update-index", "-z", "--index-info", env=env, stdin=info.encode("utf-8", "surrogateescape"))
-        _git(root, "add", "-f", "--", *paths, env=env)
+        if paths:
+            _git(root, "add", "-f", "--", *paths, env=env)
         tree = _git(root, "write-tree", env=env).strip()
+    carried = [p for p in keep if p not in given]
+    if carried:
+        before = _tree_entries(root, head, carried) if head else {}
+        staged = _index_entries(root, carried)
+        carried = [p for p in carried if staged.get(p) == before.get(p)]
     if head and tree == _git(root, "rev-parse", head + "^{tree}").strip():
         commit = head
     else:
         commit = _git(root, "commit-tree", tree, "-m", message, *(["-p", head] if head else [])).strip()
         _git(root, "update-ref", "-m", message, "HEAD", commit, *([head] if head else []))
-    _git(root, "reset", "-q", commit, "--", *paths, *keep)
+    reset = [*paths, *given, *carried]
+    if reset:
+        _git(root, "reset", "-q", commit, "--", *reset)
     return commit
+
+
+_UNMERGED = ("unmerged", "")
+
+
+def _index_entries(root: Path, paths: list[str]) -> dict[str, tuple[str, str]]:
+    """path -> (mode, blob id) in the real index for the paths it holds; a path with a merge conflict (stages 1 to 3)
+    gets _UNMERGED, which matches no commit."""
+    out = _git(root, "ls-files", "-s", "-z", "--", *paths)
+    entries: dict[str, tuple[str, str]] = {}
+    for item in filter(None, out.split("\0")):
+        meta, name = item.split("\t", 1)
+        mode, sha, stage = meta.split()
+        entries[name] = (mode, sha) if stage == "0" else _UNMERGED
+    return entries
 
 
 def _tree_entries(root: Path, commit: str, paths: list[str]) -> dict[str, tuple[str, str]]:
@@ -337,20 +418,23 @@ def lock(root: Path, run: dict[str, Any]) -> dict[str, Any]:
     root = Path(root).resolve()
     run_id = run["run_id"]
     e2e = passed_e2e(run)
-    files = sorted({*lock_files(root, run), *e2e_files(root, e2e)})
+    accepted = lock_files(root, run)
+    carried, taken = _carried_e2e(root, run, e2e)
+    carried = {f: entry for f, entry in carried.items() if f not in accepted}
+    files = sorted({*accepted, *carried, *e2e_files(root, [p for p in e2e if p["id"] not in taken])})
     sigs, unextractable = signatures.extract(root, [i for i in run.get("interfaces") or [] if isinstance(i, dict)])
-    keys, unreadable = signatures.read_keys(root, key_files(root, run), lock_commands(run))
+    keys, unreadable = signatures.read_keys(root, key_files(root, run, e2e), lock_commands(run, e2e=bool(e2e)))
     data = lock_list(run, files, sigs, keys, unextractable + unreadable)
     raw = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     list_file = root / LIST_PATH
     list_file.parent.mkdir(parents=True, exist_ok=True)
     list_file.write_bytes(raw)
     paths = [*files, LIST_PATH]
-    commit = _commit_only(root, paths, f"atelier: lock the acceptance tests ({run_id})")
+    commit = _commit_only(root, [p for p in paths if p not in carried], f"atelier: lock the acceptance tests ({run_id})", carried)
     blobs = tree_blobs(root, commit, paths)
-    missing = [p for p in paths if p not in blobs]
+    missing = [p for p in paths if p not in blobs] + [f for f in carried if blobs.get(f) != carried[f][1]]
     if missing:
-        raise state.StateError(f"lock: the lock commit {commit} lacks {', '.join(missing)}")
+        raise state.StateError(f"lock: the lock commit {commit} lacks or changed {', '.join(missing)}")
     outside, digest, target = _keep_outside(root, run_id, raw, commit)
 
     run["lock"] = {
@@ -388,11 +472,14 @@ def extend(root: Path, run: dict[str, Any], pbis: list[dict[str, Any]] | None = 
     """Add the E2E files of the e2e PBIs that passed their wave check to the lock, and move the lock commit on.
 
     pbis defaults to every e2e PBI that passed; those the lock already took (run["lock"]["e2e_pbis"]) are skipped.
-    Their files that are there and not locked yet join the list's files. The list is written again (the rest of it as
-    the copy outside the work tree holds it), then committed with the new files on top of HEAD; the files the lock
-    already held go into that commit with the old lock commit's content. The copy outside the work tree, the commit id
-    and the hash are written again, and run["lock"] takes the new commit, files and sha256. Returns the extension
-    kept in run["lock_extensions"], or None when the lock is off or there is nothing to add.
+    Their files that are there and not locked yet join the list's files. The keys of the files workers also touch
+    (package.json and the like) that their targets name join the list's keys, by the same rules as an acceptance PBI's,
+    and so do the package.json scripts the plan's e2e commands run, in the files already keyed; a key the list holds
+    keeps its locked value. The list is written again (the rest of it as the copy outside the work tree holds it),
+    then committed with the new files on top of HEAD; the files the lock already held go into that commit with the old
+    lock commit's content. The copy outside the work tree, the commit id and the hash are written again, and
+    run["lock"] takes the new commit, files and sha256. Returns the extension kept in run["lock_extensions"] (with
+    "keys", each "<file> <key>", when keys were added), or None when the lock is off or there is nothing to add.
     """
     kept = run.get("lock")
     if not kept:
@@ -406,12 +493,27 @@ def extend(root: Path, run: dict[str, Any], pbis: list[dict[str, Any]] | None = 
     list_path = kept.get("list") or LIST_PATH
     held = [f for f in kept.get("files") or [] if f != list_path]
     added = [f for f in e2e_files(root, fresh) if f not in held and f != list_path]
-    if not added:
+    listed = locked_list(root, run)
+    keys = {str(f): dict(v) for f, v in (listed.get("keys") or {}).items() if isinstance(v, dict)}
+    # The files workers also touch that the e2e PBIs' targets name get their keys locked, and the scripts the plan's
+    # e2e commands run join the keys of the files already keyed; a key the lock holds keeps its locked value.
+    found, unreadable = signatures.read_keys(
+        root, sorted({*_target_key_files(root, _listed(root), fresh), *keys}), lock_commands(run, e2e=True)
+    )
+    keyed: list[str] = []
+    for name, values in found.items():
+        for key, value in values.items():
+            if key not in keys.get(name, {}):
+                keys.setdefault(name, {})[key] = value
+                keyed.append(f"{name} {key}")
+    unextractable = list(listed.get("unextractable") or [])
+    unextractable += [u for u in unreadable if u.get("file") not in keys and u not in unextractable]
+    if not added and not keyed:
         kept["e2e_pbis"] = ids
         return None
 
-    listed = locked_list(root, run)
-    data = {**listed, "files": sorted({*[str(f) for f in listed.get("files") or held], *added})}
+    files = sorted({*[str(f) for f in listed.get("files") or held], *added})
+    data = {**listed, "files": files, "keys": keys, "unextractable": unextractable}
     raw = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     before = kept["commit"]
     keep = _tree_entries(root, before, held)
@@ -431,7 +533,10 @@ def extend(root: Path, run: dict[str, Any], pbis: list[dict[str, Any]] | None = 
     outside, digest, target = _keep_outside(root, run["run_id"], raw, commit)
 
     kept.update(commit=commit, files=paths, outside=str(outside), sha256=digest, hash_file=str(target), e2e_pbis=ids)
+    kept["unextractable"] = unextractable
     extension = {"pbis": [p["id"] for p in fresh], "files": added, "commit_before": before, "commit": commit}
+    if keyed:
+        extension["keys"] = keyed
     run.setdefault("lock_extensions", []).append(extension)
     return extension
 
@@ -442,10 +547,14 @@ def relock(
     files: list[str],
     record: dict[str, Any],
     added: dict[str, str | None] | None = None,
+    checked: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Lock the acceptance tests again after an unlock whose fixed and added lines were checked.
 
-    files are the locked files the unlock opened, as its fix worker left them in the work tree. First they are
+    files are the locked files the unlock opened, as its fix worker left them in the work tree. checked (file -> the
+    sha256 of the content the unlock's check judged) makes each such file commit exactly that content: the file is
+    read once, refused (StateError, nothing moves) when the bytes read are not the checked ones, and those bytes are
+    what is committed, so a write after the check cannot get into the lock. First they are
     committed on top of HEAD, with every other locked file and the list as the lock commit held them: that commit is
     the unlock record's commit (the fixed tests), and the lock commit before it is its commit_before. Then the list is
     written again, with the record added to its unlocks and the added cases (case id -> the PBI it is assigned to, or
@@ -477,8 +586,26 @@ def relock(
             cases.append(cid)
         if pbi:
             assignments[cid] = pbi
+    given: dict[str, tuple[str, bytes]] = {}
+    modes = _tree_entries(root, before, opened)
+    for name in opened:
+        if not checked or name not in checked:
+            continue
+        try:
+            content = (root / name).read_bytes()
+        except OSError as exc:
+            raise state.StateError(f"lock: {name} cannot be read to lock it again ({type(exc).__name__})") from exc
+        if hashlib.sha256(content).hexdigest() != checked[name]:
+            raise state.StateError(f"lock: {name} changed after its check; the checked content is not there to lock again")
+        given[name] = (modes[name][0] if name in modes else "100644", content)
     label = ", ".join(str(c) for c in record.get("cases") or []) or ", ".join(opened)
-    fixed = _commit_only(root, opened, f"atelier: commit the fixed tests of the unlock of {label} ({run['run_id']})", keep)
+    fixed = _commit_only(
+        root,
+        [f for f in opened if f not in given],
+        f"atelier: commit the fixed tests of the unlock of {label} ({run['run_id']})",
+        keep,
+        given,
+    )
     entry = {**record, "commit_before": before, "commit": fixed}
     data = {**listed, "cases": cases, "assignments": assignments, "unlocks": [*(listed.get("unlocks") or []), entry]}
     raw = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
@@ -509,13 +636,28 @@ def add_worktree(root: Path, commit: str) -> Path:
     """A temporary git worktree of commit (detached HEAD), in a new folder outside the work tree; hooks do not run.
 
     Returns the worktree's folder; remove_worktree takes it away again. When making it fails, what was made is taken
-    away before the error (state.StateError) is raised.
+    away before the error (state.StateError) is raised. A temporary folder inside the work tree (TMPDIR set to a
+    folder in it, for example) is refused, since the worktree must be outside it.
     """
     root = Path(root).resolve()
-    base = Path(tempfile.mkdtemp(prefix=WORKTREE_PREFIX)).resolve()
+    try:
+        base = Path(tempfile.mkdtemp(prefix=WORKTREE_PREFIX)).resolve()
+    except OSError as exc:
+        raise state.StateError(f"lock: the temporary folder for the worktree cannot be made ({exc})") from exc
     tree = base / WORKTREE_NAME
     hooks = base / "no-hooks"
-    hooks.mkdir()
+    try:
+        if base == root or root in base.parents:
+            raise state.StateError(
+                f"lock: the temporary folder {base} is inside the work tree {root}; set TMPDIR (TEMP on Windows) "
+                "to a folder outside it"
+            )
+        hooks.mkdir()
+    except (OSError, state.StateError) as exc:
+        shutil.rmtree(base, ignore_errors=True)
+        if isinstance(exc, state.StateError):
+            raise
+        raise state.StateError(f"lock: the temporary folder {base} cannot be set up ({exc})") from exc
     try:
         _git(root, "-c", f"core.hooksPath={hooks}", "worktree", "add", "--detach", str(tree), commit)
     except state.StateError:

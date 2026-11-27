@@ -23,13 +23,15 @@ When the retrospective takes the lock off locked cases (an unlock: resolve_unloc
 acceptance test file fixed as an acceptance PBI would write it. The fixed and added lines are then run with the
 acceptance command twice (unlock_check_plan): at the lock commit, in a temporary worktree, where they must fail, and
 in the work tree, where they must pass when the decision fixes the scenario and fail with an assertion when it fixes
-the implementation. The other cases of the file must end as they did before (judge_unlock).
+the implementation. The other cases of the file must end as they did before, and the lines that name them must stay
+as they were at the lock commit (judge_unlock).
 """
 
 from __future__ import annotations
 
 import os
 import re
+import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -190,6 +192,9 @@ def ticket_fields(run: dict[str, Any], pbi: dict[str, Any]) -> dict[str, Any]:
     if pbi.get("revised"):
         # Built again after a plan return: the requirements whose scenarios the re-plan changed.
         fields["revised"] = list(pbi["revised"])
+        # The cases of these scenarios whose PBI a worker already built: the Red check lets only these pass.
+        own = {str(c["id"]) for sc in fields["scenarios"] for c in sc.get("cases") or [] if c.get("id")}
+        fields["may_pass"] = sorted(own & built_cases(run))
     return fields
 
 
@@ -873,6 +878,28 @@ def revised_requirements(run: dict[str, Any], before: list[dict[str, Any]]) -> l
     return [sc["id"] for sc in scenarios(run) if sc["id"] not in old or _scenario_body(sc) != _scenario_body(old[sc["id"]])]
 
 
+# The run's record of the re-plans that changed a case's test: case id -> how many wave checks were kept by then.
+CASE_REVISIONS = "case_revisions"
+
+
+def _case_bodies(sc: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Each case of a scenario -> what its test is written from: the requirement's text, mode and Gherkin, and the
+    case's own id, values and test name."""
+    body = _scenario_body(sc)
+    head = {key: body[key] for key in ("text", "mode", "gherkin")}
+    return {str(c["id"]): {**head, **c} for c in body["cases"] if c.get("id")}
+
+
+def revised_cases(run: dict[str, Any], before: list[dict[str, Any]]) -> list[str]:
+    """The cases whose test a re-plan changed or added, against the scenarios before it, in plan order."""
+    old = _scenarios_by_id(before)
+    out: list[str] = []
+    for sc in scenarios(run):
+        was = _case_bodies(old[sc["id"]]) if sc["id"] in old else {}
+        out += [cid for cid, body in _case_bodies(sc).items() if was.get(cid) != body]
+    return out
+
+
 def reopen_revised(run: dict[str, Any], before: list[dict[str, Any]]) -> dict[str, list[str]]:
     """Send the requirements a re-plan in the middle of an acceptance-first run changed back to the acceptance stage.
 
@@ -881,11 +908,16 @@ def reopen_revised(run: dict[str, Any], before: list[dict[str, Any]]) -> dict[st
     planner's review sends a file back, every passed requirement that PBI can change goes back to the Red check, and
     the review of the files involved is dropped. Every requirement sent back gets its Red and review tries anew. The
     requirements the re-plan left as they were, and the acceptance PBIs of no changed requirement, stay as they were.
+    A case whose test the re-plan changed no longer counts its passes in the wave checks before it (passed_cases).
 
     Returns {"revised", "reopened", "rebuilt"}: the changed requirements, every requirement sent back, and the
     acceptance PBIs built again.
     """
     revised = revised_requirements(run, before)
+    checks_so_far = len(run.get("wave_cases") or [])
+    revised_at = run.setdefault(CASE_REVISIONS, {})
+    for cid in revised_cases(run, before):
+        revised_at[cid] = checks_so_far
     owners = requirement_owners(run)
     by_id = _scenarios_by_id(scenarios(run))
     rebuilt: list[dict[str, Any]] = []
@@ -1053,7 +1085,8 @@ def judge_wave_cases(
             if seen.get(cid) in (None, "passed"):
                 seen[cid] = kind
                 messages[cid] = str(case.get("message") or "")
-    excused = objection_red_cases(run, assignments)
+    # A case its worker left red with an objection and that passes now counts as passed (the objection stays on the PBI).
+    excused = {cid for cid in objection_red_cases(run, assignments) if seen.get(cid) != "passed"}
     missing = [cid for cid in ids if cid not in seen and cid not in excused]
     failed = {cid: kind for cid, kind in seen.items() if kind != "passed" and cid not in excused}
     before = passed_cases(run)
@@ -1119,14 +1152,17 @@ def case_owners(
 
 
 def passed_cases(run: dict[str, Any]) -> set[str]:
-    """The locked cases that passed in a wave check so far."""
+    """The locked cases that passed in a wave check so far. A pass from before a re-plan changed the case's test is
+    left out: it was the pass of the test before the change (reopen_revised)."""
+    revised_at = run.get(CASE_REVISIONS) or {}
     out: set[str] = set()
-    for entry in run.get("wave_cases") or []:
+    for index, entry in enumerate(run.get("wave_cases") or []):
         if "passed" in entry:
-            out |= {str(c) for c in entry.get("passed") or []}
+            got = {str(c) for c in entry.get("passed") or []}
         else:
             # Kept before the passed cases were: the ones that ran, did not fail and had no objection.
-            out |= {str(c) for c in entry.get("ran") or []} - set(entry.get("failed") or {}) - set(entry.get("excused") or [])
+            got = {str(c) for c in entry.get("ran") or []} - set(entry.get("failed") or {}) - set(entry.get("excused") or [])
+        out |= {cid for cid in got if index >= int(revised_at.get(cid) or 0)}
     return out
 
 
@@ -1262,8 +1298,9 @@ def ends_before_unlock(run: dict[str, Any]) -> dict[str, list[str]] | None:
 
 
 def _rank(kind: str) -> int:
-    # A testcase run twice ends as its worst run: skipped < passed < any failure.
-    return 0 if kind == "skipped" else 1 if kind == "passed" else 2
+    # A testcase run twice ends as its worst run: skipped < passed < an assertion or not-implemented failure < any
+    # other failure (for example an error), so that the order of the testcases cannot hide an error.
+    return 0 if kind == "skipped" else 1 if kind == "passed" else 2 if kind in _GOOD_FAILURES else 3
 
 
 def _case_ends(testcases: list[dict[str, str]], ids: list[str]) -> tuple[dict[str, str], list[str]]:
@@ -1281,24 +1318,77 @@ def _case_ends(testcases: list[dict[str, str]], ids: list[str]) -> tuple[dict[st
     return ends, extra
 
 
+def _named_ids(line: str, ids: list[str]) -> set[str]:
+    """The case ids a line names. As in match_case_id, an id inside a longer id named at the same place does not count."""
+    spans = [
+        (m.start(), m.end(), cid)
+        for cid in ids
+        for m in re.finditer(rf"(?<![A-Za-z0-9]){re.escape(cid)}(?![A-Za-z0-9])", line)
+    ]
+    return {
+        cid
+        for start, end, cid in spans
+        if not any(s <= start and end <= e and e - s > end - start for s, e, _ in spans)
+    }
+
+
+def case_lines(text: str, targets: list[str], others: list[str]) -> dict[str, list[str]]:
+    """Each case of others -> the lines of text that name it and none of targets, in order (trailing spaces and line
+    endings aside). A line that names one of targets is the unlock's to change, also when it names others too."""
+    out: dict[str, list[str]] = {cid: [] for cid in others}
+    opened = set(targets)
+    for line in text.splitlines():
+        named = _named_ids(line, [*targets, *others])
+        if named & opened:
+            continue
+        for cid in others:
+            if cid in named:
+                out[cid].append(line.rstrip())
+    return out
+
+
+def unlock_texts(root: Path, run: dict[str, Any], unlock: dict[str, Any]) -> dict[str, str | None]:
+    """An unlock's file at the lock commit and in the work tree, as text for judge_unlock (None where it cannot be
+    read)."""
+    file = str(unlock.get("file") or "")
+    commit = str((run.get("lock") or {}).get("commit") or "")
+    out: dict[str, str | None] = {where: None for where in UNLOCK_PLACES}
+    if not file:
+        return out
+    if commit:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "show", f"{commit}:{file}"], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        if proc.returncode == 0:
+            out["lock_commit"] = proc.stdout.decode("utf-8", "replace")
+    try:
+        out["work_tree"] = (Path(root) / file).read_bytes().decode("utf-8", "replace")
+    except OSError:
+        pass
+    return out
+
+
 def judge_unlock(
     run: dict[str, Any],
     unlock: dict[str, Any],
     runs: dict[str, tuple[list[dict[str, str]], str | None]],
     locked: dict[str, str],
     before: dict[str, Any] | None = None,
+    texts: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """Whether an unlock's fixed and added lines hold, from the JUnit XML of its two runs.
 
     runs maps lock_commit and work_tree to (the testcases, why the XML could not be read). locked maps each locked
-    case to its requirement; before is how the locked cases ended last (ends_before_unlock).
+    case to its requirement; before is how the locked cases ended last (ends_before_unlock); texts maps lock_commit
+    and work_tree to the file's text there (unlock_texts; None where it could not be read).
     - The unlock's cases: at the lock commit each ran and did not pass (an error counts as failing there, since the
       implementation is not in that commit; a light-no-red requirement cannot be made Red, so it only has to run). In
       the work tree each passed when the decision fixes the scenario, and failed with an assertion or a
       not-implemented error when it fixes the implementation.
     - The file's other locked cases, whose lines the fix leaves as they were: at the lock commit each ran and did not
       pass (light-no-red: ran); in the work tree each ran, and ended as in the last wave check (passed stays passed,
-      red stays red).
+      red stays red). With texts, the lines that name each of them and none of the unlock's cases are also the same
+      in the work tree as at the lock commit (case_lines), so that a change that keeps such a case green fails too.
     - A testcase with no id of the unlock's cases or of the file's locked cases fails the check too.
     Returns {"passed", "reasons", "lock_commit", "work_tree"}: how each of the unlock's cases ended at each place.
     """
@@ -1321,6 +1411,17 @@ def judge_unlock(
         extra += [n for n in names if n not in extra]
     if extra:
         reasons.append("鍵を外すケースにもファイルの鍵のケースにも無い testcase がある: " + ", ".join(extra))
+    if texts is not None and others:
+        old, new = texts.get("lock_commit"), texts.get("work_tree")
+        if old is None or new is None:
+            reasons.append(f"{file} の行を{UNLOCK_PLACE_LABELS['lock_commit']}と比べられなかった")
+        else:
+            was, now = case_lines(old, targets, others), case_lines(new, targets, others)
+            reasons += [
+                f"{cid}: 対象の外のケースの行が{UNLOCK_PLACE_LABELS['lock_commit']}から変わった（鍵を外していない行）"
+                for cid in others
+                if was[cid] != now[cid]
+            ]
     lock_ends = ends.get("lock_commit")
     now_ends = ends.get("work_tree")
     lock_label = UNLOCK_PLACE_LABELS["lock_commit"]

@@ -575,7 +575,11 @@ class TestFlowRulesSeam1(unittest.TestCase):
             root = Path(td)
             # An older template with the E2E limit is still read; the limit changes nothing.
             agents, tmpl = write_agents_and_template(root, limits={"e2e_rounds": 1})
-            pbis = [{"id": "PBI-1", "title": "A", "depends_on": [], "level": "L1", "reason": "small"}]
+            # PBI-1 runs the E2E command, so its failure has PBI-1's files to fix.
+            pbis = [{
+                "id": "PBI-1", "title": "A", "depends_on": [], "level": "L1", "reason": "small",
+                "checks": ["python run_tests.py", "python e2e.py"],
+            }]
             act = reach_building_with(root, pbis, agents_path=agents, template_path=tmpl)
             write_result_for(act, {"status": "ok"})
             _, chk = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])

@@ -13,20 +13,32 @@ mark goes again when the run does not fix the entry: a re-plan that no longer na
 PBI that named it did not pass (release_unpassed); the entry is then a candidate for the next runs again.
 
 A work root that is not a git work tree has no backlog: nothing is read or written, and the report says so.
+
+Runs in different worktrees share the file, so every change to it (take, release_unpassed, add_leftovers) holds one
+lock file next to it, <git common dir>/atelier/backlog.jsonl.lock, from its first read to its last write. The lock is
+a file created exclusively; a run waits for it up to LOCK_WAIT_SECONDS (then the change fails with an OSError, as a
+write that fails does), and a lock file older than LOCK_STALE_SECONDS is taken to be left by a run that died, and removed.
 """
 from __future__ import annotations
 
 import json
 import os
 import subprocess
+import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from . import retro, state
 
 SCHEMA = "atelier.backlog/1"
 FILE_NAME = "backlog.jsonl"
+LOCK_SUFFIX = ".lock"
+LOCK_WAIT_SECONDS = 30.0
+LOCK_STALE_SECONDS = 300.0
+LOCK_POLL_SECONDS = 0.05
 NOT_GIT = "作業ルートが git のリポジトリでないため"
 
 KIND_LABELS = {
@@ -118,6 +130,62 @@ def _dumps(entry: dict[str, Any]) -> str:
     return json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
 
 
+def lock_path(path: Path) -> Path:
+    """The lock file of the backlog at path."""
+    return Path(path).with_name(Path(path).name + LOCK_SUFFIX)
+
+
+def _break_stale(lock: Path) -> bool:
+    """Remove the lock file when it is older than LOCK_STALE_SECONDS (its holder died); True when it was removed."""
+    try:
+        seen = lock.read_text(encoding="utf-8")
+        age = time.time() - lock.stat().st_mtime
+    except OSError:
+        return False  # Gone already, or being removed: the next try creates it.
+    if age < LOCK_STALE_SECONDS:
+        return False
+    try:
+        # Only the lock judged stale is removed, not one another waiter took after removing it.
+        if lock.read_text(encoding="utf-8") == seen:
+            lock.unlink()
+            return True
+    except OSError:
+        pass
+    return False
+
+
+@contextmanager
+def _locked(path: Path) -> Iterator[None]:
+    """Hold the backlog's lock file for one read-modify-write; TimeoutError (an OSError) after LOCK_WAIT_SECONDS."""
+    lock = lock_path(path)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    token = f"{os.getpid()} {uuid.uuid4().hex}"
+    deadline = time.monotonic() + LOCK_WAIT_SECONDS
+    while True:
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except (FileExistsError, PermissionError):
+            # PermissionError: on Windows, for example, while another run removes the lock file.
+            if _break_stale(lock):
+                continue
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"backlog のロック {lock} を {LOCK_WAIT_SECONDS:g} 秒待っても取れませんでした。")
+            time.sleep(LOCK_POLL_SECONDS)
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(token)
+        break
+    try:
+        yield
+    finally:
+        try:
+            # A lock another run removed as stale and took again is that run's, and stays.
+            if lock.read_text(encoding="utf-8") == token:
+                lock.unlink()
+        except OSError:
+            pass
+
+
 def _source_items(root: Path, run: dict[str, Any], ids: Iterable[str]) -> list[dict[str, Any]]:
     """The retrospective items a leftover comes from, as they are: the fix list's item, else the list's own."""
     wanted = [str(i) for i in ids if i]
@@ -198,11 +266,6 @@ def add_leftovers(root: Path, run: dict[str, Any]) -> dict[str, Any]:
     could not be written. The entries this run took whose PBIs all did not pass are released first (release_unpassed).
     """
     kept = _status(run)
-    try:
-        release_unpassed(Path(root), run)
-    except OSError as exc:
-        kept["error"] = f"{location(Path(root))}: {exc}"
-        return kept
     path = location(Path(root))
     kept["git"] = path is not None
     kept["path"] = str(path) if path is not None else None
@@ -210,19 +273,22 @@ def add_leftovers(root: Path, run: dict[str, Any]) -> dict[str, Any]:
     if path is None:
         return kept
     todo = [lo for lo in run.get("leftovers") or [] if isinstance(lo, dict) and lo.get("id") and lo["id"] not in written]
-    if not todo:
+    if not kept.get("taken") and not todo:
         return kept
     try:
-        have = {entry["id"] for entry in read(path)}
-        lines = []
-        for lo in todo:
-            entry = make_entry(Path(root), run, lo)
-            if entry["id"] not in have:
-                lines.append(_dumps(entry))
-        if lines:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8", newline="\n") as fh:
-                fh.write("".join(line + "\n" for line in lines))
+        # One lock from the release's read to the append, so no other run's change falls between them.
+        with _locked(path):
+            _release_unpassed(path, run)
+            have = {entry["id"] for entry in read(path)}
+            lines = []
+            for lo in todo:
+                entry = make_entry(Path(root), run, lo)
+                if entry["id"] not in have:
+                    lines.append(_dumps(entry))
+            if lines:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8", newline="\n") as fh:
+                    fh.write("".join(line + "\n" for line in lines))
     except OSError as exc:
         kept["error"] = f"{path}: {exc}"
         return kept
@@ -322,6 +388,15 @@ def take(root: Path, run: dict[str, Any]) -> list[str]:
     path = location(Path(root))
     if path is None:
         return []
+    # One lock from the first read to the last write, so two runs do not both take an entry, and an append of
+    # another run does not fall between this read and the write that replaces the file.
+    with _locked(path):
+        return _take(path, run, wanted)
+
+
+def _take(path: Path, run: dict[str, Any], wanted: dict[str, list[str]]) -> list[str]:
+    """take, with the backlog's lock held."""
+    kept = _status(run)
     if kept.get("taken"):
         _release(path, run, None, wanted)
     if not wanted:
@@ -361,6 +436,15 @@ def release_unpassed(root: Path, run: dict[str, Any]) -> list[str]:
         return []
     path = location(Path(root))
     if path is None:
+        return []
+    with _locked(path):
+        return _release_unpassed(path, run)
+
+
+def _release_unpassed(path: Path, run: dict[str, Any]) -> list[str]:
+    """release_unpassed, with the backlog's lock held."""
+    kept = _status(run)
+    if not kept.get("taken"):
         return []
     status = {p.get("id"): p.get("status") for p in run.get("pbis", [])}
     by = named(run)

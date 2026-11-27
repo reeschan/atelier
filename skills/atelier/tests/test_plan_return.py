@@ -218,6 +218,46 @@ class StopQuestionTests(unittest.TestCase):
         self.assertIn("invalid choice", out["error"])
         self.assertEqual("asking_plan_return", state.load_state(self.tmp)["state"])
 
+    def replan_the_wave(self, plan: dict) -> dict:
+        """Stop the wave (PBI-2 built and not checked), fix the plan with plan and approve it."""
+        self.stop_the_wave()
+        planner = answer(self.tmp, "--choice", "replan")
+        self.assertEqual("plan_approval", done(self.tmp, planner, plan)["kind"])
+        return answer(self.tmp, "--choice", "approve")
+
+    def test_fixing_the_plan_keeps_a_built_pbi_it_leaves_as_it_was_for_the_wave_check(self) -> None:
+        revised = make_valid_plan(WAVE)
+        revised["pbis"][0]["goal"] = "Read the box as a list"
+        revised["pbis"][1]["level"] = "L3"
+        act = self.replan_the_wave(revised)
+        # Only the stopped PBI is built again; PBI-2 keeps its build and is not launched again.
+        self.assertEqual(("launch", "worker", "PBI-1"), (act["action"], act["role"], act["pbi"]))
+        run = state.load_state(self.tmp)
+        self.assertEqual("built", state.get_pbi(run, "PBI-2")["status"])
+        self.assertEqual(["pending", "pending"], [state.get_pbi(run, p)["status"] for p in ("PBI-3", "PBI-4")])
+        check = done(self.tmp, act, {"status": "ok"})
+        self.assertEqual(("check", ["check-1", "check-2", "python -m unittest"]), (check["action"], check["commands"]))
+
+    def test_fixing_the_plan_builds_a_changed_built_pbi_again(self) -> None:
+        for field, value in (("goal", "Size the box twice"), ("checks", ["check-2b"]), ("depends_on", ["PBI-5"])):
+            with self.subTest(field):
+                self.setUp()
+                revised = make_valid_plan(WAVE)
+                revised["pbis"][1][field] = value
+                if field == "depends_on":
+                    revised["pbis"][4]["depends_on"] = []
+                self.replan_the_wave(revised)
+                self.assertEqual("pending", state.get_pbi(state.load_state(self.tmp), "PBI-2")["status"])
+
+    def test_a_kept_built_pbi_with_nothing_left_to_launch_goes_to_the_wave_check(self) -> None:
+        # The new plan drops the stopped PBI and the PBIs that depend on it; PBI-5 waits for PBI-2's check.
+        check = self.replan_the_wave(make_valid_plan([WAVE[1], WAVE[4]]))
+        self.assertEqual(("check", ["check-2", "python -m unittest"]), (check["action"], check["commands"]))
+        run = state.load_state(self.tmp)
+        self.assertEqual(("checking", "built"), (run["state"], state.get_pbi(run, "PBI-2")["status"]))
+        nxt = done(self.tmp, check, {"exit_code": 0})
+        self.assertEqual(("launch", "worker", "PBI-5"), (nxt["action"], nxt["role"], nxt["pbi"]))
+
     def test_each_exception_is_asked_with_its_number_and_label(self) -> None:
         for exc, label in state.STOP_EXCEPTION_LABELS.items():
             with self.subTest(exception=exc):
@@ -378,6 +418,8 @@ class AcceptanceFirstPlanReturnTests(unittest.TestCase):
         ticket = ticket_of(stage)
         self.assertEqual(["R1"], ticket["revised"])
         self.assertEqual(["R1-1", "R1-2", "R1-3", "R1-4"], [c["id"] for c in ticket["scenarios"][0]["cases"]])
+        # PBI-3 was built before its stop, so its cases may pass; PBI-4's (R1-3, R1-4) must still be Red.
+        self.assertEqual(["R1-1", "R1-2"], ticket["may_pass"])
         self.assertEqual(
             {"revised": ["R1"], "reopened": ["R1"], "rebuilt": ["PBI-1"], "lock_before": before["commit"]},
             run["plan_returns"][0]["relock"],
@@ -443,6 +485,26 @@ class AcceptanceFirstPlanReturnTests(unittest.TestCase):
         self.assertEqual([(before, None)], [(h["commit"], h["plan_return"]) for h in run["lock_history"]])
         self.assertEqual(["PBI-1"], pbis_of(stage))
         # No plan-return question was asked, so none is counted.
+        self.assertEqual((0, []), (run["counters"]["plan_returns"], run["plan_returns"]))
+
+        # The rebuilt tests are checked Red and reviewed; the tests are locked again before PBI-3 is launched.
+        rewritten = {"cases": [*RED["cases"], {"name": name("R1-4"), "message": "assert 0 == 6"}]}
+        (self.root / TEST_FILE).write_text(json.dumps(rewritten), encoding="utf-8")
+        red = done(self.root, stage, {"status": "ok", "acceptance_files": {"R1": TEST_FILE}})
+        self.assertEqual(("check", "checking_red"), (red["action"], saved(self.root)["state"]))
+        review = drive(self.root)
+        run = saved(self.root)
+        self.assertEqual(("reviewing_acceptance", None), (run["state"], run["lock"]))
+        nxt = pass_review(self.root, review)
+        run = saved(self.root)
+        self.assertEqual(("building", ["PBI-3"]), (run["state"], pbis_of(nxt)))
+        lock = run["lock"]
+        self.assertTrue(lock)
+        self.assertNotEqual(before, lock["commit"])
+        self.assertEqual(before, git(self.root, "rev-parse", f"{lock['commit']}^"))
+        listed = json.loads((self.root / locks.LIST_PATH).read_text(encoding="utf-8"))
+        self.assertEqual(["R1-1", "R1-2", "R1-3", "R1-4"], listed["cases"])
+        self.assertIsNone(locks.copy_problem(self.root, run))
         self.assertEqual((0, []), (run["counters"]["plan_returns"], run["plan_returns"]))
 
 
