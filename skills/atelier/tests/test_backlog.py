@@ -156,6 +156,20 @@ class BacklogTests(unittest.TestCase):
         line = next(ln for ln in Path(act["prompt"]).read_text(encoding="utf-8").splitlines() if ln.startswith("Backlog candidates: "))
         self.assertEqual([left], [c["id"] for c in json.loads(line[len("Backlog candidates: "):])])
 
+    def test_a_backlog_file_that_is_not_utf8_does_not_stop_the_plan_approval(self) -> None:
+        root = self.git_root()
+        finish_with_leftovers(root)
+        taken = f"{run_state(root)['run_id']}:LO-1"
+        act = plan_launch(root)
+        code, ask = done(root, act, plan_taking(taken))
+        self.assertEqual((0, "plan_approval"), (code, ask.get("kind")), ask)
+        # The file goes bad between the plan and its approval: the approval is kept and the error is recorded.
+        backlog_file(root).write_bytes(b"\xff\xfe not utf-8\n")
+        approve(root)
+        run = run_state(root)
+        self.assertTrue(run["approvals"]["plan"])
+        self.assertIn("utf-8", run["backlog"]["take_error"].lower())
+
     def test_a_plan_naming_an_unknown_backlog_entry_is_refused(self) -> None:
         root = self.git_root()
         finish_with_leftovers(root)

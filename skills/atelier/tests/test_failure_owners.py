@@ -128,7 +128,22 @@ class FailureOwnerSteps(unittest.TestCase):
         self.assertEqual(1, conductor._run_check(self.tmp, act, None, 60))
         failed, passed = json.loads((self.tmp / "r.json").read_text(encoding="utf-8"))["commands"]
         self.assertEqual(["$ lint --help", "tests/test_box.py"], failed["output"].strip().splitlines())
+        self.assertEqual(failed["output"], Path(failed["output_file"]).read_text(encoding="utf-8"))
         self.assertNotIn("output", passed)
+        self.assertNotIn("output_file", passed)
+
+    def test_2_reads_the_whole_output_when_the_test_file_is_named_before_the_kept_end(self) -> None:
+        # The test file is named first, then more output than the result keeps (CHECK_OUTPUT_TAIL) follows it.
+        long_tail = "x" * (conductor.CHECK_OUTPUT_TAIL + 100)
+        script = self.tmp / "fail.py"
+        script.write_text(f"print('FAILED tests/test_box.py::test_lower')\nprint('{long_tail}')\nraise SystemExit(1)\n", encoding="utf-8")
+        act = {"commands": [f'"{sys.executable}" "{script}"'], "result": str(self.tmp / "r.json")}
+        self.assertEqual(1, conductor._run_check(self.tmp, act, None, 60))
+        result = json.loads((self.tmp / "r.json").read_text(encoding="utf-8"))
+        (entry,) = result["commands"]
+        self.assertNotIn("tests/test_box.py", entry["output"])
+        outputs = conductor._command_outputs(result, [entry["command"]])
+        self.assertIn("FAILED tests/test_box.py::test_lower", outputs[entry["command"]])
 
     def test_3_a_failure_no_pbi_owns_is_left_unresolved_and_the_run_goes_on(self) -> None:
         tail = "\n".join(f"line {n}" for n in range(30)) + "\nImportError: cannot import name 'x' from 'helpers'"

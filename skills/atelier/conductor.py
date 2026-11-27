@@ -428,6 +428,11 @@ def _command_outputs(result: dict[str, Any], commands: list[str]) -> dict[str, s
     """
     entries = [c for c in result.get("commands") or [] if isinstance(c, dict)]
     own = {str(c.get("command")): c["output"] for c in entries if isinstance(c.get("output"), str)}
+    for c in entries:
+        # The whole output, kept beside the result (_run_check), names test files that the capped end may not hold.
+        whole = _read_output_file(c.get("output_file"))
+        if whole is not None:
+            own[str(c.get("command"))] = whole
     output = str(result.get("output") or "")
     lines = output.split("\n")
     heads = {head for c in entries for head in (f"$ {c.get('command')}", f"$ {c.get('command')} (ok)")}
@@ -443,6 +448,16 @@ def _command_outputs(result: dict[str, Any], commands: list[str]) -> dict[str, s
         end = next((i for i in range(start, len(lines)) if lines[i] in heads), len(lines))
         out[cmd] = "\n".join(lines[start:end])
     return out
+
+
+def _read_output_file(path: Any) -> str | None:
+    """A failed command's whole output from the file _run_check kept it in, or None when there is none to read."""
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
 
 
 def _lay_failed_commands(
@@ -2009,7 +2024,8 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
             try:
                 # The backlog entries the plan's PBIs take get this run's id, so later runs do not get them again.
                 backlog.take(root, run)
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
+                # ValueError covers a backlog file that is not UTF-8 (UnicodeDecodeError); the approval still holds.
                 run.setdefault("backlog", {})["take_error"] = str(exc)
             flow.apply_event(run, "plan_approved")
         elif choice == "revise":
@@ -2236,14 +2252,17 @@ def _run_check(root: Path, act: dict[str, Any], shell: str | None, timeout: int 
 
     The exit code is the first failing command's; each command's own exit code is in "commands", so a
     carry-over names every check that failed, not only the first. A failed command's entry also keeps the end of its
-    own output, which the failure owners' steps read (_command_outputs). A command named in the action's cwds runs in
+    own output, and its whole output goes to a file beside the result ("output_file"), which the failure owners' steps
+    read (_command_outputs), since a test file may be named before the end. A command named in the action's cwds runs in
     that folder instead of the work root (an unlock's check runs the lock commit's state in a temporary worktree).
     """
     exit_code = 0
     outputs: list[tuple[str, int, str]] = []
     codes: list[dict[str, Any]] = []
     cwds = act.get("cwds") or {}
-    for cmd in act["commands"]:
+    result_path = Path(act["result"])
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    for index, cmd in enumerate(act["commands"], start=1):
         argv: str | list[str] = [shell, "-c", cmd] if shell else cmd
         try:
             proc = subprocess.run(
@@ -2262,11 +2281,15 @@ def _run_check(root: Path, act: dict[str, Any], shell: str | None, timeout: int 
         except OSError as exc:
             code, out = 127, str(exc)
         outputs.append((cmd, code, out))
-        codes.append({"command": cmd, "exit_code": code, **({"output": _tail(out)} if code != 0 else {})})
+        entry: dict[str, Any] = {"command": cmd, "exit_code": code}
+        if code != 0:
+            entry["output"] = _tail(out)
+            whole = result_path.with_name(f"{result_path.stem}.{index}.out")
+            whole.write_text(out, encoding="utf-8")
+            entry["output_file"] = str(whole)
+        codes.append(entry)
         if code != 0 and exit_code == 0:
             exit_code = code
-    result_path = Path(act["result"])
-    result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(
         json.dumps({"exit_code": exit_code, "output": _check_output(outputs), "commands": codes}, ensure_ascii=False),
         encoding="utf-8",
