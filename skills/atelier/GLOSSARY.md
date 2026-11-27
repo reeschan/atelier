@@ -77,7 +77,7 @@ _Avoid_: review.yaml, backlog, issue list
 The items of the retrospective list the user approved to fix.
 
 **Leftover (残り)**:
-An item still failing after the fix stage. The run does not fix it; it goes to the backlog, and the run is not complete.
+Something still failing at the final check, an item a fix worker could not fix and returned in `open`, or an unlock whose lines did not check out. The run does not fix it again; it goes to the backlog, and the run is not complete.
 _Avoid_: carry-over, remaining TODO
 
 **Backlog (backlog)**:
@@ -95,6 +95,10 @@ _Avoid_: TODO, deferred failure, hold
 **Fix PBI (修正の PBI)**:
 A PBI the conductor writes from a carry-over and puts before the PBIs that depend on the failed one. The planner does not write it.
 _Avoid_: rework PBI, auto-fix
+
+**E2E PBI (E2E の PBI)**:
+A PBI of kind `e2e` that writes E2E tests, at level L3 or above, in a wave after every building PBI. With `acceptance_first` on, its files join the lock once it passes its wave check, so no later worker can change them.
+_Avoid_: test PBI, tester task
 
 **Unresolved (未解決)**:
 A carry-over whose fix PBI failed twice, or a failed check that no PBI owns. The run holds the PBI and those that depend on it, goes on without asking, and puts it on the retrospective list.
@@ -127,7 +131,7 @@ The check of an acceptance PBI. It passes when every case fails for the missing 
 _Avoid_: failing test run
 
 **Lock (鍵)**:
-The acceptance test files, their settings and the public interfaces that no worker may change, recorded outside the working tree with the commit they were locked at.
+The acceptance test files, their settings and the public interfaces that no worker may change, recorded outside the working tree with the commit they were locked at. The files of the E2E PBIs that passed join it, and only a fix that takes the lock off approved cases may change their file, before it is locked again.
 _Avoid_: test_paths, do_not_touch, freeze
 
 **Light mode (軽量モード)**:
@@ -170,8 +174,20 @@ A PBI the planner flags as needing care. Only the user decides it is sensitive, 
 ## Flow
 
 **Stage (工程)**:
-One fixed step of a run: OMM scan, survey, grill, plan, approve, data preparation, build, check, review, fix, e2e, report.
+One fixed step of a run, in this order: OMM scan, survey, grill, plan, approve, data preparation, (with `acceptance_first` on) acceptance tests, Red check, the planner's confirmation and the lock, then build and check in waves, E2E PBIs, final review, E2E, retrospective (the triage), fix-list approval, fix stage (once), final check, report.
 _Avoid_: 段, phase, episode
+
+**E2E (E2E の段)**:
+The stage after the final review that runs the plan's E2E commands once, with the specs the E2E PBIs added. A failure goes on the retrospective list as an E2E failure (the command and the end of its output); it never sends the run back to fixing. With no E2E command the stage is skipped, and the report says so.
+_Avoid_: E2E fix round, E2E retry
+
+**Fix stage (修正の段)**:
+The stage that fixes the approved fix list, in fix groups that share no file. A run enters it once at most, and nothing goes back to it.
+_Avoid_: fix round, rework loop
+
+**Final check (最後の検査)**:
+The checks after the fix stage, each run once: the repository checks (the plan's `checks` and the checks of the PBIs that own the files the fix stage changed) and the plan's E2E commands. What fails becomes a leftover and is not fixed again. A run with nothing to fix goes to the report without it.
+_Avoid_: re-check, second fix stage
 
 **Round (巡)**:
 One exchange of the grill: a batch of questions and the user's answers.
@@ -196,7 +212,7 @@ A command whose exit code decides pass or fail. No model judges it.
 _Avoid_: verification by review
 
 **Repository check (全体の検査)**:
-A check over the whole repository (the whole test suite, the type check and the like), listed in the plan's `checks`. The conductor runs it once after each wave and once after the fix stage; a worker runs only the tests related to its own work.
+A check over the whole repository (the whole test suite, the type check and the like), listed in the plan's `checks`. The conductor runs it once after each wave and once in the final check; a worker runs only the tests related to its own work.
 _Avoid_: PBI check, worker check
 
 **Guard rule (守りの規則)**:
