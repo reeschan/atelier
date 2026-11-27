@@ -129,6 +129,13 @@ class PlanValidationTests(unittest.TestCase):
         cyclic["pbis"][1]["depends_on"] = ["PBI-1"]
         self.assertTrue(plan.validate_plan(cyclic))
 
+    def test_backlog_candidates_hold_for_every_pbi_even_from_an_iterator(self) -> None:
+        obj = _valid_plan()
+        obj["pbis"][1]["backlog"] = ["BL-1"]
+        self.assertEqual([], plan.validate_plan(obj, backlog_ids=iter(["BL-1"])))
+        obj["pbis"][1]["backlog"] = ["BL-9"]
+        self.assertTrue(plan.validate_plan(obj, backlog_ids=iter(["BL-1"])))
+
     def test_waves_orders_by_dependencies_and_rejects_cycles(self) -> None:
         obj = {
             "schema": "atelier.plan/1",

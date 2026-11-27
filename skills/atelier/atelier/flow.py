@@ -31,13 +31,13 @@ STATES: tuple[str, ...] = (
     "reviewing_acceptance",
     "building",
     "checking",
-    "asking_rebuild",
+    "asking_plan_return",
     "reviewing",
+    "running_e2e",
     "triaging",
     "awaiting_fix_approval",
     "fixing",
-    "running_e2e",
-    "asking_e2e_limit",
+    "final_checking",
     "reporting",
     "done",
     "asking_budget",
@@ -57,6 +57,19 @@ CROSS_CUTTING_STATES: frozenset[str] = frozenset(
     }
 )
 TERMINAL_STATES: frozenset[str] = frozenset({"reporting", "done"})
+# The states that ask the user and wait for the answer. Planning is entered only from one of them (never
+# ReturnWithoutAsking): in the middle of a run, the planner is launched again only on the user's answer to the
+# plan-return question or to the broken-plan question.
+QUESTION_STATES: frozenset[str] = frozenset(
+    {
+        "asking_omm",
+        "asking_interview",
+        "awaiting_spec_approval",
+        "awaiting_plan_approval",
+        "awaiting_fix_approval",
+        "asking_plan_return",
+    }
+) | CROSS_CUTTING_STATES
 # The acceptance stage: the acceptance and stub PBIs are built, their Red check runs, then the planner reads the tests.
 ACCEPTANCE_STATES: frozenset[str] = frozenset({"building_acceptance", "checking_red", "reviewing_acceptance"})
 # With acceptance first, a PBI of these kinds is never launched before the acceptance tests are locked.
@@ -99,12 +112,37 @@ def check_invariants(run: dict[str, Any]) -> None:
             )
     if s == "planning" and not approvals["spec"]:
         raise InvariantError("never PlanWithoutSpec: entered planning without approved spec")
+    if s == "planning":
+        # The planner is launched again in the middle of a run only on the user's answer (building or checking never
+        # goes back to planning by itself).
+        last = (run.get("history") or [{}])[-1]
+        if last.get("to") == "planning" and last.get("from") not in QUESTION_STATES:
+            raise InvariantError(
+                f"never ReturnWithoutAsking: went back to planning from {last.get('from')} without the user's answer"
+            )
     if s == "reviewing" and c["review_count"] >= 1:
         raise InvariantError("never SecondReview: entered reviewing with review_count >= 1")
-    if s == "fixing" and not approvals["fix_list"] and c["e2e_failures"] == 0:
-        raise InvariantError("never FixWithoutList: entered fixing without approved fix list or e2e failure")
-    if s == "fixing" and c["e2e_failures"] > c["e2e_limit"] and not c["e2e_continuing"]:
-        raise InvariantError("never FixPastLimit: entered fixing past e2e limit without continue approval")
+    if s == "fixing" and not approvals["fix_list"]:
+        raise InvariantError("never FixWithoutList: entered fixing without an approved fix list")
+    if s == "fixing" and fix_stage_entries(run) > 1:
+        raise InvariantError("never SecondFixStage: entered the fix stage a second time")
+    if s == "fixing" and final_check_started(run):
+        raise InvariantError("never FixAfterFinalCheck: went back to the fix stage after the final check")
+
+
+def fix_stage_entries(run: dict[str, Any]) -> int:
+    """How many times the run entered the fix stage: on an approved fix list (a resume after a cross-cutting
+    question goes back into the same fix stage and is not counted)."""
+    entered = sum(
+        1 for h in run.get("history") or []
+        if h.get("to") == "fixing" and h.get("from") not in CROSS_CUTTING_STATES and h.get("from") != "fixing"
+    )
+    return max(entered, int((run.get("counters") or {}).get("fix_stages") or 0))
+
+
+def final_check_started(run: dict[str, Any]) -> bool:
+    """True once the run has entered the final check (or recorded its result)."""
+    return bool(run.get("final_check")) or any(h.get("to") == "final_checking" for h in run.get("history") or [])
 
 
 def _approve_spec(run: dict[str, Any]) -> None:
@@ -145,40 +183,30 @@ def _clear_plan_approval(run: dict[str, Any]) -> None:
     run["approvals"].pop("plan_sends", None)
 
 
+def _wave_built(run: dict[str, Any]) -> bool:
+    """True when PBIs of the wave are built and wait for the wave's check."""
+    return any(p.get("status") in ("built", "failed") for p in run.get("pbis", []))
+
+
 def _approve_fix_list(run: dict[str, Any]) -> None:
     run["approvals"]["fix_list"] = True
+    counters = run.setdefault("counters", {})
+    counters["fix_stages"] = int(counters.get("fix_stages") or 0) + 1
+
+
+def _first_fix_stage(run: dict[str, Any]) -> bool:
+    """The fix stage runs once: not after it was entered, and never after the final check."""
+    return fix_stage_entries(run) == 0 and not final_check_started(run)
 
 
 def _inc_review(run: dict[str, Any]) -> None:
     run["counters"]["review_count"] += 1
 
 
-def _inc_e2e_within_limit(run: dict[str, Any]) -> None:
-    run["counters"]["e2e_failures"] += 1
-    run["counters"]["e2e_continuing"] = False
-
-
-def _inc_e2e_past_limit(run: dict[str, Any]) -> None:
-    run["counters"]["e2e_failures"] += 1
-    run["counters"]["e2e_continuing"] = False
-
-
-def _continue_e2e(run: dict[str, Any]) -> None:
-    run["counters"]["e2e_continuing"] = True
-
-
-def _clear_e2e_continuing(run: dict[str, Any]) -> None:
-    run["counters"]["e2e_continuing"] = False
-
-
-def _can_e2e_auto_fix(run: dict[str, Any]) -> bool:
-    c = run["counters"]
-    return not c["e2e_continuing"] and (c["e2e_failures"] + 1) <= c["e2e_limit"]
-
-
-def _e2e_exceeded(run: dict[str, Any]) -> bool:
-    c = run["counters"]
-    return c["e2e_continuing"] or (c["e2e_failures"] + 1) > c["e2e_limit"]
+# Where the run goes once E2E is over, whether it passed, failed or was skipped: the retrospective's triage. A failed
+# E2E never goes back to the fix stage; its failure is an item of the retrospective list. This is the one place to
+# change to put another stage (the mutation check) between E2E and the triage.
+AFTER_E2E = "triaging"
 
 
 TRANSITIONS: tuple[Transition, ...] = (
@@ -266,52 +294,56 @@ TRANSITIONS: tuple[Transition, ...] = (
     Transition("building", "wave_built", "checking", guard=lambda r: r["approvals"]["plan"]),
     Transition("building", "no_buildable_pbis_review", "reviewing", guard=lambda r: r["counters"]["review_count"] == 0),
     Transition("building", "no_buildable_pbis_report", "reporting"),
+    # Plan return: a worker returned a stop. Its PBI and the PBIs that depend on it are held and the other PBIs of the
+    # wave are built; once the wave has nothing left to launch, the user is asked one question. Going on with the stop
+    # as an objection sends the wave, the stopped PBI as it was built, to its check (the held PBIs wait for it again).
+    # Fixing the plan launches the planner's revise, the passed PBIs frozen, as the broken-plan question's re-plan does.
+    Transition("building", "worker_stopped", "asking_plan_return", guard=lambda r: r["approvals"]["plan"]),
+    Transition(
+        "asking_plan_return",
+        "plan_return_continue",
+        "checking",
+        guard=lambda r: r["approvals"]["plan"] and _wave_built(r),
+    ),
+    Transition(
+        "asking_plan_return",
+        "plan_return_continue",
+        "building",
+        guard=lambda r: r["approvals"]["plan"] and not _wave_built(r),
+    ),
+    Transition(
+        "asking_plan_return",
+        "plan_return_replan",
+        "planning",
+        guard=lambda r: r["approvals"]["spec"],
+        effect=_start_replan,
+    ),
     # A failed check is carried over: a fix PBI goes before the PBIs left, or, after the last wave,
-    # the fix stage fixes it. Only a fix PBI that failed past its tries asks the user.
+    # the fix stage fixes it. A fix PBI that failed past its tries is left unresolved without asking: it,
+    # its carry-over's PBIs and the PBIs that depend on them are held, and the run goes on with the rest.
     Transition("checking", "carried_next", "building", guard=lambda r: r["approvals"]["plan"]),
     Transition("checking", "carried_last", "reviewing", guard=lambda r: r["counters"]["review_count"] == 0),
-    Transition("checking", "check_failed", "asking_rebuild"),
-    Transition("asking_rebuild", "rebuild_retry", "building", guard=lambda r: r["approvals"]["plan"]),
-    Transition("asking_rebuild", "rebuild_hold", "building", guard=lambda r: r["approvals"]["plan"]),
     Transition("checking", "wave_passed_next", "building", guard=lambda r: r["approvals"]["plan"]),
     Transition("checking", "all_pbis_passed", "reviewing", guard=lambda r: r["counters"]["review_count"] == 0),
-    # Final review (once) & Triage & Fix approval & Fixing
+    # Final review (once) -> E2E -> Retrospective (triage) -> Fix approval -> Fixing -> Reporting
     Transition(
         "reviewing",
         "review_returned",
-        "triaging",
+        "running_e2e",
         guard=lambda r: r["counters"]["review_count"] == 0,
         effect=_inc_review,
     ),
+    # E2E runs once; passed, failed or skipped (no E2E commands), the run goes on the same way.
+    Transition("running_e2e", "e2e_done", AFTER_E2E),
     Transition("triaging", "triaged", "awaiting_fix_approval"),
-    Transition("awaiting_fix_approval", "fix_list_approved", "fixing", effect=_approve_fix_list),
-    Transition("awaiting_fix_approval", "nothing_to_fix", "running_e2e"),
-    Transition(
-        "fixing",
-        "fix_check_passed",
-        "running_e2e",
-        guard=lambda r: r["approvals"]["fix_list"] or r["counters"]["e2e_failures"] > 0,
-        effect=_clear_e2e_continuing,
-    ),
-    # E2E & E2E limit
-    Transition("running_e2e", "e2e_passed", "reporting"),
-    Transition("running_e2e", "e2e_skipped", "reporting"),
-    Transition(
-        "running_e2e",
-        "e2e_failed",
-        "fixing",
-        guard=_can_e2e_auto_fix,
-        effect=_inc_e2e_within_limit,
-    ),
-    Transition(
-        "running_e2e",
-        "e2e_failed",
-        "asking_e2e_limit",
-        guard=_e2e_exceeded,
-        effect=_inc_e2e_past_limit,
-    ),
-    Transition("asking_e2e_limit", "e2e_continue", "fixing", effect=_continue_e2e),
-    Transition("asking_e2e_limit", "stop", "reporting"),
+    Transition("awaiting_fix_approval", "fix_list_approved", "fixing", guard=_first_fix_stage, effect=_approve_fix_list),
+    # Nothing to fix: no fix stage and no final check, straight to the report.
+    Transition("awaiting_fix_approval", "nothing_to_fix", "reporting"),
+    # The fix stage runs once. Once every fix group is built, the final check runs the whole check (the plan's checks
+    # and the checks of the PBIs that own a fixed file) and E2E once; what fails is left over (recorded on the run)
+    # and the run goes to the report. Nothing goes back to the fix stage.
+    Transition("fixing", "fixes_built", "final_checking", guard=lambda r: r["approvals"]["fix_list"]),
+    Transition("final_checking", "final_check_done", "reporting"),
     # Reporting -> Done
     Transition("reporting", "report_written", "done"),
     # Cross-cutting resume & stop

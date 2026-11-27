@@ -165,8 +165,8 @@ def reach_building(tmp: Path, pbis: list[dict] | None = None) -> dict:
     return act
 
 
-def fail_until_rebuild(tmp: Path, act: dict, failed: list[str] | None = None) -> dict:
-    """Fail a wave check, then its fix PBI twice: the rebuild question."""
+def fail_until_unresolved(tmp: Path, act: dict, failed: list[str] | None = None) -> dict:
+    """Fail a wave check, then its fix PBI twice: the carry-over is held as unresolved without a question."""
     extra = {"failed_pbis": failed} if failed else {}
     write_result_for(act, {"exit_code": 1, **extra})
     code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
@@ -194,37 +194,12 @@ def reach_reviewing(tmp: Path) -> dict:
     return act
 
 
-def reach_running_e2e_via_fix(tmp: Path) -> dict:
-    """Drive to reviewing with 1 actionable finding -> triage -> approve -> fix -> e2e."""
+def reach_e2e_after_review(tmp: Path, findings: list[dict] | None = None) -> dict:
+    """Drive to the final review and return its findings: E2E runs next, before the triage."""
     act = reach_reviewing(tmp)
-    write_result_for(act, {
-        "schema": "atelier.findings/1",
-        "findings": [
-            make_finding("F-1", severity="major", confidence=95, files=["a.py"]),
-            make_finding("F-2", severity="minor", confidence=90, kind="style", files=["a.py"]),
-            make_finding("F-3", severity="major", confidence=60, files=["a.py"]),
-        ],
-    })
+    write_result_for(act, {"schema": "atelier.findings/1", "findings": list(findings or [])})
     code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-    assert code == 0 and act["action"] == "launch" and act["role"] == "planner"
-
-    write_result_for(act, {
-        "schema": "atelier.triage/1",
-        "items": [{"id": "F-1", "decision": "fix", "reason": "fix bug"}],
-    })
-    code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-    assert code == 0 and act["action"] == "ask" and act["kind"] == "fix_approval"
-
-    code, act = run_cli("answer", "--root", str(tmp), "--choice", "approve")
-    assert code == 0 and act["action"] == "launch" and act["role"] == "worker"
-
-    write_result_for(act, {"summary": "fixed F-1", "status": "ok"})
-    code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-    assert code == 0 and act["action"] == "check"
-
-    write_result_for(act, {"exit_code": 0, "summary": "fix checks passed"})
-    code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-    assert code == 0 and act["action"] == "check"
+    assert code == 0 and act["action"] == "check" and act["commands"] == ["python e2e.py"], act
     return act
 
 
@@ -393,7 +368,9 @@ class TestConductorSeam1(unittest.TestCase):
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(act["kind"], "plan_approval")
 
-    def test_multi_wave_carry_over_and_rebuild_retry(self) -> None:
+    def test_multi_wave_carry_over_holds_the_failing_fix_pbi_as_unresolved(self) -> None:
+        # GUARDS.md (G9) points here: the check's exit code alone fails the wave, and the fix PBI failing past its
+        # tries is held as unresolved without a question.
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             pbis = [
@@ -417,24 +394,20 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(act["action"], "check")
 
-            # The check fails, the fix PBI fails twice -> asking_rebuild
-            act = fail_until_rebuild(tmp, act)
-            self.assertEqual(act["kind"], "rebuild")
+            # The check fails (exit code 1 fails both PBIs), the fix PBI fails twice -> held as unresolved, no question
+            act = fail_until_unresolved(tmp, act)
+            self.assertNotEqual(act["action"], "ask")
 
-            # retry -> the fix PBI again
-            code, act = run_cli("answer", "--root", str(tmp), "--choice", "retry")
-            self.assertEqual(code, 0)
-            self.assertEqual((act["action"], act["role"], act["pbi"]), ("launch", "worker", "CO-1-FIX"))
-
-            # The fix PBI passes -> wave 2 (PBI-3)
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(act["action"], "check")
-            write_result_for(act, {"exit_code": 0})
-            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "launch")
-            self.assertEqual(act["pbi"], "PBI-3")
+            # PBI-3 needs both, so it is held too; nothing is left to build -> the final review
+            self.assertEqual((act["action"], act["role"]), ("launch", "reviewer"))
+            from atelier import state as run_state
+            run = run_state.load_state(tmp)
+            self.assertEqual(
+                {p["id"]: p["status"] for p in run["pbis"]},
+                {"PBI-1": "held", "PBI-2": "held", "CO-1-FIX": "held", "PBI-3": "held"},
+            )
+            self.assertEqual(run["carry_overs"][0]["status"], "unresolved")
+            self.assertEqual([u["held_pbis"] for u in run["unresolved"]], [["PBI-1", "PBI-2", "CO-1-FIX", "PBI-3"]])
 
     def test_an_independent_pbi_shares_the_wave_of_a_fix_pbi(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -471,71 +444,92 @@ class TestConductorSeam1(unittest.TestCase):
             statuses = state.pbi_statuses(state.load_state(tmp))
             self.assertEqual({"PBI-1", "PBI-2", "PBI-3", "CO-1-FIX"}, {k for k, v in statuses.items() if v == "passed"})
 
-    def test_review_triage_fix_and_e2e_limit_continue_stop(self) -> None:
+    def test_review_e2e_failure_triage_fix_and_report(self) -> None:
+        from atelier import retro, state
+
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            act = reach_running_e2e_via_fix(tmp)
+            act = reach_e2e_after_review(tmp, [
+                make_finding("F-1", severity="major", confidence=95, files=["a.py"]),
+                make_finding("F-2", severity="minor", confidence=90, kind="style", files=["a.py"]),
+                make_finding("F-3", severity="major", confidence=60, files=["a.py"]),
+            ])
+            self.assertEqual("running_e2e", state.load_state(tmp)["state"])
 
-            # E2E failure #1 (<= limit 2) -> fixing
-            write_result_for(act, {"exit_code": 1})
-            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "launch")
-            self.assertEqual(act["role"], "worker")
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            write_result_for(act, {"exit_code": 0})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(act["action"], "check")
-
-            # E2E failure #2 (<= limit 2) -> fixing
-            write_result_for(act, {"exit_code": 1})
-            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "launch")
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            write_result_for(act, {"exit_code": 0})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(act["action"], "check")
-
-            # E2E failure #3 (> limit 2) -> asking_e2e_limit
-            write_result_for(act, {"exit_code": 1})
-            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "ask")
-            self.assertEqual(act["kind"], "e2e_limit")
-
-            # continue -> 1 fix round -> E2E failure #4 -> asks again immediately!
-            code, act = run_cli("answer", "--root", str(tmp), "--choice", "continue")
-            self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "launch")
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            write_result_for(act, {"exit_code": 0})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(act["action"], "check")
-
-            write_result_for(act, {"exit_code": 1})
-            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "ask")
-            self.assertEqual(act["kind"], "e2e_limit")
-
-            # stop -> reporting -> done
-            code, act = run_cli("answer", "--root", str(tmp), "--choice", "stop")
-            self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "done")
-            self.assertTrue(Path(act["report"]).exists())
-
-    def test_triage_nothing_to_fix_goes_to_e2e(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            act = reach_reviewing(tmp)
+            # E2E fails: no fix worker is launched; the failure joins the retrospective list and the triage sorts it
+            output = "\n".join(f"line {i}" for i in range(40)) + "\nAssertionError: the page has no total"
             write_result_for(act, {
-                "schema": "atelier.findings/1",
-                "findings": [make_finding("F-1", severity="major", confidence=90)],
+                "exit_code": 1,
+                "commands": [{"command": "python e2e.py", "exit_code": 1}],
+                "output": output,
             })
+            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
+            self.assertEqual(code, 0, act)
+            self.assertEqual(("launch", "planner"), (act["action"], act["role"]))
+            run = state.load_state(tmp)
+            self.assertEqual("triaging", run["state"])
+            self.assertEqual({"from": "running_e2e", "event": "e2e_done", "to": "triaging"}, run["history"][-1])
+            self.assertNotIn("fixing", [h["to"] for h in run["history"]])
+            items = {i["id"]: i for i in retro.load_items(run)}
+            self.assertEqual(["F-1", "E2E-1"], list(items))
+            failure = items["E2E-1"]
+            self.assertEqual("e2e_failure", failure["kind"])
+            self.assertEqual("python e2e.py", failure["command"])
+            self.assertTrue(failure["output"].endswith("AssertionError: the page has no total"))
+            self.assertNotIn("line 0\n", failure["output"])  # only the end of the output
+            self.assertIn("python e2e.py", failure["what"])
+            self.assertEqual({"review": 1, "e2e_failure": 1}, run["retro"]["kinds"])
+
+            write_result_for(act, {
+                "schema": "atelier.triage/1",
+                "items": [
+                    {"id": "F-1", "decision": "fix", "reason": "fix bug"},
+                    {"id": "E2E-1", "decision": "skip", "reason": "the E2E server was down"},
+                ],
+            })
+            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
+            self.assertEqual((code, act["action"], act["kind"]), (0, "ask", "fix_approval"))
+
+            code, act = run_cli("answer", "--root", str(tmp), "--choice", "approve")
+            self.assertEqual((code, act["action"], act["role"]), (0, "launch", "worker"))
+            write_result_for(act, {"summary": "fixed F-1", "status": "ok"})
+            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
+            self.assertEqual((code, act["action"]), (0, "check"))
+            # The final check: the whole check and the plan's E2E, once
+            self.assertEqual(["python -m unittest", "python e2e.py"], act["commands"])
+
+            # The final check passes -> the report (the E2E state is not entered again)
+            write_result_for(act, {"exit_code": 0, "summary": "final checks passed"})
+            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
+            self.assertEqual((code, act["action"]), (0, "done"))
+            run = state.load_state(tmp)
+            self.assertIn({"from": "fixing", "event": "fixes_built", "to": "final_checking"}, run["history"])
+            self.assertIn({"from": "final_checking", "event": "final_check_done", "to": "reporting"}, run["history"])
+            self.assertEqual(1, [h["from"] for h in run["history"]].count("running_e2e"))
+            for key in ("e2e_failures", "e2e_limit", "e2e_continuing"):
+                self.assertNotIn(key, run["counters"])
+            report = Path(act["report"]).read_text(encoding="utf-8")
+            self.assertIn("- E2E: 落ちた（1 件を振り返りの一覧に入れた", report)
+            self.assertNotIn("E2E 失敗回数", report)
+
+    def test_e2e_passes_then_the_triage(self) -> None:
+        from atelier import state
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            act = reach_e2e_after_review(tmp, [make_finding("F-1", severity="major", confidence=90)])
+            write_result_for(act, {"exit_code": 0})
+            code, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
+            self.assertEqual((code, act["action"], act["role"]), (0, "launch", "planner"))
+            run = state.load_state(tmp)
+            self.assertEqual(("triaging", "e2e_done"), (run["state"], run["history"][-1]["event"]))
+            self.assertEqual({"review": 1}, run["retro"]["kinds"])
+
+    def test_triage_nothing_to_fix_goes_to_the_report(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            act = reach_e2e_after_review(tmp, [make_finding("F-1", severity="major", confidence=90)])
+            write_result_for(act, {"exit_code": 0})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             self.assertEqual(act["role"], "planner")
 
@@ -548,9 +542,10 @@ class TestConductorSeam1(unittest.TestCase):
 
             code, act = run_cli("answer", "--root", str(tmp), "--choice", "nothing_to_fix")
             self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "check")
+            self.assertEqual(act["action"], "done")
             _, st = run_cli("status", "--root", str(tmp))
-            self.assertEqual(st["state"], "running_e2e")
+            self.assertEqual(st["state"], "done")
+            self.assertIn({"from": "awaiting_fix_approval", "event": "nothing_to_fix", "to": "reporting"}, st["history"])
 
     def test_cross_cutting_questions_resume_and_stop(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -690,7 +685,7 @@ class TestConductorSeam1(unittest.TestCase):
         with self.assertRaises(flow.InvariantError):
             flow.check_invariants(r3)
 
-        # 3. A failed check goes on as a carry-over, and asks only past the fix PBI's tries
+        # 3. A failed check goes on as a carry-over; past the fix PBI's tries it is held, never asked
         r4 = state.new_run_state(Path("."), Path("goal.md"), None)
         r4["state"] = "checking"
         r4["approvals"]["spec"] = True
@@ -698,8 +693,9 @@ class TestConductorSeam1(unittest.TestCase):
         flow.apply_event(r4, "carried_next")
         self.assertEqual(r4["state"], "building")
         r4["state"] = "checking"
-        flow.apply_event(r4, "check_failed")
-        self.assertEqual(r4["state"], "asking_rebuild")
+        with self.assertRaises(flow.TransitionError):
+            flow.apply_event(r4, "check_failed")
+        self.assertNotIn("asking_rebuild", flow.STATES)
         self.assertNotIn("auto_fixing", flow.STATES)
 
         # 4. SecondReview
@@ -715,18 +711,20 @@ class TestConductorSeam1(unittest.TestCase):
         r6 = state.new_run_state(Path("."), Path("goal.md"), None)
         r6["state"] = "fixing"
         r6["approvals"]["fix_list"] = False
-        r6["counters"]["e2e_failures"] = 0
         with self.assertRaises(flow.InvariantError):
             flow.check_invariants(r6)
 
-        # 6. FixPastLimit
+        # 6. No E2E limit: a failed E2E goes on to the triage like a passed one, never to fixing
         r7 = state.new_run_state(Path("."), Path("goal.md"), None)
-        r7["state"] = "fixing"
-        r7["counters"]["e2e_failures"] = 3
-        r7["counters"]["e2e_limit"] = 2
-        r7["counters"]["e2e_continuing"] = False
-        with self.assertRaises(flow.InvariantError):
-            flow.check_invariants(r7)
+        r7["state"] = "running_e2e"
+        for event in ("e2e_failed", "e2e_passed", "e2e_skipped", "e2e_continue"):
+            with self.subTest(event=event), self.assertRaises(flow.TransitionError):
+                flow.apply_event(r7, event)
+        self.assertEqual("triaging", flow.apply_event(r7, "e2e_done"))
+        self.assertEqual(
+            [("running_e2e", "e2e_done", flow.AFTER_E2E)],
+            [(t.source, t.event, t.target) for t in flow.TRANSITIONS if t.source == "running_e2e"],
+        )
 
     def test_cli_subprocess_utf8_and_exit_codes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -753,7 +751,7 @@ class TestConductorSeam1(unittest.TestCase):
             err = json.loads(res2.stdout.strip())
             self.assertIn("error", err)
 
-    def test_no_buildable_pbis_paths_and_fix_check_retry(self) -> None:
+    def test_no_buildable_pbis_paths_and_final_check_failure(self) -> None:
         # 1. The only PBI fails -> the carry-over goes to the final review and the fix stage
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -787,11 +785,11 @@ class TestConductorSeam1(unittest.TestCase):
             self.assertEqual(act["action"], "launch")
             self.assertEqual(act["role"], "reviewer")
 
-        # 3. Fix check failure in fixing re-launches worker, then passes to running_e2e
+        # 3. A failed final check launches no fix worker again: it is left over and the run goes to the report
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            act = reach_reviewing(tmp)
-            write_result_for(act, {"schema": "atelier.findings/1", "findings": [make_finding("F-1", severity="major", confidence=95)]})
+            act = reach_e2e_after_review(tmp, [make_finding("F-1", severity="major", confidence=95)])
+            write_result_for(act, {"exit_code": 0})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
             write_result_for(act, {"schema": "atelier.triage/1", "items": [{"id": "F-1", "decision": "fix", "reason": "fix"}]})
             _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
@@ -803,16 +801,9 @@ class TestConductorSeam1(unittest.TestCase):
             write_result_for(act, {"exit_code": 1})
             code, act = run_cli("done", "--root", str(tmp))
             self.assertEqual(code, 0)
-            self.assertEqual(act["action"], "launch")
-            self.assertEqual(act["role"], "worker")
-
-            write_result_for(act, {"status": "ok"})
-            _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
-            write_result_for(act, {"exit_code": 0})
-            code, act = run_cli("done", "--root", str(tmp))
-            self.assertEqual(code, 0)
+            self.assertEqual(act["action"], "done")
             _, st = run_cli("status", "--root", str(tmp))
-            self.assertEqual(st["state"], "running_e2e")
+            self.assertEqual(st["state"], "done")
 
     def test_reply_file_and_error_refusals(self) -> None:
         with tempfile.TemporaryDirectory() as td:

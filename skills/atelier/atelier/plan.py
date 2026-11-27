@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -26,7 +26,14 @@ PBI_KINDS = ("build", "acceptance", "e2e", "stub")
 DEFAULT_KIND = "build"
 SCENARIO_MODES = ("normal", "light", "light-no-red")
 UNIT_MARK = "unit"
-TRIAGE_DECISIONS = ("fix", "skip", "ask")
+TRIAGE_FIX = "fix"
+TRIAGE_DECISIONS = (TRIAGE_FIX, "skip", "ask")
+# A triage item's unlock: the locked cases whose lock comes off, and what was decided for them. scenario: the test
+# lines change to what the implementation does; implementation: the test lines change and the implementation follows.
+UNLOCK_FIELDS = ("cases", "fix", "requirement")
+UNLOCK_FIXES = ("scenario", "implementation")
+UNLOCK_FIX_LABELS = {"scenario": "シナリオを直す", "implementation": "実装を直す"}
+UNLOCK_DECISIONS = ("fix", "ask")
 MIN_CONFIDENCE = 80
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
@@ -257,6 +264,18 @@ def _validate_requirements(pbis: list[Any], scenarios: Any, errors: list[str]) -
                 )
 
 
+def _validate_backlog(pbi: dict[str, Any], label: str, known: set[str], errors: list[str]) -> None:
+    """A PBI's `backlog` (optional): the ids of backlog entries it takes, each one of the candidates."""
+    if "backlog" not in pbi:
+        return
+    names = _validate_str_list(pbi.get("backlog"), f"{label}.backlog", errors)
+    unknown = [n for n in dict.fromkeys(names or []) if n not in known]
+    if unknown:
+        errors.append(
+            f"{label}.backlog の {', '.join(repr(n) for n in unknown)} は backlog の候補（Backlog candidates）にありません。"
+        )
+
+
 def _validate_data_needs(value: Any, label: str, errors: list[str]) -> None:
     if not isinstance(value, list):
         errors.append(f"{label} は配列にしてください（無ければ []）。")
@@ -338,11 +357,15 @@ def _compute_waves(pbis: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return result
 
 
-def validate_plan(obj: Any, acceptance_first: bool = False) -> list[str]:
+def validate_plan(obj: Any, acceptance_first: bool = False, backlog_ids: Iterable[str] | None = None) -> list[str]:
     """Validate an atelier.plan/1 object and return Japanese error strings.
 
     With acceptance_first on, the plan must also carry scenarios and interfaces. With it off, a plan without
-    them passes as before; any that are given are still checked for shape.
+    them passes as before; any that are given are still checked for shape. The rules on e2e PBIs (level L3 or higher,
+    a wave after every build PBI) hold whether acceptance_first is on or off.
+
+    A PBI may name the backlog entries it takes in `backlog`; each must be one of backlog_ids (the candidates the plan
+    launch gave the planner; none when it is None).
     """
     if not isinstance(obj, dict):
         return ["計画は JSON オブジェクトにしてください。"]
@@ -377,6 +400,8 @@ def validate_plan(obj: Any, acceptance_first: bool = False) -> list[str]:
 
     seen_ids: set[str] = set()
     valid_pbi_items: list[dict[str, Any]] = []
+    # Built once, so an iterator of candidates holds for every PBI, not only the first.
+    known_backlog = set(backlog_ids or [])
 
     for index, pbi in enumerate(pbis):
         label = f"pbis[{index}]"
@@ -430,6 +455,7 @@ def validate_plan(obj: Any, acceptance_first: bool = False) -> list[str]:
             if not EVIDENCE_PATTERN.fullmatch(place.strip()):
                 errors.append(f"{label}.evidence の {place!r} は path:行番号 にしてください。")
         _validate_data_needs(pbi.get("data_needs"), f"{label}.data_needs", errors)
+        _validate_backlog(pbi, label, known_backlog, errors)
 
         if _is_nonempty_str(pid):
             valid_pbi_items.append(pbi)
@@ -466,8 +492,9 @@ def validate_plan(obj: Any, acceptance_first: bool = False) -> list[str]:
             except ValueError as exc:
                 errors.append(str(exc))
             else:
+                wave_of = {p["id"]: n for n, wave in enumerate(wave_list) for p in wave}
+                _check_e2e_rules(pbis, wave_of, errors)
                 if acceptance_first:
-                    wave_of = {p["id"]: n for n, wave in enumerate(wave_list) for p in wave}
                     _check_form_rules(obj, pbis, wave_of, errors)
 
     return errors
@@ -519,23 +546,32 @@ def _has_question_mark(value: Any) -> bool:
     return "?" in text
 
 
+def _check_e2e_rules(pbis: list[dict[str, Any]], wave_of: dict[str, int], errors: list[str]) -> None:
+    """The rules on e2e PBIs, whether acceptance_first is on or off: level L3 or higher, and a wave after every build
+    PBI (the E2E files they write are added to the lock once they pass, so no build PBI comes after them)."""
+    build_waves = [wave_of[p["id"]] for p in pbis if p.get("kind", DEFAULT_KIND) == "build"]
+    for pbi in pbis:
+        if pbi.get("kind", DEFAULT_KIND) != "e2e":
+            continue
+        pid = pbi["id"]
+        if pbi.get("level") in LEVELS[:2]:
+            errors.append(f"{pid} は kind が e2e なので、level は L3 以上にしてください（今は {pbi.get('level')}）。")
+        if any(wave_of[pid] <= w for w in build_waves):
+            errors.append(f"{pid} は kind が e2e なので、すべての kind が build の PBI より後の wave に置いてください。")
+
+
 def _check_form_rules(obj: dict[str, Any], pbis: list[dict[str, Any]], wave_of: dict[str, int], errors: list[str]) -> None:
-    """The rules on the shape of an acceptance-first plan: where each kind of PBI sits and how cases are assigned."""
+    """The rules on the shape of an acceptance-first plan: where acceptance and stub PBIs sit and how cases are
+    assigned (the e2e rules are _check_e2e_rules, for every plan)."""
     by_id = {p["id"]: p for p in pbis}
 
     def kind_of(pbi: dict[str, Any]) -> Any:
         return pbi.get("kind", DEFAULT_KIND)
 
-    build_waves = [wave_of[p["id"]] for p in pbis if kind_of(p) == "build"]
     for pbi in pbis:
         pid, kind = pbi["id"], kind_of(pbi)
         if kind in ("acceptance", "stub") and wave_of[pid] != 0:
             errors.append(f"{pid} は kind が {kind} なので、最初の wave（depends_on なし）に置いてください。")
-        if kind == "e2e":
-            if pbi.get("level") in LEVELS[:2]:
-                errors.append(f"{pid} は kind が e2e なので、level は L3 以上にしてください（今は {pbi.get('level')}）。")
-            if any(wave_of[pid] <= w for w in build_waves):
-                errors.append(f"{pid} は kind が e2e なので、すべての kind が build の PBI より後の wave に置いてください。")
 
     scenarios = obj.get("scenarios")
     if not isinstance(scenarios, list):
@@ -767,8 +803,85 @@ def validate_acceptance_review(obj: Any, expected_files: Iterable[str]) -> list[
     return errors
 
 
-def validate_triage(obj: Any, expected_ids: Iterable[str] | None = None) -> list[str]:
-    """Validate an atelier.triage/1 object and return Japanese error strings."""
+def _validate_unlock(
+    unlock: Any,
+    label: str,
+    decision: Any,
+    locked_cases: Mapping[str, str] | None,
+    plan_cases: set[str],
+    errors: list[str],
+) -> list[str]:
+    """Check a triage item's `unlock`: the locked cases whose lock the decision takes off, and what it decided for them
+    (fix the scenario, or fix the implementation). Returns its case ids (none when they cannot be read).
+
+    With locked_cases (each locked case -> its requirement) the cases are checked against the lock too: they are the
+    locked cases of one requirement whose lines are fixed, and new ids for the lines added to it (requirement names it
+    when no locked case does). A case of a requirement that is not locked is refused, and so is an unlock in a run
+    with no locked case.
+    """
+    where = f"{label} の unlock"
+    if not isinstance(unlock, dict):
+        errors.append(f"{where} は cases と fix を持つオブジェクトにしてください。")
+        return []
+    extra = sorted(set(unlock) - set(UNLOCK_FIELDS))
+    if extra:
+        errors.append(f"{where} に使えない項目があります: {', '.join(extra)}")
+    ids = _validate_str_list(unlock.get("cases"), f"{where}.cases", errors, require_nonempty_list=True) or []
+    repeated = sorted({cid for cid in ids if ids.count(cid) > 1})
+    if repeated:
+        errors.append(f"{where}.cases に同じケースが重複しています: {', '.join(repeated)}")
+    if unlock.get("fix") not in UNLOCK_FIXES:
+        errors.append(f"{where}.fix は scenario（シナリオを直す）か implementation（実装を直す）にしてください。")
+    requirement = unlock.get("requirement")
+    if requirement is not None and not _is_nonempty_str(requirement):
+        errors.append(f"{where}.requirement は空でない文字列にしてください（省くと cases の鍵のケースの要件）。")
+        requirement = None
+    if decision in TRIAGE_DECISIONS and decision not in UNLOCK_DECISIONS:
+        errors.append(f"{label} は unlock を持つので、decision を fix か ask にしてください（見送るなら unlock を省く）。")
+    if locked_cases is None or not ids:
+        return ids
+    if not locked_cases:
+        errors.append(f"{where}: この run には鍵をかけたケースが無いので、鍵を外せません。")
+        return ids
+    owners = sorted({locked_cases[cid] for cid in ids if cid in locked_cases})
+    if len(owners) > 1:
+        errors.append(f"{where}.cases は 1 つの要件のケースにしてください（{', '.join(owners)} にまたがっています）。")
+        return ids
+    if requirement is not None and requirement not in set(locked_cases.values()):
+        errors.append(f"{where}.requirement {requirement!r} は鍵をかけた要件ではありません。")
+        return ids
+    if requirement is not None and owners and owners[0] != requirement:
+        errors.append(f"{where}.cases の鍵のケースは要件 {owners[0]} のもので、requirement の {requirement} と違います。")
+    unlocked = [cid for cid in ids if cid not in locked_cases and cid in plan_cases]
+    if unlocked:
+        errors.append(f"{where}.cases の {', '.join(unlocked)} は鍵をかけていない要件のケースです。")
+    added = [cid for cid in ids if cid not in locked_cases and cid not in plan_cases]
+    if added and requirement is None and not owners:
+        errors.append(
+            f"{where}.cases の {', '.join(added)} は鍵のケースに無い（足す行）ので、足す要件を requirement に書いてください。"
+        )
+    return ids
+
+
+def validate_triage(
+    obj: Any,
+    expected_ids: Iterable[str] | None = None,
+    locked_cases: Mapping[str, str] | None = None,
+    plan_cases: Iterable[str] | None = None,
+    unscoped_ids: Iterable[str] | None = None,
+) -> list[str]:
+    """Validate an atelier.triage/1 object and return Japanese error strings.
+
+    expected_ids are the ids of the retrospective list: the result must have each of them once, and no other id.
+    An item may carry `unlock` ({"cases", "fix", "requirement"}): the decision takes the lock off those cases, and
+    fix says what it decided, `scenario` (the test lines change to what the implementation does) or `implementation`
+    (the test lines change and the implementation follows them). Such an item is fixed or asked, never skipped, and
+    a case is unlocked by one item only. locked_cases (each locked case -> its requirement) and plan_cases (every case
+    id of the plan) check the cases against the lock as well (_validate_unlock).
+
+    unscoped_ids are the items of the list with no files to fix (see the function unscoped_ids): such an item is
+    asked or skipped, never fixed without an unlock, so a fix worker always has a bounded set of files.
+    """
     if not isinstance(obj, dict):
         return ["仕分け結果は JSON オブジェクトにしてください。"]
 
@@ -782,6 +895,9 @@ def validate_triage(obj: Any, expected_ids: Iterable[str] | None = None) -> list
         return errors
 
     seen_ids: set[str] = set()
+    unlocked_by: dict[str, str] = {}
+    known_cases = {str(c) for c in plan_cases or []}
+    unscoped = set(unscoped_ids or [])
     for index, item in enumerate(items):
         label = f"items[{index}]"
         if not isinstance(item, dict):
@@ -792,7 +908,7 @@ def validate_triage(obj: Any, expected_ids: Iterable[str] | None = None) -> list
         if not _is_nonempty_str(fid):
             errors.append(f"{label} の id は空でない文字列にしてください。")
         elif fid in seen_ids:
-            errors.append(f"仕分け対象 id {fid!r} が重複しています。")
+            errors.append(f"仕分け対象 id {fid!r} が重複しています（振り返りの一覧の各件は 1 回だけ仕分けてください）。")
         else:
             seen_ids.add(fid)
             label = fid
@@ -803,20 +919,45 @@ def validate_triage(obj: Any, expected_ids: Iterable[str] | None = None) -> list
         if not _is_nonempty_str(item.get("reason")):
             errors.append(f"{label} の reason は空でない文字列にしてください。")
 
+        if item.get("decision") == TRIAGE_FIX and _is_nonempty_str(fid) and fid in unscoped and "unlock" not in item:
+            errors.append(
+                f"{label} は直す範囲のファイルが決まらない（持ち主の PBI もファイルも無い）ので、fix にできません。"
+                "ask か skip にしてください。"
+            )
+
+        if "unlock" in item:
+            for cid in _validate_unlock(item["unlock"], label, item.get("decision"), locked_cases, known_cases, errors):
+                if cid in unlocked_by and unlocked_by[cid] != label:
+                    errors.append(f"ケース {cid} の鍵を {unlocked_by[cid]} と {label} の 2 件で外しています（1 件にしてください）。")
+                unlocked_by.setdefault(cid, label)
+
     if expected_ids is not None:
         expected = set(expected_ids)
         missing = sorted(expected - seen_ids)
         extra = sorted(seen_ids - expected)
         if missing:
-            errors.append(f"仕分け結果に不足している指摘があります: {', '.join(missing)}")
+            errors.append(f"仕分け結果に振り返りの一覧の件が足りません: {', '.join(missing)}")
         if extra:
-            errors.append(f"仕分け結果に未知の指摘 id があります: {', '.join(extra)}")
+            errors.append(f"仕分け結果に振り返りの一覧に無い id があります: {', '.join(extra)}")
 
     return errors
 
 
+def is_unlock(item: Any) -> bool:
+    """True for an item of the fix list whose triage took the lock off locked cases (it carries an `unlock`)."""
+    return isinstance(item, dict) and isinstance(item.get("unlock"), dict)
+
+
 def _item_files(item: dict[str, Any]) -> list[str]:
-    raw = [item.get("file"), *(item.get("files") or [])]
+    """The files an item of the fix list touches: its file and files, and the files a retrospective item affects.
+
+    An item with an unlock touches only the acceptance test file the unlock opens.
+    """
+    if is_unlock(item):
+        raw = [item["unlock"].get("file")]
+    else:
+        affects = item.get("affects") if isinstance(item.get("affects"), dict) else {}
+        raw = [item.get("file"), *(item.get("files") or []), *(affects.get("files") or [])]
     out: list[str] = []
     for path in raw:
         if _is_nonempty_str(path):
@@ -826,10 +967,33 @@ def _item_files(item: dict[str, Any]) -> list[str]:
     return out
 
 
+def unscoped_ids(items: Iterable[Any]) -> list[str]:
+    """The ids of the items a fix worker would get no files for: no unlock, and no file, files or affected files.
+
+    Such an item may not enter the fix list, since its worker would have no paths to keep to (for example an
+    unresolved failure whose owner PBI could not be found).
+    """
+    return [
+        str(item["id"]) for item in items
+        if isinstance(item, dict) and _is_nonempty_str(item.get("id")) and not is_unlock(item) and not _item_files(item)
+    ]
+
+
 def fix_groups(findings: list[dict[str, Any]], max_workers: int = 3) -> list[list[dict[str, Any]]]:
-    """Group findings by shared files and pack into at most max_workers disjoint groups."""
+    """Group findings by shared files and pack into at most max_workers disjoint groups.
+
+    An item with an unlock is a group of its own, and those groups come first: their workers fix locked acceptance
+    tests the way an acceptance PBI writes them, and the run checks each fix and locks the tests again before the
+    other groups change the implementation. max_workers bounds the other groups.
+    """
     if max_workers < 1:
         raise ValueError("max_workers は 1 以上にしてください。")
+    unlocks = [[item] for item in findings if is_unlock(item)]
+    return unlocks + _shared_file_groups([item for item in findings if not is_unlock(item)], max_workers)
+
+
+def _shared_file_groups(findings: list[dict[str, Any]], max_workers: int) -> list[list[dict[str, Any]]]:
+    """Group findings by shared files and pack into at most max_workers disjoint groups."""
     if not findings:
         return []
 
@@ -893,6 +1057,7 @@ def planner_prompt(
     plan_path: str | Path | None = None,
     request_text: str | None = None,
     findings_path: str | Path | None = None,
+    retro_path: str | Path | None = None,
     levels: list[dict[str, Any]] | None = None,
     out_path: str | Path | None = None,
     rule_docs: Iterable[str] | None = None,
@@ -901,8 +1066,15 @@ def planner_prompt(
     scenarios: list[dict[str, Any]] | None = None,
     interfaces: list[dict[str, Any]] | None = None,
     acceptance_files: list[dict[str, Any]] | None = None,
+    backlog: list[dict[str, Any]] | None = None,
+    backlog_note: str | None = None,
 ) -> Path:
-    """Write a planner prompt for mode ('plan', 'revise', 'triage' or 'acceptance_review') using only approved spec and facts."""
+    """Write a planner prompt for mode ('plan', 'revise', 'triage' or 'acceptance_review') using only approved spec and facts.
+
+    In triage the input is the retrospective list (retro_path; findings_path is the older name of the same input).
+    In plan and revise, backlog lists the backlog entries the plan may take as PBIs (backlog_note says why there are
+    none, for example when the work root is not a git repository).
+    """
     if mode not in ("plan", "revise", "triage", "acceptance_review"):
         raise ValueError(f"unsupported planner mode: {mode}")
 
@@ -925,14 +1097,19 @@ def planner_prompt(
         lvl_data = levels if levels is not None else _load_levels_json()
         lines.append(f"Levels: {json.dumps(lvl_data, ensure_ascii=False)}")
         lines.append(f"Acceptance first: {'on' if acceptance_first else 'off'}")
+        if backlog:
+            lines.append(f"Backlog candidates: {json.dumps(backlog, ensure_ascii=False)}")
+        else:
+            lines.append(f"Backlog candidates: none{f' ({backlog_note})' if backlog_note else ''}")
     if mode == "revise":
         if plan_path is not None:
             lines.append(f"Current plan: {Path(plan_path).resolve()}")
         lines.append(f"User revision request: {request_text or ''}")
         lines.append(f"Passed PBIs: {', '.join(passed_pbis or []) or 'none'}")
     if mode == "triage":
-        if findings_path is not None:
-            lines.append(f"Findings: {Path(findings_path).resolve()}")
+        listing = retro_path if retro_path is not None else findings_path
+        if listing is not None:
+            lines.append(f"Retrospective list: {Path(listing).resolve()}")
     if mode == "acceptance_review":
         lines.append(f"Approved scenarios: {json.dumps(scenarios or [], ensure_ascii=False)}")
         lines.append(f"Public interfaces: {json.dumps(interfaces or [], ensure_ascii=False)}")

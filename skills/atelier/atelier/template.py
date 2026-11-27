@@ -78,11 +78,10 @@ def validate_template(value: Any, agents_path: Path | str | None = None) -> dict
     for role, step in roles.items():
         _step(step, f'役 {role}', runners)
     limits = value['limits']
+    # e2e_rounds is an older limit (how many times a failed E2E went back to the fix stage). E2E runs once now and a
+    # failure goes to the retrospective list, so a template that still has it is read but the value is not used.
     if not isinstance(limits, dict) or set(limits) - {'auto_fix', 'e2e_rounds', 'budget_tokens', 'budget_usd', 'parallel'} or limits.get('auto_fix') != 1 or type(limits.get('auto_fix')) is not int:
         _fail('上限の設定が不正です')
-    rounds = limits.get('e2e_rounds', 2)
-    if type(rounds) is not int or rounds < 0:
-        _fail('E2E の上限は 0 以上の整数です')
     parallel = limits.get('parallel', DEFAULT_PARALLEL)
     if type(parallel) is not int or parallel < 1:
         _fail('同時に動かす起動の上限 (parallel) は 1 以上の整数です')
@@ -95,7 +94,6 @@ def validate_template(value: Any, agents_path: Path | str | None = None) -> dict
         if not isinstance(mapping, dict) or any(not _text(k) or type(v) is not bool for k, v in mapping.items()):
             _fail(f'{section} は真偽値の対応表です')
     result = copy.deepcopy(value)
-    result['limits'].setdefault('e2e_rounds', 2)
     result['limits'].setdefault('budget_tokens', None)
     result['limits'].setdefault('budget_usd', None)
     result['limits'].setdefault('parallel', DEFAULT_PARALLEL)

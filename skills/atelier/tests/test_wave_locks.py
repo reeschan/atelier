@@ -265,6 +265,16 @@ class WaveLockTests(unittest.TestCase):
                 self.setUp()
                 nxt = self.run_wave_after_build(ends)
                 run = saved(self.root)
+                if reason.startswith("R1-3"):
+                    # R1-3 is PBI-4's, and no PBI of the wave has its test file in its targets: it is left unresolved,
+                    # and PBI-3 is not failed for it.
+                    self.assertEqual("passed", state.get_pbi(run, "PBI-3")["status"])
+                    self.assertEqual([], run.get("carry_overs") or [])
+                    (item,) = run["unresolved"]
+                    self.assertEqual((acceptance.WAVE_CASES_UNRESOLVED, ["R1-3"]), (item["kind"], item["cases"]))
+                    self.assertIn(reason, item["reason"])
+                    self.assertEqual(["PBI-4"], pbis_of(nxt))
+                    continue
                 self.assertEqual("carried", state.get_pbi(run, "PBI-3")["status"])
                 (co,) = run["carry_overs"]
                 self.assertEqual((["PBI-3"], [PBI_CHECK]), (co["pbis"], co["commands"]))
@@ -294,17 +304,30 @@ class WaveLockTests(unittest.TestCase):
                 kept = run["wave_cases"][-1]
                 self.assertEqual((["R1-2"], [], list(CASES)), (kept["excused"], kept["missing"], kept["ran"]))
 
+    def test_a_case_left_red_with_an_objection_that_passes_now_counts_as_passed(self) -> None:
+        nxt = self.run_wave_after_build(outcomes(), {"status": "ok", "objections": [OBJECTION]})
+        run = saved(self.root)
+        self.assertEqual(["PBI-4"], pbis_of(nxt))
+        kept = run["wave_cases"][-1]
+        self.assertEqual(([], ["R1-1", "R1-2"]), (kept["excused"], kept["passed"]))
+        self.assertEqual({"R1-1", "R1-2"}, acceptance.passed_cases(run))
+        self.assertEqual({"passed": ["R1-1", "R1-2"], "ran": list(CASES)}, acceptance.ends_before_unlock(run))
+        # The objection itself stays on the PBI for the retrospective.
+        self.assertEqual(["R1-2"], [o["case"] for o in state.get_pbi(run, "PBI-3")["objections"]])
+
     def test_the_pbis_checks_and_the_plans_checks_are_judged_as_before_after_the_cases(self) -> None:
         launch = self.lock_and_launch()
         self.build(launch)
         (self.root / "plan_fail").write_bytes(b"")
         nxt = self.run_wave(outcomes())
         run = saved(self.root)
-        self.assertEqual("carried", state.get_pbi(run, "PBI-3")["status"])
-        (co,) = run["carry_overs"]
-        self.assertEqual((["PBI-3"], [PLAN_CHECK]), (co["pbis"], co["commands"]))
-        self.assertEqual(["G9"], run["last_failed_rules"])
-        self.assertEqual(["CO-1-FIX"], pbis_of(nxt))
+        # The plan's check names no test file of PBI-3's targets: it is left unresolved and PBI-3 passes.
+        self.assertEqual("passed", state.get_pbi(run, "PBI-3")["status"])
+        self.assertEqual([], run.get("carry_overs") or [])
+        (item,) = run["unresolved"]
+        self.assertEqual((acceptance.CHECK_UNRESOLVED, PLAN_CHECK), (item["kind"], item["command"]))
+        self.assertEqual([], run["last_failed_rules"])
+        self.assertEqual(["PBI-4"], pbis_of(nxt))
 
     def run_wave_after_build(self, ends: dict, result: dict | None = None) -> dict:
         self.build(self.lock_and_launch(), result)
@@ -323,6 +346,59 @@ class UnlockedWaveTests(unittest.TestCase):
                     act = actions._make_wave_check(root, run)
                     self.assertEqual(plan.wave_commands(run["pbis"], ["make all"]), act["commands"])
                     self.assertNotIn("wave", act)
+
+
+def revised_scenario(sum_2: int) -> dict:
+    """R1 with R1-1 (1 + 2 = 3) and R1-2 (2 + 2 = sum_2), both assigned to PBI-3."""
+    return {
+        "id": "R1",
+        "text": "要件 R1",
+        "mode": "normal",
+        "gherkin": GHERKIN,
+        "cases": [
+            {"id": "R1-1", "values": {"a": 1, "b": 2, "sum": 3}, "pbi": "PBI-3", "needs": []},
+            {"id": "R1-2", "values": {"a": 2, "b": 2, "sum": sum_2}, "pbi": "PBI-3", "needs": []},
+        ],
+    }
+
+
+def wave_entry(check: str, passed: list[str]) -> dict:
+    return {"check": check, "total": 2, "ran": ["R1-1", "R1-2"], "missing": [], "failed": {}, "excused": [], "passed": passed, "sent_back": []}
+
+
+class RevisedCaseBaselineTests(unittest.TestCase):
+    def test_a_pass_from_before_a_re_plan_changed_the_cases_test_is_not_a_baseline_for_the_new_test(self) -> None:
+        run = {
+            "acceptance_first": True,
+            "pbis": [
+                {"id": "PBI-1", "kind": "acceptance", "status": "passed", "requirements": ["R1"], "targets": [TEST_FILE], "acceptance_files": {"R1": TEST_FILE}},
+                {"id": "PBI-3", "status": "passed", "targets": ["app.py"]},
+                {"id": "PBI-5", "status": "pending", "targets": ["other.py"]},
+            ],
+            # The re-plan changed R1-2's expected sum and kept its id; R1-1 is as it was.
+            "scenarios": [revised_scenario(5)],
+            "red": {"R1": {"status": "passed", "failures": 0, "reasons": [], "history": []}},
+            "wave_cases": [wave_entry("CHK-1", ["R1-1", "R1-2"])],
+        }
+        acceptance.reopen_revised(run, [revised_scenario(4)])
+        self.assertEqual({"R1-2": 1}, run[acceptance.CASE_REVISIONS])
+        self.assertEqual({"R1-1"}, acceptance.passed_cases(run))
+
+        # In the next wave check both are red, and no PBI of the wave holds them: only R1-1 was green before.
+        rows = "".join(
+            f'<testcase name="{name(cid)}"><failure type="AssertionError" message="assert 0 == 3"/></testcase>' for cid in ("R1-1", "R1-2")
+        )
+        groups = [{"file": TEST_FILE, "junit": "1.xml", "command": "run R1", "requirements": ["R1"]}]
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "1.xml").write_text(f'<?xml version="1.0"?><testsuite>{rows}</testsuite>', encoding="utf-8")
+            verdict = acceptance.judge_wave_cases(
+                Path(tmp), run, groups, ["R1-1", "R1-2"], {"R1-1": "PBI-3", "R1-2": "PBI-3"}, ["PBI-5"]
+            )
+        self.assertEqual((["R1-1"], {}), (verdict["red_again"], verdict["by_pbi"]))
+
+        # A pass of the new test, after the re-plan, is a baseline again.
+        run["wave_cases"].append(wave_entry("CHK-2", ["R1-1", "R1-2"]))
+        self.assertEqual({"R1-1", "R1-2"}, acceptance.passed_cases(run))
 
 
 if __name__ == "__main__":

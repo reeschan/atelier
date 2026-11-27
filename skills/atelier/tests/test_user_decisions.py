@@ -24,6 +24,10 @@ def review_and_triage(tmp: Path, findings: list[dict], triage: list[dict] | None
     act = reach_reviewing(tmp)
     write_result_for(act, {"schema": "atelier.findings/1", "findings": findings})
     _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
+    # E2E runs after the final review and passes; then the triage, or the fix approval without one
+    assert act["action"] == "check", act
+    write_result_for(act, {"exit_code": 0})
+    _, act = run_cli("done", "--root", str(tmp), "--launch-id", act["launch_id"])
     if triage is not None:
         assert act["role"] == "planner", act
         write_result_for(act, {"schema": "atelier.triage/1", "items": triage})
@@ -63,8 +67,10 @@ class FixApprovalIncludesUserDecisionsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             act = review_and_triage(tmp, [], None)
-            self.assertEqual(act["action"], "check")
-            self.assertEqual(state.load_state(tmp)["state"], "running_e2e")
+            self.assertEqual(act["action"], "done")
+            run = state.load_state(tmp)
+            self.assertEqual(run["state"], "done")
+            self.assertIn({"from": "awaiting_fix_approval", "event": "nothing_to_fix", "to": "reporting"}, run["history"])
 
 
 class ApprovedEditTests(unittest.TestCase):

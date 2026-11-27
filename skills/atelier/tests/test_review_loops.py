@@ -136,13 +136,17 @@ class CheckCommandTests(unittest.TestCase):
             self.assertEqual(["npm test -- a", "npm test -- b", "npm run type-check"], act["commands"])
             code, act = done(tmp, act, {"exit_code": 0})
             code, act = done(tmp, act, {"schema": "atelier.findings/1", "findings": [make_finding("F-1", files=["b.py"])]})
+            # The plan's E2E runs right after the final review
+            self.assertEqual(("check", ["npm run e2e"]), (act["action"], act["commands"]))
+            code, act = done(tmp, act, {"exit_code": 0})
             code, act = done(tmp, act, {"schema": "atelier.triage/1", "items": [{"id": "F-1", "decision": "fix", "reason": "bug"}]})
             act = approve(tmp)
             self.assertIn('"npm test -- b"', Path(act["prompt"]).read_text(encoding="utf-8"))
             code, act = done(tmp, act, {"status": "ok"})
-            self.assertEqual(["npm test -- b", "npm run type-check", "npm test -- a"], act["commands"])
+            # The final check: the fixed file's PBI's checks and the plan's checks, then the plan's E2E
+            self.assertEqual(["npm test -- b", "npm run type-check", "npm test -- a", "npm run e2e"], act["commands"])
             code, act = done(tmp, act, {"exit_code": 0})
-            self.assertEqual(["npm run e2e"], act["commands"])
+            self.assertEqual("done", act["action"], act)
 
     def test_empty_e2e_is_skipped_and_reported(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -154,6 +158,27 @@ class CheckCommandTests(unittest.TestCase):
             code, act = done(tmp, act, {"status": "ok"})
             code, act = done(tmp, act, {"exit_code": 0})
             code, act = done(tmp, act, {"schema": "atelier.findings/1", "findings": []})
+            self.assertEqual("done", act["action"], act)
+            self.assertIn("- E2E: E2E のコマンドが無いため流していない", Path(act["report"]).read_text(encoding="utf-8"))
+            moves = [(h["from"], h["event"], h["to"]) for h in run_state(tmp)["history"]]
+            self.assertIn(("reviewing", "review_returned", "running_e2e"), moves)
+            self.assertIn(("running_e2e", "e2e_done", "triaging"), moves)
+
+    def test_empty_e2e_goes_on_to_the_triage(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            plan_obj = make_valid_plan()
+            plan_obj["e2e"] = []
+            drive_to_plan_approval(tmp, VALID_FACTS, plan_obj)
+            act = approve(tmp)
+            code, act = done(tmp, act, {"status": "ok"})
+            code, act = done(tmp, act, {"exit_code": 0})
+            code, act = done(tmp, act, {"schema": "atelier.findings/1", "findings": [make_finding("F-1", files=["a.py"])]})
+            self.assertEqual(("launch", "planner"), (act["action"], act["role"]), act)
+            self.assertEqual("triaging", run_state(tmp)["state"])
+            self.assertTrue(run_state(tmp)["e2e_skipped"])
+            code, act = done(tmp, act, {"schema": "atelier.triage/1", "items": [{"id": "F-1", "decision": "skip", "reason": "later"}]})
+            code, act = run_cli("answer", "--root", str(tmp), "--choice", "nothing_to_fix")
             self.assertEqual("done", act["action"], act)
             self.assertIn("E2E のコマンドが無い", Path(act["report"]).read_text(encoding="utf-8"))
 
@@ -179,6 +204,8 @@ class ReviewSkillTests(unittest.TestCase):
             good = {"schema": "atelier.findings/1", "findings": [{**make_finding("F-1", kind="rule"), "rule": "docs/rules.md:2"}]}
             code, act = done(tmp, act, good)
             self.assertEqual(0, code, act)
+            self.assertEqual("check", act["action"])  # E2E, then the triage
+            code, act = done(tmp, act, {"exit_code": 0})
             self.assertEqual("planner", act["role"])
             records = [json.loads(line) for line in (tmp / "docs" / "pbi" / "record.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertTrue(any(r.get("runner") == "caller" and r.get("model") == "skill:repo-review" for r in records))
@@ -212,6 +239,7 @@ class SkippedFindingTests(unittest.TestCase):
             ]
             code, act = done(tmp, act, {"schema": "atelier.findings/1", "findings": findings})
             self.assertEqual(["F-1", "F-4"], [f["id"] for f in run_state(tmp)["findings"]])
+            code, act = done(tmp, act, {"exit_code": 0})  # E2E
             code, act = done(tmp, act, {"schema": "atelier.triage/1", "items": [
                 {"id": "F-1", "decision": "fix", "reason": "bug"},
                 {"id": "F-4", "decision": "skip", "reason": "out of scope"},
@@ -315,7 +343,7 @@ class DataPreparationTests(unittest.TestCase):
         run = {
             "state": "building",
             "approvals": {"spec": True, "plan": True, "fix_list": False},
-            "counters": {"auto_fix_count": 0, "review_count": 0, "e2e_failures": 0, "e2e_limit": 2, "e2e_continuing": False},
+            "counters": {"auto_fix_count": 0, "review_count": 0},
             "pbis": [{"id": "PBI-1", "status": "pending", "data_needs": [{"dest": "x"}]}],
             "data_ready": False,
         }

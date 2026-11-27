@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Any
 
-from . import SCHEMA_RUN
+from . import SCHEMA_RUN, guards
 
 
 class StateError(Exception):
@@ -46,7 +47,6 @@ def new_run_state(
 ) -> dict[str, Any]:
     limits = copy.deepcopy(active_template["limits"]) if active_template else {
         "auto_fix": 1,
-        "e2e_rounds": 2,
         "budget_tokens": None,
         "budget_usd": None,
     }
@@ -69,12 +69,11 @@ def new_run_state(
         "counters": {
             "auto_fix_count": 0,
             "review_count": 0,
-            "e2e_failures": 0,
-            "e2e_limit": limits.get("e2e_rounds", 2),
-            "e2e_continuing": False,
             "round": 0,
             "launch_seq": 0,
             "answer_seq": 0,
+            "plan_returns": 0,
+            "fix_stages": 0,
         },
         "approvals": {
             "spec": False,
@@ -101,11 +100,13 @@ def new_run_state(
         "findings_dropped": [],
         "triage_skipped": [],
         "e2e_skipped": False,
+        "e2e": None,
         "acceptance_first": None,
         "acceptance_reason": None,
         "acceptance_commands": [],
         "red": {},
         "unresolved": [],
+        "plan_returns": [],
         "lock": None,
         "planner_mode": "plan",
         "plan_revision_request": "",
@@ -116,6 +117,8 @@ def new_run_state(
         "triage_ask_items": [],
         "fix_groups": [],
         "fix_groups_done": [],
+        "final_check": None,
+        "leftovers": [],
         "batches": [],
         "launch_reads": {},
         "pbi_launches": {},
@@ -126,7 +129,6 @@ def new_run_state(
         "outside_edits": [],
         "last_check_failure": "",
         "last_failed_rules": [],
-        "last_e2e_failure": "",
         "last_fix_launch_ids": [],
         "last_fix_model": "",
         "pending_action": None,
@@ -152,7 +154,113 @@ def load_state(root: Path) -> dict[str, Any]:
         raise StateError(f"failed to read {path}: {exc}") from exc
     if not isinstance(data, dict) or data.get("schema") != SCHEMA_RUN:
         raise StateError(f"invalid run state schema in {path}")
+    resume_removed_state(root, data)
     return data
+
+
+# A state an earlier version saved that the flow no longer has: the question whether to build again a fix PBI that
+# failed past its tries. A run loaded in it goes on as the flow now goes with such a fix PBI (resume_removed_state).
+REMOVED_REBUILD_STATE = "asking_rebuild"
+# Another such state: the question, once E2E had failed more times than its limit, whether to go back to the fix
+# stage once more. A run loaded in it goes on as the flow now goes after a failed E2E (resume_removed_state).
+REMOVED_E2E_LIMIT_STATE = "asking_e2e_limit"
+
+
+def resume_removed_state(root: Path, run: dict[str, Any]) -> None:
+    """Move on a run saved in a state the flow no longer has (REMOVED_REBUILD_STATE, REMOVED_E2E_LIMIT_STATE)."""
+    _resume_rebuild_question(run)
+    _resume_e2e_limit_question(root, run)
+
+
+def _resume_e2e_limit_question(root: Path, run: dict[str, Any]) -> None:
+    """Move on a run saved in REMOVED_E2E_LIMIT_STATE, without asking, as the flow now does after a failed E2E.
+
+    The failed E2E (the output the earlier version kept) goes on the retrospective list as e2e_failure items, and the
+    run goes to the stage after E2E (flow.AFTER_E2E, the triage), never back to the fix stage. A run with no list yet
+    gets one with the E2E failure alone, since the review's findings were sorted before that E2E ran. A run in a
+    cross-cutting question raised there goes back the same way.
+    """
+    in_state = run.get("state") == REMOVED_E2E_LIMIT_STATE
+    if not in_state and run.get("return_state") != REMOVED_E2E_LIMIT_STATE:
+        return
+    from . import flow, retro  # retro imports this module, and flow imports acceptance, which does
+
+    e2e = run.get("e2e")
+    if not isinstance(e2e, dict) or e2e.get("result") != "failed":
+        run["e2e"] = {
+            "result": "failed",
+            "commands": list(run.get("plan_e2e") or []),
+            "exit_code": None,
+            "failed": [],
+            "output": output_tail(str(run.get("last_e2e_failure") or "")),
+        }
+    try:
+        retro.load(run)
+    except StateError:
+        retro.write(root, run, retro.e2e_failure_items(run), [])
+    else:
+        retro.add_e2e_failure(root, run)
+    if not in_state:
+        run["return_state"] = flow.AFTER_E2E
+        return
+    run["history"].append({"from": REMOVED_E2E_LIMIT_STATE, "event": "e2e_limit_question_removed", "to": flow.AFTER_E2E})
+    run["state"] = flow.AFTER_E2E
+    run["subphase"] = None
+    run["pending_action"] = None
+    run["pending_snapshot"] = None
+
+
+def _resume_rebuild_question(run: dict[str, Any]) -> None:
+    """Move on a run saved in REMOVED_REBUILD_STATE, without asking, as the flow now does after the same check.
+
+    The PBIs the question was about (the failed ones, else the built ones) are held as unresolved with their
+    carry-overs and every PBI that depends on them, and go on the run's unresolved list; a failed PBI with no
+    carry-over gets one first. The saved question is dropped, and the run goes back to building, or with nothing
+    left to build to the final review. A run in a cross-cutting question raised there goes back the same way.
+    """
+    in_state = run.get("state") == REMOVED_REBUILD_STATE
+    if not in_state and run.get("return_state") != REMOVED_REBUILD_STATE:
+        return
+    from . import acceptance  # acceptance imports this module
+
+    pbis = run.get("pbis", [])
+    asked = [p for p in pbis if p.get("status") == "failed"] or [p for p in pbis if p.get("status") == "built"]
+    carry_overs: list[dict[str, Any]] = []
+    loose: list[dict[str, Any]] = []
+    for pbi in asked:
+        co = carry_over_of(run, pbi.get("carry_over")) if pbi.get("kind") == "fix" else None
+        if co is None:
+            loose.append(pbi)
+        elif co not in carry_overs:
+            carry_overs.append(co)
+    output = run.get("last_check_failure") or ""
+    if loose:
+        carry_overs.append(record_carry_over(run, loose, [], output))
+    for co in carry_overs:
+        held = hold_unresolved(run, co)
+        acceptance.add_unresolved(
+            run,
+            acceptance.CARRY_OVER_UNRESOLVED,
+            f"前の版の、作り直すかの問い（{REMOVED_REBUILD_STATE}）で止まっていた run なので、問わずに未解決として保留した",
+            carry_over=co["id"],
+            fix_pbi=co.get("fix_pbi"),
+            pbis=list(co["pbis"]),
+            commands=list(co["commands"]),
+            output=output_tail(co.get("output") or output),
+            held_pbis=held,
+        )
+    if any_pending_pbis(run):
+        target = "building"
+    else:
+        target = "reviewing" if not (run.get("counters") or {}).get("review_count") else "reporting"
+    if not in_state:
+        run["return_state"] = target
+        return
+    run["history"].append({"from": REMOVED_REBUILD_STATE, "event": "rebuild_question_removed", "to": target})
+    run["state"] = target
+    run["subphase"] = None
+    run["pending_action"] = None
+    run["pending_snapshot"] = None
 
 
 def save_state(root: Path, run: dict[str, Any]) -> None:
@@ -262,11 +370,155 @@ STATUS_LABELS = {
 }
 
 
-def rebuild_hold_targets(run: dict[str, Any]) -> list[dict[str, Any]]:
-    """PBIs that the rebuild question's hold applies to: the failed ones, else the built ones."""
-    pbis = run.get("pbis", [])
-    failed = [p for p in pbis if p.get("status") == "failed"]
-    return failed or [p for p in pbis if p.get("status") == "built"]
+# Why a PBI is held. A carry-over whose fix PBI failed past its tries holds its PBIs as unresolved; a worker's stop
+# holds its PBI and the PBIs that depend on it until the user answers the plan-return question.
+UNRESOLVED_HOLD = "unresolved"
+STOP_HOLD = "stop"
+HELD_REASON_LABELS = {
+    UNRESOLVED_HOLD: "未解決による保留",
+    STOP_HOLD: "作業者の stop で止めた（途中の戻りの問いの答えを待つ）",
+    "sensitive_dependency": "sensitive で外した PBI に依る",
+    "stale_dependency": "計画の変更で前提が変わった",
+}
+# How many lines of a failed check's output an unresolved carry-over keeps.
+OUTPUT_TAIL_LINES = 20
+
+
+def output_tail(text: str, lines: int = OUTPUT_TAIL_LINES) -> str:
+    """The last lines of a check's output."""
+    return "\n".join(str(text or "").strip().splitlines()[-lines:])
+
+
+_IDENTIFIER = re.compile(r"[A-Za-z_]\w*\Z")
+
+
+def test_file_names(path: str) -> list[str]:
+    """The names under which a test file shows in a check's output, longest first.
+
+    Each trailing part of its path (tests/test_x.py, test_x.py), and for a Python file its unittest module names
+    (skills.atelier.tests.test_x, tests.test_x); a bare module name only for a file at the root, since a test
+    method can have the same name.
+    """
+    parts = [p for p in str(path or "").strip().replace("\\", "/").removeprefix("./").split("/") if p]
+    if not parts:
+        return []
+    names = ["/".join(parts[i:]) for i in range(len(parts))]
+    if parts[-1].endswith(".py"):
+        dotted = [*parts[:-1], parts[-1][: -len(".py")]]
+        if all(_IDENTIFIER.match(p) for p in dotted):
+            names += [".".join(dotted[i:]) for i in range(len(dotted)) if len(dotted) - i >= 2 or len(dotted) == 1]
+    return names
+
+
+# A character of a path in a check's output, once native separators are read as POSIX ones (for example
+# C:\work\tests\test_x.py is read as C:/work/tests/test_x.py).
+_PATH_CHAR = re.compile(r"[\w.\-/]")
+# What may not follow a file name in the output for the name to be whole (for example test_x.pyc or test_x.py.bak).
+_LONGER_NAME = re.compile(r"[\w\-]|\.\w")
+
+
+def _path_parts(path: str) -> list[str]:
+    return [p for p in str(path or "").strip().replace("\\", "/").split("/") if p and p != "."]
+
+
+def _paths_ending_at(body: str, start: int, name: str) -> list[str]:
+    """The paths in the output that end with the file name found at start, longest first.
+
+    The path characters and spaces before the name give the longest one; each one that starts after one of those
+    spaces is another, since a folder name may hold a space (for example "FAILED tests/user flow/test_x.py" gives
+    "FAILED tests/user flow/test_x.py", "tests/user flow/test_x.py" and "flow/test_x.py").
+    """
+    begin = start
+    while begin > 0 and (body[begin - 1] == " " or _PATH_CHAR.match(body[begin - 1])):
+        begin -= 1
+    run = body[begin:start]
+    return [run[i:] + name for i in (0, *(k + 1 for k, ch in enumerate(run) if ch == " "))]
+
+
+def _path_match(found: str, target: list[str]) -> str | None:
+    """How a path in the output stands to the target's path: "names" (it ends with the target), "shorter" (the
+    target ends with it), "elsewhere" (a file of the same name in another folder) or None (not that file name, or a
+    path that does not tell).
+
+    A file at the root is named only by a path with no folder, and as a shorter path is, since a file of the same name
+    in a folder ends with it too. A relative path with a folder is another file; an absolute one does not tell, since
+    the output does not show where the root is.
+    """
+    parts = _path_parts(found)
+    if not parts or parts[-1] != target[-1]:
+        return None
+    if len(target) == 1:
+        if len(parts) == 1:
+            return "shorter"
+        return None if found.startswith("/") else "elsewhere"
+    if parts[-len(target):] == target:
+        return "names"
+    if target[-len(parts):] == parts:
+        return "shorter"
+    return "elsewhere"
+
+
+def names_test_file(text: str, path: str) -> bool:
+    """True when the output names the test file: one of its names, not as part of a longer name.
+
+    A path in the output names the file when one of the two paths ends with the other (for example
+    C:/work/tests/test_x.py, tests/test_x.py or test_x.py for tests/test_x.py), folder names with spaces included.
+    A path to a file of the same name in another folder (for example tests/unit/test_x.py for
+    tests/integration/test_x.py, or for test_x.py at the root) does not; once the output gives such a path, a shorter
+    path that both files end with (test_x.py) is taken to name that other file. A unittest module name names the
+    file when it is one of the file's module names, whole and not inside a path.
+    """
+    target = _path_parts(path)
+    if not target:
+        return False
+    body = str(text or "").replace("\\", "/")
+    name = target[-1]
+    shorter = elsewhere = False
+    for found in re.finditer(re.escape(name), body):
+        start, end = found.span()
+        if start and body[start - 1] != "/" and _PATH_CHAR.match(body[start - 1]):
+            continue
+        if _LONGER_NAME.match(body, end):
+            continue
+        matches = {_path_match(p, target) for p in _paths_ending_at(body, start, name)}
+        if "names" in matches:
+            return True
+        if "shorter" in matches:
+            shorter = True
+        elif "elsewhere" in matches:
+            elsewhere = True
+    if shorter and not elsewhere:
+        return True
+    paths = {"/".join(target[i:]) for i in range(len(target))}
+    for module in test_file_names(path):
+        if module not in paths and re.search(r"(?<![\w./])" + re.escape(module) + r"(?!\w|\.py)", body):
+            return True
+    return False
+
+
+def named_test_owners(text: str, pbis: list[dict[str, Any]]) -> list[str]:
+    """The PBIs with a test file in their targets that the output names (step 2 of the failure owners)."""
+    return [
+        p["id"]
+        for p in pbis
+        if any(guards.is_test_file(t) and names_test_file(text, t) for t in p.get("targets") or [] if isinstance(t, str))
+    ]
+
+
+def failure_owners(pbis: list[dict[str, Any]], command: str, output: str) -> tuple[list[str], str | None]:
+    """Whose failure a failed command of a wave check is, among the PBIs of the wave, and by which step.
+
+    (1) the PBIs that have the command in their own checks, else (2) the PBIs with a test file in their targets that
+    the command's output names (a path or a unittest module name), else (3) none: the failure is left unresolved.
+    Fix PBIs go by the same steps. Returns (PBI ids, "checks" | "targets" | None).
+    """
+    own = [p["id"] for p in pbis if command in (p.get("checks") or [])]
+    if own:
+        return own, "checks"
+    named = named_test_owners(output, pbis)
+    if named:
+        return named, "targets"
+    return [], None
 
 
 def dependents_of(run: dict[str, Any], ids: list[str]) -> list[str]:
@@ -288,50 +540,26 @@ def dependents_of(run: dict[str, Any], ids: list[str]) -> list[str]:
     return sorted(found, key=order.index)
 
 
-def hold_after_rebuild(run: dict[str, Any], *, continue_dependents: bool) -> list[str]:
-    """Hold the PBIs the rebuild question was about; optionally let the PBIs that depend on them go on.
+def hold_unresolved(run: dict[str, Any], co: dict[str, Any]) -> list[str]:
+    """Hold a carry-over whose fix PBI failed past its tries, without asking the user.
 
-    A held PBI keeps its changes in the working tree. With continue_dependents, each pending PBI that
-    depends on a held one waives that dependency, and the held PBI is checked again with it (recheck_held_pbis).
+    The fix PBI, the PBIs the carry-over holds and every unfinished PBI that depends on them, directly or
+    through another PBI, are held as unresolved, and so is the carry-over. A held PBI keeps its changes in the
+    working tree; a PBI held before for another reason keeps that reason. The PBIs that do not depend on them
+    go on. Returns the held PBI ids in plan order.
     """
-    held = [p["id"] for p in rebuild_hold_targets(run)]
-    for pbi in run.get("pbis", []):
-        if pbi["id"] in held:
+    sources = [pid for pid in [*co.get("pbis", []), co.get("fix_pbi")] if pid and get_pbi(run, pid) is not None]
+    order = [p["id"] for p in run.get("pbis", [])]
+    held = sorted(set(sources) | set(dependents_of(run, sources)), key=order.index)
+    for pid in held:
+        pbi = get_pbi(run, pid)
+        if pbi is not None and pbi.get("status") != "held":
             pbi["status"] = "held"
-            pbi["held_reason"] = "check_failed"
-    if continue_dependents:
-        for pbi in run.get("pbis", []):
-            if pbi.get("status", "pending") != "pending":
-                continue
-            waive = [dep for dep in pbi.get("depends_on") or [] if dep in held]
-            if waive:
-                pbi["waived_deps"] = sorted(set(pbi.get("waived_deps") or []) | set(waive))
+            pbi["held_reason"] = UNRESOLVED_HOLD
+            pbi["held_carry_over"] = co["id"]
+    co["status"] = "unresolved"
+    co["held_pbis"] = list(held)
     return held
-
-
-def recheck_held_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
-    """PBIs held after a failed check that a PBI now being checked went on without.
-
-    Their checks run again with that PBI's, so a PBI that only failed for want of its dependent
-    (for example an export not used yet) passes once the dependent is built. A held PBI picked up
-    this way brings in the held PBIs it went on without in turn.
-    """
-    pbis = run.get("pbis", [])
-    sources = [p for p in pbis if p.get("status") in ("built", "failed")]
-    picked: list[dict[str, Any]] = []
-    while sources:
-        waived = {dep for p in sources for dep in p.get("waived_deps") or []}
-        sources = [
-            p
-            for p in pbis
-            if p["id"] in waived
-            and p.get("status") == "held"
-            and p.get("held_reason") == "check_failed"
-            and p not in picked
-        ]
-        picked += sources
-    order = [p["id"] for p in pbis]
-    return sorted(picked, key=lambda p: order.index(p["id"]))
 
 
 def unfinished_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
@@ -517,7 +745,8 @@ def record_usage(
     )
 
 
-# A carry-over gets a fix PBI at its PBI's level, then one at the next level; after that the user is asked.
+# A carry-over gets a fix PBI at its PBI's level, then one at the next level; after that it is left unresolved
+# and held (hold_unresolved), without asking the user.
 FIX_PBI_TRIES = 2
 
 
@@ -655,6 +884,53 @@ def carry_over_fix_items(run: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
+
+# What the final check leaves over: a failed command of the whole check, a failed E2E command, or an item a fix
+# worker returned in `open` (could not fix); and what the fix stage left over: an unlock whose fixed lines could not be
+# confirmed (its file went back to the lock commit's content). Nothing left over is fixed again in the same run.
+LEFTOVER_KINDS = ("check_failure", "e2e_failure", "fix_open", "unlock_failed")
+
+
+def add_leftover(
+    run: dict[str, Any],
+    kind: str,
+    what: str,
+    *,
+    command: str | None = None,
+    exit_code: Any = None,
+    output: str = "",
+    items: list[str] | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Record one leftover on the run: its kind, the command, the end of its output and the retrospective items it
+    comes from (the ids of the fix list items)."""
+    if kind not in LEFTOVER_KINDS:
+        raise StateError(f"unknown leftover kind: {kind!r}")
+    leftovers = run.setdefault("leftovers", [])
+    entry = {
+        "id": f"LO-{len(leftovers) + 1}",
+        "kind": kind,
+        "what": what,
+        "command": command,
+        "exit_code": exit_code,
+        "output": output_tail(output),
+        "items": list(items or []),
+        **extra,
+    }
+    leftovers.append(entry)
+    return entry
+
+
+def open_item_text(item: Any) -> str:
+    """One item of a worker's `open` list as text (a string, or an object with what/why/command)."""
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        parts = [str(item.get(k)).strip() for k in ("what", "command", "why", "reason") if item.get(k)]
+        return " — ".join(p for p in parts if p) or json.dumps(item, ensure_ascii=False)
+    return json.dumps(item, ensure_ascii=False)
+
+
 OBJECTION_STATES = ("green", "red")
 STOP_EXCEPTIONS = (1, 2, 3, 4)
 STOP_EXCEPTION_LABELS = {
@@ -702,8 +978,102 @@ def worker_result_errors(result: dict[str, Any]) -> list[str]:
 
 
 def keep_worker_notes(pbi: dict[str, Any], result: dict[str, Any]) -> None:
-    """Keep a worker's objections and stop on its PBI, for the report. Nothing here asks a question."""
+    """Keep a worker's objections and stop on its PBI, for the report and the plan-return question.
+
+    An objection asks nothing. A stop of a PBI being built is held (hold_for_stop) and asked about once the wave has
+    nothing left to launch.
+    """
     if isinstance(result.get("objections"), list) and result["objections"]:
         pbi["objections"] = [dict(o) for o in result["objections"] if isinstance(o, dict)]
     if isinstance(result.get("stop"), dict):
         pbi["stop"] = dict(result["stop"])
+
+
+# The answers to the plan-return question.
+PLAN_RETURN_DECISIONS = {"replan": "計画を直す", "continue": "異議として続ける"}
+
+
+def hold_for_stop(run: dict[str, Any], pbi_id: str) -> list[str]:
+    """Hold a PBI whose worker returned a stop, and every unfinished PBI that depends on it, directly or through
+    another PBI, until the user answers the plan-return question. The other PBIs of the wave go on.
+
+    Each held PBI keeps the status it had (held_from), so that going on puts it back: the stopped PBI to the wave's
+    check as its worker built it, the others to wait for it. A PBI held, carried or finished before keeps what it was.
+    Returns the held PBI ids in plan order.
+    """
+    order = [p["id"] for p in run.get("pbis", [])]
+    held: list[str] = []
+    for pid in sorted({pbi_id, *dependents_of(run, [pbi_id])}, key=order.index):
+        pbi = get_pbi(run, pid)
+        if pbi is None or pbi.get("status") in ("held", "carried", *FINISHED_STATUSES):
+            continue
+        pbi["held_from"] = pbi.get("status", "pending")
+        pbi["status"] = "held"
+        pbi["held_reason"] = STOP_HOLD
+        pbi["held_stop"] = pbi_id
+        held.append(pid)
+    return held
+
+
+def stop_held_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """The PBIs a stop holds until the user answers the plan-return question, in plan order."""
+    return [p for p in run.get("pbis", []) if p.get("status") == "held" and p.get("held_reason") == STOP_HOLD]
+
+
+def stopped_pbis(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """The PBIs whose worker returned a stop that the user has not answered yet."""
+    return [p for p in stop_held_pbis(run) if p.get("held_stop") == p["id"]]
+
+
+def stop_entry(pbi: dict[str, Any]) -> dict[str, Any]:
+    """A stopped PBI's stop: the PBI, its title, the exception's number and label, and the reason."""
+    stop = pbi.get("stop") if isinstance(pbi.get("stop"), dict) else {}
+    exc = stop.get("exception")
+    return {
+        "pbi": pbi["id"],
+        "title": pbi.get("title") or pbi["id"],
+        "exception": exc,
+        "label": STOP_EXCEPTION_LABELS.get(exc, "") if type(exc) is int else "",
+        "reason": str(stop.get("reason") or ""),
+    }
+
+
+def record_plan_return(run: dict[str, Any], decision: str, note: str = "") -> dict[str, Any]:
+    """Keep the user's answer to the plan-return question as a plan return and count it.
+
+    The record (kind plan_return) holds the decision, each unanswered stop with its exception and reason, the
+    stopped workers' objections, the PBIs that were held and the user's note; it goes on the retrospective list.
+    Every answer adds one to counters["plan_returns"].
+    """
+    items = run.setdefault("plan_returns", [])
+    stopped = stopped_pbis(run)
+    record = {
+        "id": f"PR-{len(items) + 1}",
+        "kind": "plan_return",
+        "decision": decision,
+        "stops": [stop_entry(p) for p in stopped],
+        "objections": [{"pbi": p["id"], **o} for p in stopped for o in p.get("objections") or [] if isinstance(o, dict)],
+        "held_pbis": [p["id"] for p in stop_held_pbis(run)],
+        "note": note or "",
+    }
+    items.append(record)
+    counters = run.setdefault("counters", {})
+    counters["plan_returns"] = int(counters.get("plan_returns") or 0) + 1
+    return record
+
+
+def release_stop_hold(run: dict[str, Any], plan_return_id: str) -> list[str]:
+    """Put back the PBIs a stop held, when the user goes on with it as an objection.
+
+    The stopped PBI goes to the wave's check as its worker built it, marked with the plan return; the PBIs that depend
+    on it wait for it again. Returns their ids in plan order.
+    """
+    released: list[str] = []
+    for pbi in stop_held_pbis(run):
+        if pbi.get("held_stop") == pbi["id"]:
+            pbi["plan_return"] = plan_return_id
+        pbi["status"] = pbi.pop("held_from", None) or "pending"
+        pbi.pop("held_reason", None)
+        pbi.pop("held_stop", None)
+        released.append(pbi["id"])
+    return released

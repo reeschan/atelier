@@ -47,7 +47,7 @@ class WaveFailedPbisTests(unittest.TestCase):
         judged = {"exit_code": 1, "failed_pbis": ["PBI-1"], "case_failed_pbis": ["PBI-2"], "commands": []}
         with mock.patch.object(conductor.actions, "judge_wave", return_value=judged), \
                 mock.patch.object(conductor, "_append_check_records_for_wave"), \
-                mock.patch.object(conductor, "_carry_failed_check", return_value="check_failed"), \
+                mock.patch.object(conductor, "_carry_failed_check", return_value="carried_next"), \
                 mock.patch.object(conductor.flow, "apply_event"):
             conductor._handle_check_done(Path("."), run, {"exit_code": 1, "failed_pbis": ["PBI-1"]}, {"wave": {}})
         self.assertEqual({"PBI-1": "failed", "PBI-2": "failed"}, {p["id"]: p["status"] for p in run["pbis"]})
@@ -96,10 +96,10 @@ class FixTicketLockTests(unittest.TestCase):
                 "acceptance_first": True,
                 "lock": {"files": ["tests/acceptance/test_r1.py"]},
             }
-            for groups in (base["fix_groups"], []):
-                with self.subTest(groups=bool(groups)):
-                    run = {**copy.deepcopy(base), "fix_groups": groups}
-                    self.assertEqual(["tests/acceptance/test_r1.py"], self.ticket(run, root)["locked_files"])
+            self.assertEqual(["tests/acceptance/test_r1.py"], self.ticket(copy.deepcopy(base), root)["locked_files"])
+            # E2E no longer sends the run back to the fix stage, so a fix stage with no group (the old FIX-E2E ticket) is refused.
+            with self.assertRaises(state.StateError):
+                self.ticket({**copy.deepcopy(base), "fix_groups": []}, root)
             unlocked = {**copy.deepcopy(base), "lock": None}
             self.assertNotIn("locked_files", self.ticket(unlocked, root))
 

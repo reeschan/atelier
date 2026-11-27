@@ -70,7 +70,7 @@ conductor: "Conductor (conductor.py, no model)" {
   record: "Run record\ntokens, rules read and fired" {
     class: svc
   }
-  accept: "Acceptance and keys (acceptance_first)\nRed check (JUnit XML), step-definition check,\nlocks, signatures, check after each wave" {
+  accept: "Acceptance and keys (acceptance_first)\nRed check (JUnit XML), step-definition check,\nlocks, signatures, check after each wave,\nE2E PBI files join the lock,\nre-lock after an unlock fix" {
     class: svc
   }
 }
@@ -124,8 +124,19 @@ ommcache: ".omm-cache (outside the repository)" {
   shape: page
 }
 
-lockcopy: "<git common dir>/atelier/<run>/\nlock list copy, lock commit id\n(outside the work tree)" {
-  shape: page
+gitdir: "<git common dir>/atelier/ (outside the work tree)" {
+  class: zone
+  icon: https://icons.terrastruct.com/essentials%2F245-folder.svg
+
+  lockcopy: "<run>/ lock list copy\nlock commit id" {
+    shape: page
+  }
+  retro: "<run>/retro.json\nretrospective list" {
+    shape: page
+  }
+  backlog: "backlog.jsonl\nleftovers, shared by every worktree" {
+    shape: page
+  }
 }
 
 repo: Target repository {
@@ -166,5 +177,7 @@ cc.caller -> tools.omm: "full scan when asked" {style.stroke-dash: 4}
 tools.omm <-> ommcache: "nearest cache, delta"
 conductor.flow -> conductor.accept
 conductor.accept -> repo.code: "run acceptance cases, lock commit"
-conductor.accept -> lockcopy: "copy of the lock list"
+conductor.accept -> gitdir.lockcopy: "copy of the lock list"
+conductor.flow -> gitdir.retro: "gather, planner sorts once"
+conductor.flow <-> gitdir.backlog: "leftovers in, open items to the next plan"
 conductor.accept -> home.locks: "sha256"

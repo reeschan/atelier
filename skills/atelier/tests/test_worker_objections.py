@@ -2,7 +2,8 @@
 
 A build or e2e PBI's ticket lists the locked files, the case ids assigned to it and the unit test files it may write;
 a fix PBI's ticket lists the locked files. A run without acceptance-first has none of these. A result's objections
-and stop are checked for their shape, kept on the PBI and shown in the report; a stop asks no question.
+and stop are checked for their shape, kept on the PBI and shown in the report; an objection asks no question, and a
+stop holds its PBI and asks the user one question (tests/test_plan_return.py follows it further).
 """
 
 from __future__ import annotations
@@ -78,19 +79,29 @@ class LockedTicketTests(unittest.TestCase):
         self.assertEqual({}, actions.lock_ticket_fields(run, {"id": "PBI-2", "kind": "stub"}))
         self.assertEqual({}, actions.lock_ticket_fields({**run, "acceptance_first": False}, fix))
 
-    def test_a_stop_asks_no_question_and_both_notes_reach_the_report(self) -> None:
+    def test_a_stop_asks_one_question_and_both_notes_reach_the_report(self) -> None:
         launch = self.launch()
         (self.root / "app.py").write_bytes(b"def add(a, b):\n    return a + b\n")
-        code, nxt = message(self.root, launch, {"status": "ok", "objections": [OBJECTION], "stop": STOP})
-        self.assertEqual(0, code, nxt)
+        code, ask = message(self.root, launch, {"status": "ok", "objections": [OBJECTION], "stop": STOP})
+        self.assertEqual(0, code, ask)
         run = saved(self.root)
-        self.assertNotEqual("asking_plan_broken", run["state"])
-        self.assertEqual("check", nxt["action"], nxt)
+        # PBI-3 is the only PBI left to build, so the plan-return question comes at once.
+        self.assertEqual(("asking_plan_return", "ask", "plan_return"), (run["state"], ask["action"], ask["kind"]))
+        self.assertEqual(["replan", "continue"], [c["id"] for c in ask["choices"]])
         pbi = state.get_pbi(run, "PBI-3")
+        self.assertEqual(("held", state.STOP_HOLD), (pbi["status"], pbi["held_reason"]))
         self.assertEqual([OBJECTION], pbi["objections"])
         self.assertEqual(STOP, pbi["stop"])
+        code, nxt = run_cli("answer", "--root", str(self.root), "--choice", "continue")
+        self.assertEqual(0, code, nxt)
+        self.assertEqual("check", nxt["action"], nxt)
+        run = saved(self.root)
+        self.assertEqual("built", state.get_pbi(run, "PBI-3")["status"])
         report = actions._write_report(self.root, run).read_text(encoding="utf-8")
-        for text in ("## 作業者の異議", "PBI-3 R1-2", "the sum should round", "built as written", "## 作業者の stop", "例外 2", STOP["reason"]):
+        for text in (
+            "## 作業者の異議", "PBI-3 R1-2", "the sum should round", "built as written", "## 作業者の stop", "例外 2", STOP["reason"],
+            "## 途中の戻り", "PR-1（異議として続ける）",
+        ):
             self.assertIn(text, report)
 
 

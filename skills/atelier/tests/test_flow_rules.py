@@ -33,13 +33,32 @@ VALID_FACTS: dict = {
 }
 
 
+# The variables that pick a repository, a work tree or an index for git. A test run from a git hook inherits them
+# (for example GIT_DIR), and git would then work on that repository instead of the test's own.
+GIT_REPOSITORY_VARIABLES = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_IMPLICIT_WORK_TREE",
+)
+
+
+def git_env() -> dict[str, str]:
+    """The environment for git on a test's own repository: this one without GIT_REPOSITORY_VARIABLES."""
+    return {k: v for k, v in os.environ.items() if k not in GIT_REPOSITORY_VARIABLES}
+
+
 def init_git_repo(root: Path) -> None:
-    subprocess.run(["git", "init", "-q", str(root)], check=True)
-    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
-    subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+    env = git_env()
+    subprocess.run(["git", "init", "-q", str(root)], check=True, env=env)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True, env=env)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True, env=env)
     (root / "app.py").write_text("x = 1\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(root), "add", "app.py"], check=True)
-    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "app.py"], check=True, env=env)
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "init"], check=True, env=env)
 
 
 def write_agents_and_template(
@@ -136,22 +155,52 @@ class TestFlowRulesSeam1(unittest.TestCase):
         with self.assertRaises(flow.InvariantError):
             flow.check_invariants(r4)
 
-        # 5. FixWithoutList
+        # 5. FixWithoutList: only the approved fix list enters fixing (a failed E2E is not a reason)
         r5 = state.new_run_state(Path("."), Path("goal.md"), None)
         r5["state"] = "fixing"
         r5["approvals"]["fix_list"] = False
-        r5["counters"]["e2e_failures"] = 0
-        with self.assertRaises(flow.InvariantError):
+        with self.assertRaisesRegex(flow.InvariantError, "never FixWithoutList: entered fixing without an approved fix list$"):
             flow.check_invariants(r5)
+        r5["approvals"]["fix_list"] = True
+        flow.check_invariants(r5)
 
-        # 6. FixPastLimit
+        # 6. No E2E limit: no question about it, no counters for it, no FixPastLimit, no way from E2E to fixing
+        self.assertNotIn("asking_e2e_limit", flow.STATES)
+        self.assertNotIn("asking_e2e_limit", flow.QUESTION_STATES)
         r6 = state.new_run_state(Path("."), Path("goal.md"), None)
-        r6["state"] = "fixing"
-        r6["counters"]["e2e_failures"] = 3
-        r6["counters"]["e2e_limit"] = 2
-        r6["counters"]["e2e_continuing"] = False
-        with self.assertRaises(flow.InvariantError):
-            flow.check_invariants(r6)
+        for key in ("e2e_failures", "e2e_limit", "e2e_continuing"):
+            self.assertNotIn(key, r6["counters"])
+        self.assertNotIn("e2e_rounds", r6["limits"])
+        import inspect
+        self.assertNotIn("FixPastLimit", inspect.getsource(flow.check_invariants))
+        self.assertNotIn("e2e", inspect.getsource(flow.check_invariants))
+        self.assertEqual([], [t for t in flow.TRANSITIONS if t.source == "running_e2e" and t.target == "fixing"])
+
+        # 7. ReturnWithoutAsking: building and checking go back to planning only through the user's answer
+        def back_to_planning(src: str) -> dict:
+            run = state.new_run_state(Path("."), Path("goal.md"), None)
+            run["state"] = "planning"
+            run["approvals"]["spec"] = True
+            run["history"].append({"from": src, "event": "replan", "to": "planning"})
+            return run
+
+        for src in ("building", "checking"):
+            with self.subTest(source=src), self.assertRaisesRegex(flow.InvariantError, "never ReturnWithoutAsking"):
+                flow.check_invariants(back_to_planning(src))
+        for src in ("asking_plan_return", "asking_plan_broken", "awaiting_plan_approval", "asking_budget"):
+            with self.subTest(source=src):
+                flow.check_invariants(back_to_planning(src))
+        self.assertEqual(
+            {("asking_plan_return", "plan_return_replan"), ("asking_plan_broken", "replan"), ("awaiting_plan_approval", "revise_plan")},
+            {(t.source, t.event) for t in flow.TRANSITIONS if t.target == "planning" and t.source not in ("asking_interview", "awaiting_spec_approval")},
+        )
+        for src in ("building", "checking"):
+            r7 = state.new_run_state(Path("."), Path("goal.md"), None)
+            r7.update(state=src)
+            r7["approvals"].update(spec=True, plan=True)
+            for event in ("replan", "plan_return_replan", "revise_plan"):
+                with self.subTest(source=src, event=event), self.assertRaises(flow.TransitionError):
+                    flow.apply_event(r7, event)
 
     def test_fix_pbi_prompt_level_and_route(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -196,33 +245,32 @@ class TestFlowRulesSeam1(unittest.TestCase):
             self.assertEqual((fix2["pbi"], fix2["model"], fix2["effort"]), ("CO-1-FIX", "sonnet", "high"))
             self.assertIn("LintError: unused", Path(fix2["prompt"]).read_text(encoding="utf-8"))
 
-            # It fails past its tries -> asking_rebuild; PBI-3 waits on it, so both holds are offered
+            # It fails past its tries -> held as unresolved without a question; PBI-3 waits on it, so it is held
+            # too, and with nothing left to build the final review follows
             write_result_for(fix2, {"status": "ok"})
             _, chk3 = run_cli("done", "--root", str(root), "--launch-id", fix2["launch_id"])
             write_result_for(chk3, {"exit_code": 1, "failed_pbis": ["CO-1-FIX"], "output": "still failing"})
-            code, ask = run_cli("done", "--root", str(root), "--launch-id", chk3["launch_id"])
+            code, nxt = run_cli("done", "--root", str(root), "--launch-id", chk3["launch_id"])
             self.assertEqual(code, 0)
-            self.assertEqual(ask["action"], "ask")
-            self.assertEqual(ask["kind"], "rebuild")
-            self.assertEqual([c["id"] for c in ask["choices"]], ["retry", "retry_up", "hold", "hold_stop"])
-
-            # Choose retry_up -> the fix PBI promoted from L3 to L4 (opus, high)
-            code, rebuild = run_cli("answer", "--root", str(root), "--choice", "retry_up")
-            self.assertEqual(code, 0)
-            self.assertEqual(rebuild["action"], "launch")
-            self.assertEqual(rebuild["pbi"], "CO-1-FIX")
-            self.assertEqual(rebuild["model"], "opus")
-            self.assertEqual(rebuild["effort"], "high")
+            self.assertEqual((nxt["action"], nxt["role"]), ("launch", "reviewer"))
+            from atelier import state
+            run = state.load_state(root)
+            self.assertEqual(
+                {p["id"]: (p["status"], p.get("held_reason")) for p in run["pbis"]},
+                {pid: ("held", state.UNRESOLVED_HOLD) for pid in ("PBI-1", "PBI-2", "CO-1-FIX", "PBI-3")},
+            )
+            self.assertEqual("L3", state.get_pbi(run, "CO-1-FIX")["level"])
+            self.assertIn("still failing", run["unresolved"][0]["output"])
 
     def test_template_switch_expired_ask_and_limits(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            agents, base_tmpl = write_agents_and_template(root, limits={"e2e_rounds": 1})
+            agents, base_tmpl = write_agents_and_template(root, limits={"budget_tokens": 1000000})
             alt_tmpl = root / "alt.json"
             alt_data = json.loads(base_tmpl.read_text(encoding="utf-8"))
             alt_data["name"] = "alt"
             alt_data["roles"]["surveyor"] = {"runner": "agent", "model": "sonnet", "effort": "low"}
-            alt_data["limits"]["e2e_rounds"] = 3
+            alt_data["limits"]["budget_tokens"] = 3000000
             write_json(alt_tmpl, alt_data)
 
             switch_file = root / "switch.json"
@@ -255,7 +303,7 @@ class TestFlowRulesSeam1(unittest.TestCase):
             self.assertEqual(out["next"]["action"], "ask")
             self.assertEqual(out["next"]["kind"], "template_switch")
 
-            # Choose drop -> reverts to base template (surveyor=haiku, e2e_limit=1)
+            # Choose drop -> reverts to base template (surveyor=haiku, budget_tokens=1000000)
             code, act = run_cli("answer", "--root", str(root), "--choice", "drop")
             self.assertEqual(code, 0)
             self.assertEqual(act["action"], "launch")
@@ -263,7 +311,7 @@ class TestFlowRulesSeam1(unittest.TestCase):
             self.assertEqual(act["model"], "haiku")
 
             _, st = run_cli("status", "--root", str(root))
-            self.assertEqual(st["counters"]["e2e_limit"], 1)
+            self.assertEqual(st["limits"]["budget_tokens"], 1000000)
 
     def test_template_choose_route_persisted_on_pbi(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -539,11 +587,18 @@ class TestFlowRulesSeam1(unittest.TestCase):
             self.assertNotEqual(by_id["PBI-1"]["status"], "held")
             self.assertNotEqual(by_id["PBI-3"]["status"], "held")  # independent not held
 
-    def test_e2e_limit_from_template_and_no_fix_approval(self) -> None:
+    def test_e2e_rounds_in_the_template_is_read_but_a_failed_e2e_goes_to_the_triage(self) -> None:
+        from atelier import retro, state
+
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
+            # An older template with the E2E limit is still read; the limit changes nothing.
             agents, tmpl = write_agents_and_template(root, limits={"e2e_rounds": 1})
-            pbis = [{"id": "PBI-1", "title": "A", "depends_on": [], "level": "L1", "reason": "small"}]
+            # PBI-1 runs the E2E command, so its failure has PBI-1's files to fix.
+            pbis = [{
+                "id": "PBI-1", "title": "A", "depends_on": [], "level": "L1", "reason": "small",
+                "checks": ["python run_tests.py", "python e2e.py"],
+            }]
             act = reach_building_with(root, pbis, agents_path=agents, template_path=tmpl)
             write_result_for(act, {"status": "ok"})
             _, chk = run_cli("done", "--root", str(root), "--launch-id", act["launch_id"])
@@ -553,36 +608,35 @@ class TestFlowRulesSeam1(unittest.TestCase):
             _, e2e = run_cli("done", "--root", str(root), "--launch-id", rev["launch_id"])
             self.assertEqual(e2e["action"], "check")
 
-            # E2E failure #1 (== limit 1) -> fixing directly without fix_approval
-            write_result_for(e2e, {"exit_code": 1})
-            code, fix_w = run_cli("done", "--root", str(root), "--launch-id", e2e["launch_id"])
-            self.assertEqual(code, 0)
-            self.assertEqual(fix_w["action"], "launch")
-            self.assertEqual(fix_w["role"], "worker")
+            # E2E fails: the triage sorts its failure; no fix worker, no limit question
+            write_result_for(e2e, {"exit_code": 1, "output": "E2E: checkout page timed out"})
+            code, tri = run_cli("done", "--root", str(root), "--launch-id", e2e["launch_id"])
+            self.assertEqual(code, 0, tri)
+            self.assertEqual(("launch", "planner"), (tri["action"], tri["role"]))
+            run = state.load_state(root)
+            self.assertEqual(1, run["limits"]["e2e_rounds"])
+            self.assertNotIn("e2e_limit", run["counters"])
+            [failure] = retro.load_items(run)
+            self.assertEqual(("E2E-1", "e2e_failure"), (failure["id"], failure["kind"]))
+            # The check did not say which command failed: the item names the plan's E2E commands.
+            self.assertEqual("python e2e.py", failure["command"])
+            self.assertEqual("E2E: checkout page timed out", failure["output"])
+            self.assertEqual("E2E: checkout page timed out", failure["why"])
+
+            write_result_for(tri, {"schema": "atelier.triage/1", "items": [{"id": "E2E-1", "decision": "fix", "reason": "a real timeout"}]})
+            code, ask = run_cli("done", "--root", str(root), "--launch-id", tri["launch_id"])
+            self.assertEqual((code, ask["kind"]), (0, "fix_approval"))
+            code, fix_w = run_cli("answer", "--root", str(root), "--choice", "approve")
+            self.assertEqual((code, fix_w["role"]), (0, "worker"))
+            ticket = Path(fix_w["prompt"]).read_text(encoding="utf-8")
+            self.assertIn('"id": "FIX-1"', ticket)
+            self.assertNotIn("FIX-E2E", ticket)
             write_result_for(fix_w, {"status": "ok"})
             _, fix_c = run_cli("done", "--root", str(root), "--launch-id", fix_w["launch_id"])
+            self.assertEqual(fix_c["action"], "check")
             write_result_for(fix_c, {"exit_code": 0})
-            _, e2e2 = run_cli("done", "--root", str(root), "--launch-id", fix_c["launch_id"])
-            self.assertEqual(e2e2["action"], "check")
-
-            # E2E failure #2 (> limit 1) -> asking_e2e_limit
-            write_result_for(e2e2, {"exit_code": 1})
-            code, ask = run_cli("done", "--root", str(root), "--launch-id", e2e2["launch_id"])
-            self.assertEqual(code, 0)
-            self.assertEqual(ask["kind"], "e2e_limit")
-
-            # continue -> 1 round -> failure asks again
-            code, fix_w2 = run_cli("answer", "--root", str(root), "--choice", "continue")
-            self.assertEqual(code, 0)
-            self.assertEqual(fix_w2["action"], "launch")
-            write_result_for(fix_w2, {"status": "ok"})
-            _, fix_c2 = run_cli("done", "--root", str(root), "--launch-id", fix_w2["launch_id"])
-            write_result_for(fix_c2, {"exit_code": 0})
-            _, e2e3 = run_cli("done", "--root", str(root), "--launch-id", fix_c2["launch_id"])
-            write_result_for(e2e3, {"exit_code": 1})
-            code, ask2 = run_cli("done", "--root", str(root), "--launch-id", e2e3["launch_id"])
-            self.assertEqual(code, 0)
-            self.assertEqual(ask2["kind"], "e2e_limit")
+            code, done = run_cli("done", "--root", str(root), "--launch-id", fix_c["launch_id"])
+            self.assertEqual((code, done["action"]), (0, "done"))
 
     def test_template_switch_expired_keep_and_budget_stop(self) -> None:
         with tempfile.TemporaryDirectory() as td:
