@@ -250,6 +250,93 @@ class UnresolvedHoldTests(unittest.TestCase):
             self.assertIn("- 状態: done", Path(act["report"]).read_text(encoding="utf-8"))
 
 
+E2E_OUTPUT = "E2E: checkout page timed out"
+
+
+class RemovedE2eLimitQuestionTests(unittest.TestCase):
+    """A run an earlier version saved in its E2E-limit question goes on as the flow now goes after a failed E2E."""
+
+    def save_as_the_e2e_limit_question(self, root: Path, ask: dict | None = None) -> None:
+        """Save the run as an earlier version did when E2E failed past its limit: the review, the fix stage and E2E
+        ran, no retrospective list was written, and the run waits for the E2E-limit question (or for ask, raised
+        from it)."""
+        pbis = [{"id": "PBI-1", "title": "A", "depends_on": [], "checks": ["python run_tests.py", "python e2e.py"]}]
+        act = done(root, reach_building_with(root, pbis), {"status": "ok"})
+        act = done(root, act, {"exit_code": 0})
+        e2e = done(root, act, {"schema": "atelier.findings/1", "findings": []})
+        self.assertEqual("check", e2e["action"])
+        run = state.load_state(root)
+        self.assertEqual("running_e2e", run["state"])
+        for key in ("retro", "e2e"):
+            run.pop(key, None)
+        run["approvals"]["fix_list"] = True
+        run["counters"].update({"e2e_failures": 2, "e2e_limit": 1, "e2e_continuing": False})
+        run["last_e2e_failure"] = E2E_OUTPUT
+        run["history"] += [
+            {"from": "running_e2e", "event": "e2e_failed", "to": "fixing"},
+            {"from": "fixing", "event": "fix_check_passed", "to": "running_e2e"},
+            {"from": "running_e2e", "event": "e2e_failed", "to": state.REMOVED_E2E_LIMIT_STATE},
+        ]
+        run["state"] = state.REMOVED_E2E_LIMIT_STATE
+        run["pending_action"] = {"action": "ask", "kind": "e2e_limit", "launch_id": "ask-0099"}
+        run["pending_snapshot"] = None
+        if ask is not None:
+            run["return_state"] = run["state"]
+            run["state"] = ask["state"]
+            run["pending_action"] = {"action": "ask", "kind": ask["kind"], "launch_id": "ask-0100"}
+        state.save_state(root, run)
+
+    def assert_triaged_without_a_second_fix_stage(self, root: Path, tri: dict) -> None:
+        """The triage sorts the E2E failure alone; the fix approval does not go back to the fix stage."""
+        from atelier import retro
+
+        self.assertEqual(("launch", "planner"), (tri["action"], tri["role"]))
+        run = state.load_state(root)
+        self.assertEqual(flow.AFTER_E2E, run["state"])
+        [failure] = retro.load_items(run)
+        self.assertEqual(("E2E-1", "e2e_failure", "python e2e.py"), (failure["id"], failure["kind"], failure["command"]))
+        self.assertEqual((E2E_OUTPUT, E2E_OUTPUT), (failure["output"], failure["why"]))
+
+        triage = {"schema": "atelier.triage/1", "items": [{"id": "E2E-1", "decision": "fix", "reason": "a real timeout"}]}
+        ask = done(root, tri, triage)
+        self.assertEqual("fix_approval", ask["kind"])
+        code, out = run_cli("answer", "--root", str(root), "--choice", "approve")
+        self.assertEqual(2, code)
+        self.assertIn("already been through its fix stage", out["error"])
+        self.assertEqual("awaiting_fix_approval", state.load_state(root)["state"])
+        code, out = run_cli("answer", "--root", str(root), "--choice", "nothing_to_fix")
+        self.assertEqual((0, "done"), (code, out["action"]), out)
+        history = state.load_state(root)["history"]
+        saved_at = max(i for i, h in enumerate(history) if h["to"] == state.REMOVED_E2E_LIMIT_STATE)
+        self.assertNotIn("fixing", [h["to"] for h in history[saved_at:]])
+        self.assertEqual("done", history[-1]["to"])
+
+    def test_a_run_saved_in_the_removed_e2e_limit_question_goes_to_the_triage(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.save_as_the_e2e_limit_question(root)
+            # The saved question is gone: an answer to it is refused, and the run goes on as the flow does now.
+            code, out = run_cli("answer", "--root", str(root), "--choice", "continue")
+            self.assertEqual(2, code)
+            self.assertIn(f"no pending question in state {flow.AFTER_E2E}", out["error"])
+            self.assertEqual(
+                {"from": state.REMOVED_E2E_LIMIT_STATE, "event": "e2e_limit_question_removed", "to": flow.AFTER_E2E},
+                state.load_state(root)["history"][-1],
+            )
+            code, tri = run_cli("next", "--root", str(root))
+            self.assertEqual(0, code, tri)
+            self.assert_triaged_without_a_second_fix_stage(root, tri)
+
+    def test_a_question_raised_from_the_removed_e2e_limit_question_goes_back_to_the_triage(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.save_as_the_e2e_limit_question(root, {"state": "asking_budget", "kind": "budget"})
+            self.assertEqual(flow.AFTER_E2E, state.load_state(root)["return_state"])
+            code, tri = run_cli("answer", "--root", str(root), "--choice", "resume")
+            self.assertEqual(0, code, tri)
+            self.assert_triaged_without_a_second_fix_stage(root, tri)
+
+
 def git(root: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(root), *args], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

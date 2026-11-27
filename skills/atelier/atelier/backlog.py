@@ -15,21 +15,29 @@ PBI that named it did not pass (release_unpassed); the entry is then a candidate
 A work root that is not a git work tree has no backlog: nothing is read or written, and the report says so.
 
 Runs in different worktrees share the file, so every change to it (take, release_unpassed, add_leftovers) holds one
-lock file next to it, <git common dir>/atelier/backlog.jsonl.lock, from its first read to its last write. The lock is
-a file created exclusively; a run waits for it up to LOCK_WAIT_SECONDS (then the change fails with an OSError, as a
-write that fails does), and a lock file older than LOCK_STALE_SECONDS is taken to be left by a run that died, and removed.
+lock next to it, from its first read to its last write: the OS's exclusive lock (flock on POSIX, msvcrt.locking on
+Windows) on the file <git common dir>/atelier/backlog.jsonl.lock. The file stays there; the lock is held only while a
+change runs, and the OS lets it go when its holder closes the file or dies, so no run removes another run's lock and a
+lock left by a run that died needs no clean-up. A run waits for the lock up to LOCK_WAIT_SECONDS (then the change fails
+with an OSError, as a write that fails does).
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import subprocess
 import time
-import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt
 
 from . import retro, state
 
@@ -37,8 +45,9 @@ SCHEMA = "atelier.backlog/1"
 FILE_NAME = "backlog.jsonl"
 LOCK_SUFFIX = ".lock"
 LOCK_WAIT_SECONDS = 30.0
-LOCK_STALE_SECONDS = 300.0
 LOCK_POLL_SECONDS = 0.05
+# The errors of a lock try while another holder has the lock (Windows gives EACCES or EDEADLOCK, POSIX EWOULDBLOCK).
+_HELD_ERRNOS = {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK, getattr(errno, "EDEADLOCK", errno.EDEADLK)}
 NOT_GIT = "作業ルートが git のリポジトリでないため"
 
 KIND_LABELS = {
@@ -135,55 +144,51 @@ def lock_path(path: Path) -> Path:
     return Path(path).with_name(Path(path).name + LOCK_SUFFIX)
 
 
-def _break_stale(lock: Path) -> bool:
-    """Remove the lock file when it is older than LOCK_STALE_SECONDS (its holder died); True when it was removed."""
+def _try_lock(fd: int) -> bool:
+    """Take the OS lock on the open lock file without waiting; False while another holder has it."""
     try:
-        seen = lock.read_text(encoding="utf-8")
-        age = time.time() - lock.stat().st_mtime
-    except OSError:
-        return False  # Gone already, or being removed: the next try creates it.
-    if age < LOCK_STALE_SECONDS:
-        return False
-    try:
-        # Only the lock judged stale is removed, not one another waiter took after removing it.
-        if lock.read_text(encoding="utf-8") == seen:
-            lock.unlink()
-            return True
-    except OSError:
-        pass
-    return False
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        else:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)  # The first byte; a lock may lie past the end of the file.
+    except OSError as exc:
+        if exc.errno in _HELD_ERRNOS:
+            return False
+        raise
+    return True
+
+
+def _unlock(fd: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    else:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 
 
 @contextmanager
 def _locked(path: Path) -> Iterator[None]:
-    """Hold the backlog's lock file for one read-modify-write; TimeoutError (an OSError) after LOCK_WAIT_SECONDS."""
+    """Hold the backlog's lock for one read-modify-write; TimeoutError (an OSError) after LOCK_WAIT_SECONDS.
+
+    The lock is the OS's lock on the lock file (flock on POSIX, msvcrt.locking on Windows), not the file itself: the
+    file stays, and the OS lets the lock go when its holder closes the file or dies.
+    """
     lock = lock_path(path)
     lock.parent.mkdir(parents=True, exist_ok=True)
-    token = f"{os.getpid()} {uuid.uuid4().hex}"
-    deadline = time.monotonic() + LOCK_WAIT_SECONDS
-    while True:
-        try:
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except (FileExistsError, PermissionError):
-            # PermissionError: on Windows, for example, while another run removes the lock file.
-            if _break_stale(lock):
-                continue
+    fd = os.open(str(lock), os.O_RDWR | os.O_CREAT)
+    try:
+        deadline = time.monotonic() + LOCK_WAIT_SECONDS
+        while not _try_lock(fd):
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"backlog のロック {lock} を {LOCK_WAIT_SECONDS:g} 秒待っても取れませんでした。")
             time.sleep(LOCK_POLL_SECONDS)
-            continue
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(token)
-        break
-    try:
-        yield
-    finally:
         try:
-            # A lock another run removed as stale and took again is that run's, and stays.
-            if lock.read_text(encoding="utf-8") == token:
-                lock.unlink()
-        except OSError:
-            pass
+            yield
+        finally:
+            _unlock(fd)
+    finally:
+        os.close(fd)
 
 
 def _source_items(root: Path, run: dict[str, Any], ids: Iterable[str]) -> list[dict[str, Any]]:

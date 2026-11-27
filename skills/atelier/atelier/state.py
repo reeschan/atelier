@@ -154,16 +154,63 @@ def load_state(root: Path) -> dict[str, Any]:
         raise StateError(f"failed to read {path}: {exc}") from exc
     if not isinstance(data, dict) or data.get("schema") != SCHEMA_RUN:
         raise StateError(f"invalid run state schema in {path}")
-    resume_removed_state(data)
+    resume_removed_state(root, data)
     return data
 
 
 # A state an earlier version saved that the flow no longer has: the question whether to build again a fix PBI that
 # failed past its tries. A run loaded in it goes on as the flow now goes with such a fix PBI (resume_removed_state).
 REMOVED_REBUILD_STATE = "asking_rebuild"
+# Another such state: the question, once E2E had failed more times than its limit, whether to go back to the fix
+# stage once more. A run loaded in it goes on as the flow now goes after a failed E2E (resume_removed_state).
+REMOVED_E2E_LIMIT_STATE = "asking_e2e_limit"
 
 
-def resume_removed_state(run: dict[str, Any]) -> None:
+def resume_removed_state(root: Path, run: dict[str, Any]) -> None:
+    """Move on a run saved in a state the flow no longer has (REMOVED_REBUILD_STATE, REMOVED_E2E_LIMIT_STATE)."""
+    _resume_rebuild_question(run)
+    _resume_e2e_limit_question(root, run)
+
+
+def _resume_e2e_limit_question(root: Path, run: dict[str, Any]) -> None:
+    """Move on a run saved in REMOVED_E2E_LIMIT_STATE, without asking, as the flow now does after a failed E2E.
+
+    The failed E2E (the output the earlier version kept) goes on the retrospective list as e2e_failure items, and the
+    run goes to the stage after E2E (flow.AFTER_E2E, the triage), never back to the fix stage. A run with no list yet
+    gets one with the E2E failure alone, since the review's findings were sorted before that E2E ran. A run in a
+    cross-cutting question raised there goes back the same way.
+    """
+    in_state = run.get("state") == REMOVED_E2E_LIMIT_STATE
+    if not in_state and run.get("return_state") != REMOVED_E2E_LIMIT_STATE:
+        return
+    from . import flow, retro  # retro imports this module, and flow imports acceptance, which does
+
+    e2e = run.get("e2e")
+    if not isinstance(e2e, dict) or e2e.get("result") != "failed":
+        run["e2e"] = {
+            "result": "failed",
+            "commands": list(run.get("plan_e2e") or []),
+            "exit_code": None,
+            "failed": [],
+            "output": output_tail(str(run.get("last_e2e_failure") or "")),
+        }
+    try:
+        retro.load(run)
+    except StateError:
+        retro.write(root, run, retro.e2e_failure_items(run), [])
+    else:
+        retro.add_e2e_failure(root, run)
+    if not in_state:
+        run["return_state"] = flow.AFTER_E2E
+        return
+    run["history"].append({"from": REMOVED_E2E_LIMIT_STATE, "event": "e2e_limit_question_removed", "to": flow.AFTER_E2E})
+    run["state"] = flow.AFTER_E2E
+    run["subphase"] = None
+    run["pending_action"] = None
+    run["pending_snapshot"] = None
+
+
+def _resume_rebuild_question(run: dict[str, Any]) -> None:
     """Move on a run saved in REMOVED_REBUILD_STATE, without asking, as the flow now does after the same check.
 
     The PBIs the question was about (the failed ones, else the built ones) are held as unresolved with their
@@ -363,44 +410,88 @@ def test_file_names(path: str) -> list[str]:
     return names
 
 
-# A path in a check's output: a run of path characters, with native or POSIX separators (for example
-# C:\work\tests\test_x.py, or tests/test_x.py in "tests/test_x.py::test_a").
-_PATH_TOKEN = re.compile(r"[\w.\-/\\]+")
+# A character of a path in a check's output, once native separators are read as POSIX ones (for example
+# C:\work\tests\test_x.py is read as C:/work/tests/test_x.py).
+_PATH_CHAR = re.compile(r"[\w.\-/]")
+# What may not follow a file name in the output for the name to be whole (for example test_x.pyc or test_x.py.bak).
+_LONGER_NAME = re.compile(r"[\w\-]|\.\w")
 
 
 def _path_parts(path: str) -> list[str]:
     return [p for p in str(path or "").strip().replace("\\", "/").split("/") if p and p != "."]
 
 
+def _paths_ending_at(body: str, start: int, name: str) -> list[str]:
+    """The paths in the output that end with the file name found at start, longest first.
+
+    The path characters and spaces before the name give the longest one; each one that starts after one of those
+    spaces is another, since a folder name may hold a space (for example "FAILED tests/user flow/test_x.py" gives
+    "FAILED tests/user flow/test_x.py", "tests/user flow/test_x.py" and "flow/test_x.py").
+    """
+    begin = start
+    while begin > 0 and (body[begin - 1] == " " or _PATH_CHAR.match(body[begin - 1])):
+        begin -= 1
+    run = body[begin:start]
+    return [run[i:] + name for i in (0, *(k + 1 for k, ch in enumerate(run) if ch == " "))]
+
+
+def _path_match(found: str, target: list[str]) -> str | None:
+    """How a path in the output stands to the target's path: "names" (it ends with the target), "shorter" (the
+    target ends with it), "elsewhere" (a file of the same name in another folder) or None (not that file name, or a
+    path that does not tell).
+
+    A file at the root is named only by a path with no folder, and as a shorter path is, since a file of the same name
+    in a folder ends with it too. A relative path with a folder is another file; an absolute one does not tell, since
+    the output does not show where the root is.
+    """
+    parts = _path_parts(found)
+    if not parts or parts[-1] != target[-1]:
+        return None
+    if len(target) == 1:
+        if len(parts) == 1:
+            return "shorter"
+        return None if found.startswith("/") else "elsewhere"
+    if parts[-len(target):] == target:
+        return "names"
+    if target[-len(parts):] == parts:
+        return "shorter"
+    return "elsewhere"
+
+
 def names_test_file(text: str, path: str) -> bool:
     """True when the output names the test file: one of its names, not as part of a longer name.
 
     A path in the output names the file when one of the two paths ends with the other (for example
-    C:/work/tests/test_x.py, tests/test_x.py or test_x.py for tests/test_x.py). A path to a file of the same name in
-    another folder (for example tests/unit/test_x.py for tests/integration/test_x.py) does not; once the output gives
-    such a path, a shorter path that both files end with (test_x.py) is taken to name that other file. A unittest
-    module name names the file when it is one of the file's module names, whole.
+    C:/work/tests/test_x.py, tests/test_x.py or test_x.py for tests/test_x.py), folder names with spaces included.
+    A path to a file of the same name in another folder (for example tests/unit/test_x.py for
+    tests/integration/test_x.py, or for test_x.py at the root) does not; once the output gives such a path, a shorter
+    path that both files end with (test_x.py) is taken to name that other file. A unittest module name names the
+    file when it is one of the file's module names, whole and not inside a path.
     """
     target = _path_parts(path)
     if not target:
         return False
+    body = str(text or "").replace("\\", "/")
+    name = target[-1]
     shorter = elsewhere = False
-    for token in _PATH_TOKEN.findall(str(text or "")):
-        parts = _path_parts(token.rstrip(".-"))
-        if not parts or parts[-1] != target[-1]:
+    for found in re.finditer(re.escape(name), body):
+        start, end = found.span()
+        if start and body[start - 1] != "/" and _PATH_CHAR.match(body[start - 1]):
             continue
-        if parts[-len(target):] == target:
+        if _LONGER_NAME.match(body, end):
+            continue
+        matches = {_path_match(p, target) for p in _paths_ending_at(body, start, name)}
+        if "names" in matches:
             return True
-        if target[-len(parts):] == parts:
+        if "shorter" in matches:
             shorter = True
-        else:
+        elif "elsewhere" in matches:
             elsewhere = True
     if shorter and not elsewhere:
         return True
-    body = str(text or "").replace("\\", "/")
     paths = {"/".join(target[i:]) for i in range(len(target))}
-    for name in test_file_names(path):
-        if name not in paths and re.search(r"(?<![\w.])" + re.escape(name) + r"(?!\w)", body):
+    for module in test_file_names(path):
+        if module not in paths and re.search(r"(?<![\w./])" + re.escape(module) + r"(?!\w|\.py)", body):
             return True
     return False
 

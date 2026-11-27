@@ -8,6 +8,7 @@ fix worker returns in `open` is left over too. A run with nothing to fix goes to
 
 from __future__ import annotations
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -251,6 +252,23 @@ class LockedCarryOverFinalCheckTests(UnlockTestBase):
         self.assertEqual(("check_failure", "R2-1", ["CO-1"]), (left["kind"], left["case"], left["items"]))
         report = (self.root / "docs" / "pbi" / "REPORT.md").read_text(encoding="utf-8")
         self.assertIn("最後の検査で受け入れのケース R2-1 が通らなかった（assertion）（元の件: CO-1）", report)
+
+    def test_a_failed_check_whose_result_names_only_the_acceptance_commands_is_left_over(self) -> None:
+        final, _ = self.reach_final_check(fixed=True)
+        runs = [g["command"] for g in final["final"]["groups"]]
+        for command in runs:
+            subprocess.run(command, shell=True, cwd=str(self.root), capture_output=True, check=False)
+        # The cases pass, but the result has no row for the PBI's check or the plan's, and the check's own exit code
+        # says something failed: that stands for the commands with no row.
+        out = self.done(final, {"exit_code": 1, "output": "a check failed", "commands": [{"command": c, "exit_code": 0} for c in runs]})
+        self.assertEqual("done", out["action"], out)
+        run = saved(self.root)
+        self.assertEqual("failed", run["final_check"]["result"])
+        self.assertEqual({"R1-1": "passed", "R1-2": "passed", "R2-1": "passed"}, run["final_check"]["cases"])
+        self.assertEqual("open", run["carry_overs"][0]["status"])
+        (left,) = run["leftovers"]
+        self.assertEqual(("check_failure", None, 1), (left["kind"], left["command"], left["exit_code"]))
+        self.assertEqual(final["commands"], left["commands"])
 
 
 def fix_run(**fields) -> dict:

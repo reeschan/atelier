@@ -751,7 +751,15 @@ def _build_pbis_from_plan(run: dict[str, Any], result: dict[str, Any]) -> list[d
         for item in wave_items:
             pid = item["id"]
             if pid in kept:
-                built.append({**kept[pid], "wave": wave_idx})
+                pbi = {**kept[pid], "wave": wave_idx}
+                if pbi.get("kind") == "acceptance" and pbi.get("status") == "passed":
+                    # A passed acceptance PBI takes the requirements the new plan gives it, so that it is built again
+                    # for the ones whose scenario the plan adds or changes (acceptance.requirement_changes refuses any
+                    # other change).
+                    pbi.pop("requirements", None)
+                    if item.get("requirements"):
+                        pbi["requirements"] = list(item["requirements"])
+                built.append(pbi)
                 continue
             level = item["level"]
             level_reason = item["level_reason"]
@@ -837,6 +845,10 @@ def _validate_completion_before_accept(
         passed = [p["id"] for p in run.get("pbis", []) if p.get("status") == "passed"]
         if not errors and passed:
             errors = plan.frozen_changes(run.get("pbis", []), result, passed)
+        if not errors and passed:
+            # Compared with the run as it was when the re-plan started, for a plan revised again before its approval.
+            relock = run.get("plan_return_relock") or {}
+            errors = acceptance.requirement_changes(run, result, relock.get("owners"), relock.get("scenarios"))
         if errors:
             raise ConductorError(" ".join(errors))
         try:
@@ -1834,7 +1846,11 @@ def _start_planner_revision(
     for co in state.open_carry_overs(run):
         co["status"] = "replanned"
     if run.get("acceptance_first") and run.get("lock"):
-        run["plan_return_relock"] = {"plan_return": plan_return, "scenarios": copy.deepcopy(acceptance.scenarios(run))}
+        run["plan_return_relock"] = {
+            "plan_return": plan_return,
+            "scenarios": copy.deepcopy(acceptance.scenarios(run)),
+            "owners": acceptance.requirement_owners(run),
+        }
     run["planner_mode"] = "revise"
     run["plan_revision_request"] = request
     run["pending_plan_sends"] = None
@@ -1863,7 +1879,9 @@ def _plan_return_request(run: dict[str, Any], record: dict[str, Any], text: str 
         lines.append(
             "Fix the scenarios and the interfaces the stop concerns. The acceptance PBI of each requirement whose "
             "scenario you change is built again, checked Red and read by you again, and the acceptance tests are "
-            "then locked again. A passed stub PBI cannot change: to change a public interface, add a stub PBI for it."
+            "then locked again. A passed acceptance PBI keeps every requirement it has; it can take a requirement "
+            "whose scenario you add or change, and is built again for it. A passed stub PBI cannot change: to change "
+            "a public interface, add a stub PBI for it."
         )
     return "\n".join(lines)
 
@@ -2052,6 +2070,12 @@ def _cmd_answer(args: argparse.Namespace) -> dict[str, Any]:
                 if co["id"] in excluded:
                     co["status"] = "dropped"
         if choice == "approve" and run.get("fix_list"):
+            if flow.fix_stage_entries(run) or flow.final_check_started(run):
+                # The fix stage runs once (for example a run an earlier version saved after its fix stage and E2E).
+                raise ConductorError(
+                    "this run has already been through its fix stage, and it is not entered again: "
+                    "answer nothing_to_fix to go to the report"
+                )
             state.reset_fix_groups(run, plan.fix_groups(run["fix_list"], max_workers=template.parallel_limit(run)))
             flow.apply_event(run, "fix_list_approved")
         elif choice in ("nothing_to_fix", "approve"):

@@ -298,7 +298,8 @@ def judge_final(run_root: Path, run: dict[str, Any], pending: dict[str, Any], re
     Each case of the plan (pending["final"], final_case_plan) ends as its JUnit XML says, or missing when it did not
     run; one that did not pass fails the final check. The other commands stay in "commands". Returns the result with
     "exit_code" (the first failed other command's, else 1 when a case did not pass, else 0), "commands_passed" (the
-    other commands passed) and "cases": each case -> {"end", "command", "items", "why"}.
+    other commands passed) and "cases": each case -> {"end", "command", "items", "why"}. When another command the check
+    ran (pending["commands"]) has no exit code of its own in the result, the check's own exit code stands for it.
     """
     final = pending.get("final") or {}
     groups = [g for g in final.get("groups") or [] if isinstance(g, dict)]
@@ -306,8 +307,12 @@ def judge_final(run_root: Path, run: dict[str, Any], pending: dict[str, Any], re
     given = [c for c in result.get("commands") or [] if isinstance(c, dict)]
     rest = [c for c in given if str(c.get("command")) not in acceptance_commands]
     failing = [c for c in rest if c.get("exit_code")]
-    # Without each command's exit code, the check's own exit code is all there is to go by.
-    rest_code = failing[0]["exit_code"] if failing else 0 if given else result.get("exit_code")
+    # Without each command's exit code, the check's own exit code is all there is to go by: for the other commands
+    # with no row in the result, or, when the action does not name its commands, for a result with no rows at all.
+    scheduled = [str(c) for c in pending.get("commands") or [] if str(c) not in acceptance_commands]
+    reported = {str(c.get("command")) for c in rest}
+    unreported = [c for c in scheduled if c not in reported] if pending.get("commands") else [] if given else [None]
+    rest_code = failing[0]["exit_code"] if failing else result.get("exit_code") if unreported else 0
     locked = locks.locked_cases(run)
     ids = list(locked)
     group_of = {str(rid): g for g in groups for rid in g.get("requirements") or []}

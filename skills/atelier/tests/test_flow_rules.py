@@ -33,13 +33,32 @@ VALID_FACTS: dict = {
 }
 
 
+# The variables that pick a repository, a work tree or an index for git. A test run from a git hook inherits them
+# (for example GIT_DIR), and git would then work on that repository instead of the test's own.
+GIT_REPOSITORY_VARIABLES = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_IMPLICIT_WORK_TREE",
+)
+
+
+def git_env() -> dict[str, str]:
+    """The environment for git on a test's own repository: this one without GIT_REPOSITORY_VARIABLES."""
+    return {k: v for k, v in os.environ.items() if k not in GIT_REPOSITORY_VARIABLES}
+
+
 def init_git_repo(root: Path) -> None:
-    subprocess.run(["git", "init", "-q", str(root)], check=True)
-    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
-    subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+    env = git_env()
+    subprocess.run(["git", "init", "-q", str(root)], check=True, env=env)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True, env=env)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True, env=env)
     (root / "app.py").write_text("x = 1\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(root), "add", "app.py"], check=True)
-    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "app.py"], check=True, env=env)
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "init"], check=True, env=env)
 
 
 def write_agents_and_template(

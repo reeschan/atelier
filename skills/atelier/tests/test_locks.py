@@ -498,6 +498,67 @@ class LockExtendTests(unittest.TestCase):
         # The wave check finds both E2E changes against the new lock.
         self.assertEqual(["e2e/add.spec.js", "e2e/fixtures/a.json"], sorted(c["path"] for c in locks.wave_changes(self.root, run)))
 
+    def test_a_passed_e2e_file_a_revised_acceptance_pbi_also_targets_keeps_its_locked_content(self) -> None:
+        run = self.run_state()
+        locks.lock(self.root, run)
+        self.write_e2e()
+        state.get_pbi(run, "PBI-3")["status"] = "passed"
+        locks.extend(self.root, run)
+        spec = git(self.root, "rev-parse", f"{run['lock']['commit']}:e2e/add.spec.js")
+        locks.lift(run, "PR-1")
+        # The revised acceptance PBI also has the passed e2e PBI's spec in its targets, and the spec is loosened.
+        state.get_pbi(run, "PBI-1")["targets"] = ["acc/R1.json", "e2e/add.spec.js"]
+        (self.root / "e2e" / "add.spec.js").write_bytes(b"// loosened\n")
+        again = locks.lock(self.root, run)
+        self.assertIn("e2e/add.spec.js", again["files"])
+        self.assertEqual(spec, git(self.root, "rev-parse", f"{again['commit']}:e2e/add.spec.js"))
+        self.assertEqual(["e2e/add.spec.js"], [c["path"] for c in locks.wave_changes(self.root, run)])
+
+    def test_a_lock_made_again_after_a_lift_keeps_the_locked_e2e_keys(self) -> None:
+        (self.root / "package.json").write_bytes(json.dumps({"scripts": {"test": "jest"}}).encode("utf-8"))
+        run = self.run_state()
+        run["plan_e2e"] = ["npm run e2e"]
+        locks.lock(self.root, run)
+        self.write_e2e()
+        (self.root / "e2e" / "package.json").write_bytes(json.dumps({"scripts": {"test": "playwright test"}}).encode("utf-8"))
+        (self.root / "package.json").write_bytes(
+            json.dumps({"scripts": {"test": "jest", "e2e": "npm --prefix e2e test"}}).encode("utf-8")
+        )
+        state.get_pbi(run, "PBI-3")["status"] = "passed"
+        locks.extend(self.root, run)
+        locks.lift(run, "PR-1")
+        # While the lock is off, the e2e scripts are loosened, and the acceptance script is revised.
+        (self.root / "e2e" / "package.json").write_bytes(json.dumps({"scripts": {"test": "exit 0"}}).encode("utf-8"))
+        (self.root / "package.json").write_bytes(
+            json.dumps({"scripts": {"test": "jest --ci", "e2e": "exit 0"}}).encode("utf-8")
+        )
+        locks.lock(self.root, run)
+        keys = locks.locked_list(self.root, run)["keys"]
+        self.assertEqual("playwright test", keys["e2e/package.json"]["scripts.test"])
+        self.assertEqual("npm --prefix e2e test", keys["package.json"]["scripts.e2e"])
+        # The acceptance key is read from the work tree, as the revision left it.
+        self.assertEqual("jest --ci", keys["package.json"]["scripts.test"])
+        changed = sorted((c["path"], c.get("key")) for c in locks.wave_changes(self.root, run))
+        self.assertEqual([("e2e/package.json", "scripts.test"), ("package.json", "scripts.e2e")], changed)
+
+    def test_a_key_file_of_a_passed_e2e_pbi_that_cannot_be_read_is_recorded_even_when_nothing_else_is_added(self) -> None:
+        run = self.run_state()
+        state.get_pbi(run, "PBI-3")["targets"] = ["e2e/package.json"]
+        first = dict(locks.lock(self.root, run))
+        (self.root / "e2e").mkdir()
+        (self.root / "e2e" / "package.json").write_bytes(b"{ not json\n")
+        state.get_pbi(run, "PBI-3")["status"] = "passed"
+        extension = locks.extend(self.root, run)
+        self.assertIsNotNone(extension)
+        self.assertEqual(([], first["commit"]), (extension["files"], extension["commit_before"]))
+        listed = locks.locked_list(self.root, run)
+        self.assertEqual(["e2e/package.json"], [u.get("file") for u in listed["unextractable"]])
+        self.assertEqual(listed["unextractable"], run["lock"]["unextractable"])
+        self.assertEqual(["PBI-3"], run["lock"]["e2e_pbis"])
+        self.assertIsNone(locks.copy_problem(self.root, run))
+        # It is recorded once: the same PBI is not taken again.
+        self.assertIsNone(locks.extend(self.root, run))
+
     def test_a_staged_change_of_a_file_the_new_lock_commit_carries_stays_staged(self) -> None:
         run = self.run_state()
         first = locks.lock(self.root, run)

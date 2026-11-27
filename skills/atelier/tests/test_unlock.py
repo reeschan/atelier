@@ -33,6 +33,7 @@ if str(SKILLS_DIR) not in sys.path:
     sys.path.insert(0, str(SKILLS_DIR))
 
 from atelier import acceptance, guards, locks, plan, retro, state  # noqa: E402
+from tests import test_acceptance_red  # noqa: E402
 from tests.test_acceptance_red import GHERKIN, approve_plan, drive, finish_stage, pass_review, pbis_of, saved  # noqa: E402
 from tests.test_acceptance_toggle import UNIT  # noqa: E402
 from tests.test_conductor import run_cli, write_json, write_result_for  # noqa: E402
@@ -91,6 +92,20 @@ def r1(expect_2: int = 4, **extra: object) -> dict:
 
 
 R2 = {"cases": [{"name": "test_R2[R2-1]", "expect": 10}]}
+
+
+def by_line(spec: dict) -> str:
+    """An acceptance test file of the fake runner with each case on its own line, as an acceptance worker writes it:
+    an unlock may change only the lines that name its own cases."""
+    return '{"cases": [\n' + ",\n".join(json.dumps(case) for case in spec["cases"]) + "\n]}\n"
+
+
+def write_by_line(root: Path, specs: dict[str, dict]) -> None:
+    """The fake acceptance worker, writing each requirement's file with each case on its own line."""
+    for rid, spec in specs.items():
+        path = root / "acceptance" / f"{rid}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(by_line(spec).encode("utf-8"))
 
 
 def unlock_plan() -> dict:
@@ -197,7 +212,8 @@ class UnlockTestBase(unittest.TestCase):
         (self.root / ".git" / "info").mkdir(parents=True, exist_ok=True)
         (self.root / ".git" / "info" / "attributes").write_bytes(b"*.json text eol=lf\n")
         self.write("app.py", STUB)
-        check = finish_stage(self.root, act, {"R1": r1(), "R2": R2})
+        with patch.object(test_acceptance_red, "write_tests", write_by_line):
+            check = finish_stage(self.root, act, {"R1": r1(), "R2": R2})
         self.assertEqual("check", check["action"])
         launch = pass_review(self.root, drive(self.root))
         self.assertEqual(["PBI-3"], pbis_of(launch))
@@ -228,8 +244,9 @@ class UnlockTestBase(unittest.TestCase):
         return launch
 
     def fix_lines(self, launch: dict, test_file: dict, result: dict | None = None) -> dict:
-        """The fake unlock worker writes R1's test file; returns the next action (the unlock's check)."""
-        self.write_json(R1_FILE, test_file)
+        """The fake unlock worker writes R1's test file, each case on its own line; returns the next action (the
+        unlock's check)."""
+        self.write(R1_FILE, by_line(test_file))
         return self.done(launch, result or {"status": "ok"})
 
     def assert_no_worktree(self, check: dict) -> None:
@@ -298,7 +315,7 @@ class UnlockTicketAndGuardTests(UnlockTestBase):
 
     def test_g1_lets_the_unlock_change_its_file_and_stops_a_change_of_another_locked_file(self) -> None:
         launch = self.to_fix_stage()
-        self.write_json(R1_FILE, r1(5))
+        self.write(R1_FILE, by_line(r1(5)))
         r2_locked = self.locked_blob(R2_FILE)
         self.write_json(R2_FILE, {"cases": [{"name": "test_R2[R2-1]", "outcome": "passed"}]})
         ask = self.done(launch, {"status": "ok"})
@@ -322,7 +339,7 @@ class UnlockTicketAndGuardTests(UnlockTestBase):
 
     def test_g1_stops_the_unlock_worker_changing_a_source_file(self) -> None:
         launch = self.to_fix_stage()
-        self.write_json(R1_FILE, r1(5))
+        self.write(R1_FILE, by_line(r1(5)))
         self.write("app.py", "def add(a, b):\n    return a + b + 1\n")
         ask = self.done(launch, {"status": "ok"})
         run = saved(self.root)
@@ -545,7 +562,7 @@ class UnlockCheckTests(UnlockTestBase):
     def test_a_file_changed_after_its_check_was_made_is_not_locked_again(self) -> None:
         check = self.fix_lines(self.to_fix_stage("scenario"), r1(5))
         # The same lines with one more blank line at the end, written while the check waits: not the bytes checked.
-        self.write(R1_FILE, json.dumps(r1(5)) + "\n\n")
+        self.write(R1_FILE, by_line(r1(5)) + "\n")
         drive(self.root)
         left = self.assert_not_locked_again(saved(self.root), check)
         self.assertIn(f"{R1_FILE} が確かめた後に変わった", left["what"])
@@ -553,9 +570,15 @@ class UnlockCheckTests(UnlockTestBase):
     def test_a_file_changed_and_put_back_while_its_check_waits_is_not_locked_again(self) -> None:
         check = self.fix_lines(self.to_fix_stage("scenario"), r1(5))
         # The file is written with other lines and then with the checked bytes again: the bytes match, the write shows.
-        checked = (self.root / R1_FILE).read_bytes()
+        target = self.root / R1_FILE
+        checked, before = target.read_bytes(), target.stat()
         self.write_json(R1_FILE, r1(6))
-        (self.root / R1_FILE).write_bytes(checked)
+        target.write_bytes(checked)
+        # Both writes may fall in one tick of the file system's clock and leave the modification time as it was: the
+        # write is given a later one, so what the check sees does not hang on the clock's resolution.
+        os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns + 2_000_000_000))
+        self.assertEqual(checked, target.read_bytes())
+        self.assertNotEqual(before.st_mtime_ns, target.stat().st_mtime_ns)
         drive(self.root)
         left = self.assert_not_locked_again(saved(self.root), check)
         self.assertIn(f"{R1_FILE} が確かめた後に変わった", left["what"])
@@ -573,7 +596,7 @@ class UnlockCheckTests(UnlockTestBase):
                 making, frame = frame.f_code.co_name == "make_unlock_check", frame.f_back
             if making and not changed and Path(path).resolve() == target:
                 changed.append(True)
-                target.write_bytes((json.dumps(r1(70)) + "\n").encode("utf-8"))
+                target.write_bytes(by_line(r1(70)).encode("utf-8"))
             return real(path)
 
         with patch.object(Path, "read_bytes", read_bytes):
@@ -645,7 +668,7 @@ class UnlockBatchTests(UnlockTestBase):
         self.assertIn(R1_FILE, second["locked_files"])
 
         lock_before = saved(self.root)["lock"]["commit"]
-        self.write_json(R1_FILE, r1(5))
+        self.write(R1_FILE, by_line(r1(5)))
         self.write_json(R2_FILE, {"cases": [{"name": "test_R2[R2-1]", "expect": 11}]})
         check = self.done(batch, {"status": "ok"})
         # Each launch may change the file its unlock opened; the two checks wait in line.

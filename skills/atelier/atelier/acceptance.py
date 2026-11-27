@@ -29,6 +29,7 @@ as they were at the lock commit (judge_unlock).
 
 from __future__ import annotations
 
+import difflib
 import os
 import re
 import subprocess
@@ -952,6 +953,39 @@ def reopen_revised(run: dict[str, Any], before: list[dict[str, Any]]) -> dict[st
     return {"revised": revised, "reopened": reopened, "rebuilt": [p["id"] for p in rebuilt]}
 
 
+def requirement_changes(
+    run: dict[str, Any],
+    new_plan: dict[str, Any],
+    owners_before: dict[str, str] | None = None,
+    scenarios_before: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Japanese errors for the passed acceptance PBIs whose requirements a re-plan changes in a way it cannot build.
+
+    A passed acceptance PBI may take a requirement whose scenario the re-plan adds or changes: it is built again for
+    it when the plan is approved (reopen_revised). It may not take a requirement whose scenario stays as it was, nor
+    give one up, since it is not built again for that and its tests would not follow. The requirements it writes go
+    by requirement_owners; owners_before and scenarios_before are those of the run when the re-plan started (by
+    default the run's own).
+    """
+    after = {"pbis": [p for p in new_plan.get("pbis") or [] if isinstance(p, dict)], "scenarios": new_plan.get("scenarios")}
+    had_by = requirement_owners(run) if owners_before is None else owners_before
+    has_by = requirement_owners(after)
+    revised = set(revised_requirements(after, scenarios(run) if scenarios_before is None else scenarios_before))
+    errors: list[str] = []
+    for pbi in run.get("pbis", []):
+        if pbi.get("kind") != "acceptance" or pbi.get("status") != "passed":
+            continue
+        had = [rid for rid, owner in had_by.items() if owner == pbi["id"]]
+        has = [rid for rid, owner in has_by.items() if owner == pbi["id"]]
+        changed = [rid for rid in had if rid not in has] + [rid for rid in has if rid not in had and rid not in revised]
+        if changed:
+            errors.append(
+                f"合格済みの受け入れの {pbi['id']} が受け持つ要件は、このようには変えられません（{', '.join(changed)}）。"
+                "受け持つ要件は外せず、足せるのはシナリオを足すか変える要件だけです。"
+            )
+    return errors
+
+
 WAVE_CASES_RULE = "acceptance_cases"
 WAVE_LOCK_UNRESOLVED = "lock_changed"
 WAVE_CASES_UNRESOLVED = "cases_missing"
@@ -1332,19 +1366,31 @@ def _named_ids(line: str, ids: list[str]) -> set[str]:
     }
 
 
-def case_lines(text: str, targets: list[str], others: list[str]) -> dict[str, list[str]]:
-    """Each case of others -> the lines of text that name it and none of targets, in order (trailing spaces and line
-    endings aside). A line that names one of targets is the unlock's to change, also when it names others too."""
-    out: dict[str, list[str]] = {cid: [] for cid in others}
-    opened = set(targets)
-    for line in text.splitlines():
-        named = _named_ids(line, [*targets, *others])
-        if named & opened:
+def case_lines(old: str, new: str, targets: list[str], others: list[str]) -> tuple[dict[str, list[str]], list[str]]:
+    """The lines an unlock may not change, from a line diff of the file at the lock commit (old) and now (new).
+
+    An unlock may change, remove or add only lines that name one of targets (its fixed and added cases) and none of
+    others (the file's other locked cases). Blank lines, trailing spaces and line endings aside, every line the diff
+    removes or adds is checked. Returns (each case of others -> the changed lines that name it, also when they name
+    one of targets too, for example a line that holds two cases; the changed lines that name no case, for example a
+    shared fixture's line, which may hold the other cases' content).
+    """
+    ids = [*targets, *others]
+    by_case: dict[str, list[str]] = {cid: [] for cid in others}
+    no_case: list[str] = []
+    was = [line.rstrip() for line in old.splitlines() if line.strip()]
+    now = [line.rstrip() for line in new.splitlines() if line.strip()]
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, was, now, autojunk=False).get_opcodes():
+        if op == "equal":
             continue
-        for cid in others:
-            if cid in named:
-                out[cid].append(line.rstrip())
-    return out
+        for line in [*was[i1:i2], *now[j1:j2]]:
+            named = _named_ids(line, ids)
+            if not named:
+                no_case.append(line)
+            for cid in others:
+                if cid in named and line not in by_case[cid]:
+                    by_case[cid].append(line)
+    return by_case, no_case
 
 
 def unlock_texts(root: Path, run: dict[str, Any], unlock: dict[str, Any]) -> dict[str, str | None]:
@@ -1387,8 +1433,9 @@ def judge_unlock(
       not-implemented error when it fixes the implementation.
     - The file's other locked cases, whose lines the fix leaves as they were: at the lock commit each ran and did not
       pass (light-no-red: ran); in the work tree each ran, and ended as in the last wave check (passed stays passed,
-      red stays red). With texts, the lines that name each of them and none of the unlock's cases are also the same
-      in the work tree as at the lock commit (case_lines), so that a change that keeps such a case green fails too.
+      red stays red). With texts, a line diff against the lock commit (case_lines) also fails the check when the fix
+      changed, removed or added a line that names one of them (also when it names one of the unlock's cases too) or
+      that names no case at all, so that a change that keeps such a case green fails too.
     - A testcase with no id of the unlock's cases or of the file's locked cases fails the check too.
     Returns {"passed", "reasons", "lock_commit", "work_tree"}: how each of the unlock's cases ended at each place.
     """
@@ -1416,12 +1463,18 @@ def judge_unlock(
         if old is None or new is None:
             reasons.append(f"{file} の行を{UNLOCK_PLACE_LABELS['lock_commit']}と比べられなかった")
         else:
-            was, now = case_lines(old, targets, others), case_lines(new, targets, others)
+            by_case, no_case = case_lines(old, new, targets, others)
+            since = UNLOCK_PLACE_LABELS["lock_commit"]
             reasons += [
-                f"{cid}: 対象の外のケースの行が{UNLOCK_PLACE_LABELS['lock_commit']}から変わった（鍵を外していない行）"
-                for cid in others
-                if was[cid] != now[cid]
+                f"{cid}: 対象の外のケースの行が{since}から変わった（鍵を外していない行。ほかのケースと同じ行も変えられない）: {lines[0]}"
+                for cid, lines in by_case.items()
+                if lines
             ]
+            if no_case:
+                reasons.append(
+                    f"{file}: どのケースの id も無い行が{since}から変わった（ほかのケースの中身かもしれないので変えられない、"
+                    f"{len(no_case)} 行）: {no_case[0]}"
+                )
     lock_ends = ends.get("lock_commit")
     now_ends = ends.get("work_tree")
     lock_label = UNLOCK_PLACE_LABELS["lock_commit"]

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -20,7 +21,7 @@ from pathlib import Path
 from unittest import mock
 
 from atelier import actions, backlog, plan, retro, state
-from tests.test_conductor import VALID_FACTS, make_valid_plan, run_cli
+from tests.test_conductor import SKILLS_DIR, VALID_FACTS, make_valid_plan, run_cli
 from tests.test_final_check import reach_final_check
 from tests.test_flow_rules import init_git_repo
 from tests.test_review_loops import approve, done, run_state, start
@@ -337,8 +338,14 @@ class BacklogLockTests(unittest.TestCase):
             backlog.take(self.root, run)
         thread.join(10)
         self.assertFalse(thread.is_alive())
-        self.assertFalse(backlog.lock_path(self.path).exists())
+        self.assert_lock_free()
         return run
+
+    def assert_lock_free(self) -> None:
+        """The lock is taken at the first try: no change holds it any more."""
+        with mock.patch.object(backlog, "LOCK_WAIT_SECONDS", 0):
+            with backlog._locked(self.path):
+                pass
 
     def test_an_append_waits_for_a_take_and_is_not_lost(self) -> None:
         other = {"run_id": "r3", "pbis": [], "leftovers": [{"id": "LO-1", "kind": "check_failure", "what": "w", "output": "o"}]}
@@ -355,26 +362,79 @@ class BacklogLockTests(unittest.TestCase):
         self.assertEqual(([], ["r1:LO-1"]), (other["backlog"]["taken"], other["backlog"]["taken_elsewhere"]))
         self.assertEqual("r2", entries(self.root)[0]["taken_by"])
 
-    def test_a_held_lock_is_waited_for_and_a_stale_one_is_removed(self) -> None:
+    def start_holder(self) -> subprocess.Popen:
+        """Another process (a run in another worktree) that takes the lock and holds it until it is killed."""
+        script = (
+            "import sys, time\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from atelier import backlog\n"
+            "with backlog._locked(Path(sys.argv[2])):\n"
+            "    print('held', flush=True)\n"
+            "    time.sleep(120)\n"
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", script, str(SKILLS_DIR), str(self.path)], stdout=subprocess.PIPE, text=True
+        )
+        self.addCleanup(self.stop, proc)
+        self.assertEqual("held", proc.stdout.readline().strip())
+        return proc
+
+    @staticmethod
+    def stop(proc: subprocess.Popen) -> None:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(10)
+        proc.stdout.close()
+
+    def test_a_live_holder_keeps_the_lock_however_old_its_file_is(self) -> None:
         lock = backlog.lock_path(self.path)
-        lock.write_text("another run", encoding="utf-8")
+        holder = self.start_holder()
+        old = time.time() - 3600
+        os.utime(lock, (old, old))  # The file's age does not matter: no waiter takes the lock from a live holder.
         run = {"run_id": "r2", "pbis": [{"id": "PBI-1", "backlog": ["r1:LO-1"]}]}
-        with mock.patch.object(backlog, "LOCK_WAIT_SECONDS", 0.2):
-            with self.assertRaises(OSError):
+        with mock.patch.object(backlog, "LOCK_WAIT_SECONDS", 0.3):
+            with self.assertRaises(TimeoutError):
                 backlog.take(self.root, run)
             left = {"run_id": "r3", "pbis": [], "leftovers": [{"id": "LO-1", "kind": "check_failure", "what": "w"}]}
             backlog.add_leftovers(self.root, left)
         self.assertIn(str(lock), left["backlog"]["error"])
         self.assertEqual(["r1:LO-1"], [e["id"] for e in entries(self.root)])
         self.assertIsNone(entries(self.root)[0]["taken_by"])
-        self.assertEqual("another run", lock.read_text(encoding="utf-8"))
 
-        # A lock file older than LOCK_STALE_SECONDS was left by a run that died.
-        old = time.time() - backlog.LOCK_STALE_SECONDS - 60
-        os.utime(lock, (old, old))
-        self.assertEqual(["r1:LO-1"], backlog.take(self.root, run))
-        self.assertEqual("r2", entries(self.root)[0]["taken_by"])
-        self.assertFalse(lock.exists())
+        # The holder dies: the OS lets its lock go, and the file left behind does not hold anyone up.
+        self.stop(holder)
+        self.assertTrue(lock.exists())
+        self.assert_lock_free()
+
+    def test_runs_waiting_for_a_holder_that_dies_go_on_one_at_a_time(self) -> None:
+        holder = self.start_holder()
+        run = {"run_id": "r2", "pbis": [{"id": "PBI-1", "backlog": ["r1:LO-1"]}]}
+        left = {"run_id": "r3", "pbis": [], "leftovers": [{"id": "LO-1", "kind": "check_failure", "what": "w", "output": "o"}]}
+        real_write = backlog._write_lines
+
+        def slow_write(path: Path, lines: list[str]) -> None:
+            time.sleep(0.3)  # An append that got in between the take's read and this write would be lost by it.
+            real_write(path, lines)
+
+        threads = [
+            threading.Thread(target=backlog.take, args=(self.root, run)),
+            threading.Thread(target=backlog.add_leftovers, args=(self.root, left)),
+        ]
+        with mock.patch.object(backlog, "_write_lines", slow_write):
+            for thread in threads:
+                thread.start()
+            time.sleep(0.3)
+            self.assertTrue(all(thread.is_alive() for thread in threads))  # Both wait for the holder.
+            self.stop(holder)
+            for thread in threads:
+                thread.join(20)
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertNotIn("error", left["backlog"])
+        by_id = {e["id"]: e for e in entries(self.root)}
+        self.assertEqual(["r1:LO-1", "r3:LO-1"], list(by_id))
+        self.assertEqual("r2", by_id["r1:LO-1"]["taken_by"])
+        self.assert_lock_free()
 
 
 if __name__ == "__main__":

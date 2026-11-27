@@ -323,6 +323,44 @@ class TestFileNames(unittest.TestCase):
                 with self.subTest(target=unit, text=text):
                     self.assertEqual((["PBI-1", "PBI-2"], "targets"), state.failure_owners(pbis, "pytest", text))
 
+    def test_a_path_with_a_folder_does_not_name_a_file_of_that_name_at_the_root(self) -> None:
+        for unit in ("tests/unit/test_box.py", "tests\\unit\\test_box.py"):
+            pbis = [{"id": "PBI-1", "targets": ["test_box.py"]}, {"id": "PBI-2", "targets": [unit]}]
+            # Once the folder is given, a file name alone is taken to be that file's too.
+            for text in (
+                "FAILED tests/unit/test_box.py::test_total",
+                "tests\\unit\\test_box.py:12: AssertionError",
+                "FAILED tests/unit/test_box.py::test_total\ntest_box.py:12: AssertionError",
+                "FAIL: test_total (tests.unit.test_box.BoxTests.test_total)",
+            ):
+                with self.subTest(target=unit, text=text):
+                    self.assertEqual((["PBI-2"], "targets"), state.failure_owners(pbis, "pytest", text))
+            # A path with no folder is the file at the root; the other file ends with it too.
+            for text in ("FAILED test_box.py::test_total", "./test_box.py:12: AssertionError"):
+                with self.subTest(target=unit, text=text):
+                    self.assertEqual((["PBI-1", "PBI-2"], "targets"), state.failure_owners(pbis, "pytest", text))
+            # The root file's own unittest module name, and an absolute path, which does not tell where the root is.
+            text = 'File "C:\\work\\test_box.py", line 3\nFAIL: test_total (test_box.BoxTests.test_total)'
+            self.assertEqual((["PBI-1"], "targets"), state.failure_owners(pbis, "unittest", text))
+
+    def test_a_path_with_spaces_in_its_folders_is_read_whole(self) -> None:
+        for user, other in (
+            ("tests/user flow/test_checkout.py", "tests/other flow/test_checkout.py"),
+            ("tests\\user flow\\test_checkout.py", "tests\\other flow\\test_checkout.py"),
+        ):
+            pbis = [{"id": "PBI-1", "targets": [user]}, {"id": "PBI-2", "targets": [other]}]
+            for text in (
+                "FAILED tests/user flow/test_checkout.py::test_total - assert 1 == 2",
+                "tests\\user flow\\test_checkout.py:12: AssertionError",
+                'File "C:\\work\\tests\\user flow\\test_checkout.py", line 12, in test_total',
+                "FAILED user flow/test_checkout.py::test_total",
+            ):
+                with self.subTest(target=user, text=text):
+                    self.assertEqual((["PBI-1"], "targets"), state.failure_owners(pbis, "pytest", text))
+            # Once the folder is given, a file name alone is the other file's.
+            text = "FAILED tests/other flow/test_checkout.py::test_total\ntest_checkout.py:12: AssertionError"
+            self.assertEqual((["PBI-2"], "targets"), state.failure_owners(pbis, "pytest", text))
+
 
 if __name__ == "__main__":
     unittest.main()

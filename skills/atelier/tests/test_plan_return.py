@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent
 if str(SKILLS_DIR) not in sys.path:
@@ -26,9 +28,14 @@ from atelier import acceptance, actions, locks, state  # noqa: E402
 from tests import test_wave_locks  # noqa: E402
 from tests.test_acceptance_red import drive, pass_review, pbis_of, saved  # noqa: E402
 from tests.test_conductor import make_valid_plan, reach_building, run_cli, write_json, write_result_for  # noqa: E402
+from tests.test_flow_rules import GIT_REPOSITORY_VARIABLES, git_env, init_git_repo  # noqa: E402
 from tests.test_worker_checks import ticket_of  # noqa: E402
 # The test case class is not imported by name, so its tests do not run again from this module.
 from tests.test_wave_locks import BUILT, RED, TEST_FILE, name, outcomes  # noqa: E402
+from tests.test_integration import make_pbi  # noqa: E402
+
+# The locked plan of test_wave_locks, kept before a test replaces it there.
+WAVE_PLAN = test_wave_locks.wave_plan
 
 STOP = {"exception": 2, "reason": "R1-1 and R1-3 contradict each other"}
 LABEL = "鍵つきのケースどうしが矛盾する"
@@ -68,8 +75,26 @@ def held(run: dict) -> dict[str, str | None]:
 
 
 def git(root: Path, *args: str) -> str:
-    proc = subprocess.run(["git", "-C", str(root), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    """Run git on the test's own repository, whatever repository the environment picks (git_env)."""
+    proc = subprocess.run(
+        ["git", "-C", str(root), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, env=git_env()
+    )
     return proc.stdout.decode("utf-8").rstrip()
+
+
+class GitEnvironmentTests(unittest.TestCase):
+    def test_git_on_a_test_repository_ignores_the_repository_the_environment_picks(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            other, own = Path(td) / "other", Path(td) / "own"
+            init_git_repo(other)
+            # As in a git hook: the environment picks the other repository, its work tree and its index.
+            picked = {"GIT_DIR": str(other / ".git"), "GIT_WORK_TREE": str(other), "GIT_INDEX_FILE": str(other / ".git" / "index")}
+            with patch.dict(os.environ, picked):
+                self.assertEqual([], [k for k in GIT_REPOSITORY_VARIABLES if k in git_env()])
+                init_git_repo(own)
+                self.assertEqual(("1", "init"), (git(own, "rev-list", "--count", "HEAD"), git(own, "log", "-1", "--format=%s")))
+            self.assertTrue((own / ".git").is_dir())
+            self.assertEqual("1", git(other, "rev-list", "--count", "HEAD"))
 
 
 class StopQuestionTests(unittest.TestCase):
@@ -328,6 +353,57 @@ def scenario(rid: str, total: int = 3) -> dict:
     ]}
 
 
+class RequirementChangeTests(unittest.TestCase):
+    """A re-plan may give a passed acceptance PBI only a requirement whose scenario it adds or changes."""
+
+    def setUp(self) -> None:
+        self.run = {
+            "pbis": [
+                {"id": "PBI-1", "kind": "acceptance", "status": "passed", "requirements": ["R1"]},
+                {"id": "PBI-2", "kind": "acceptance", "status": "passed", "requirements": ["R2"]},
+                {"id": "PBI-3", "kind": "acceptance", "status": "pending", "requirements": ["R3"]},
+            ],
+            "scenarios": [scenario("R1"), scenario("R2"), scenario("R3")],
+        }
+
+    def plan(self, requirements: dict[str, list[str]], scenarios: list[dict]) -> dict:
+        return {
+            "pbis": [{"id": pid, "kind": "acceptance", "requirements": reqs} for pid, reqs in requirements.items()],
+            "scenarios": scenarios,
+        }
+
+    def test_a_requirement_whose_scenario_the_re_plan_adds_or_changes_may_go_to_a_passed_one(self) -> None:
+        added = self.plan({"PBI-1": ["R1", "R4"], "PBI-2": ["R2"], "PBI-3": ["R3"]}, [*self.run["scenarios"], scenario("R4")])
+        self.assertEqual([], acceptance.requirement_changes(self.run, added))
+        changed = self.plan({"PBI-1": ["R1", "R3"], "PBI-2": ["R2"]}, [scenario("R1"), scenario("R2"), scenario("R3", total=4)])
+        self.assertEqual([], acceptance.requirement_changes(self.run, changed))
+        # A PBI that has not passed yet is built anyway: it may give up or take any requirement.
+        moved = self.plan({"PBI-1": ["R1"], "PBI-2": ["R2"], "PBI-4": ["R3"]}, self.run["scenarios"])
+        self.assertEqual([], acceptance.requirement_changes(self.run, moved))
+
+    def test_a_passed_one_keeps_its_requirements_and_takes_no_unchanged_one(self) -> None:
+        for requirements, changed in (
+            ({"PBI-1": ["R1", "R3"], "PBI-2": ["R2"]}, "R3"),
+            ({"PBI-1": ["R1", "R2"], "PBI-2": [], "PBI-3": ["R3"]}, "R2"),
+            ({"PBI-1": [], "PBI-2": ["R2"], "PBI-3": ["R1", "R3"]}, "R1"),
+        ):
+            with self.subTest(requirements=requirements):
+                errors = acceptance.requirement_changes(self.run, self.plan(requirements, self.run["scenarios"]))
+                self.assertTrue(errors)
+                self.assertTrue(all(changed in e for e in errors), errors)
+
+    def test_it_compares_with_the_run_when_the_re_plan_started(self) -> None:
+        # A plan revised twice: the first revision gave PBI-1 the new R4, and the second keeps it.
+        before_owners, before_scenarios = acceptance.requirement_owners(self.run), list(self.run["scenarios"])
+        self.run["pbis"][0]["requirements"] = ["R1", "R4"]
+        self.run["scenarios"] = [*before_scenarios, scenario("R4")]
+        again = self.plan({"PBI-1": ["R1", "R4"], "PBI-2": ["R2"], "PBI-3": ["R3"]}, self.run["scenarios"])
+        self.assertEqual([], acceptance.requirement_changes(self.run, again, before_owners, before_scenarios))
+        # Taking it out again is giving up nothing the PBI had when the re-plan started.
+        back = self.plan({"PBI-1": ["R1"], "PBI-2": ["R2"], "PBI-3": ["R3"]}, before_scenarios)
+        self.assertEqual([], acceptance.requirement_changes(self.run, back, before_owners, before_scenarios))
+
+
 class ReopenRevisedTests(unittest.TestCase):
     def test_only_the_changed_requirements_go_back_and_an_unchanged_unresolved_one_stays_out_of_the_lock(self) -> None:
         before = [scenario("R1"), {**scenario("R2"), "no_lock": True}, scenario("R3")]
@@ -469,6 +545,46 @@ class AcceptanceFirstPlanReturnTests(unittest.TestCase):
         after = self.run_wave(outcomes())
         self.assertEqual(["PBI-4"], pbis_of(after))
         self.assertEqual("passed", state.get_pbi(saved(self.root), "PBI-3")["status"])
+
+    def test_a_requirement_the_re_plan_gives_a_passed_acceptance_pbi_gets_its_tests(self) -> None:
+        def named_plan() -> dict:
+            """The locked plan, with acceptance PBI-1 naming R1."""
+            obj = WAVE_PLAN()
+            obj["pbis"][0]["requirements"] = ["R1"]
+            return obj
+
+        with patch.object(test_wave_locks, "wave_plan", named_plan):
+            launch = self.lock_and_launch()
+        (self.root / "app.py").write_bytes(BUILT.encode("utf-8"))
+        self.assertEqual("plan_return", done(self.root, launch, {"status": "ok", "stop": STOP})["kind"])
+        planner = answer(self.root, "--choice", "replan")
+
+        # Taking R1 from PBI-1 is refused, with the reason; the planner's launch stays open.
+        moved = named_plan()
+        del moved["pbis"][0]["requirements"]
+        moved["pbis"].append({**make_pbi("PBI-5", targets=["acceptance/R1b.json"]), "kind": "acceptance", "requirements": ["R1"]})
+        write_result_for(planner, moved)
+        code, out = run_cli("done", "--root", str(self.root), "--launch-id", planner["launch_id"])
+        self.assertEqual(2, code)
+        self.assertIn("合格済みの受け入れの PBI-1 が受け持つ要件", out["error"])
+        self.assertIn("R1", out["error"])
+
+        # The planner adds R2 and gives it to PBI-1: PBI-1 takes it and is built again for it.
+        revised = named_plan()
+        revised["pbis"][0]["requirements"] = ["R1", "R2"]
+        r2 = json.loads(json.dumps(revised["scenarios"][0]))
+        r2.update(id="R2", text="要件 R2", cases=[{"id": "R2-1", "values": {"a": 5, "b": 2, "sum": 7}, "pbi": "PBI-4", "needs": []}])
+        revised["scenarios"].append(r2)
+        self.assertEqual("plan_approval", done(self.root, planner, revised)["kind"])
+        stage = answer(self.root, "--choice", "approve")
+        run = saved(self.root)
+        self.assertEqual("building_acceptance", run["state"])
+        self.assertEqual(["R1", "R2"], state.get_pbi(run, "PBI-1")["requirements"])
+        self.assertEqual("PBI-1", acceptance.requirement_owners(run)["R2"])
+        self.assertEqual(["PBI-1"], pbis_of(stage))
+        self.assertEqual(["R2"], ticket_of(stage)["revised"])
+        relock = run["plan_returns"][0]["relock"]
+        self.assertEqual((["R2"], ["PBI-1"]), (relock["revised"], relock["rebuilt"]))
 
     def test_a_broken_plan_re_planned_in_a_locked_run_is_locked_again_too(self) -> None:
         launch = self.lock_and_launch()

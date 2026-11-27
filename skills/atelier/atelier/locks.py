@@ -33,7 +33,8 @@ When the user fixes the plan in the middle of the run, the lock comes off once t
 acceptance PBIs of the requirements it changed are built again and checked, and the next entry into building locks
 the tests again, with a new list, a new lock commit on top of the branch, and a new copy, commit id and hash. The
 E2E files of the e2e PBIs that passed before then are locked again with them, with the content the earlier lock
-commit held, not what the work tree holds after the lift.
+commit held, not what the work tree holds after the lift, even when an acceptance PBI of the revised plan also has
+the file in its targets; the keys the earlier lock locked for those PBIs keep the values its list held too.
 
 When the retrospective takes the lock off locked cases (an unlock), the fix stage opens only their acceptance test
 file to the one fix worker of that unlock (without, for its launch's G1). The run then checks the fixed and added
@@ -250,6 +251,44 @@ def _carried_e2e(root: Path, run: dict[str, Any], pbis: list[dict[str, Any]]) ->
     return entries, taken
 
 
+def _carried_e2e_keys(root: Path, run: dict[str, Any], pbis: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """The keys an earlier lock locked for e2e PBIs, to lock again with the values it held (a lock made again after a
+    lift).
+
+    For each PBI, the latest lock in run["lock_history"] that took it gives, from its list (read from its lock commit
+    and checked against its sha256), every key of the files workers also touch that the PBI's targets cover, and the
+    package.json scripts the plan's e2e commands run. Those are the values its wave check passed with, whatever the
+    work tree holds now. Where two locks hold the same key, the later one wins. Returns file -> {key: value}; a key no
+    such lock held is not in it.
+    """
+    history = [h for h in reversed(run.get("lock_history") or []) if isinstance(h, dict) and h.get("commit")]
+    commands = [str(c) for c in run.get("plan_e2e") or [] if c]
+    found: list[tuple[int, dict[str, Any]]] = []
+    for pbi in pbis:
+        index = next((i for i, h in enumerate(history) if pbi["id"] in (h.get("e2e_pbis") or [])), None)
+        if index is not None:
+            found.append((index, pbi))
+    lists: dict[int, dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]] = {}
+    for index, pbi in sorted(found, key=lambda item: item[0]):
+        if index not in lists:
+            # The copy outside the work tree holds the latest lock's list, so the old list is read from its commit.
+            old = {k: v for k, v in history[index].items() if k != "outside"}
+            lists[index] = locked_list(root, {"lock": old}).get("keys") or {}
+        targets = [t for t in (_norm(t) for t in pbi.get("targets") or []) if t]
+        for name, values in lists[index].items():
+            if not isinstance(values, dict):
+                continue
+            if guards.covered(str(name), targets):
+                wanted = list(values)
+            else:
+                scripts = {k[len("scripts."):]: None for k in values if str(k).startswith("scripts.")}
+                wanted = [f"scripts.{s}" for s in signatures.command_scripts(commands, scripts) if f"scripts.{s}" in values]
+            for key in wanted:
+                out.setdefault(str(name), {}).setdefault(key, values[key])
+    return out
+
+
 def key_files(root: Path, run: dict[str, Any], e2e: list[dict[str, Any]] | None = None) -> list[str]:
     """The files workers also touch whose keys are locked: those at the work root, those an acceptance PBI with a
     locked requirement has in its targets, and those the e2e PBIs in e2e have in their targets."""
@@ -419,11 +458,17 @@ def lock(root: Path, run: dict[str, Any]) -> dict[str, Any]:
     run_id = run["run_id"]
     e2e = passed_e2e(run)
     accepted = lock_files(root, run)
+    # A file an earlier lock took for a passed e2e PBI keeps that lock's content, even when an acceptance PBI of the
+    # revised plan also has it in its targets: the e2e PBI's wave check passed with that content.
     carried, taken = _carried_e2e(root, run, e2e)
-    carried = {f: entry for f, entry in carried.items() if f not in accepted}
     files = sorted({*accepted, *carried, *e2e_files(root, [p for p in e2e if p["id"] not in taken])})
     sigs, unextractable = signatures.extract(root, [i for i in run.get("interfaces") or [] if isinstance(i, dict)])
     keys, unreadable = signatures.read_keys(root, key_files(root, run, e2e), lock_commands(run, e2e=bool(e2e)))
+    # The same goes for the keys an earlier lock locked for those PBIs; the other keys are read from the work tree.
+    carried_keys = _carried_e2e_keys(root, run, [p for p in e2e if p["id"] in taken])
+    for name, values in carried_keys.items():
+        keys.setdefault(name, {}).update(values)
+    unreadable = [u for u in unreadable if u.get("file") not in carried_keys]
     data = lock_list(run, files, sigs, keys, unextractable + unreadable)
     raw = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     list_file = root / LIST_PATH
@@ -479,7 +524,8 @@ def extend(root: Path, run: dict[str, Any], pbis: list[dict[str, Any]] | None = 
     then committed with the new files on top of HEAD; the files the lock already held go into that commit with the old
     lock commit's content. The copy outside the work tree, the commit id and the hash are written again, and
     run["lock"] takes the new commit, files and sha256. Returns the extension kept in run["lock_extensions"] (with
-    "keys", each "<file> <key>", when keys were added), or None when the lock is off or there is nothing to add.
+    "keys", each "<file> <key>", when keys were added), or None when the lock is off or there is nothing to add (no
+    file, no key, and no key file that cannot be read and is not recorded yet).
     """
     kept = run.get("lock")
     if not kept:
@@ -507,8 +553,10 @@ def extend(root: Path, run: dict[str, Any], pbis: list[dict[str, Any]] | None = 
                 keys.setdefault(name, {})[key] = value
                 keyed.append(f"{name} {key}")
     unextractable = list(listed.get("unextractable") or [])
-    unextractable += [u for u in unreadable if u.get("file") not in keys and u not in unextractable]
-    if not added and not keyed:
+    unread = [u for u in unreadable if u.get("file") not in keys and u not in unextractable]
+    unextractable += unread
+    # A key file that cannot be read is recorded in the list too, even when nothing else is added.
+    if not added and not keyed and not unread:
         kept["e2e_pbis"] = ids
         return None
 
